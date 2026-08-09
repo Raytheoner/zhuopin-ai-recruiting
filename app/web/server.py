@@ -10,10 +10,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.agents.jd_agent import generate_jd
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
-from app.graph.nodes import effect_confirm_profile
+from app.graph.nodes import effect_confirm_profile, effect_generate_and_persist_jd
 from app.middleware.auth import AuthMiddleware
 from app.schemas.job_profile import JobProfile
 from app.storage.db import get_connection, init_schema
@@ -133,19 +132,36 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
                 },
             }
         )
-        jd_result = generate_jd(gateway, profile)
-
-        conn.execute(
-            "UPDATE job_profile SET profile_json = ? "
-            "WHERE job_id = ? AND version = ?",
-            (json.dumps({**profile_dict, "_jd_text": jd_result.text}, ensure_ascii=False), job_id, version),
+        # generate_jd() 是一次真实、有成本的 LLM 调用，必须像其他有副作用的节点
+        # 一样独占一个幂等 effect（工程铁律1）——否则 POST .../confirm 被重试
+        # （双击、客户端超时重发、反向代理重试）会重复触发生成，并且第二次的
+        # （可能不同的）结果会静默覆盖第一次。business_key 复用 effect_confirm_profile
+        # 的 version：同一个已确认版本的第二次调用在 idempotent_effect 内部直接
+        # 短路，generate_jd() 根本不会被再次调用。
+        effect_generate_and_persist_jd(
+            conn,
+            thread_id=job_id,
+            business_key=str(version),
+            gateway=gateway,
+            profile=profile,
+            profile_dict=profile_dict,
+            version=version,
         )
-        conn.commit()
+
+        # 不能直接用 effect_generate_and_persist_jd() 的返回值：重放命中
+        # effect_log 时 idempotent_effect 会短路返回 None（没有真的执行函数体）。
+        # 无论是本次真跑了还是被短路了，profile_json 里此刻都已经是最终状态，
+        # 统一从这里读回去构造响应，两条路径读到的是同一份持久化结果。
+        persisted_row = conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id = ? AND version = ?",
+            (job_id, version),
+        ).fetchone()
+        persisted = json.loads(persisted_row[0])
 
         return {
             "job_id": job_id,
-            "jd_text": jd_result.text,
-            "needs_manual": jd_result.needs_manual,
+            "jd_text": persisted["_jd_text"],
+            "needs_manual": persisted.get("_jd_needs_manual", False),
         }
 
     @router.get("/api/jobs/{job_id}")
