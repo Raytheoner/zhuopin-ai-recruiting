@@ -1,0 +1,45 @@
+# === 敏感信息（硬红线，绝不入库）===
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets/
+
+# === 候选人数据（个人信息，绝不入库）===
+data/resumes/
+data/candidates/
+data/recordings/
+*.resume.pdf
+evalset/          # 200 份真实简历评测集，本地保存，走安全通道分发
+
+# === Superpowers 运行时 scratch ===
+.superpowers/
+# 注意：docs/superpowers/plans/ 要入库，那是实现计划，不是 scratch
+
+# === OpenSpec 临时文件 ===
+.openspec-test-*
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# === Node ===
+node_modules/
+dist/
+.next/
+
+# === 编辑器与系统 ===
+.DS_Store
+.idea/
+.vscode/
+*.swp

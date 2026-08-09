@@ -1,0 +1,45 @@
+schema: spec-driven
+
+context: |
+  项目：卓品智能 AI Agent 驱动全流程招聘智能体
+  公司背景：无锡 ECU（汽车电子）研发制造企业，约 300 人，主要招聘嵌入式/汽车电子工程师岗位
+
+  技术栈（详见 01-开源调研与技术选型.md）：
+  - 编排层：LangGraph ≥1.0.10 + Postgres Checkpointer
+  - 数据层：Postgres + pgvector + 对象存储
+  - 解析层：PaddleOCR / MinerU 版面解析 + 境内 LLM schema 约束抽取（Pydantic/Outlines）
+  - 匹配层：硬门槛规则 → BGE-M3 embedding 召回 → LLM rubric 精排（自研，核心差异化）
+  - 面试层：一期异步（FunASR 转写 + 双评分器），二期才考虑 LiveKit 实时
+  - 外部：Moka/北森（渠道对接）、企业微信（通知与审批）
+
+  不可违背的工程铁律：
+  1. LangGraph 恢复时节点从头整个重跑 → 每个有副作用的动作（发消息/写ATS/建工单）必须独占一个节点，并带幂等键
+  2. L3 Agent 全部是无副作用纯函数，副作用只在 L4 编排层的独立节点执行
+  3. 所有 AI 评分必须持久化：模型版本 + prompt 版本 + 输入哈希 + rubric 快照 + 输出 evidence
+  4. 每条 criterion_score 必须有 evidence_span（回指简历原文 offset），evidence 为空不允许写入
+  5. temperature=0，模型版本显式锁定，不用 latest 别名
+
+  合规红线（PIPL 及配套规章，详见 01 文档第 3 节）：
+  - AI 只做排序推荐，不做自动淘汰；淘汰必须有人工确认节点并留痕
+  - 禁止人脸/表情分析（《人脸识别技术应用安全管理办法》2025-06-01 施行）
+  - AI 生成的 JD、拒信、邀约须标注（《AI 生成合成内容标识办法》2025-09-01 施行）
+  - 模型全部走境内，简历数据不出境
+  - 绝不用历史录用结果做监督信号（避免 Amazon 2018 式偏见放大）
+  - 候选人入口用一次性邀请链接，避免被认定"向境内公众提供"
+
+  数据模型要点：
+  - application 是独立实体，状态属于投递不属于候选人（不要合并 candidate 和 application）
+  - application_stage_history 流转事实表是所有报表的基础
+  - stage.stage_type 是语义标签，显示名可自定义，逻辑只认类型
+  - 自定义字段用 JSON（property_definition/property_value），不用 EAV
+
+  写作与沟通：中文。结论先行，不确定的必须标注可信度，不编造数据。
+
+rules:
+  proposal:
+    - 用中文撰写
+    - 必须包含"不做什么"（Non-goals）章节
+    - 涉及个人信息处理的变更，必须有合规影响说明
+  tasks:
+    - 单个任务控制在 2 小时以内
+    - 涉及副作用的任务必须显式说明幂等策略
