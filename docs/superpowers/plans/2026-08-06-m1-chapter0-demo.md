@@ -3480,8 +3480,21 @@ Write-Host "==> 推送代码到 $remote`:$RemoteAppDir"
 # 不推送这些目录：.venv（服务器自己建）、data（运行时数据）、缓存、.git
 $excludeNames = @(".venv", "data", "__pycache__", ".pytest_cache", ".git")
 
-$itemsToCopy = Get-ChildItem -Path $LocalAppDir -Force |
-    Where-Object { $excludeNames -notcontains $_.Name }
+# .env 及其变体绝不能从开发机同步：服务器的 .env 是独立维护的生产凭据
+# （真实 LLM_API_KEY、锁定的模型版本，工程铁律5），会被开发机本地 .env
+# 静默覆盖且没有任何提示（2026-08-09 review 发现）。.env.example 是例外——
+# 那是要随代码分发的占位模板，不含真实凭据。服务器 .env 按
+# docs/deploy-51-server.md 的说明单独维护。
+$itemsToCopy = Get-ChildItem -Path $LocalAppDir -Force | Where-Object {
+    if ($excludeNames -contains $_.Name) {
+        return $false
+    }
+    if ($_.Name -like ".env*" -and $_.Name -ne ".env.example") {
+        Write-Warning "跳过 $($_.Name)：服务器 .env 是独立维护的生产配置，不从开发机同步（避免覆盖真实凭据/模型锁定版本）。"
+        return $false
+    }
+    return $true
+}
 
 foreach ($item in $itemsToCopy) {
     Write-Host "    scp: $($item.Name)"
@@ -3693,7 +3706,9 @@ git commit -m "docs: M1 Demo 试运行反馈收集表与执行清单（0.11）"
 
 5. **（2026-08-09，run-build 执行期间由 Task 10 reviewer 发现，非本次全量重试覆盖）`confirm()` 里 `generate_jd()` 裸调用，完全没有走 `idempotent_effect` 保护**：`POST /api/jobs/{id}/confirm` 被重试（双击、客户端超时重发、反向代理重试）会重复触发一次真实、有成本的 LLM 调用，且第二次结果会静默覆盖第一次的 JD 文本——违反工程铁律1"每个有副作用的动作必须独占一个节点、带幂等键"。已新增 `effect_generate_and_persist_jd`（Task 9 Step 5，与 `effect_persist_draft`/`effect_confirm_profile` 同一模式），`confirm()` 改为调用它，并在调用后统一从 `job_profile.profile_json` 读回 `_jd_text`/`_jd_needs_manual` 构造响应（因为命中重放时 `idempotent_effect` 短路返回 `None`，不能依赖函数返回值）。这个 bug 没被全量重试捕获，是因为它需要"客户端对同一次确认发起两次请求"这个场景，正常单次调用的 pytest 不会触发。
 
-这五个 bug 都不是本次"两处必须变"范围内引入的新代码——它们藏在从旧计划原样搬运的 Task 3/8/9/10 里，此前从未被真正执行过（`run-build` 尚未开始）。如果不做这次全量重试，会在 `run-build` 阶段才被 TDD 的"运行确认通过"步骤捕获，届时才第一次发现，现在提前堵上。
+6. **（2026-08-09，run-build 执行期间由 Task 11 reviewer 发现，非本次全量重试覆盖）`sync-to-server.ps1` 的 `$excludeNames` 没排除 `.env`**：开发机若存在本地 `.env`（真实场景——本次 run-build 全程都有），日常发版会把它静默 `scp` 到服务器，覆盖服务器独立维护的生产凭据/铁律5锁定的模型版本，且没有任何提示。已加一段过滤：排除 `.env` 及其变体（保留 `.env.example`，那是要随代码分发的占位模板），命中时 `Write-Warning` 提示被跳过。这个 bug 没被全量重试捕获，是因为全量重试跑的是 `pytest`，不涉及执行这个 PowerShell 脚本本身。
+
+这六个 bug 都不是本次"两处必须变"范围内引入的新代码——它们藏在从旧计划原样搬运的 Task 3/8/9/10/11 里，此前从未被真正执行过（`run-build` 尚未开始）。如果不做这次全量重试，会在 `run-build` 阶段才被 TDD 的"运行确认通过"步骤捕获，届时才第一次发现，现在提前堵上。
 
 ---
 
