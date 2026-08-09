@@ -26,8 +26,20 @@ Write-Host "==> 推送代码到 $remote`:$RemoteAppDir"
 # 不推送这些目录：.venv（服务器自己建）、data（运行时数据）、缓存、.git
 $excludeNames = @(".venv", "data", "__pycache__", ".pytest_cache", ".git")
 
-$itemsToCopy = Get-ChildItem -Path $LocalAppDir -Force |
-    Where-Object { $excludeNames -notcontains $_.Name }
+# .env 及其变体绝不能从开发机同步：服务器的 .env 是独立维护的生产凭据
+# （真实 LLM_API_KEY、锁定的模型版本，工程铁律5），会被开发机本地 .env
+# 静默覆盖且没有任何提示。.env.example 是例外——那是要随代码分发的占位模板，
+# 不含真实凭据。服务器 .env 按 docs/deploy-51-server.md 的说明单独维护。
+$itemsToCopy = Get-ChildItem -Path $LocalAppDir -Force | Where-Object {
+    if ($excludeNames -contains $_.Name) {
+        return $false
+    }
+    if ($_.Name -like ".env*" -and $_.Name -ne ".env.example") {
+        Write-Warning "跳过 $($_.Name)：服务器 .env 是独立维护的生产配置，不从开发机同步（避免覆盖真实凭据/模型锁定版本）。"
+        return $false
+    }
+    return $true
+}
 
 foreach ($item in $itemsToCopy) {
     Write-Host "    scp: $($item.Name)"
