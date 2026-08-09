@@ -33,7 +33,16 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
 
 @idempotent_effect("effect_persist_draft")
 def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_key: str, state: dict) -> None:
-    """effect_* 节点：写 job_profile 草案行，独占、幂等。business_key = round_count。"""
+    """
+    effect_* 节点：写 job_profile 草案行，独占、幂等。business_key = round_count。
+
+    不在这里 conn.commit() —— idempotent_effect 装饰器要求被装饰函数的写入与它自己
+    追加的 effect_log 行落在同一个事务里、由装饰器统一提交一次（见
+    app/storage/idempotency.py）。如果这里先提交一次，一旦进程在“这次提交”和
+    “装饰器提交 effect_log”之间崩溃，job_profile 行已经落盘但 effect_log 没有，
+    LangGraph 重放时会用同一个 business_key 重新执行本函数，撞上已存在的主键
+    （UNIQUE constraint failed），重试永久失败——这正是工程铁律1要避免的情形。
+    """
     profile_json = json.dumps(state.get("profile_patch_accumulated", {}), ensure_ascii=False)
     unspecified_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
     version = int(business_key) + 1
@@ -43,7 +52,6 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
         "VALUES (?, ?, ?, 'drafting', ?, ?)",
         (f"{thread_id}-v{version}", thread_id, version, profile_json, unspecified_json),
     )
-    conn.commit()
 
 
 @idempotent_effect("effect_deliver_message")
@@ -66,6 +74,9 @@ def effect_confirm_profile(
     """
     effect_* 节点：把最新画像草案冻结为 approved，同步更新 job.status。
     business_key = 冻结的 version 号，防止同一版本被重复确认两次。
+
+    不在这里 conn.commit() —— 理由同 effect_persist_draft：写入与 effect_log
+    记录必须由 idempotent_effect 装饰器在同一个事务里一次性提交。
     """
     conn.execute(
         "UPDATE job_profile SET status = 'approved' "
@@ -73,7 +84,6 @@ def effect_confirm_profile(
         (thread_id, thread_id),
     )
     conn.execute("UPDATE job SET status = 'approved' WHERE id = ?", (thread_id,))
-    conn.commit()
 
 
 def message_business_key(payload: dict) -> str:

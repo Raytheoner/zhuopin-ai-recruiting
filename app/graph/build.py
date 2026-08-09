@@ -40,10 +40,16 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
             payload = {"questions": state.get("pending_questions", [])}
             message = OutboundMessage(type="question", payload=payload)
 
+        # business_key 前缀带上 round_count：message_business_key() 本身只是
+        # 内容哈希，如果两轮问出的问题恰好完全相同（例如用户没回答，LLM 在下一轮
+        # 原样重问），纯内容哈希会让第二轮的合法投递被误判成第一轮的重放而静默
+        # 跳过。带上 round_count 后，同一轮内的真实重放（round_count 相同）仍然
+        # 会命中同一个 business_key、正确去重；不同轮次即使内容相同也会得到不同
+        # 的 business_key，不会被误杀。
         effect_deliver_message(
             conn,
             thread_id=state["job_id"],
-            business_key=message_business_key(payload),
+            business_key=f"{state['round_count']}:{message_business_key(payload)}",
             channel=channel,
             message=message,
         )
