@@ -2411,9 +2411,11 @@ import json
 import sqlite3
 
 from app.agents.intake_agent import run_intake_turn
+from app.agents.jd_agent import JDGenerationResult, generate_jd  # 2026-08-09 追加
 from app.channels.base import Channel, OutboundMessage
 from app.graph.state import IntakeState
 from app.llm.gateway import LLMGateway
+from app.schemas.job_profile import JobProfile  # 2026-08-09 追加
 from app.storage.idempotency import idempotent_effect
 
 
@@ -2484,6 +2486,49 @@ def effect_confirm_profile(
         (thread_id, thread_id),
     )
     conn.execute("UPDATE job SET status = 'approved' WHERE id = ?", (thread_id,))
+
+
+# 2026-08-09 追加（Task 10 review 发现的 Critical 缺口）：generate_jd() 是一次
+# 真实、有成本的 LLM 调用，原计划在 Task 10 的 confirm() 里裸调用，完全没有走
+# idempotent_effect 保护——POST /api/jobs/{id}/confirm 被重试（双击、客户端
+# 超时重发、反向代理重试，浏览器 demo 里都会真实发生）时会重复触发生成，且
+# 第二次结果会静默覆盖第一次的 JD 文本，违反工程铁律1。补一个 effect_* 包装，
+# 与 effect_persist_draft / effect_confirm_profile 走同一模式。
+@idempotent_effect("effect_generate_and_persist_jd")
+def effect_generate_and_persist_jd(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    gateway: LLMGateway,
+    profile: JobProfile,
+    profile_dict: dict,
+    version: int,
+) -> JDGenerationResult:
+    """
+    effect_* 节点：调用 LLM 生成 JD 并持久化回 job_profile，独占、幂等。
+    business_key = 被确认的画像 version（与 effect_confirm_profile 用同一个
+    version，两者 node_name 不同，effect_key 天然不冲突）。不在这里
+    conn.commit() —— 写入必须与 effect_log 记录由装饰器统一提交。
+
+    返回值只在"本次真的执行了函数体"时有意义；idempotent_effect 命中重放
+    会直接返回 None，调用方需要在重放路径上拿到 JD 文本时，应该在调用后
+    重新从 job_profile.profile_json 读，而不是依赖这里的返回值（Task 10
+    的 confirm() 就是这么处理的）。
+    """
+    jd_result = generate_jd(gateway, profile)
+    conn.execute(
+        "UPDATE job_profile SET profile_json = ? WHERE job_id = ? AND version = ?",
+        (
+            json.dumps(
+                {**profile_dict, "_jd_text": jd_result.text, "_jd_needs_manual": jd_result.needs_manual},
+                ensure_ascii=False,
+            ),
+            thread_id,
+            version,
+        ),
+    )
+    return jd_result
 
 
 def message_business_key(payload: dict) -> str:
@@ -2948,10 +2993,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.agents.jd_agent import generate_jd
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
-from app.graph.nodes import effect_confirm_profile
+from app.graph.nodes import effect_confirm_profile, effect_generate_and_persist_jd  # 2026-08-09: generate_jd 改走幂等 effect
 from app.middleware.auth import AuthMiddleware
 from app.schemas.job_profile import JobProfile
 from app.storage.db import get_connection, init_schema
@@ -3071,19 +3115,37 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
                 },
             }
         )
-        jd_result = generate_jd(gateway, profile)
-
-        conn.execute(
-            "UPDATE job_profile SET profile_json = ? "
-            "WHERE job_id = ? AND version = ?",
-            (json.dumps({**profile_dict, "_jd_text": jd_result.text}, ensure_ascii=False), job_id, version),
+        # generate_jd() 是一次真实、有成本的 LLM 调用，必须像其他有副作用的节点
+        # 一样独占一个幂等 effect（工程铁律1，2026-08-09 review 发现并修正）——
+        # 否则 POST .../confirm 被重试（双击、客户端超时重发、反向代理重试）
+        # 会重复触发生成，且第二次的（可能不同的）结果会静默覆盖第一次。
+        # business_key 复用 effect_confirm_profile 的 version：同一个已确认
+        # 版本的第二次调用会在 idempotent_effect 内部直接短路，generate_jd()
+        # 根本不会被再次调用。
+        effect_generate_and_persist_jd(
+            conn,
+            thread_id=job_id,
+            business_key=str(version),
+            gateway=gateway,
+            profile=profile,
+            profile_dict=profile_dict,
+            version=version,
         )
-        conn.commit()
+
+        # 不能直接用 effect_generate_and_persist_jd() 的返回值：重放命中
+        # effect_log 时 idempotent_effect 会短路返回 None（没有真的执行函数体）。
+        # 无论本次是真跑了还是被短路了，job_profile.profile_json 此刻都已经是
+        # 最终状态，统一从这里读回去构造响应，两条路径读到同一份持久化结果。
+        persisted_row = conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id = ? AND version = ?",
+            (job_id, version),
+        ).fetchone()
+        persisted = json.loads(persisted_row[0])
 
         return {
             "job_id": job_id,
-            "jd_text": jd_result.text,
-            "needs_manual": jd_result.needs_manual,
+            "jd_text": persisted["_jd_text"],
+            "needs_manual": persisted.get("_jd_needs_manual", False),
         }
 
     @router.get("/api/jobs/{job_id}")
@@ -3122,7 +3184,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
 pytest tests/test_web_api.py -v
 ```
 
-Expected: 9 个测试全部 PASS
+Expected: 8 个测试全部 PASS（2026-08-09 更正：Step 1 代码块实际定义 8 个测试函数，原文"9 个"是计划撰写时的笔误，与铁律5修正无关）
 
 - [ ] **Step 6: 写单页前端 `app/web/static/index.html`（含「演示环境」显著标注、`<!--BASE_HREF-->` 占位符、相对路径 fetch）**
 
@@ -3629,7 +3691,9 @@ git commit -m "docs: M1 Demo 试运行反馈收集表与执行清单（0.11）"
 3. **Task 9 `build_intake_graph` checkpointer 用法错误**：`SqliteSaver.from_conn_string(db_path)` 返回的是 `@contextmanager` 生成器，不 `with` 直接传给 `graph.compile()` 会抛 `TypeError: Invalid checkpointer provided`——已改成 `SqliteSaver(conn)`，复用函数本就持有的连接
 4. **（2026-08-09，run-build 执行期间由 Task 9 reviewer 发现，非本次全量重试覆盖）`effect_persist_draft`/`effect_confirm_profile`/`WebChannel.deliver` 各自提前 `conn.commit()`**：破坏了 `idempotent_effect` 依赖的"写入与 effect_log 记账在同一事务、只提交一次"假设。Reviewer 用内存 sqlite3.Connection 子类模拟"提前 commit 之后、装饰器自己的 commit 之前"崩溃，实测复现：`effect_persist_draft` 重放会因主键冲突硬失败，`effect_deliver_message`（内部调用 `WebChannel.deliver`）重放会静默产生第二条 `outbox` 记录——后者是真实的重复投递。已从三处删掉提前的 `conn.commit()`，统一交给 `idempotent_effect` 装饰器提交（见 Task 6 Step 5、Task 9 Step 5 对应代码块及注释）。这个 bug 之所以没被上面的全量重试捕获，是因为它只在"提前 commit 之后、装饰器自己 commit 之前发生崩溃重放"这个具体时序窗口下才触发，正常无中断的 pytest 运行不会经过这个窗口。
 
-这四个 bug 都不是本次"两处必须变"范围内引入的新代码——它们藏在从旧计划原样搬运的 Task 3/8/9 里，此前从未被真正执行过（`run-build` 尚未开始）。如果不做这次全量重试，会在 `run-build` 阶段才被 TDD 的"运行确认通过"步骤捕获，届时才第一次发现，现在提前堵上。
+5. **（2026-08-09，run-build 执行期间由 Task 10 reviewer 发现，非本次全量重试覆盖）`confirm()` 里 `generate_jd()` 裸调用，完全没有走 `idempotent_effect` 保护**：`POST /api/jobs/{id}/confirm` 被重试（双击、客户端超时重发、反向代理重试）会重复触发一次真实、有成本的 LLM 调用，且第二次结果会静默覆盖第一次的 JD 文本——违反工程铁律1"每个有副作用的动作必须独占一个节点、带幂等键"。已新增 `effect_generate_and_persist_jd`（Task 9 Step 5，与 `effect_persist_draft`/`effect_confirm_profile` 同一模式），`confirm()` 改为调用它，并在调用后统一从 `job_profile.profile_json` 读回 `_jd_text`/`_jd_needs_manual` 构造响应（因为命中重放时 `idempotent_effect` 短路返回 `None`，不能依赖函数返回值）。这个 bug 没被全量重试捕获，是因为它需要"客户端对同一次确认发起两次请求"这个场景，正常单次调用的 pytest 不会触发。
+
+这五个 bug 都不是本次"两处必须变"范围内引入的新代码——它们藏在从旧计划原样搬运的 Task 3/8/9/10 里，此前从未被真正执行过（`run-build` 尚未开始）。如果不做这次全量重试，会在 `run-build` 阶段才被 TDD 的"运行确认通过"步骤捕获，届时才第一次发现，现在提前堵上。
 
 ---
 
