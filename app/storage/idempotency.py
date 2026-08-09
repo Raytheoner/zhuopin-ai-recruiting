@@ -33,7 +33,17 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
             if existing is not None:
                 return None
 
-            result = fn(conn, thread_id=thread_id, business_key=business_key, **kwargs)
+            try:
+                result = fn(conn, thread_id=thread_id, business_key=business_key, **kwargs)
+            except Exception:
+                # conn is a single connection shared across the whole app
+                # (see db.get_connection); if fn wrote rows before raising,
+                # those writes sit in SQLite's implicit open transaction and
+                # would otherwise be durably committed the next time ANY
+                # unrelated effect calls conn.commit(). Roll back so a failed
+                # effect leaves no trace for a later, unrelated commit to pick up.
+                conn.rollback()
+                raise
 
             conn.execute(
                 "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
