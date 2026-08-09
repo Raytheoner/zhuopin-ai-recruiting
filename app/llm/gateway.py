@@ -18,6 +18,98 @@ class SchemaExtractionFailed(Exception):
     """重试耗尽后仍未拿到符合 Schema 的结构化输出。"""
 
 
+# OpenAI strict 结构化输出规范（以及照抄该规范的 OpenAI 兼容供应商）不接受这些
+# 校验关键字，带着它们发过去会被直接拒绝。pydantic 的 Field(ge=1)、字段默认值
+# 等都会产出其中的项（例如 JobProfile.headcount 的 "minimum": 1）。
+# 丢掉它们不会放松校验：extract_structured 拿到响应后仍然会用完整的 pydantic
+# 模型 model_validate 一次，不合法就走重试。
+_STRICT_UNSUPPORTED_KEYWORDS = frozenset(
+    {
+        "default",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+    }
+)
+
+
+def _strictify_node(node: Any, defs: dict) -> Any:
+    """递归把一个 JSON Schema 节点改写成 strict 规范形态。"""
+    if isinstance(node, list):
+        return [_strictify_node(item, defs) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    if "$ref" in node:
+        # 内联引用：把 $defs 里的定义整个展开到引用点。同级的其他关键字
+        # （例如 description）覆盖被引用定义里的同名项。
+        target = defs[node["$ref"].rsplit("/", 1)[-1]]
+        siblings = {k: v for k, v in node.items() if k != "$ref"}
+        return _strictify_node({**target, **siblings}, defs)
+
+    out: dict = {}
+    for key, value in node.items():
+        if key in _STRICT_UNSUPPORTED_KEYWORDS or key == "$defs":
+            continue
+        if key == "properties" and isinstance(value, dict):
+            # properties 的键是字段名，不是 schema 关键字——必须按映射处理，
+            # 否则名叫 "type" / "properties" 的字段会把下面的判断带偏。
+            out[key] = {name: _strictify_node(sub, defs) for name, sub in value.items()}
+        else:
+            out[key] = _strictify_node(value, defs)
+
+    if out.get("type") == "object":
+        out["additionalProperties"] = False
+        # strict 规范要求所有属性都列进 required，可选性用 nullable 类型
+        # （pydantic 对 `X | None` 产出的 anyOf[..., {"type":"null"}]）表达。
+        out["required"] = list(out.get("properties", {}).keys())
+    return out
+
+
+def _to_strict_json_schema(schema: type[BaseModel]) -> dict:
+    """
+    把 pydantic 的 model_json_schema() 输出转成 OpenAI strict 结构化输出能接受的形态：
+    $defs/$ref 全部内联、每个 object 层级都 additionalProperties=false、
+    每个 object 的所有属性都列进 required、剔除 strict 不支持的校验关键字。
+
+    为什么选"完全内联"而不是"保留 $ref、给每个 $defs 定义也加上 additionalProperties"：
+    各家 OpenAI 兼容供应商对 $ref 的支持深浅不一（有的只支持同文档一层引用，有的
+    干脆不解析），内联后的 schema 是所有实现的交集，最不容易在真实调用里被拒。
+    代价只是 payload 变大一点，对本项目的调用量可以忽略。
+
+    代价二（目前不影响任何调用方）：递归模型（自己引用自己的 Schema）没法内联，
+    会栈溢出。真需要递归结构时得改回保留 $ref 的路线，那时必须给每个 $defs 定义
+    也补上 additionalProperties=false 和完整的 required。
+    """
+    raw = schema.model_json_schema()
+    defs = raw.get("$defs", {})
+    return _strictify_node(raw, defs)
+
+
+def _has_free_form_object(node: Any) -> bool:
+    """
+    检测 schema 里是否存在"任意键值的自由 object"（pydantic 对裸 `dict` 字段的产出：
+    type=object 但没有 properties）。strict 模式表达不了这种形状——给它加上
+    additionalProperties=false 等于告诉模型"只准返回空对象"，这比被供应商拒绝更糟：
+    模型会一声不吭地一直返回 {}。
+    """
+    if isinstance(node, list):
+        return any(_has_free_form_object(item) for item in node)
+    if not isinstance(node, dict):
+        return False
+    if node.get("type") == "object" and not node.get("properties"):
+        return True
+    return any(_has_free_form_object(value) for value in node.values())
+
+
 class AuditHook(Protocol):
     def record(
         self,
@@ -122,12 +214,24 @@ class LLMGateway:
         ) from last_error
 
     def _call_model(self, system_prompt: str, user_prompt: str, schema: type[BaseModel]):
-        if self._supports_json_schema:
+        strict_schema = _to_strict_json_schema(schema) if self._supports_json_schema else None
+        # 自由 object（裸 dict 字段）在 strict 模式下无法表达，只能降级回
+        # json_object 模式，否则模型会被 additionalProperties=false 锁死成只能
+        # 返回 {}——静默返回空结果比被供应商拒绝更难排查。
+        use_json_schema = strict_schema is not None and not _has_free_form_object(strict_schema)
+        if strict_schema is not None and not use_json_schema:
+            logger.warning(
+                "%s 含有自由 object 字段（裸 dict），strict json_schema 模式表达不了，"
+                "本次调用降级为 json_object 模式",
+                schema.__name__,
+            )
+
+        if use_json_schema:
             response_format = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": schema.__name__,
-                    "schema": schema.model_json_schema(),
+                    "schema": strict_schema,
                     "strict": True,
                 },
             }
@@ -136,11 +240,22 @@ class LLMGateway:
                 {"role": "user", "content": user_prompt},
             ]
         else:
+            # json_object 模式下供应商只保证"是合法 JSON"，不校验形状，所以必须把
+            # Schema 本身写进 system prompt——否则模型只能靠猜字段名、类型和枚举
+            # 取值（scripts/compare_models.py 的 EXTRACTION_SYSTEM_PROMPT 写着
+            # "字段需符合给定 Schema"，但在修复前根本没有把 Schema 给出去）。
+            # 这里用 pydantic 的原始 schema 而不是 strict 版：strict 版会把裸 dict
+            # 字段写成 additionalProperties=false / required=[]，等于告诉模型
+            # "这个字段只能是空对象"，正好和实际语义相反。
             response_format = {"type": "json_object"}
             messages = [
                 {
                     "role": "system",
-                    "content": system_prompt + "\n只输出合法 JSON，不要输出任何其他文字。",
+                    "content": (
+                        f"{system_prompt}\n只输出合法 JSON，不要输出任何其他文字。\n"
+                        "输出必须符合以下 JSON Schema（字段名、类型、枚举取值原样使用）：\n"
+                        f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
+                    ),
                 },
                 {"role": "user", "content": user_prompt},
             ]
