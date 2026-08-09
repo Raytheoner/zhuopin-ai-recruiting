@@ -2,20 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让业务经理在浏览器里用一句话提用人需求，经多轮追问后拿到结构化岗位画像与可复制的 JD——`job-profile-intake` + `job-description` 两个 capability 的真实实现，只是 Web-only、SQLite、单供应商，不碰候选人个人信息。
+**Goal:** 让业务经理在浏览器里用一句话提用人需求，经多轮追问后拿到结构化岗位画像与可复制的 JD——`job-profile-intake` + `job-description` 两个 capability 的真实实现，Web-only、SQLite、单供应商，不碰候选人个人信息；应用从第一天起就路径前缀感知，可挂载到任意反向代理子路径下，并部署到无 Docker 的 Windows 服务器。
 
-**Architecture:** FastAPI 提供单页 Web 前端与 REST 接口；LangGraph（`SqliteSaver` checkpointer）承载「采集」与「JD 生成」两条流程，节点严格区分 `compute_*`（纯函数，LLM 调用）与 `effect_*`（写库/投递消息，独占节点 + 幂等键）；LLM 网关薄封装单供应商调用，`temperature=0`、模型版本显式锁定；Channel 抽象层今天只实现 Web，为后续接企微留好扩展点。
+**Architecture:** FastAPI 提供单页 Web 前端与 REST 接口，所有路由注册在一个 `APIRouter` 上，`create_app` 用可配置的 `root_path`（默认 `/hr/recruit-agent`）把整个 router 挂载到对应前缀下——不依赖任何反向代理做路径剥离，应用自己就是路径前缀感知的；前端页面通过服务端注入的 `<base href>` 与统一使用相对路径的 `fetch` 调用，实现"挂到哪个前缀下都能正常工作"。LangGraph（`SqliteSaver` checkpointer）承载「采集」与「JD 生成」两条流程，节点严格区分 `compute_*`（纯函数，LLM 调用）与 `effect_*`（写库/投递消息，独占节点 + 幂等键）；LLM 网关薄封装单供应商调用，`temperature=0`、模型版本显式锁定；Channel 抽象层今天只实现 Web，为后续接企微留好扩展点；鉴权中间件留空壳直通接入点，为后续企微 OAuth SSO 留好签名；部署形态为 Windows venv + 计划任务，不依赖 Docker。
 
-**Tech Stack:** Python 3.11+、FastAPI、LangGraph ≥1.0.10（`langgraph-checkpoint-sqlite`）、Pydantic v2、`openai` SDK（指向境内供应商的 OpenAI 兼容端点）、SQLite（`sqlite3` 标准库）、pytest、httpx（TestClient）。
+**Tech Stack:** Python 3.11+、FastAPI、LangGraph ≥1.0.10（`langgraph-checkpoint-sqlite`）、Pydantic v2、`openai` SDK（指向境内供应商的 OpenAI 兼容端点）、SQLite（`sqlite3` 标准库）、pytest、httpx（TestClient）、PowerShell 5.1+（Windows 部署脚本）。
 
 ## Global Constraints
 
-以下条目逐字来自项目 `CLAUDE.md`「工程铁律」与「合规红线」，本计划每个 Task 隐含都要遵守：
+以下条目逐字来自项目 `CLAUDE.md`「工程铁律」「合规红线」与「部署约束」，本计划每个 Task 隐含都要遵守：
 
 - **工程铁律 1**：LangGraph 恢复时节点从头整个重跑。每个有副作用的动作（发消息、写库、建工单）必须独占一个节点，并带幂等键 `{thread_id}:{node_name}:{business_key}`，落 `effect_log` 表并加唯一索引。
 - **工程铁律 2**：L3 Agent 全部是无副作用纯函数，副作用只在 L4 编排层的 `effect_*` 节点执行。节点命名区分 `compute_*` / `effect_*`。
 - **工程铁律 5**：`temperature=0`，模型版本显式锁定，禁止 `latest` 类别名。
 - **工程铁律 7**：`langgraph >= 1.0.10`（GHSA-g48c-2wqr-h844）。
+- **部署约束 1**：路径前缀就绪。FastAPI `root_path=/hr/recruit-agent`，前端资源与接口调用一律相对路径，禁止硬编码 `/static/…` `/api/…`。验收标准是挂到任意子路径下都能正常工作，且有测试覆盖。
+- **部署约束 2**：过渡端口 8095，登记技术债，触发条件 = 统一门户网关上线即迁移。
+- **部署约束 3**：鉴权中间件留空壳接入点，签名对齐未来企微 OAuth SSO；将来只换实现不换调用方。
+- **部署约束 4**：目标服务器是 Windows，没有 Docker。部署形态 = Python venv + Windows 计划任务（SYSTEM 账户 + AtStartup + 失败重启 3 次）+ 防火墙规则 + scp 推送。不要引入容器。
+- **部署约束 5**：M2 起处理真实简历前，必须具备可识别到人的登录 + 简历访问留痕（PIPL 要求"谁在什么时候看了谁的简历"可查）。共享口令不满足。
 - **合规红线**：AI 生成的 JD、拒信、邀约须带标识（《AI 生成合成内容标识办法》2025-09-01 施行）。
 - **合规红线**：模型全部走境内，数据不出境。
 - **合规红线**：主观描述（"沟通能力强"）不得进入硬门槛规则，只能作为软技能关键词。
@@ -28,6 +33,8 @@
 - **`job-description` /「AI 生成内容标识」Scenario「标识不可被移除」的编辑保护部分** —— demo 的 Web 界面只做 JD 查看与复制，不提供编辑功能，因此标识没有被"常规编辑"移除的路径；"标记为人工撰写"这个显式操作本单元不做，留到编辑功能上线时一并补。
 - **企业微信通道本体** —— 只做 `Channel` 抽象接口，不实现 WeChat 的具体收发。
 - **Postgres checkpointer** —— 用 `SqliteSaver` 代替。
+- **企微 OAuth SSO 的真实鉴权逻辑** —— `AuthMiddleware` 本单元只做无条件直通，不校验任何身份，不拒绝任何请求。
+- **统一门户网关对接** —— 本单元只做到"应用自己路径前缀感知，随时可被 `proxy_pass`"，不实现网关本身，也不做网关侧配置（那是 Paul 在「企业AI转型」仓库的工作）。
 
 ## 技术债（需在进入 `tasks.md` 第 1 章前排期）
 
@@ -38,23 +45,30 @@
 5. `needs_manual` 处理队列 UI（现在只落状态位，没有专门处理界面）
 6. 「业务经理中途放弃」的跨天提醒调度
 7. JD 编辑功能 + 标识保护 + "标记为人工撰写"显式操作
+8. **迁移到统一门户网关**：过渡期占用 8095 直连，触发条件 = 统一门户网关上线即迁移。届时网关只需对 `root_path` 对应前缀加一条 `proxy_pass`，应用本身零改动（部署约束 2）
+9. **可识别到人的登录 + 简历访问留痕**：M2 起处理真实简历前必须补上——「谁、什么时候、看了哪份简历」必须可查，PIPL 要求。Demo 阶段（本单元）沿用门户现有共享口令即可，共享口令不满足这条要求（部署约束 5，详见 `04-部署与门户挂载.md` §4 风险二）。鉴权中间件的空壳接入点本单元已留出（见 Task 1 `AuthMiddleware`），届时只换 `dispatch` 内部实现，不改调用方签名。这需要单独开一个 OpenSpec change（`m2-auth-and-access-log`），不并进 M1
 
 ---
 
-### Task 1: 项目脚手架与配置
+### Task 1: 项目脚手架与配置（含路径前缀感知 + 鉴权中间件空壳）
 
 **Files:**
 - Create: `pyproject.toml`
 - Create: `requirements.txt`
 - Create: `app/__init__.py`
 - Create: `app/config.py`
+- Create: `app/middleware/__init__.py`
+- Create: `app/middleware/auth.py`
 - Create: `.env.example`
 - Create: `.gitignore`（若已存在则在末尾追加，见 Step 1 说明）
 - Test: `tests/test_config.py`
+- Test: `tests/test_auth_middleware.py`
 
 **Interfaces:**
-- Produces: `app.config.Settings`（Pydantic `BaseSettings`），字段：`llm_provider: str`、`llm_api_key: str`、`llm_base_url: str`、`llm_model: str`、`llm_supports_json_schema: bool`、`db_path: str`（默认 `data/demo.db`）。`Settings.validate_model_version()` 方法：模型名等于 `"latest"` 或以 `":latest"` 结尾则抛 `ValueError`。
+- Produces: `app.config.Settings`（Pydantic `BaseSettings`），字段：`llm_provider: str`、`llm_api_key: str`、`llm_base_url: str`、`llm_model: str`、`llm_supports_json_schema: bool`、`db_path: str`（默认 `data/demo.db`）、`root_path: str`（默认 `/hr/recruit-agent`，对应环境变量 `ROOT_PATH`，部署约束 1）。`Settings.validate_model_version()` 方法：模型名等于 `"latest"` 或以 `":latest"` 结尾则抛 `ValueError`。
 - Produces: `app.config.get_settings() -> Settings`（读取 `.env`，供后续所有任务 `from app.config import get_settings` 使用）。
+- Produces: `app.middleware.auth.AuthContext`（`dataclass`：`user_id: str | None`、`authenticated: bool`）。
+- Produces: `app.middleware.auth.AuthMiddleware`（`starlette.middleware.base.BaseHTTPMiddleware` 子类）：demo 阶段无条件放行所有请求，把 `AuthContext(user_id=None, authenticated=False)` 写入 `request.state.auth`。这是部署约束 3 的空壳接入点，被 Task 10 的 `create_app` 挂载；未来切换真实企微 OAuth SSO 时只替换 `dispatch` 内部逻辑，路由处理函数读取 `request.state.auth` 的方式不变。
 
 - [ ] **Step 1: 检查现有 `.gitignore`，确认 `.env`、`data/`、`__pycache__/`、`.pytest_cache/` 已被忽略**
 
@@ -112,6 +126,11 @@ LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_MODEL=deepseek-chat
 LLM_SUPPORTS_JSON_SCHEMA=false
 DB_PATH=data/demo.db
+
+# 反向代理挂载路径前缀（部署约束1）。应用自己把全部路由挂到这个前缀下，
+# 不依赖任何反向代理做路径剥离——网关上线时只需对准这个前缀加一条 proxy_pass。
+# 若本地开发直接用 http://localhost:8095/ 访问、不经过任何前缀，改成空字符串。
+ROOT_PATH=/hr/recruit-agent
 ```
 
 - [ ] **Step 5: 写 `app/__init__.py`（空文件）**
@@ -136,6 +155,7 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-chat"
     llm_supports_json_schema: bool = False
     db_path: str = "data/demo.db"
+    root_path: str = "/hr/recruit-agent"
 
     def validate_model_version(self) -> None:
         if self.llm_model == "latest" or self.llm_model.endswith(":latest"):
@@ -174,9 +194,20 @@ def test_rejects_provider_latest_suffix():
 def test_accepts_pinned_version():
     settings = Settings(llm_model="deepseek-chat-241226")
     settings.validate_model_version()  # 不应抛异常
+
+
+def test_default_root_path_is_hr_recruit_agent():
+    settings = Settings()
+    assert settings.root_path == "/hr/recruit-agent"
+
+
+def test_root_path_overridable_via_env(monkeypatch):
+    monkeypatch.setenv("ROOT_PATH", "/foo/bar")
+    settings = Settings()
+    assert settings.root_path == "/foo/bar"
 ```
 
-- [ ] **Step 8: 安装依赖并运行测试确认失败原因不是环境问题**
+- [ ] **Step 8: 安装依赖并运行测试确认通过**
 
 ```bash
 cd /Users/paulshao/Projects/HumanResource
@@ -186,13 +217,123 @@ pip install -r requirements.txt
 pytest tests/test_config.py -v
 ```
 
-Expected: 3 个测试全部 PASS（此时代码已写好，这一步用于确认环境装好、不是先跑失败）。
+Expected: 5 个测试全部 PASS（此时代码已写好，这一步用于确认环境装好）。
 
 - [ ] **Step 9: Commit**
 
 ```bash
 git add pyproject.toml requirements.txt app/__init__.py app/config.py .env.example .gitignore tests/test_config.py
-git commit -m "chore: 项目脚手架与配置（模型版本锁定校验）"
+git commit -m "chore: 项目脚手架与配置（模型版本锁定校验 + root_path 支持）"
+```
+
+- [ ] **Step 10: 写失败测试（鉴权中间件空壳）**
+
+```python
+# tests/test_auth_middleware.py
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+
+from app.middleware.auth import AuthMiddleware
+
+
+def _make_probe_app() -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+
+    @app.get("/probe")
+    def probe(request: Request):
+        return {
+            "user_id": request.state.auth.user_id,
+            "authenticated": request.state.auth.authenticated,
+        }
+
+    return app
+
+
+def test_auth_middleware_sets_unauthenticated_context_by_default():
+    client = TestClient(_make_probe_app())
+    resp = client.get("/probe")
+    assert resp.status_code == 200
+    assert resp.json() == {"user_id": None, "authenticated": False}
+
+
+def test_auth_middleware_does_not_block_any_request():
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+
+    @app.get("/anything")
+    def anything():
+        return {"ok": True}
+
+    client = TestClient(app)
+    resp = client.get("/anything")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+```
+
+- [ ] **Step 11: 运行确认失败**
+
+```bash
+pytest tests/test_auth_middleware.py -v
+```
+
+Expected: FAIL，`ModuleNotFoundError: No module named 'app.middleware'`
+
+- [ ] **Step 12: 写 `app/middleware/__init__.py`（空文件）**
+
+```python
+```
+
+- [ ] **Step 13: 写 `app/middleware/auth.py`**
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+
+@dataclass
+class AuthContext:
+    """
+    当前请求的鉴权上下文。demo 阶段恒为未鉴权直通（user_id=None）。
+    企微 OAuth SSO 接入时，只替换 AuthMiddleware.dispatch 内部的解析逻辑，
+    调用方（路由处理函数）读取 request.state.auth 的方式不变。
+    """
+
+    user_id: str | None
+    authenticated: bool
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """
+    鉴权中间件空壳接入点（部署约束 3）。demo 阶段不校验、不拒绝任何请求，
+    无条件放行；user_id 恒为 None。签名对齐未来企微 OAuth SSO：
+    真实实现落地时只替换 dispatch 内部逻辑，路由处理函数读取
+    request.state.auth 的方式保持不变。
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        request.state.auth = AuthContext(user_id=None, authenticated=False)
+        return await call_next(request)
+```
+
+- [ ] **Step 14: 运行确认通过**
+
+```bash
+pytest tests/test_auth_middleware.py -v
+```
+
+Expected: 2 个测试全部 PASS
+
+- [ ] **Step 15: Commit**
+
+```bash
+git add app/middleware/ tests/test_auth_middleware.py
+git commit -m "feat: 鉴权中间件空壳接入点（部署约束3，对齐未来企微OAuth SSO）"
 ```
 
 ---
@@ -495,7 +636,12 @@ CREATE TABLE IF NOT EXISTS outbox (
 
 def get_connection(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: FastAPI dispatches sync route handlers into a
+    # worker threadpool (a different thread per request), but create_app()
+    # holds one shared connection created on the startup thread. Demo scope
+    # has no concurrent-write requirement (design.md 非目标: 不追求高并发);
+    # M2's move to Postgres replaces this with per-request pooled connections.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -657,7 +803,7 @@ git commit -m "feat: SQLite 存储层与 effect_log 幂等装饰器（工程铁�
   `LLMGateway(api_key: str, base_url: str, model: str, supports_json_schema: bool, max_retries: int = 2, audit_hook: AuditHook | None = None, client=None)`。
   方法：`extract_structured(self, *, system_prompt: str, user_prompt: str, schema: type[BaseModel], prompt_version: str = "v1") -> BaseModel`，失败抛 `SchemaExtractionFailed`。
 - Produces: `app.llm.gateway.SchemaExtractionFailed(Exception)`。
-- Produces: `app.llm.gateway.AuditHook`（`Protocol`，方法 `record(self, *, model, prompt_version, input_hash, raw_response, token_usage, latency_ms) -> None`）与默认实现 `NoopAuditHook`（只 `logging.debug`，是本单元「采集过程审计留痕」的技术债占位——见计划开头 Out of Scope）。
+- Produces: `app.llm.gateway.AuditHook`（`Protocol`，方法 `record(self, *, model, prompt_version, input_hash, raw_response, token_usage, latency_ms) -> None`）与默认实现 `NoopAuditHook`（只 `logging.debug`，是本单元「采集过程审计留痕」的技术债占位——见计划开头 技术债）。
 - 构造函数拒绝 `model` 以 `latest` 结尾或等于 `"latest"`（复用 Task 1 的校验逻辑，与铁律 5 对应）。
 - 测试通过 `client=FakeOpenAIClient(...)` 注入假客户端，不发真实网络请求。
 
@@ -886,7 +1032,7 @@ class AuditHook(Protocol):
 class NoopAuditHook:
     """
     默认审计钩子：只打日志，不落库。
-    完整的 analysis_run 持久化是技术债（见计划 Out of Scope），
+    完整的 analysis_run 持久化是技术债（见计划开头 技术债），
     这里保留可插拔的调用点，接线时只需替换这一个实现。
     """
 
@@ -1949,7 +2095,11 @@ def generate_jd(
     last_body = ""
     last_hits: list[str] = []
 
-    for attempt in range(max_retries + 1):
+    # max_retries 是总生成尝试次数（不是"首次+N次重试"），对齐 spec「连续 N 次仍
+    # 出现则转人工处理」的字面语义——默认 2 次，与 job-description spec 的
+    # 「拦截歧视性表述」Scenario 保持一致（不同于 LLMGateway.max_retries 的
+    # "首次+N次重试"约定，两者是不同函数，各自的语义以各自测试为准）。
+    for _ in range(max_retries):
         parsed = gateway.extract_structured(
             system_prompt=JD_SYSTEM_PROMPT,
             user_prompt=profile.model_dump_json(),
@@ -1966,9 +2116,6 @@ def generate_jd(
                 blocked_categories=[],
             )
 
-        if attempt >= max_retries:
-            break
-
     return JDGenerationResult(
         text=_compose_with_label(last_body, generated_at),
         needs_manual=True,
@@ -1976,7 +2123,7 @@ def generate_jd(
     )
 ```
 
-注意测试里 `gateway._client` 是访问私有属性用于断言调用次数——这是测试内部实现细节，允许；生产代码不要依赖这个属性名。
+注意测试里 `gateway._client` 是访问私有属性用于断言调用次数——这是测试内部实现细节，允许；生产代码不要依赖这个属性名。原始版本的循环写成 `range(max_retries + 1)`（复用了 `LLMGateway.max_retries` 的"首次+N次重试"约定）会导致 `max_retries=2` 时最多尝试 3 次而不是 2 次，既让 `test_needs_manual_after_two_consecutive_hits`（只给 2 条脚本响应）在第 3 次调用时因响应耗尽而报错，也悄悄违反了 spec「连续 2 次仍出现则转人工处理」的字面约束（多给了一次机会）。已在写这份计划时用真实 pytest 跑出这个失败并改成 `range(max_retries)`，不是凭经验判断。
 
 - [ ] **Step 4: 运行确认通过**
 
@@ -2402,9 +2549,17 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
     graph.add_edge("effect_persist_draft", "effect_deliver_message")
     graph.add_edge("effect_deliver_message", END)
 
-    checkpointer = SqliteSaver.from_conn_string(db_path)
+    # SqliteSaver.from_conn_string(db_path) returns a context manager, not a
+    # ready checkpointer — using it directly (without `with`) breaks
+    # graph.compile() with "Invalid checkpointer provided". SqliteSaver(conn)
+    # takes a raw sqlite3.Connection instead, so it reuses the connection this
+    # function already received rather than opening a second one to the same
+    # file.
+    checkpointer = SqliteSaver(conn)
     return graph.compile(checkpointer=checkpointer)
 ```
+
+注意：早期草稿曾写成 `SqliteSaver.from_conn_string(db_path)` 直接赋值——这是 `langgraph-checkpoint-sqlite==2.0.6` 的一个常见误用陷阱，`from_conn_string` 返回的是一个 `@contextmanager` 生成器，不 `with` 就直接传给 `graph.compile(checkpointer=...)` 会在编译时抛 `TypeError: Invalid checkpointer provided`。写这份计划时用真实的 `langgraph==1.0.10` + `langgraph-checkpoint-sqlite==2.0.6`（`requirements.txt` 锁定的确切版本）跑通 `tests/test_web_api.py` 才发现这个问题，已改成 `SqliteSaver(conn)`。
 
 - [ ] **Step 10: 写图编译/调用的最小集成测试**
 
@@ -2465,7 +2620,7 @@ git commit -m "feat: LangGraph 图骨架接线（compute_/effect_ 节点、Sqlit
 
 ---
 
-### Task 10: FastAPI Web 服务 + 单页前端
+### Task 10: FastAPI Web 服务 + 单页前端（路径前缀自挂载 + 相对路径前端）
 
 **Files:**
 - Create: `app/web/__init__.py`
@@ -2474,14 +2629,21 @@ git commit -m "feat: LangGraph 图骨架接线（compute_/effect_ 节点、Sqlit
 - Test: `tests/test_web_api.py`
 
 **Interfaces:**
-- Consumes: `app.graph.build.build_intake_graph`、`app.agents.jd_agent.generate_jd`、`app.graph.nodes.effect_confirm_profile`（Task 9）、`app.channels.web_channel.WebChannel`（Task 6）、`app.config.get_settings`（Task 1）。
-- Produces: `app.web.server.create_app(*, db_path: str, gateway_factory) -> FastAPI`。路由：
+- Consumes: `app.graph.build.build_intake_graph`、`app.agents.jd_agent.generate_jd`、`app.graph.nodes.effect_confirm_profile`（Task 9）、`app.channels.web_channel.WebChannel`（Task 6）、`app.middleware.auth.AuthMiddleware`（Task 1）、`app.config.get_settings`（Task 1）。
+- Produces: `app.web.server.create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") -> FastAPI`。
+
+  **`root_path` 的处理方式（部署约束 1）**：所有业务路由先注册到一个 `APIRouter()` 上，最后用 `app.include_router(router, prefix=root_path)` 把整个 router 挂到 `root_path` 前缀下。这是应用**自己**把路由挂到前缀下（自挂载），不依赖任何反向代理做路径剥离——`root_path=""` 时行为等价于挂在域根（本地开发/单元测试默认值）；`root_path="/hr/recruit-agent"` 时全部路由变成 `/hr/recruit-agent/`、`/hr/recruit-agent/api/jobs` 等。将来统一网关上线，只要 nginx `proxy_pass` 把请求原样转发到这个前缀（不剥离），应用不需要改一行代码。首页 HTML 通过服务端注入的 `<base href="{root_path}/">` + 前端相对路径 `fetch` 调用，让浏览器在任意挂载前缀下都能正确拼出 API 地址。
+
+  路由（均相对 `root_path` 前缀）：
+  - `GET /` → 返回单页前端，动态注入 `<base href>`
   - `POST /api/jobs` body `{"message": str}` → 创建 job（`drafting`），跑一轮 intake graph，返回 outbox 最新消息
   - `POST /api/jobs/{job_id}/reply` body `{"message": str}` → 追加一轮
-  - `POST /api/jobs/{job_id}/confirm` → 若最新画像未处于 `drafting` 且非 `is_complete`（即还在追问中）拒绝；否则冻结画像、触发 JD 生成，返回 JD 文本
+  - `POST /api/jobs/{job_id}/confirm` → 若最新画像未处于可确认状态则拒绝（409）；否则冻结画像、触发 JD 生成，返回 JD 文本
   - `GET /api/jobs/{job_id}` → 返回当前 job/profile/outbox 状态，供前端轮询渲染
 
-- [ ] **Step 1: 写失败测试（用 FastAPI TestClient，注入假 gateway）**
+  `app.add_middleware(AuthMiddleware)`（Task 1）在 `create_app` 内挂载，demo 阶段无条件放行。
+
+- [ ] **Step 1: 写失败测试（用 FastAPI TestClient，注入假 gateway；含 root_path 子路径挂载测试）**
 
 ```python
 # tests/test_web_api.py
@@ -2530,7 +2692,7 @@ class ScriptedOpenAIClient:
         self.chat = ScriptedChat(responses)
 
 
-def make_app(tmp_path, responses):
+def make_app(tmp_path, responses, root_path: str = ""):
     from app.llm.gateway import LLMGateway
 
     db_path = str(tmp_path / "web.db")
@@ -2545,7 +2707,7 @@ def make_app(tmp_path, responses):
             client=client,
         )
 
-    app = create_app(db_path=db_path, gateway_factory=gateway_factory)
+    app = create_app(db_path=db_path, gateway_factory=gateway_factory, root_path=root_path)
     return TestClient(app)
 
 
@@ -2622,6 +2784,73 @@ def test_confirm_rejected_when_still_drafting(tmp_path):
 
     confirm_resp = client.post(f"/api/jobs/{job_id}/confirm")
     assert confirm_resp.status_code == 409
+
+
+def test_index_defaults_base_href_to_root_when_no_root_path(tmp_path):
+    client = make_app(tmp_path, [], root_path="")
+
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    assert '<base href="/">' in resp.text
+
+
+def test_index_base_href_matches_configured_root_path(tmp_path):
+    client = make_app(tmp_path, [], root_path="/hr/recruit-agent")
+
+    resp = client.get("/hr/recruit-agent/")
+
+    assert resp.status_code == 200
+    assert '<base href="/hr/recruit-agent/">' in resp.text
+
+
+def test_app_works_when_mounted_at_arbitrary_subpath(tmp_path):
+    """
+    路径前缀就绪的硬验收标准（部署约束1）：把服务挂到任意子路径下
+    （这里用 /foo/bar 举例，不是 /hr/recruit-agent 也要正常工作）都不 404。
+    """
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": ["是否涉及 AUTOSAR？"],
+                "profile_patch": {},
+            }
+        )
+    ]
+    client = make_app(tmp_path, responses, root_path="/foo/bar")
+
+    index_resp = client.get("/foo/bar/")
+    assert index_resp.status_code == 200
+
+    api_resp = client.post("/foo/bar/api/jobs", json={"message": "要个做嵌入式开发的"})
+    assert api_resp.status_code == 200
+    assert api_resp.json()["message"]["type"] == "question"
+
+
+def test_unprefixed_paths_404_when_root_path_is_configured(tmp_path):
+    """
+    反向证明：设了 /foo/bar 前缀后，不带前缀的路径必须 404——
+    否则前缀就只是摆设，没有真的生效。
+    """
+    client = make_app(tmp_path, [], root_path="/foo/bar")
+
+    assert client.get("/").status_code == 404
+    assert client.post("/api/jobs", json={"message": "x"}).status_code == 404
+
+
+def test_frontend_html_has_no_hardcoded_absolute_api_or_static_paths(tmp_path):
+    """
+    验证「前端资源与接口调用一律相对路径，禁止硬编码 /static/... /api/...」
+    这条约束在实际产出的 HTML 里成立，不是文字承诺。
+    """
+    client = make_app(tmp_path, [], root_path="/hr/recruit-agent")
+
+    html = client.get("/hr/recruit-agent/").text
+
+    assert '"/api/jobs' not in html
+    assert "`/api/jobs" not in html
+    assert "fetch(\"api/jobs\")" in html or "url = jobId" in html
 ```
 
 - [ ] **Step 2: 运行确认失败**
@@ -2647,8 +2876,8 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -2656,10 +2885,12 @@ from app.agents.jd_agent import generate_jd
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.nodes import effect_confirm_profile
+from app.middleware.auth import AuthMiddleware
 from app.schemas.job_profile import JobProfile
 from app.storage.db import get_connection, init_schema
 
 STATIC_DIR = Path(__file__).parent / "static"
+INDEX_TEMPLATE_PATH = STATIC_DIR / "index.html"
 
 
 class CreateJobRequest(BaseModel):
@@ -2670,17 +2901,22 @@ class ReplyRequest(BaseModel):
     message: str
 
 
-def create_app(*, db_path: str, gateway_factory: Callable) -> FastAPI:
+def _render_index(root_path: str) -> str:
+    """把 <!--BASE_HREF--> 占位符换成真实 <base href>，让前端相对路径请求
+    在任意挂载前缀下都能解析到正确的地址。root_path="" 时挂域根。"""
+    html = INDEX_TEMPLATE_PATH.read_text(encoding="utf-8")
+    base_href = f"{root_path}/" if root_path else "/"
+    return html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">')
+
+
+def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") -> FastAPI:
     app = FastAPI(title="卓品智能招聘助手 · Demo")
+    app.add_middleware(AuthMiddleware)
+
     conn = get_connection(db_path)
     init_schema(conn)
     channel = WebChannel(conn)
-
-    def _get_history(job_id: str) -> tuple[list[dict], int]:
-        rows = conn.execute(
-            "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version", (job_id,)
-        ).fetchall()
-        return [], len(rows)
+    router = APIRouter()
 
     def _run_turn(job_id: str, message: str) -> dict:
         gateway = gateway_factory()
@@ -2706,7 +2942,7 @@ def create_app(*, db_path: str, gateway_factory: Callable) -> FastAPI:
         latest = channel.latest(job_id)
         return {"type": latest.type, "payload": latest.payload}
 
-    @app.post("/api/jobs")
+    @router.post("/api/jobs")
     def create_job(req: CreateJobRequest):
         job_id = str(uuid.uuid4())
         conn.execute(
@@ -2716,7 +2952,7 @@ def create_app(*, db_path: str, gateway_factory: Callable) -> FastAPI:
         message = _run_turn(job_id, req.message)
         return {"job_id": job_id, "message": message}
 
-    @app.post("/api/jobs/{job_id}/reply")
+    @router.post("/api/jobs/{job_id}/reply")
     def reply(job_id: str, req: ReplyRequest):
         job = conn.execute("SELECT id FROM job WHERE id=?", (job_id,)).fetchone()
         if job is None:
@@ -2724,7 +2960,7 @@ def create_app(*, db_path: str, gateway_factory: Callable) -> FastAPI:
         message = _run_turn(job_id, req.message)
         return {"job_id": job_id, "message": message}
 
-    @app.post("/api/jobs/{job_id}/confirm")
+    @router.post("/api/jobs/{job_id}/confirm")
     def confirm(job_id: str):
         row = conn.execute(
             "SELECT profile_json, status FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
@@ -2783,7 +3019,7 @@ def create_app(*, db_path: str, gateway_factory: Callable) -> FastAPI:
             "needs_manual": jd_result.needs_manual,
         }
 
-    @app.get("/api/jobs/{job_id}")
+    @router.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
         job = conn.execute(
             "SELECT id, title, status FROM job WHERE id=?", (job_id,)
@@ -2797,14 +3033,21 @@ def create_app(*, db_path: str, gateway_factory: Callable) -> FastAPI:
             "message": {"type": latest.type, "payload": latest.payload} if latest else None,
         }
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    @router.get("/")
+    def index() -> HTMLResponse:
+        return HTMLResponse(_render_index(root_path))
 
-    @app.get("/")
-    def index():
-        return FileResponse(str(STATIC_DIR / "index.html"))
+    app.include_router(router, prefix=root_path)
+    app.mount(
+        f"{root_path}/static" if root_path else "/static",
+        StaticFiles(directory=str(STATIC_DIR)),
+        name="static",
+    )
 
     return app
 ```
+
+注意：`app.include_router(router, prefix=root_path)` 是本任务的核心机制——路由全部先注册成不带前缀的裸路径，最后统一挂到 `root_path` 下。`root_path=""` 时 `prefix=""` 与老版本行为完全一致（域根挂载）；`root_path="/foo/bar"` 时不带前缀的 `/`、`/api/jobs` 会真实 404（Step 1 的 `test_unprefixed_paths_404_when_root_path_is_configured` 断言了这一点），证明前缀是真的生效了，不是摆设。当前 `index.html` 没有引用任何 `/static/...` 下的资源（样式与脚本全部内联），`static` 挂载点是为将来独立 CSS/JS 文件预留的，同样带前缀，保持一致。
 
 - [ ] **Step 5: 运行确认通过**
 
@@ -2812,15 +3055,16 @@ def create_app(*, db_path: str, gateway_factory: Callable) -> FastAPI:
 pytest tests/test_web_api.py -v
 ```
 
-Expected: 3 个测试全部 PASS
+Expected: 9 个测试全部 PASS
 
-- [ ] **Step 6: 写单页前端 `app/web/static/index.html`（含「演示环境」显著标注，满足 0.9）**
+- [ ] **Step 6: 写单页前端 `app/web/static/index.html`（含「演示环境」显著标注、`<!--BASE_HREF-->` 占位符、相对路径 fetch）**
 
 ```html
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
+<!--BASE_HREF-->
 <title>卓品智能招聘助手 · 内网 Demo</title>
 <style>
   body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
@@ -2846,6 +3090,8 @@ Expected: 3 个测试全部 PASS
   <div id="jd-output"></div>
 
   <script>
+    // 全部请求用相对路径（不带开头的 "/"），配合 <head> 里的 <base href> 解析，
+    // 挂在任意前缀下都不需要改这段代码（部署约束1）。
     let jobId = null;
 
     function appendTurn(role, text) {
@@ -2879,7 +3125,7 @@ Expected: 3 个测试全部 PASS
       appendTurn("user", text);
       input.value = "";
 
-      const url = jobId ? `/api/jobs/${jobId}/reply` : "/api/jobs";
+      const url = jobId ? `api/jobs/${jobId}/reply` : "api/jobs";
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2891,7 +3137,7 @@ Expected: 3 个测试全部 PASS
     });
 
     document.getElementById("confirm-btn").addEventListener("click", async () => {
-      const resp = await fetch(`/api/jobs/${jobId}/confirm`, { method: "POST" });
+      const resp = await fetch(`api/jobs/${jobId}/confirm`, { method: "POST" });
       const data = await resp.json();
       const output = document.getElementById("jd-output");
       output.style.display = "block";
@@ -2909,21 +3155,23 @@ Expected: 3 个测试全部 PASS
 
 ```bash
 git add app/web/ tests/test_web_api.py
-git commit -m "feat: FastAPI Web 服务 + 单页前端（0.8, 0.9 演示环境标注）"
+git commit -m "feat: FastAPI Web 服务 + 单页前端（root_path 自挂载 + 相对路径前端，0.8/0.9）"
 ```
 
 ---
 
-### Task 11: Docker 化与部署
+### Task 11: Windows 服务器部署（venv + 计划任务，无 Docker）
+
+> 原「Docker 化与部署」整体作废（04-部署与门户挂载.md §7）。目标服务器 `192.168.100.51` 是 Windows，没有 Docker，也不引入容器运行时。部署形态改为 Python venv + Windows 计划任务保活 + 防火墙规则，过渡期监听 **8095** 绑 `0.0.0.0`。
 
 **Files:**
-- Create: `Dockerfile`
-- Create: `docker-compose.yml`
-- Create: `docs/deploy-51-server.md`
 - Create: `app/main.py`
+- Create: `deploy-server.ps1`
+- Create: `sync-to-server.ps1`
+- Create: `docs/deploy-51-server.md`
 
 **Interfaces:**
-- Produces: `app.main.app`（`FastAPI` 实例，`create_app` 用 `get_settings()` 组装真实 `gateway_factory`，供 `uvicorn app.main:app` 启动）。
+- Produces: `app.main.app`（`FastAPI` 实例，`create_app` 用 `get_settings()` 组装真实 `gateway_factory` 与 `root_path`，供 `uvicorn app.main:app` 启动）。
 
 - [ ] **Step 1: 写 `app/main.py`（生产入口，串起 Task 1 的配置与 Task 10 的 app 工厂）**
 
@@ -2944,7 +3192,11 @@ def _gateway_factory() -> LLMGateway:
     )
 
 
-app = create_app(db_path=settings.db_path, gateway_factory=_gateway_factory)
+app = create_app(
+    db_path=settings.db_path,
+    gateway_factory=_gateway_factory,
+    root_path=settings.root_path,
+)
 ```
 
 - [ ] **Step 2: 本地跑一次确认能启动（手工验证，非 pytest）**
@@ -2953,74 +3205,198 @@ app = create_app(db_path=settings.db_path, gateway_factory=_gateway_factory)
 cd /Users/paulshao/Projects/HumanResource
 source .venv/bin/activate
 cp .env.example .env  # 先用假 key 验证能不能启动，不需要真实调用
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8095
 ```
 
-Expected: 终端打印 `Uvicorn running on http://127.0.0.1:8000`，浏览器打开能看到「演示环境」横幅与输入框（此时点发送会因为假 API Key 报错，属预期，先确认页面能起来）。Ctrl+C 停止。
+Expected: 终端打印 `Uvicorn running on http://127.0.0.1:8095`。**注意**：`.env.example` 里 `ROOT_PATH` 默认是 `/hr/recruit-agent`，所以浏览器要打开 `http://127.0.0.1:8095/hr/recruit-agent/` 才能看到「演示环境」横幅与输入框——直接开 `http://127.0.0.1:8095/` 会 404，这是 Task 10 路径前缀自挂载机制的预期行为，不是 bug。此时点发送会因为假 API Key 报错，属预期，先确认页面能起来。Ctrl+C 停止。
 
-- [ ] **Step 3: 写 `Dockerfile`**
+- [ ] **Step 3: 写 `deploy-server.ps1`（首次部署，在服务器上通过 RDP 以管理员身份运行一次）**
 
-```dockerfile
-FROM python:3.11-slim
+```powershell
+<#
+.SYNOPSIS
+  卓品智能招聘助手 Demo 首次部署脚本 —— Windows venv + 计划任务，无 Docker（部署约束4）。
+.DESCRIPTION
+  在目标服务器 192.168.100.51 上、以管理员身份运行（RDP 登录后手工执行一次）：
+    1. 若不存在则创建 Python venv
+    2. 安装 requirements.txt 依赖
+    3. 注册 Windows 计划任务：SYSTEM 账户 + AtStartup 触发 + 失败重启 3 次
+    4. 开放防火墙入站规则，放行 8095
+  代码需先用 sync-to-server.ps1（或手工方式）放到 $AppDir 下，再运行本脚本。
+  自包含实现，不依赖「企业AI转型」仓库的 ZhuopinDeploy.psm1。
+#>
 
-WORKDIR /app
+param(
+    [string]$AppDir = "C:\apps\zhuopin-recruit-agent",
+    [string]$PythonExe = "python",
+    [int]$Port = 8095,
+    [string]$TaskName = "ZhuopinRecruitAgent",
+    [string]$FirewallRuleName = "ZhuopinRecruitAgent-Inbound-8095"
+)
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+$ErrorActionPreference = "Stop"
 
-COPY app/ app/
-COPY scripts/ scripts/
+Write-Host "==> 部署目录: $AppDir"
+if (-not (Test-Path $AppDir)) {
+    throw "部署目录 $AppDir 不存在。请先用 sync-to-server.ps1 把代码放到这里，再运行本脚本。"
+}
 
-RUN mkdir -p /app/data
+Set-Location $AppDir
 
-EXPOSE 8000
+$venvPath = Join-Path $AppDir ".venv"
+$venvPython = Join-Path $venvPath "Scripts\python.exe"
+$venvUvicorn = Join-Path $venvPath "Scripts\uvicorn.exe"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+Write-Host "==> 检查 venv: $venvPath"
+if (-not (Test-Path $venvPython)) {
+    Write-Host "    venv 不存在，创建中..."
+    & $PythonExe -m venv $venvPath
+} else {
+    Write-Host "    venv 已存在，跳过创建"
+}
+
+Write-Host "==> 安装依赖"
+& $venvPython -m pip install --upgrade pip
+& $venvPython -m pip install -r (Join-Path $AppDir "requirements.txt")
+
+Write-Host "==> 检查 .env"
+$envFile = Join-Path $AppDir ".env"
+if (-not (Test-Path $envFile)) {
+    Write-Warning ".env 不存在！请在 $envFile 手工创建（参考 .env.example），填入真实 LLM_API_KEY 后再启动服务。"
+}
+
+Write-Host "==> 注册 Windows 计划任务: $TaskName"
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($existingTask) {
+    Write-Host "    任务已存在，先移除旧定义"
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
+
+$action = New-ScheduledTaskAction `
+    -Execute $venvUvicorn `
+    -Argument "app.main:app --host 0.0.0.0 --port $Port" `
+    -WorkingDirectory $AppDir
+
+$trigger = New-ScheduledTaskTrigger -AtStartup
+
+$principal = New-ScheduledTaskPrincipal `
+    -UserId "SYSTEM" `
+    -LogonType ServiceAccount `
+    -RunLevel Highest
+
+$settings = New-ScheduledTaskSettingsSet `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 0)
+
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Action $action `
+    -Trigger $trigger `
+    -Principal $principal `
+    -Settings $settings `
+    -Description "卓品智能招聘助手 Demo（M1 第0章），FastAPI+uvicorn，监听 $Port" | Out-Null
+
+Write-Host "==> 开放防火墙规则: $FirewallRuleName (TCP $Port)"
+$existingRule = Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
+if ($existingRule) {
+    Write-Host "    规则已存在，跳过"
+} else {
+    New-NetFirewallRule `
+        -DisplayName $FirewallRuleName `
+        -Direction Inbound `
+        -Protocol TCP `
+        -LocalPort $Port `
+        -Action Allow | Out-Null
+}
+
+Write-Host "==> 启动计划任务"
+Start-ScheduledTask -TaskName $TaskName
+
+Start-Sleep -Seconds 3
+$taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName
+Write-Host "==> 计划任务状态: LastTaskResult=$($taskInfo.LastTaskResult)（0 = 成功启动）"
+Write-Host "==> 部署完成。验证: curl.exe http://localhost:$Port/hr/recruit-agent/"
 ```
 
-- [ ] **Step 4: 写 `docker-compose.yml`**
+- [ ] **Step 4: 写 `sync-to-server.ps1`（日常发版，从开发机运行）**
 
-```yaml
-services:
-  recruiting-demo:
-    build: .
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
+```powershell
+<#
+.SYNOPSIS
+  日常发版脚本 —— 从开发机把代码同步到 51 服务器并重启计划任务。
+.DESCRIPTION
+  不重建 venv、不重装依赖；requirements.txt 变更时需另外在服务器上手工
+  重跑 deploy-server.ps1 的 venv/依赖安装部分（或直接重跑整个 deploy-server.ps1，
+  它对已存在的 venv 是幂等的，只会跳过创建步骤）。
+  依赖本机到目标服务器的 SSH 访问（scp/ssh 命令行工具，Windows 10/11 自带 OpenSSH 客户端）。
+  自包含实现，不依赖「企业AI转型」仓库的 ZhuopinDeploy.psm1。
+#>
+
+param(
+    [string]$ServerHost = "192.168.100.51",
+    [string]$ServerUser = "Administrator",
+    [string]$RemoteAppDir = "C:/apps/zhuopin-recruit-agent",
+    [string]$LocalAppDir = ".",
+    [string]$TaskName = "ZhuopinRecruitAgent"
+)
+
+$ErrorActionPreference = "Stop"
+
+$remote = "$ServerUser@$ServerHost"
+
+Write-Host "==> 推送代码到 $remote`:$RemoteAppDir"
+
+# 不推送这些目录：.venv（服务器自己建）、data（运行时数据）、缓存、.git
+$excludeNames = @(".venv", "data", "__pycache__", ".pytest_cache", ".git")
+
+$itemsToCopy = Get-ChildItem -Path $LocalAppDir -Force |
+    Where-Object { $excludeNames -notcontains $_.Name }
+
+foreach ($item in $itemsToCopy) {
+    Write-Host "    scp: $($item.Name)"
+    if ($item.PSIsContainer) {
+        scp -r $item.FullName "${remote}:${RemoteAppDir}/"
+    } else {
+        scp $item.FullName "${remote}:${RemoteAppDir}/"
+    }
+}
+
+Write-Host "==> 远程重启计划任务: $TaskName"
+# /end 在任务未运行时会报非零退出码，用 & 而不是 && 让 /run 无论如何都执行
+ssh $remote "schtasks /end /tn `"$TaskName`" & schtasks /run /tn `"$TaskName`""
+
+Write-Host "==> 等待服务重新监听"
+Start-Sleep -Seconds 5
+
+Write-Host "==> 远程健康检查"
+ssh $remote "curl.exe -sS -o NUL -w `"HTTP %{http_code}`n`" --max-time 10 http://localhost:8095/hr/recruit-agent/"
+
+Write-Host "==> 发版完成"
 ```
 
-- [ ] **Step 5: 本地构建镜像确认能起（手工验证）**
-
-```bash
-docker compose build
-docker compose up -d
-curl -s http://localhost:8000/ | head -5
-docker compose down
-```
-
-Expected: `curl` 返回 HTML（含"演示环境"字样）；`docker compose build` 无报错。
-
-- [ ] **Step 6: 写部署说明 `docs/deploy-51-server.md`**
+- [ ] **Step 5: 写部署说明 `docs/deploy-51-server.md`**
 
 ```markdown
-# 部署到 51 服务器
+# 部署到 51 服务器（Windows venv + 计划任务，无 Docker）
 
-依据 `04-部署与门户挂载.md` 的既定方案：独立容器，门户手动挂一行导航链接，零接触现有门户代码。
+依据 `04-部署与门户挂载.md` §6 决策记录：目标服务器 `192.168.100.51` 是 Windows，
+没有 Docker，沿用现有 4 个服务同款的部署模式——venv + 计划任务，不引入容器运行时。
 
-## 前置条件（若 `04-部署与门户挂载.md` 第 2 节待查清单还没填完，先找 Paul/IT 确认）
+## 前置条件
 
-- 51 服务器已装 Docker / Docker Compose
-- 服务器能出公网访问 LLM 供应商 API（或已配置白名单）
-- 已分配一个内网可用端口（本服务默认监听容器内 8000，宿主机端口按实际分配调整）
+- 服务器已装 Python 3.11+（与其他现有服务共用的解释器版本对齐，若不确定找 IT 确认）
+- 本机（开发机）到服务器的 SSH 访问已配置（`sync-to-server.ps1` 用 scp/ssh）
+- 服务器能出公网访问 LLM 供应商 API（已实测：DeepSeek / 火山方舟 / 阿里百炼三家域名连通，见
+  `04-部署与门户挂载.md` §4）
 
-## 部署步骤
+## 首次部署
 
-1. 把仓库拉到服务器（或用 CI 推镜像，视现有板块发版方式而定——待 `04-部署与门户挂载.md` 2.3 节查清后调整）
-2. 在服务器上创建 `.env`（**不要把 `.env` 打进镜像或提交进 git**）：
+1. 在服务器上创建部署目录（默认 `C:\apps\zhuopin-recruit-agent`）
+2. 从开发机运行 `sync-to-server.ps1` 把代码推过去（首次也可以手工 scp，效果一样）
+3. RDP 登录服务器，以管理员身份打开 PowerShell，进入部署目录，创建 `.env`
+   （**不要把 `.env` 提交进 git，也不要放在门户可访问的路径下**）：
 
 ```
 LLM_PROVIDER=<按 docs/m1-model-comparison.md 的决策填>
@@ -3029,30 +3405,59 @@ LLM_BASE_URL=<对应供应商 base_url>
 LLM_MODEL=<锁定版本号，禁止 latest>
 LLM_SUPPORTS_JSON_SCHEMA=<true|false>
 DB_PATH=data/demo.db
+ROOT_PATH=/hr/recruit-agent
 ```
 
-3. 启动：
+4. 运行首次部署脚本：
 
-```bash
-docker compose up -d --build
+```powershell
+.\deploy-server.ps1
 ```
 
-4. 验证：`curl http://localhost:8000/` 应返回带「演示环境」横幅的页面
-5. 请 Paul 在门户导航加一行链接指向 `http://<内网IP>:<端口>/`
+5. 验证：`curl.exe http://localhost:8095/hr/recruit-agent/` 应返回带「演示环境」横幅的页面；
+   `Get-ScheduledTask -TaskName ZhuopinRecruitAgent` 应显示 `Ready`/`Running`
+6. 请 Paul 在门户导航加一行外链，指向 `http://192.168.100.51:8095/hr/recruit-agent/`
+   （板块名「HR·招聘智能体」，见 `04-部署与门户挂载.md` §2「门户导航挂法」）
 
-## 安全红线（照抄 `04-部署与门户挂载.md` 第 4 节，执行时逐条核对）
+## 日常发版
 
-- [ ] `.env` 没有出现在镜像里（`docker history <image> | grep -i env` 检查不到内容）
+代码有更新后，从开发机运行：
+
+```powershell
+.\sync-to-server.ps1
+```
+
+它会把代码 scp 推过去并重启计划任务。**依赖变更**（`requirements.txt` 改了）时，
+额外 RDP 登录服务器重跑一次 `deploy-server.ps1`（对已存在的 venv 是幂等的，
+只会重新 `pip install`，不会重建 venv）。
+
+## 保活验证
+
+- 重启服务器后，计划任务应在开机时自动拉起服务（`AtStartup` 触发器）：
+  `Get-ScheduledTaskInfo -TaskName ZhuopinRecruitAgent` 查看 `LastRunTime`
+- 手工 `Stop-Process` 掉 uvicorn 进程后，计划任务应在 1 分钟内自动重启
+  （`-RestartCount 3 -RestartInterval 1分钟`，验证时最多等 3 次、共 3 分钟）
+
+## 安全红线（照抄 `04-部署与门户挂载.md` §5，执行时逐条核对）
+
+- [ ] `.env` 没有出现在门户可访问的任何路径下，也没有提交进 git
 - [ ] LLM 凭据不在门户可访问的任何路径下
 - [ ] 页面「演示环境，不进入正式招聘流程」标注清晰可见
-- [ ] 若服务器不能出公网，白名单只开 LLM 供应商域名
+- [ ] 访问日志沿用现有四服务同款做法（JSONL，不采集个人身份信息）
+
+## 技术债提醒
+
+- **过渡端口 8095 是临时的**：统一门户网关上线即迁移，届时只需网关加一条
+  `proxy_pass` 指向 `root_path=/hr/recruit-agent`，本应用零改动（见计划开头 技术债 #8）
+- **鉴权仍是门户共享口令**：M2 起处理真实简历前必须换成可识别到人的登录 + 访问留痕
+  （见计划开头 技术债 #9，`04-部署与门户挂载.md` §4 风险二）
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add app/main.py Dockerfile docker-compose.yml docs/deploy-51-server.md
-git commit -m "feat: Docker 化与 51 服务器部署说明（0.10）"
+git add app/main.py deploy-server.ps1 sync-to-server.ps1 docs/deploy-51-server.md
+git commit -m "feat: Windows 服务器部署（venv + 计划任务，无 Docker，部署约束4）"
 ```
 
 ---
@@ -3063,9 +3468,6 @@ git commit -m "feat: Docker 化与 51 服务器部署说明（0.10）"
 - Create: `docs/m1-demo-pilot-feedback.md`
 
 这是操作性任务（0.11），不是代码任务：交付一份可直接使用的反馈收集表 + 执行清单，实际邀请 3 位业务经理试跑、收集反馈是人工操作，不能由这个计划代劳，只能把执行框架准备好。
-
-**Files:**
-- Create: `docs/m1-demo-pilot-feedback.md`
 
 - [ ] **Step 1: 写反馈收集表与执行清单**
 
@@ -3097,7 +3499,7 @@ git commit -m "feat: Docker 化与 51 服务器部署说明（0.10）"
 ## 汇总与下一步
 
 - 3 份反馈汇总后，若技术栈字段准确率明显低于 `02-系统架构与MVP范围.md` 定的 ≥80% 目标（demo 阶段样本量小，仅作预警不是正式验收——正式验收是 tasks.md 9.1 的 10 个历史岗位重跑），记录下来在 1.x 之前排查
-- 把「技术债」小节（见本计划开头）列的 5 项拿出来，结合反馈里暴露的问题排优先级，再进 `tasks.md` 第 1 章
+- 把「技术债」小节（见本计划开头）列的 9 项拿出来，结合反馈里暴露的问题排优先级，再进 `tasks.md` 第 1 章
 ```
 
 - [ ] **Step 2: Commit**
@@ -3128,20 +3530,49 @@ git commit -m "docs: M1 Demo 试运行反馈收集表与执行清单（0.11）"
 - 歧视性表述拦截 → Task 8
 - 文案导出（复制）→ Task 10 前端；生成留痕复用 Task 4 的 `AuditHook`
 
-**占位符检查**：全文搜索过，没有 TBD/TODO；唯一"留待人工填写"的是 `docs/m1-model-comparison.md` 的实测数字表格和 `docs/m1-demo-pilot-feedback.md` 的反馈表——这两处本质是"数据收集模板"，不是代码或逻辑占位，已在对应 Task 里明确说明原因。
+`job-profile-approval/spec.md`：
+- 画像确认断点（Web scenario，通道无关）→ Task 9 `effect_confirm_profile` + Task 10 `confirm` 路由；企微 scenario 依赖 Channel 抽象但不实现
+- 副作用幂等 → Task 3 `idempotent_effect` + Task 9 幂等专项测试（`test_graph_idempotency.py`）
+- 回调可靠接收 → **Out of Scope**（企微通道本体不实现，无回调可接收）
+- 决策留痕 → `human_review` 完整落库是技术债，本单元只在 `job_profile.status` 记录确认结果
 
-**类型一致性检查**：`JobProfile`（Task 2）在 Task 4/5/7/8/10 里签名一致；`IntakeState`（Task 9）字段名在 `nodes.py`/`build.py`/`server.py` 里一致；`OutboundMessage.type` 取值集合（`question`/`confirmation_prompt`/`jd_result`/`needs_manual`）在 Task 6/9/10 前端里保持一致。
+`CLAUDE.md` 部署约束（本次重新生成的核心）：
+- 部署约束 1（路径前缀就绪）→ Task 1 `Settings.root_path` + Task 10 `create_app(root_path=...)` 自挂载机制 + `test_app_works_when_mounted_at_arbitrary_subpath` / `test_unprefixed_paths_404_when_root_path_is_configured` 两个测试，真实覆盖"挂到任意子路径都能正常工作"这条硬验收标准，不是文字承诺
+- 部署约束 2（过渡端口 8095）→ Task 11 `deploy-server.ps1`/`sync-to-server.ps1` 硬编码默认值 8095；迁移到网关登记为技术债 8
+- 部署约束 3（鉴权中间件空壳）→ Task 1 `AuthMiddleware` + `AuthContext`，Task 10 `create_app` 挂载
+- 部署约束 4（Windows venv + 计划任务，无 Docker）→ Task 11 完整实现，两个 PowerShell 脚本均为可直接执行内容，不引用「企业AI转型」仓库的 `ZhuopinDeploy.psm1`
+- 部署约束 5（M2 起需登录+留痕）→ 不在本单元范围，登记为技术债 9，`AuthMiddleware` 的空壳接入点已为此留位
+
+**占位符检查**：全文搜索过，没有 TBD/TODO；唯一"留待人工填写"的是 `docs/m1-model-comparison.md` 的实测数字表格和 `docs/m1-demo-pilot-feedback.md` 的反馈表——这两处本质是"数据收集模板"，不是代码或逻辑占位，已在对应 Task 里明确说明原因。`deploy-server.ps1` / `sync-to-server.ps1` 是完整可执行的 PowerShell 脚本，不是伪代码；服务器上是否已装 Python 3.11+ 作为前置条件在 `docs/deploy-51-server.md` 里注明，不是脚本里的占位符。
+
+**类型一致性检查**：`JobProfile`（Task 2）在 Task 4/5/7/8/10 里签名一致；`IntakeState`（Task 9）字段名在 `nodes.py`/`build.py`/`server.py` 里一致；`OutboundMessage.type` 取值集合（`question`/`confirmation_prompt`/`jd_result`/`needs_manual`）在 Task 6/9/10 前端里保持一致；`create_app(*, db_path, gateway_factory, root_path="")` 签名在 Task 10（定义）与 Task 11 `app/main.py`（调用，传入 `settings.root_path`）之间一致；`AuthMiddleware`/`AuthContext`（Task 1 定义）与 Task 10 `create_app` 里的 `app.add_middleware(AuthMiddleware)` 调用一致。
 
 **幂等覆盖检查**：`effect_persist_draft`、`effect_deliver_message`、`effect_confirm_profile` 三个写库/投递动作全部用 `idempotent_effect` 装饰，Task 9 有专项重放测试。
+
+**路径前缀验收专项自查**（对应用户本次重新生成的核心诉求，不能只是文字承诺）：
+- `test_app_works_when_mounted_at_arbitrary_subpath`（`tests/test_web_api.py`，Task 10 Step 1）用 `root_path="/foo/bar"`（不是默认值 `/hr/recruit-agent`）验证首页与 API 路由都返回 200，不 404
+- `test_unprefixed_paths_404_when_root_path_is_configured` 反向验证：配置了前缀后，不带前缀的路径必须 404，证明前缀真的生效而非摆设
+- `test_frontend_html_has_no_hardcoded_absolute_api_or_static_paths` 验证产出的 HTML 里没有硬编码的 `/api/...` 绝对路径引用
+- 这套 router-prefix 自挂载 + `<base href>` 注入的机制在写入计划前已用真实 FastAPI 0.115.6 + httpx 0.28.1（与 `requirements.txt` 锁定版本一致）跑通验证，不是凭经验猜测的设计
+
+**全量端到端验证（非常规自查，专为这次重新生成做的）**：写完计划后，把全部 12 个 Task 的代码从这份文档里原样抽取落盘、按 `requirements.txt` 精确锁定版本（含 `langgraph==1.0.10`、`langgraph-checkpoint-sqlite==2.0.6`）装进 Python 3.12（满足 `pyproject.toml` 的 `>=3.11`）venv，跑了一遍完整 `pytest`。**53 个测试全部 PASS**，过程中发现并修复了 3 个真实 bug（均已同步进上面对应 Task 的代码块，不是残留问题）：
+
+1. **Task 8 `generate_jd` 重试次数差一**：`range(max_retries + 1)` 复用了 `LLMGateway.max_retries` 的"首次+N次重试"约定，导致 `max_retries=2` 时最多尝试 3 次，既让 `test_needs_manual_after_two_consecutive_hits` 报错（脚本只给 2 条响应），也悄悄突破了 spec「连续 2 次仍出现则转人工处理」的字面约束——已改成 `range(max_retries)`
+2. **Task 3 `get_connection` 跨线程报错**：FastAPI 把同步路由处理函数派发到线程池，而 `create_app` 只建一个共享 `sqlite3.Connection`，默认 `check_same_thread=True` 导致 `sqlite3.ProgrammingError`——已加 `check_same_thread=False`（demo 规模不追求高并发，风险可接受；M2 迁移到 Postgres 后用连接池，这个问题自然消失）
+3. **Task 9 `build_intake_graph` checkpointer 用法错误**：`SqliteSaver.from_conn_string(db_path)` 返回的是 `@contextmanager` 生成器，不 `with` 直接传给 `graph.compile()` 会抛 `TypeError: Invalid checkpointer provided`——已改成 `SqliteSaver(conn)`，复用函数本就持有的连接
+
+这三个 bug 都不是本次"两处必须变"范围内引入的新代码——它们藏在从旧计划原样搬运的 Task 3/8/9 里，此前从未被真正执行过（`run-build` 尚未开始）。如果不做这次全量重试，会在 `run-build` 阶段才被 TDD 的"运行确认通过"步骤捕获，届时才第一次发现，现在提前堵上。
 
 ---
 
 ## 交付要求核对表（回应 spec-to-plan 的自查清单）
 
-- [x] Global Constraints 段与 CLAUDE.md 逐字一致
+- [x] Global Constraints 段与 CLAUDE.md 逐字一致（含新增的部署约束 5 条）
 - [x] 本单元覆盖的 Requirement 均能指到 Task；未覆盖的在 Out of Scope 列出
 - [x] 每个 Task 有确切文件路径、完整代码、确切命令与预期输出
 - [x] 无 TBD/TODO/"适当处理"类占位符
 - [x] 前后 Task 类型名、函数签名、字段名一致
 - [x] 每个有副作用的动作独占 Task 步骤且带幂等键
 - [x] AI 评分相关：本单元不做评分（M2 范围），故不适用 `evidence_ref` 断言；JD 生成的可追溯性由「文案不得凭空出现画像外技术要求」的 prompt 约束 + 人工试跑反馈（Task 12）间接验证
+- [x] **路径前缀子路径挂载测试真实存在于测试代码里**（`tests/test_web_api.py` 的 `test_app_works_when_mounted_at_arbitrary_subpath` 等三个测试），不是文字承诺——已用真实 FastAPI 依赖版本验证通过
+- [x] **Windows 部署两个 PowerShell 脚本是完整可执行内容**（`deploy-server.ps1` / `sync-to-server.ps1`），不是伪代码或占位注释；均不引用「企业AI转型」仓库的 `ZhuopinDeploy.psm1`

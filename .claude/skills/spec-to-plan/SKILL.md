@@ -11,6 +11,12 @@ description: 把 OpenSpec 的 spec 转成 Superpowers 实现计划，是本项�
 
 确认当前会话能调用 `superpowers:writing-plans`。**不能调用就停下来**，告诉用户换到能调用它的界面（通常是 Desktop 的 Code tab 或 Claude Code 终端），不要自己手写一份计划冒充——手写的产物不带 `### Task N:` 结构，后面 `scripts/task-brief` 会解析失败。
 
+## ⛔ 不需要 git worktree
+
+本技能只产出一份 markdown 计划文件（`docs/superpowers/plans/`），**不写任何代码、不建分支**。直接在主检出里跑。
+
+隔离工作区是 `run-build` 的事——`writing-plans` 技能自己也写明了「worktree should have been created at **execution** time」。在这一步建 worktree 只会多一层目录切换的混乱。
+
 ## 步骤
 
 ### 1. 定位输入
@@ -53,11 +59,27 @@ description: 把 OpenSpec 的 spec 转成 Superpowers 实现计划，是本项�
 - [ ] **每个有副作用的动作独占一个 Task 步骤**且带幂等键（第一铁律）
 - [ ] 涉及 AI 评分的部分，测试断言覆盖 `evidence_ref` 非空
 
-### 6. 输出
+### 6. 端到端提取验证（强烈建议，2026-08-09 起纳入标准动作）
+
+自查清单只能查"看起来对不对"，查不出"跑不跑得起来"。写完计划后再做一步：
+
+1. 把计划里全部代码块**原样提取**到一个临时目录
+2. 按计划里的 `requirements.txt` **精确锁定版本**装进独立 venv（含 `langgraph==1.0.10`）
+3. 跑完整测试套件
+4. 有失败就**先在临时副本里定位修复，确认后再同步回正式计划文件**
+5. 修完重新提取一遍跑全量，确认 Edit 操作没引入转录误差
+6. 清理临时目录
+
+**为什么值得**：2026-08-09 这一步在 M1 第 0 章计划里揪出 3 个真实 bug（JD 生成重试次数差一、SQLite 跨线程连接、`SqliteSaver` 用法错误），全都藏在从旧版计划原样搬运、从未被执行过的部分。不做这一步，它们要到 run-build 中途才爆。
+
+**边界**：测试与被测代码出自同一份文档、同一个作者，全通只证明**代码可执行且内部自洽**，不证明**符合 spec**。spec 合规由 `run-build` 的两阶段 review 负责，这一步不是它的替代品。
+
+### 7. 输出
 
 - 计划路径
 - 覆盖了 spec 的哪些 Requirement、对应 tasks.md 哪些章节
-- Task 数量与预估
+- Task 数量
+- 提取验证结果（测试数、修复的 bug）
 - 下一步：用 `run-build` 执行
 
 **不要在本次响应里开始实现。** 计划出完就停。

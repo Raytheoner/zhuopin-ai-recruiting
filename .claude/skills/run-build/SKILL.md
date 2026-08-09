@@ -19,11 +19,23 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
 3. **计划里有没有 Global Constraints 段？**
    没有就停，回去跑 `spec-to-plan` 补。缺了这段，后面每一轮 review 都是瞎的——而且这个失败**不会报错**，只会安静地漏掉所有铁律检查。
 
-4. **是否在 main/master 上直接干活？**
-   调用 `superpowers:using-git-worktrees` 建隔离工作区。
+4. **✅ 这一步需要 git worktree**（与 `spec-to-plan` 不同，那一步不需要）
+   调用 `superpowers:using-git-worktrees` 建隔离工作区。这里会真正写代码、提交、最后走 `finishing-a-development-branch` 合并。
+
+   **建完 worktree 后必须手工补三样 git 不会带过去的东西**，否则会遇到看似莫名其妙的失败：
+
+   | 缺什么 | 症状 | 处理 |
+   |---|---|---|
+   | `.env`（gitignored） | LLM 调用报"无 API key"，像是代码 bug | 从主检出拷过去 |
+   | 本地 SQLite / `data/` | 启动即报文件不存在 | 按需拷贝或让代码自动初始化 |
+   | Python venv | `ModuleNotFoundError` | 在 worktree 内重新建 venv 装依赖 |
+
+   **拷完 `.env` 后确认 worktree 的 `.gitignore` 生效**——新目录里误提交 `.env` 是最容易发生的泄露。
 
 5. **`.superpowers/sdd/progress.md` 是否已存在？**
    存在说明这份计划跑过一部分。台账里标记完成的 Task **不要重跑**——重跑已完成任务是这套流程里最贵的失败模式。
+
+   注意：台账是 git-ignored 的，**存在 worktree 内部**。删掉 worktree 台账就没了，恢复只能靠 `git log`。
 
 ## 执行
 
