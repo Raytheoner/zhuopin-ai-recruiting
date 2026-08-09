@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<!--BASE_HREF-->
+<title>卓品智能招聘助手 · 内网 Demo</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  .banner { background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; padding: 12px 16px; border-radius: 8px; margin-bottom: 24px; font-weight: 600; }
+  .chat { border: 1px solid #ddd; border-radius: 8px; padding: 16px; min-height: 200px; margin-bottom: 16px; }
+  .turn { margin-bottom: 12px; }
+  .turn.user { text-align: right; color: #0d6efd; }
+  .turn.assistant { color: #333; }
+  textarea { width: 100%; box-sizing: border-box; padding: 8px; }
+  button { margin-top: 8px; padding: 8px 16px; cursor: pointer; }
+  #jd-output { white-space: pre-wrap; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-top: 16px; display: none; }
+</style>
+</head>
+<body>
+  <div class="banner">⚠️ 演示环境，不进入正式招聘流程</div>
+
+  <h1>一句话提用人需求</h1>
+  <div class="chat" id="chat"></div>
+  <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
+  <button id="send-btn">发送</button>
+  <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
+
+  <div id="jd-output"></div>
+
+  <script>
+    // 全部请求用相对路径（不带开头的 "/"），配合 <head> 里的 <base href> 解析，
+    // 挂在任意前缀下都不需要改这段代码（部署约束1）。
+    let jobId = null;
+
+    function appendTurn(role, text) {
+      const chat = document.getElementById("chat");
+      const div = document.createElement("div");
+      div.className = "turn " + role;
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function renderMessage(message) {
+      if (message.type === "question") {
+        appendTurn("assistant", message.payload.questions.join("\n"));
+        document.getElementById("confirm-btn").style.display = "none";
+      } else if (message.type === "confirmation_prompt") {
+        const unspecified = message.payload.unspecified_fields || [];
+        let text = "画像已收集完整，请确认。";
+        if (unspecified.length > 0) {
+          text += "\n以下字段未指定：" + unspecified.join("、");
+        }
+        appendTurn("assistant", text);
+        document.getElementById("confirm-btn").style.display = "inline-block";
+      }
+    }
+
+    document.getElementById("send-btn").addEventListener("click", async () => {
+      const input = document.getElementById("input");
+      const text = input.value.trim();
+      if (!text) return;
+      appendTurn("user", text);
+      input.value = "";
+
+      const url = jobId ? `api/jobs/${jobId}/reply` : "api/jobs";
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+      const data = await resp.json();
+      if (!jobId) jobId = data.job_id;
+      renderMessage(data.message);
+    });
+
+    document.getElementById("confirm-btn").addEventListener("click", async () => {
+      const resp = await fetch(`api/jobs/${jobId}/confirm`, { method: "POST" });
+      const data = await resp.json();
+      const output = document.getElementById("jd-output");
+      output.style.display = "block";
+      output.textContent = data.jd_text;
+      if (data.needs_manual) {
+        appendTurn("assistant", "⚠️ JD 多次触发歧视性表述检测，已转人工处理，请核对下方内容。");
+      }
+    });
+  </script>
+</body>
+</html>
