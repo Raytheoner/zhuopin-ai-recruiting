@@ -32,8 +32,11 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
 
    **拷完 `.env` 后确认 worktree 的 `.gitignore` 生效**——新目录里误提交 `.env` 是最容易发生的泄露。
 
-5. **`.superpowers/sdd/progress.md` 是否已存在？**
-   存在说明这份计划跑过一部分。台账里标记完成的 Task **不要重跑**——重跑已完成任务是这套流程里最贵的失败模式。
+5. **进度台账是否已存在？**
+   路径是 `.superpowers/sdd/<计划文件名去掉.md>/progress.md`（**按计划分子目录，不是扁平的 `sdd/progress.md`**）。
+   例：`.superpowers/sdd/2026-08-06-m1-chapter0-demo/progress.md`
+
+   存在说明这份计划跑过一部分。台账里标记 complete 的 Task **不要重跑**——重跑已完成任务是这套流程里最贵的失败模式。
 
    注意：台账是 git-ignored 的，**存在 worktree 内部**。删掉 worktree 台账就没了，恢复只能靠 `git log`。
 
