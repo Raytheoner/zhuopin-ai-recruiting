@@ -15,6 +15,11 @@ data/recordings/
 *.resume.pdf
 evalset/          # 200 份真实简历评测集，本地保存，走安全通道分发
 
+# === Python 工件（Task 1 检查清单）===
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # === Superpowers 运行时 scratch ===
 .superpowers/
 # 注意：docs/superpowers/plans/ 要入库，那是实现计划，不是 scratch
