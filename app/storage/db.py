@@ -20,6 +20,17 @@ CREATE TABLE IF NOT EXISTS job_profile (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 每个 job（thread_id）一行，存该会话到目前为止的完整对话记录。
+-- 对话历史必须落在持久层而不是只活在 LangGraph checkpoint 里：IntakeState.history
+-- 没有 reducer，每次 invoke 的输入会覆盖 checkpoint 里的旧值，靠 checkpoint 记不住
+-- 多轮上下文（见 app/graph/state.py 的说明）。由 effect_persist_draft 在写画像草案
+-- 的同一个事务里 UPSERT，保证画像与对话同生共死。
+CREATE TABLE IF NOT EXISTS conversation (
+    thread_id TEXT PRIMARY KEY,
+    history_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS effect_log (
     effect_key TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL,

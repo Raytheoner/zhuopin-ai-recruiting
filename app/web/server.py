@@ -8,7 +8,7 @@ from typing import Callable
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
@@ -50,18 +50,28 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         gateway = gateway_factory()
         graph = build_intake_graph(db_path, gateway=gateway, conn=conn, channel=channel)
 
-        history_row = conn.execute(
+        profile_row = conn.execute(
             "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
             (job_id,),
         ).fetchone()
-        accumulated = json.loads(history_row[0]) if history_row else {}
+        accumulated = json.loads(profile_row[0]) if profile_row else {}
         round_count = conn.execute(
             "SELECT COUNT(*) FROM job_profile WHERE job_id=?", (job_id,)
         ).fetchone()[0]
 
+        # 对话历史和画像、轮次一样从库里读回完整的一份，再追加本轮新消息。
+        # 修复前这里只塞了本轮消息（history=[{本轮}]），而 IntakeState.history
+        # 没有 reducer、LangGraph 按 LastValue 覆盖 checkpoint 里的旧值——第二轮起
+        # 模型只看得到最新一句话，既不知道最初的用人需求，也不知道上一轮问过什么，
+        # 每轮都是冷启动（review Critical 发现1）。
+        conversation_row = conn.execute(
+            "SELECT history_json FROM conversation WHERE thread_id=?", (job_id,)
+        ).fetchone()
+        prior_history = json.loads(conversation_row[0]) if conversation_row else []
+
         state = {
             "job_id": job_id,
-            "history": [{"role": "user", "content": message}],
+            "history": [*prior_history, {"role": "user", "content": message}],
             "round_count": round_count,
             "profile_patch_accumulated": accumulated,
         }
@@ -106,32 +116,56 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "SELECT MAX(version) FROM job_profile WHERE job_id=?", (job_id,)
         ).fetchone()[0]
 
+        # 先校验、后落 approved：profile_patch 是 LLM 自由生成的裸 dict，到这一步
+        # 才第一次撞上 JobProfile 的类型约束（例如 headcount 被写成 "两个人"、
+        # functional_safety 被写成 "ASIL B"）。校验失败时如果画像已经被标成
+        # approved，用人部门既拿不到 JD 又回不到追问状态，只能弃单重来。
+        try:
+            profile = JobProfile.model_validate(
+                {
+                    "job_title": profile_dict.get("job_title", "未命名岗位"),
+                    "department": profile_dict.get("department", "未指定"),
+                    "headcount": profile_dict.get("headcount", 1),
+                    "education_requirement": profile_dict.get("education_requirement", "未指定"),
+                    "experience_years": profile_dict.get("experience_years", "未指定"),
+                    **{
+                        k: v
+                        for k, v in profile_dict.items()
+                        if k
+                        not in {
+                            "job_title",
+                            "department",
+                            "headcount",
+                            "education_requirement",
+                            "experience_years",
+                        }
+                    },
+                }
+            )
+        except ValidationError as exc:
+            # 不让 ValidationError 裸奔成 500：这一刻正是业务经理点"确认"的时候，
+            # 整条 demo 流程的高潮。返回 422 + 说清是哪个字段、期望什么，让人能
+            # 补一句话重新确认，而不是看到一个白屏 500。
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "岗位画像字段不符合规范，无法确认；请补充或修正后重试",
+                    "errors": [
+                        {
+                            "field": ".".join(str(part) for part in err["loc"]),
+                            "reason": err["msg"],
+                            "got": str(err.get("input")),
+                        }
+                        for err in exc.errors()
+                    ],
+                },
+            ) from exc
+
         effect_confirm_profile(
             conn, thread_id=job_id, business_key=str(version), profile_dict=profile_dict
         )
 
         gateway = gateway_factory()
-        profile = JobProfile.model_validate(
-            {
-                "job_title": profile_dict.get("job_title", "未命名岗位"),
-                "department": profile_dict.get("department", "未指定"),
-                "headcount": profile_dict.get("headcount", 1),
-                "education_requirement": profile_dict.get("education_requirement", "未指定"),
-                "experience_years": profile_dict.get("experience_years", "未指定"),
-                **{
-                    k: v
-                    for k, v in profile_dict.items()
-                    if k
-                    not in {
-                        "job_title",
-                        "department",
-                        "headcount",
-                        "education_requirement",
-                        "experience_years",
-                    }
-                },
-            }
-        )
         # generate_jd() 是一次真实、有成本的 LLM 调用，必须像其他有副作用的节点
         # 一样独占一个幂等 effect（工程铁律1）——否则 POST .../confirm 被重试
         # （双击、客户端超时重发、反向代理重试）会重复触发生成，并且第二次的

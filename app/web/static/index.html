@@ -77,6 +77,23 @@
     document.getElementById("confirm-btn").addEventListener("click", async () => {
       const resp = await fetch(`api/jobs/${jobId}/confirm`, { method: "POST" });
       const data = await resp.json();
+      // 确认这一步可能因为画像字段不合规被拒（422，例如模型把 headcount 写成
+      // "两个人"），也可能因为还没到可确认状态被拒（409）。不处理的话下面会把
+      // undefined 塞进 JD 面板，用户看到的是一片空白、不知道发生了什么。
+      if (!resp.ok) {
+        const detail = data && data.detail;
+        let reason = "确认失败，请稍后重试。";
+        if (typeof detail === "string") {
+          reason = detail;
+        } else if (detail) {
+          const fields = (detail.errors || []).map(
+            (e) => `${e.field}: ${e.reason}（当前值 ${e.got}）`
+          );
+          reason = [detail.message].concat(fields).join("；");
+        }
+        appendTurn("assistant", "⚠️ " + reason);
+        return;
+      }
       const output = document.getElementById("jd-output");
       output.style.display = "block";
       output.textContent = data.jd_text;

@@ -34,9 +34,13 @@ class ScriptedChatCompletions:
     def __init__(self, responses):
         self._responses = list(responses)
         self.call_count = 0
+        # 每次调用的完整 kwargs，供断言"到底发给模型的是什么"的测试使用
+        # （多轮历史回归测试要检查 messages 里真的带上了前几轮的原文）。
+        self.calls = []
 
     def create(self, **kwargs):
         self.call_count += 1
+        self.calls.append(kwargs)
         content = self._responses.pop(0)
         return FakeResponse(choices=[FakeChoice(message=FakeMessage(content=content))])
 
@@ -268,3 +272,141 @@ def test_confirm_retry_does_not_regenerate_jd(tmp_path):
     assert second.json()["needs_manual"] is False
     # 关键断言：第二次 confirm 没有再调用一次真实的 LLM——call_count 保持不变。
     assert scripted_client.chat.completions.call_count == 2
+
+
+def test_second_turn_prompt_contains_first_turn_message_and_known_fields(tmp_path):
+    """
+    回归测试（review Critical 发现1）：多轮对话历史必须真的送到模型面前。
+
+    修复前 _run_turn 每轮都把 state["history"] 重建成 [{"role":"user","content":本轮消息}]，
+    而 IntakeState.history 是没有 reducer 的普通 TypedDict 字段——LangGraph 把它当
+    LastValue 处理，每次 invoke 的输入会静默覆盖上一轮 checkpoint 里的值。结果是
+    第二轮起模型只看得到最新一句话，既看不到最初的用人需求，也看不到已经收集到的
+    字段，而 SYSTEM_PROMPT 却在要求它"不要重复历史已有字段"——一条它根本无从遵守的
+    指令，每轮都是冷启动。
+
+    断言的是"发给模型的 user_prompt 里真的有第一轮原文和已确认字段"，而不是
+    round_count 有没有涨——后者在修复前也是对的，正是它掩盖了这个 bug。
+    """
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": ["MCU 平台族是？"],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+            }
+        ),
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": ["是否有 ASIL 要求？"],
+                "profile_patch": {"mcu_family": ["英飞凌 Aurix"]},
+            }
+        ),
+    ]
+    client, scripted_client = make_app_with_scripted_client(tmp_path, responses)
+
+    create_resp = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"})
+    job_id = create_resp.json()["job_id"]
+
+    client.post(f"/api/jobs/{job_id}/reply", json={"message": "AUTOSAR CP"})
+
+    second_call = scripted_client.chat.completions.calls[1]
+    user_prompt = second_call["messages"][-1]["content"]
+
+    assert "要个做嵌入式开发的" in user_prompt, "第二轮的 prompt 丢失了第一轮的原始需求"
+    assert "AUTOSAR CP" in user_prompt, "第二轮的 prompt 应包含本轮新消息"
+    assert "MCU 平台族是？" in user_prompt, "第二轮的 prompt 应包含上一轮助手问过的问题"
+    assert "嵌入式软件工程师" in user_prompt, (
+        "第二轮的 prompt 必须带上已累积的 profile_patch，"
+        "否则'不要重复历史已有字段'这条指令模型无从遵守"
+    )
+
+
+def test_history_accumulates_exactly_one_pair_per_turn(tmp_path):
+    """
+    多轮历史既不能丢（发现1 的正面），也不能一轮记两遍（修复方案的反面风险——
+    如果给 IntakeState.history 挂 operator.add 之类的 reducer，又同时在 _run_turn
+    里把完整历史整份传进来，每轮就会被累加两次）。
+
+    跑三轮真实 HTTP 请求，断言落库的对话记录正好是 3 组 user/assistant 交替、
+    内容和顺序都对得上。
+
+    注：客户端重发同一条 reply 会被当成新的一轮（business_key 来自
+    round_count = job_profile 行数，而不是客户端给的幂等键）——这是修复前就存在的
+    行为，属于本次明确 park 掉的那条技术债（HTTP 入口缺客户端幂等键，需要先改前端
+    契约），不在本轮修复范围内。
+    """
+    def turn(questions, patch):
+        return json.dumps(
+            {"is_job_related": True, "questions": questions, "profile_patch": patch}
+        )
+
+    responses = [
+        turn(["是否涉及 AUTOSAR？"], {"job_title": "嵌入式软件工程师"}),
+        turn(["MCU 平台族是？"], {"autosar_experience": ["CP"]}),
+        turn(["是否有 ASIL 要求？"], {"mcu_family": ["英飞凌 Aurix"]}),
+    ]
+    client, _ = make_app_with_scripted_client(tmp_path, responses)
+
+    job_id = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"}).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/reply", json={"message": "要 AUTOSAR CP"})
+    client.post(f"/api/jobs/{job_id}/reply", json={"message": "英飞凌 Aurix"})
+
+    from app.storage.db import get_connection
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    stored = json.loads(
+        conn.execute(
+            "SELECT history_json FROM conversation WHERE thread_id=?", (job_id,)
+        ).fetchone()[0]
+    )
+
+    assert [t["role"] for t in stored] == [
+        "user", "assistant", "user", "assistant", "user", "assistant",
+    ], "三轮对话应该正好落成 3 组 user/assistant，不多不少"
+    assert [t["content"] for t in stored if t["role"] == "user"] == [
+        "要个做嵌入式开发的",
+        "要 AUTOSAR CP",
+        "英飞凌 Aurix",
+    ]
+    assert stored[1]["content"] == "是否涉及 AUTOSAR？"  # 助手轮记的是当轮问出的问题
+
+
+def test_confirm_returns_422_when_llm_patch_violates_schema(tmp_path):
+    """
+    回归测试（review Important 发现2）：profile_patch 是 LLM 自由生成的裸 dict，
+    到 confirm 这一步才第一次撞上 JobProfile 的类型约束。真实模型完全可能吐出
+    {"headcount": "两个人"} 这种人话形态；修复前 JobProfile.model_validate() 外面
+    没有 try/except，ValidationError 会一路冒到 FastAPI 变成未处理的 500——而且
+    正好发生在业务经理点"确认"的那一刻，整个 demo 最关键的一步。
+
+    修复后应该返回 422 + 可读的错误说明，而不是 500。
+    """
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [],
+                "profile_patch": {
+                    "job_title": "嵌入式软件工程师",
+                    "headcount": "两个人",  # 非数字字符串，撞 headcount: int
+                },
+            }
+        )
+    ]
+    client = make_app(tmp_path, responses)
+
+    create_resp = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"})
+    job_id = create_resp.json()["job_id"]
+    assert create_resp.json()["message"]["type"] == "confirmation_prompt"
+
+    confirm_resp = client.post(f"/api/jobs/{job_id}/confirm")
+
+    assert confirm_resp.status_code == 422, (
+        f"畸形 profile_patch 应该被转成 422，实际是 {confirm_resp.status_code}"
+    )
+    detail = confirm_resp.json()["detail"]
+    assert "headcount" in json.dumps(detail, ensure_ascii=False), (
+        "422 的 detail 应该指出是哪个字段有问题，便于人工修正"
+    )

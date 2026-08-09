@@ -15,15 +15,32 @@ from app.storage.idempotency import idempotent_effect
 
 def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeState:
     """compute_* 节点：纯函数，只调用 LLM 与做数据转换，不写库、不发消息。"""
+    history = list(state.get("history", []))
+    accumulated_before = dict(state.get("profile_patch_accumulated", {}))
+
     result = run_intake_turn(
-        gateway, history=state["history"], round_count=state.get("round_count", 0)
+        gateway,
+        history=history,
+        round_count=state.get("round_count", 0),
+        # 已累积的字段必须一起送进 prompt：SYSTEM_PROMPT 要求"不要重复历史已有
+        # 字段"，模型看不见这份内容就无从遵守（review Critical 发现1）。
+        profile_patch_accumulated=accumulated_before,
     )
 
-    accumulated = dict(state.get("profile_patch_accumulated", {}))
-    accumulated.update(result.profile_patch)
+    accumulated = {**accumulated_before, **result.profile_patch}
+
+    # 把本轮助手说的话也记进历史，让下一轮的 prompt 是一段真正的对话，而不是
+    # 一串没有上下文的用户独白——否则模型不知道上一轮已经问过什么。
+    assistant_turn = {
+        "role": "assistant",
+        "content": "\n".join(result.questions)
+        if result.questions
+        else "（信息已收集完整，等待用人部门确认画像）",
+    }
 
     return {
         **state,
+        "history": [*history, assistant_turn],
         "is_job_related": result.is_job_related,
         "pending_questions": result.questions,
         "profile_patch_accumulated": accumulated,
@@ -44,6 +61,12 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     “装饰器提交 effect_log”之间崩溃，job_profile 行已经落盘但 effect_log 没有，
     LangGraph 重放时会用同一个 business_key 重新执行本函数，撞上已存在的主键
     （UNIQUE constraint failed），重试永久失败——这正是工程铁律1要避免的情形。
+
+    同时把本轮结束时的完整对话记录写进 conversation 表。对话历史必须和画像草案
+    一样落在持久层：修复前它只存在于 LangGraph checkpoint 里，而 IntakeState.history
+    没有 reducer，每次 invoke 的输入会静默覆盖上一轮的值，第二轮起模型就只看得到
+    最新一句话（review Critical 发现1）。放在同一个 effect 里写，保证"这一轮的画像"
+    和"这一轮的对话"要么一起落盘、要么一起不落盘。
     """
     profile_json = json.dumps(state.get("profile_patch_accumulated", {}), ensure_ascii=False)
     unspecified_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
@@ -53,6 +76,13 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
         "INSERT INTO job_profile (id, job_id, version, status, profile_json, unspecified_fields) "
         "VALUES (?, ?, ?, 'drafting', ?, ?)",
         (f"{thread_id}-v{version}", thread_id, version, profile_json, unspecified_json),
+    )
+    conn.execute(
+        "INSERT INTO conversation (thread_id, history_json, updated_at) "
+        "VALUES (?, ?, datetime('now')) "
+        "ON CONFLICT(thread_id) DO UPDATE SET "
+        "history_json = excluded.history_json, updated_at = excluded.updated_at",
+        (thread_id, json.dumps(state.get("history", []), ensure_ascii=False)),
     )
 
 
