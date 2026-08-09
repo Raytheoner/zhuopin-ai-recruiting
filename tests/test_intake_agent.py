@@ -132,3 +132,129 @@ def test_questions_capped_at_three_even_if_model_returns_more():
     )
 
     assert len(result.questions) == 3
+
+
+def _sent_prompt(gateway: LLMGateway) -> str:
+    """把这次调用真正发给模型的 system+user 文本拼起来，用于断言"某段内容确实进了 prompt"。"""
+    call = gateway._client.chat.completions.calls[0]
+    return "\n".join(m["content"] for m in call["messages"])
+
+
+def test_matched_ecu_terms_inject_curated_followups_into_prompt():
+    """
+    回归测试（review Important 发现3）：ecu_knowledge.py 里的 FOLLOWUP_RULES 是本项目
+    唯一沉淀下来的 ECU 领域专家知识（CP/AP、Aurix/S32K、ASIL、UDS），修复前
+    run_intake_turn 压根没 import 过它——prompt 只写了一句"基于 ECU 行业知识"，
+    实际全靠模型的通用常识猜，整个知识库是死代码。
+
+    这里断言：用户消息命中"嵌入式开发"时，FOLLOWUP_RULES["嵌入式开发"] 里的问题
+    原文必须出现在真正发给模型的 prompt 里——证明接线是真的，不是"存在但没人用"。
+    """
+    from app.agents.ecu_knowledge import FOLLOWUP_RULES
+
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": ["是否涉及 AUTOSAR（CP/AP）？"],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "要个做嵌入式开发的工程师"}],
+        round_count=0,
+    )
+
+    prompt = _sent_prompt(gateway)
+    for question in FOLLOWUP_RULES["嵌入式开发"]:
+        assert question in prompt, f"命中术语的领域追问 {question!r} 没有进入 prompt"
+
+
+def test_unmatched_text_does_not_inject_followups():
+    """反向证明：没命中术语时不应该硬塞无关追问，避免把知识库变成噪音。"""
+    from app.agents.ecu_knowledge import FOLLOWUP_RULES
+
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": ["岗位名称是？"], "profile_patch": {}})]
+    )
+
+    run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "要招个人"}],
+        round_count=0,
+    )
+
+    prompt = _sent_prompt(gateway)
+    for question in FOLLOWUP_RULES["驱动开发"]:
+        assert question not in prompt
+
+
+def test_only_user_turns_are_matched_for_ambiguous_terms():
+    """
+    助手自己问出的"是否有功能安全等级（ASIL）要求？"里含有"功能安全"这个术语；
+    如果匹配范围包含 assistant 轮次，助手问过一次之后就会永远自我触发同一条规则。
+    只匹配 user 轮次，避免这种自激。
+    """
+    from app.agents.ecu_knowledge import FOLLOWUP_RULES
+
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": ["还有别的要求吗？"], "profile_patch": {}})]
+    )
+
+    run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "要招个人"},
+            {"role": "assistant", "content": "是否有功能安全等级（ASIL）要求？"},
+            {"role": "user", "content": "暂时没有"},
+        ],
+        round_count=1,
+    )
+
+    prompt = _sent_prompt(gateway)
+    assert FOLLOWUP_RULES["功能安全"][1] not in prompt
+
+
+def test_accumulated_profile_is_visible_to_model():
+    """
+    SYSTEM_PROMPT 要求"不要重复历史已有字段"，那么已经确定的字段就必须真的出现在
+    prompt 里，否则这条指令模型无从遵守（review Critical 发现1 的另一半）。
+    """
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": ["Q"], "profile_patch": {}})]
+    )
+
+    run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "要个嵌入式的"}],
+        round_count=1,
+        profile_patch_accumulated={"job_title": "嵌入式软件工程师"},
+    )
+
+    assert "嵌入式软件工程师" in _sent_prompt(gateway)
+
+
+def test_prompt_declares_job_profile_field_names_and_enum_values():
+    """
+    回归测试（review Important 发现2 的根因侧）：profile_patch 的键值最终要过
+    JobProfile 的校验，但修复前 prompt 里从没出现过 JobProfile 的字段名、类型和
+    枚举取值——模型只能靠猜，猜错就在 confirm 那一步炸掉。
+    """
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": ["Q"], "profile_patch": {}})]
+    )
+
+    run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要个嵌入式的"}], round_count=0
+    )
+
+    prompt = _sent_prompt(gateway)
+    assert "headcount" in prompt
+    assert "functional_safety" in prompt
+    assert "ASIL-B" in prompt  # 枚举取值要原样列出，避免模型写成 "ASIL B"
+    assert "core_skills" in prompt
