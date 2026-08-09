@@ -8,6 +8,7 @@ credentials.json
 secrets/
 
 # === 候选人数据（个人信息，绝不入库）===
+data/
 data/resumes/
 data/candidates/
 data/recordings/
