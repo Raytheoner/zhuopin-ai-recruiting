@@ -14,7 +14,8 @@
 
 - **工程铁律 1**：LangGraph 恢复时节点从头整个重跑。每个有副作用的动作（发消息、写库、建工单）必须独占一个节点，并带幂等键 `{thread_id}:{node_name}:{business_key}`，落 `effect_log` 表并加唯一索引。
 - **工程铁律 2**：L3 Agent 全部是无副作用纯函数，副作用只在 L4 编排层的 `effect_*` 节点执行。节点命名区分 `compute_*` / `effect_*`。
-- **工程铁律 5**：`temperature=0`，模型版本显式锁定，禁止 `latest` 类别名。
+- **工程铁律 5（2026-08-09 现行版，本计划生成后更新，以此为准）**：`temperature=0`；模型版本优先显式锁定，禁止 `latest` 类别名。供应商不提供带版本号快照时（如 DeepSeek 公开 API 只有 `deepseek-chat` 这类会漂移的别名），**必须从 API 响应里取回实际的 `model` 字段并持久化**——配置里写的名字不算数，响应返回的才算。锁不住版本时，至少要记得住版本。
+  - **Task 4 专属追加要求**（派生自本条，计划原文未覆盖）：`LLMGateway` 必须把 API 响应中实际返回的 `model` 字段（OpenAI 兼容响应体标准字段 `response.model`）与构造函数传入的配置 `model`（`self._model`）分开记录，两者都要传给 `AuditHook.record()`；`AuditHook.record()` 签名须新增参数承载响应实际值（如 `response_model`），不得用配置值代替或省略。Task 4 原始 Step 1/Step 4 文本已按此更新，以更新后的版本为准。
 - **工程铁律 7**：`langgraph >= 1.0.10`（GHSA-g48c-2wqr-h844）。
 - **部署约束 1**：路径前缀就绪。FastAPI `root_path=/hr/recruit-agent`，前端资源与接口调用一律相对路径，禁止硬编码 `/static/…` `/api/…`。验收标准是挂到任意子路径下都能正常工作，且有测试覆盖。
 - **部署约束 2**：过渡端口 8095，登记技术债，触发条件 = 统一门户网关上线即迁移。
@@ -24,6 +25,15 @@
 - **合规红线**：AI 生成的 JD、拒信、邀约须带标识（《AI 生成合成内容标识办法》2025-09-01 施行）。
 - **合规红线**：模型全部走境内，数据不出境。
 - **合规红线**：主观描述（"沟通能力强"）不得进入硬门槛规则，只能作为软技能关键词。
+
+### Reviewer Checklist（每个 Task review 都要过一遍，非仅列出的相关 Task）
+
+1. 每个 `effect_*` 节点是否独占、是否带幂等键 `{thread_id}:{node_name}:{business_key}`（工程铁律 1）
+2. `compute_*` 节点是否真的无副作用（工程铁律 2）
+3. LLM 调用是否 `temperature=0`；响应返回的实际 `model` 字段是否被记录、且与配置的 `model` 分开持久化（工程铁律 5 现行版 + Task 4 专属追加要求）
+4. 前端有没有硬编码 `/static/` 或 `/api/`（挂到子路径下会全线 404，部署约束 1）
+5. JD 生成是否带 AI 标识、是否有歧视性表述拦截（合规红线）
+6. 写 `criterion_score` 处 `evidence_ref` 为空是否被拒绝；是否存在任何路径产生 `reason_type='ai_score'` 的淘汰记录（必须没有）——**本单元 Out of Scope 不实现候选人评分/淘汰**（见下方 Out of Scope 与 技术债 1），这两条本计划范围内应为 N/A，reviewer 确认代码库中确无相关落地即可，不必强求专门测试覆盖。
 
 ## Out of Scope（本单元明确不做，附对应 spec Requirement）
 
@@ -803,8 +813,9 @@ git commit -m "feat: SQLite 存储层与 effect_log 幂等装饰器（工程铁�
   `LLMGateway(api_key: str, base_url: str, model: str, supports_json_schema: bool, max_retries: int = 2, audit_hook: AuditHook | None = None, client=None)`。
   方法：`extract_structured(self, *, system_prompt: str, user_prompt: str, schema: type[BaseModel], prompt_version: str = "v1") -> BaseModel`，失败抛 `SchemaExtractionFailed`。
 - Produces: `app.llm.gateway.SchemaExtractionFailed(Exception)`。
-- Produces: `app.llm.gateway.AuditHook`（`Protocol`，方法 `record(self, *, model, prompt_version, input_hash, raw_response, token_usage, latency_ms) -> None`）与默认实现 `NoopAuditHook`（只 `logging.debug`，是本单元「采集过程审计留痕」的技术债占位——见计划开头 技术债）。
+- Produces: `app.llm.gateway.AuditHook`（`Protocol`，方法 `record(self, *, model, response_model, prompt_version, input_hash, raw_response, token_usage, latency_ms) -> None`）与默认实现 `NoopAuditHook`（只 `logging.debug`，是本单元「采集过程审计留痕」的技术债占位——见计划开头 技术债）。
 - 构造函数拒绝 `model` 以 `latest` 结尾或等于 `"latest"`（复用 Task 1 的校验逻辑，与铁律 5 对应）。
+- **铁律 5（2026-08-09 现行版）**：`model` 是构造函数传入的配置值（`self._model`，可能是会漂移的供应商别名，如 `deepseek-chat`）；`response_model` 是本次调用 API 响应里实际返回的 `model` 字段（OpenAI 兼容响应体标准字段 `response.model`，供应商不提供版本快照时，这是唯一能确定"这次到底是哪个模型打的分"的信息源）。两者必须分开传给 `AuditHook.record()`，不得用配置值代替响应值，也不得省略。响应对象没有 `model` 属性时，`response_model` 记 `None`，不得抛异常掩盖问题。
 - 测试通过 `client=FakeOpenAIClient(...)` 注入假客户端，不发真实网络请求。
 
 - [ ] **Step 1: 写失败测试**
@@ -844,28 +855,33 @@ class FakeUsage:
 @dataclass
 class FakeResponse:
     choices: list[FakeChoice]
+    model: str = "deepseek-chat-241226"
     usage: FakeUsage = field(default_factory=FakeUsage)
 
 
 class FakeChatCompletions:
-    def __init__(self, responses: list[str]):
+    def __init__(self, responses: list[str], response_model: str = "deepseek-chat-241226"):
         self._responses = list(responses)
+        self._response_model = response_model
         self.calls = []
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
         content = self._responses.pop(0)
-        return FakeResponse(choices=[FakeChoice(message=FakeMessage(content=content))])
+        return FakeResponse(
+            choices=[FakeChoice(message=FakeMessage(content=content))],
+            model=self._response_model,
+        )
 
 
 class FakeChat:
-    def __init__(self, responses):
-        self.completions = FakeChatCompletions(responses)
+    def __init__(self, responses, response_model: str = "deepseek-chat-241226"):
+        self.completions = FakeChatCompletions(responses, response_model=response_model)
 
 
 class FakeOpenAIClient:
-    def __init__(self, responses: list[str]):
-        self.chat = FakeChat(responses)
+    def __init__(self, responses: list[str], response_model: str = "deepseek-chat-241226"):
+        self.chat = FakeChat(responses, response_model=response_model)
 
 
 def test_rejects_latest_model_alias():
@@ -959,8 +975,43 @@ def test_audit_hook_called_with_expected_fields():
     assert len(recorded) == 1
     call = recorded[0]
     assert call["model"] == "deepseek-chat-241226"
+    assert call["response_model"] == "deepseek-chat-241226"
     assert call["prompt_version"] == "v2"
     assert "raw_response" in call and "latency_ms" in call and "token_usage" in call
+
+
+def test_audit_hook_records_actual_response_model_separately_from_configured():
+    """
+    工程铁律 5（2026-08-09 现行版）：DeepSeek 这类供应商只给会漂移的别名
+    （如 deepseek-chat），配置里写的名字不算数，必须记住 API 响应实际
+    返回的 model 字段——且要和配置值分开存，不能互相代替。
+    """
+    client = FakeOpenAIClient(
+        [json.dumps({"x": 1, "y": 2})],
+        response_model="deepseek-chat-241226",
+    )
+    recorded = []
+
+    class RecordingHook:
+        def record(self, **kwargs):
+            recorded.append(kwargs)
+
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat",  # 配置里写的是会漂移的别名
+        supports_json_schema=False,
+        client=client,
+        audit_hook=RecordingHook(),
+    )
+
+    gateway.extract_structured(system_prompt="sys", user_prompt="user", schema=Point)
+
+    assert len(recorded) == 1
+    call = recorded[0]
+    assert call["model"] == "deepseek-chat"                   # 配置值
+    assert call["response_model"] == "deepseek-chat-241226"   # API 实际返回值
+    assert call["model"] != call["response_model"]
 
 
 def test_json_schema_mode_sets_response_format():
@@ -1021,6 +1072,7 @@ class AuditHook(Protocol):
         self,
         *,
         model: str,
+        response_model: str | None,
         prompt_version: str,
         input_hash: str,
         raw_response: str,
@@ -1082,6 +1134,11 @@ class LLMGateway:
             latency_ms = (time.monotonic() - started) * 1000
             raw_content = response.choices[0].message.content
 
+            # 铁律 5（2026-08-09 现行版）：response.model 是 API 实际返回的模型标识，
+            # 与构造函数传入的配置值 self._model 分开记录——配置里写的名字不算数，
+            # 供应商静默升级 deepseek-chat 这类别名时，只有响应里的值可信。
+            response_model = getattr(response, "model", None)
+
             usage = getattr(response, "usage", None)
             token_usage = (
                 {
@@ -1094,6 +1151,7 @@ class LLMGateway:
 
             self._audit_hook.record(
                 model=self._model,
+                response_model=response_model,
                 prompt_version=prompt_version,
                 input_hash=input_hash,
                 raw_response=raw_content,
@@ -1150,7 +1208,7 @@ class LLMGateway:
 pytest tests/test_llm_gateway.py -v
 ```
 
-Expected: 6 个测试全部 PASS
+Expected: 7 个测试全部 PASS（含 2026-08-09 新增的 `test_audit_hook_records_actual_response_model_separately_from_configured`）
 
 - [ ] **Step 6: Commit**
 
@@ -3555,7 +3613,7 @@ git commit -m "docs: M1 Demo 试运行反馈收集表与执行清单（0.11）"
 - `test_frontend_html_has_no_hardcoded_absolute_api_or_static_paths` 验证产出的 HTML 里没有硬编码的 `/api/...` 绝对路径引用
 - 这套 router-prefix 自挂载 + `<base href>` 注入的机制在写入计划前已用真实 FastAPI 0.115.6 + httpx 0.28.1（与 `requirements.txt` 锁定版本一致）跑通验证，不是凭经验猜测的设计
 
-**全量端到端验证（非常规自查，专为这次重新生成做的）**：写完计划后，把全部 12 个 Task 的代码从这份文档里原样抽取落盘、按 `requirements.txt` 精确锁定版本（含 `langgraph==1.0.10`、`langgraph-checkpoint-sqlite==2.0.6`）装进 Python 3.12（满足 `pyproject.toml` 的 `>=3.11`）venv，跑了一遍完整 `pytest`。**53 个测试全部 PASS**，过程中发现并修复了 3 个真实 bug（均已同步进上面对应 Task 的代码块，不是残留问题）：
+**全量端到端验证（非常规自查，专为这次重新生成做的）**：写完计划后，把全部 12 个 Task 的代码从这份文档里原样抽取落盘、按 `requirements.txt` 精确锁定版本（含 `langgraph==1.0.10`、`langgraph-checkpoint-sqlite==2.0.6`）装进 Python 3.12（满足 `pyproject.toml` 的 `>=3.11`）venv，跑了一遍完整 `pytest`。**53 个测试全部 PASS**（2026-08-09 因铁律 5 更新给 Task 4 补了 1 个测试，现应为 54 个），过程中发现并修复了 3 个真实 bug（均已同步进上面对应 Task 的代码块，不是残留问题）：
 
 1. **Task 8 `generate_jd` 重试次数差一**：`range(max_retries + 1)` 复用了 `LLMGateway.max_retries` 的"首次+N次重试"约定，导致 `max_retries=2` 时最多尝试 3 次，既让 `test_needs_manual_after_two_consecutive_hits` 报错（脚本只给 2 条响应），也悄悄突破了 spec「连续 2 次仍出现则转人工处理」的字面约束——已改成 `range(max_retries)`
 2. **Task 3 `get_connection` 跨线程报错**：FastAPI 把同步路由处理函数派发到线程池，而 `create_app` 只建一个共享 `sqlite3.Connection`，默认 `check_same_thread=True` 导致 `sqlite3.ProgrammingError`——已加 `check_same_thread=False`（demo 规模不追求高并发，风险可接受；M2 迁移到 Postgres 后用连接池，这个问题自然消失）
@@ -3567,7 +3625,7 @@ git commit -m "docs: M1 Demo 试运行反馈收集表与执行清单（0.11）"
 
 ## 交付要求核对表（回应 spec-to-plan 的自查清单）
 
-- [x] Global Constraints 段与 CLAUDE.md 逐字一致（含新增的部署约束 5 条）
+- [x] Global Constraints 段与 CLAUDE.md 逐字一致（含新增的部署约束 5 条）——**2026-08-09 补记**：CLAUDE.md 工程铁律 5 在本计划生成后更新，新增"响应实际 model 字段须与配置值分开持久化"一条；Global Constraints 段与 Task 4 已同步更新为现行版本，详见 Global Constraints 段工程铁律 5 与其下的 Task 4 专属追加要求
 - [x] 本单元覆盖的 Requirement 均能指到 Task；未覆盖的在 Out of Scope 列出
 - [x] 每个 Task 有确切文件路径、完整代码、确切命令与预期输出
 - [x] 无 TBD/TODO/"适当处理"类占位符
