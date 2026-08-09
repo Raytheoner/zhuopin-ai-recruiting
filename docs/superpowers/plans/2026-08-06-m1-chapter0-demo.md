@@ -1584,11 +1584,16 @@ class WebChannel:
         self._conn = conn
 
     def deliver(self, thread_id: str, message: OutboundMessage) -> None:
+        # 不在这里 commit：调用方（如 Task 9 的 effect_deliver_message，被
+        # idempotent_effect 包裹）负责唯一一次原子提交。这里若自行 commit，
+        # 会把 effect 的写入与 idempotent_effect 自己的 effect_log 记账提交
+        # 拆成两次独立事务，两者之间一旦崩溃重放，就会产生重复投递或写入
+        # 卡死（2026-08-09 review 发现，详见工程铁律1）。同一个 conn 内，
+        # 未提交的写入对 latest() 依然可见，不影响本文件自身的三个测试。
         self._conn.execute(
             "INSERT INTO outbox (thread_id, message_type, payload_json) VALUES (?, ?, ?)",
             (thread_id, message.type, json.dumps(message.payload, ensure_ascii=False)),
         )
-        self._conn.commit()
 
     def latest(self, thread_id: str) -> OutboundMessage | None:
         row = self._conn.execute(
@@ -2189,7 +2194,7 @@ def generate_jd(
 pytest tests/test_jd_agent.py -v
 ```
 
-Expected: 6 个测试全部 PASS
+Expected: 5 个测试全部 PASS（2026-08-09 更正：Step 1 代码块实际定义 5 个测试函数，原文"6 个"是计划撰写时的笔误，与本次铁律5修正无关）
 
 - [ ] **Step 5: Commit**
 
@@ -2439,12 +2444,16 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     unspecified_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
     version = int(business_key) + 1
 
+    # 不在这里 commit：idempotent_effect 装饰器在 fn 返回后统一提交这次写入
+    # 与它自己的 effect_log 记账行，两者要在同一个事务里落地。这里若自行
+    # commit，会把本函数的写入和 effect_log 的记账拆成两次独立事务，一旦
+    # 两次提交之间崩溃重放，会导致 job_profile 主键冲突、重放硬失败
+    # （2026-08-09 review 发现，详见工程铁律1）。
     conn.execute(
         "INSERT INTO job_profile (id, job_id, version, status, profile_json, unspecified_fields) "
         "VALUES (?, ?, ?, 'drafting', ?, ?)",
         (f"{thread_id}-v{version}", thread_id, version, profile_json, unspecified_json),
     )
-    conn.commit()
 
 
 @idempotent_effect("effect_deliver_message")
@@ -2468,13 +2477,13 @@ def effect_confirm_profile(
     effect_* 节点：把最新画像草案冻结为 approved，同步更新 job.status。
     business_key = 冻结的 version 号，防止同一版本被重复确认两次。
     """
+    # 同上：不在这里 commit，交给 idempotent_effect 统一提交（工程铁律1）。
     conn.execute(
         "UPDATE job_profile SET status = 'approved' "
         "WHERE job_id = ? AND version = (SELECT MAX(version) FROM job_profile WHERE job_id = ?)",
         (thread_id, thread_id),
     )
     conn.execute("UPDATE job SET status = 'approved' WHERE id = ?", (thread_id,))
-    conn.commit()
 
 
 def message_business_key(payload: dict) -> str:
@@ -3618,8 +3627,9 @@ git commit -m "docs: M1 Demo 试运行反馈收集表与执行清单（0.11）"
 1. **Task 8 `generate_jd` 重试次数差一**：`range(max_retries + 1)` 复用了 `LLMGateway.max_retries` 的"首次+N次重试"约定，导致 `max_retries=2` 时最多尝试 3 次，既让 `test_needs_manual_after_two_consecutive_hits` 报错（脚本只给 2 条响应），也悄悄突破了 spec「连续 2 次仍出现则转人工处理」的字面约束——已改成 `range(max_retries)`
 2. **Task 3 `get_connection` 跨线程报错**：FastAPI 把同步路由处理函数派发到线程池，而 `create_app` 只建一个共享 `sqlite3.Connection`，默认 `check_same_thread=True` 导致 `sqlite3.ProgrammingError`——已加 `check_same_thread=False`（demo 规模不追求高并发，风险可接受；M2 迁移到 Postgres 后用连接池，这个问题自然消失）
 3. **Task 9 `build_intake_graph` checkpointer 用法错误**：`SqliteSaver.from_conn_string(db_path)` 返回的是 `@contextmanager` 生成器，不 `with` 直接传给 `graph.compile()` 会抛 `TypeError: Invalid checkpointer provided`——已改成 `SqliteSaver(conn)`，复用函数本就持有的连接
+4. **（2026-08-09，run-build 执行期间由 Task 9 reviewer 发现，非本次全量重试覆盖）`effect_persist_draft`/`effect_confirm_profile`/`WebChannel.deliver` 各自提前 `conn.commit()`**：破坏了 `idempotent_effect` 依赖的"写入与 effect_log 记账在同一事务、只提交一次"假设。Reviewer 用内存 sqlite3.Connection 子类模拟"提前 commit 之后、装饰器自己的 commit 之前"崩溃，实测复现：`effect_persist_draft` 重放会因主键冲突硬失败，`effect_deliver_message`（内部调用 `WebChannel.deliver`）重放会静默产生第二条 `outbox` 记录——后者是真实的重复投递。已从三处删掉提前的 `conn.commit()`，统一交给 `idempotent_effect` 装饰器提交（见 Task 6 Step 5、Task 9 Step 5 对应代码块及注释）。这个 bug 之所以没被上面的全量重试捕获，是因为它只在"提前 commit 之后、装饰器自己 commit 之前发生崩溃重放"这个具体时序窗口下才触发，正常无中断的 pytest 运行不会经过这个窗口。
 
-这三个 bug 都不是本次"两处必须变"范围内引入的新代码——它们藏在从旧计划原样搬运的 Task 3/8/9 里，此前从未被真正执行过（`run-build` 尚未开始）。如果不做这次全量重试，会在 `run-build` 阶段才被 TDD 的"运行确认通过"步骤捕获，届时才第一次发现，现在提前堵上。
+这四个 bug 都不是本次"两处必须变"范围内引入的新代码——它们藏在从旧计划原样搬运的 Task 3/8/9 里，此前从未被真正执行过（`run-build` 尚未开始）。如果不做这次全量重试，会在 `run-build` 阶段才被 TDD 的"运行确认通过"步骤捕获，届时才第一次发现，现在提前堵上。
 
 ---
 
