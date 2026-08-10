@@ -116,6 +116,7 @@ class AuditHook(Protocol):
         *,
         model: str,
         response_model: str | None,
+        system_fingerprint: str | None,
         prompt_version: str,
         input_hash: str,
         raw_response: str,
@@ -182,6 +183,12 @@ class LLMGateway:
             # 供应商静默升级 deepseek-chat 这类别名时，只有响应里的值可信。
             response_model = getattr(response, "model", None)
 
+            # response.model 只是回显请求里的别名，供应商换掉别名底下的实际模型时
+            # 它照样原样返回，证明不了版本没变。system_fingerprint（OpenAI 兼容
+            # API 的惯例字段，随底层模型/部署变化）才是目前唯一能盯出漂移的信号。
+            # 不是所有供应商都带这个字段，缺失时老实记 None，不能让网关炸掉。
+            system_fingerprint = getattr(response, "system_fingerprint", None)
+
             usage = getattr(response, "usage", None)
             token_usage = (
                 {
@@ -195,6 +202,7 @@ class LLMGateway:
             self._audit_hook.record(
                 model=self._model,
                 response_model=response_model,
+                system_fingerprint=system_fingerprint,
                 prompt_version=prompt_version,
                 input_hash=input_hash,
                 raw_response=raw_content,

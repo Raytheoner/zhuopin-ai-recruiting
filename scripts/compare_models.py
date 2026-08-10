@@ -47,15 +47,25 @@ class ComparisonSummary:
 #   GET /v1/models 返回的真实模型只有 deepseek-v4-flash / deepseek-v4-pro，
 #   不存在原先写死的 deepseek-chat-241226；response_format=json_schema 被
 #   拒绝（400 "This response_format type is unavailable now"），json_object
-#   实测通过且响应 model 字段原样回显 "deepseek-v4-pro"。
+#   实测通过且响应 model 字段原样回显请求的别名（该字段本身证明不了版本没变，
+#   见 docs/m1-model-comparison.md 的 system_fingerprint 说明）。
+#   deepseek-v4-flash 同日追加对比（M1 demo 是同步等待场景，pro 单次延迟
+#   ~9.4s 太慢），json_schema 支持情况沿用 pro 的实测结论，未独立重测。
 # doubao / qwen：未实测（无 API key，账号还没注册），模型名与 json_schema
 #   支持情况仍是候选阶段的占位猜测，接线前必须实测。
 PROVIDER_CANDIDATES: list[ProviderConfig] = [
     ProviderConfig(
-        name="deepseek",
+        name="deepseek-pro",
         api_key_env="DEEPSEEK_API_KEY",
         base_url="https://api.deepseek.com/v1",
         model="deepseek-v4-pro",
+        supports_json_schema=False,
+    ),
+    ProviderConfig(
+        name="deepseek-flash",
+        api_key_env="DEEPSEEK_API_KEY",
+        base_url="https://api.deepseek.com/v1",
+        model="deepseek-v4-flash",
         supports_json_schema=False,
     ),
     ProviderConfig(

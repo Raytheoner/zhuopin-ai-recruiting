@@ -33,12 +33,19 @@ class FakeResponse:
     choices: list[FakeChoice]
     model: str = "deepseek-chat-241226"
     usage: FakeUsage = field(default_factory=FakeUsage)
+    system_fingerprint: str | None = None
 
 
 class FakeChatCompletions:
-    def __init__(self, responses: list[str], response_model: str = "deepseek-chat-241226"):
+    def __init__(
+        self,
+        responses: list[str],
+        response_model: str = "deepseek-chat-241226",
+        system_fingerprint: str | None = None,
+    ):
         self._responses = list(responses)
         self._response_model = response_model
+        self._system_fingerprint = system_fingerprint
         self.calls = []
 
     def create(self, **kwargs):
@@ -47,17 +54,32 @@ class FakeChatCompletions:
         return FakeResponse(
             choices=[FakeChoice(message=FakeMessage(content=content))],
             model=self._response_model,
+            system_fingerprint=self._system_fingerprint,
         )
 
 
 class FakeChat:
-    def __init__(self, responses, response_model: str = "deepseek-chat-241226"):
-        self.completions = FakeChatCompletions(responses, response_model=response_model)
+    def __init__(
+        self,
+        responses,
+        response_model: str = "deepseek-chat-241226",
+        system_fingerprint: str | None = None,
+    ):
+        self.completions = FakeChatCompletions(
+            responses, response_model=response_model, system_fingerprint=system_fingerprint
+        )
 
 
 class FakeOpenAIClient:
-    def __init__(self, responses: list[str], response_model: str = "deepseek-chat-241226"):
-        self.chat = FakeChat(responses, response_model=response_model)
+    def __init__(
+        self,
+        responses: list[str],
+        response_model: str = "deepseek-chat-241226",
+        system_fingerprint: str | None = None,
+    ):
+        self.chat = FakeChat(
+            responses, response_model=response_model, system_fingerprint=system_fingerprint
+        )
 
 
 def test_rejects_latest_model_alias():
@@ -188,6 +210,62 @@ def test_audit_hook_records_actual_response_model_separately_from_configured():
     assert call["model"] == "deepseek-chat"                   # 配置值
     assert call["response_model"] == "deepseek-chat-241226"   # API 实际返回值
     assert call["model"] != call["response_model"]
+
+
+def test_audit_hook_records_system_fingerprint_when_present():
+    """
+    工程铁律 5：response.model 原样回显请求的别名不能证明版本没变——DeepSeek
+    换掉别名底下的实际模型时，model 字段照样返回配置里写的那个名字。
+    system_fingerprint 会随底层模型/部署变化，是目前唯一能盯出漂移的信号，
+    必须和 model / response_model 一起落审计记录。
+    """
+    client = FakeOpenAIClient(
+        [json.dumps({"x": 1, "y": 2})],
+        system_fingerprint="fp_9954b31ca7_prod0820_fp8_kvcache_20260402",
+    )
+    recorded = []
+
+    class RecordingHook:
+        def record(self, **kwargs):
+            recorded.append(kwargs)
+
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-v4-pro",
+        supports_json_schema=False,
+        client=client,
+        audit_hook=RecordingHook(),
+    )
+
+    gateway.extract_structured(system_prompt="sys", user_prompt="user", schema=Point)
+
+    assert len(recorded) == 1
+    assert recorded[0]["system_fingerprint"] == "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+
+
+def test_audit_hook_records_none_system_fingerprint_when_absent():
+    """不是所有供应商都返回 system_fingerprint（响应对象上根本没有这个属性），
+    这种情况不能让网关炸掉，只能老实记 None。"""
+    client = FakeOpenAIClient([json.dumps({"x": 1, "y": 2})])  # 默认 system_fingerprint=None
+    recorded = []
+
+    class RecordingHook:
+        def record(self, **kwargs):
+            recorded.append(kwargs)
+
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="doubao-seed-2.1-turbo-241215",
+        supports_json_schema=False,
+        client=client,
+        audit_hook=RecordingHook(),
+    )
+
+    gateway.extract_structured(system_prompt="sys", user_prompt="user", schema=Point)
+
+    assert recorded[0]["system_fingerprint"] is None
 
 
 def test_json_schema_mode_sets_response_format():
