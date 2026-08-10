@@ -31,36 +31,45 @@ class ComparisonResult:
     latency_ms: float
     raw_output: str
     error: str | None
+    skipped: bool = False
 
 
 @dataclass
 class ComparisonSummary:
     recommended_provider: str
     disqualified: list[str]
+    skipped: list[str]
     results: list[ComparisonResult]
 
 
-# 候选供应商，来自 01-开源调研与技术选型.md 的候选名单，实测前只是候选，不是结论。
+# 候选供应商，来自 01-开源调研与技术选型.md 的候选名单。
+# deepseek：0.1 实测结果（2026-08-09，见 docs/m1-model-comparison.md）——
+#   GET /v1/models 返回的真实模型只有 deepseek-v4-flash / deepseek-v4-pro，
+#   不存在原先写死的 deepseek-chat-241226；response_format=json_schema 被
+#   拒绝（400 "This response_format type is unavailable now"），json_object
+#   实测通过且响应 model 字段原样回显 "deepseek-v4-pro"。
+# doubao / qwen：未实测（无 API key，账号还没注册），模型名与 json_schema
+#   支持情况仍是候选阶段的占位猜测，接线前必须实测。
 PROVIDER_CANDIDATES: list[ProviderConfig] = [
     ProviderConfig(
         name="deepseek",
         api_key_env="DEEPSEEK_API_KEY",
         base_url="https://api.deepseek.com/v1",
-        model="deepseek-chat-241226",  # 实测前请去 DeepSeek 控制台确认当前可用的锁定版本号
+        model="deepseek-v4-pro",
         supports_json_schema=False,
     ),
     ProviderConfig(
         name="doubao",
         api_key_env="ARK_API_KEY",
         base_url="https://ark.cn-beijing.volces.com/api/v3",
-        model="doubao-seed-2-1-turbo-241215",  # 实测前请去火山方舟控制台确认 Endpoint ID / 版本号
+        model="doubao-seed-2-1-turbo-241215",  # 未实测（无 API key）——实测前请去火山方舟控制台确认 Endpoint ID / 版本号
         supports_json_schema=True,
     ),
     ProviderConfig(
         name="qwen",
         api_key_env="DASHSCOPE_API_KEY",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        model="qwen3.7-plus-241226",  # 实测前请去 DashScope 控制台确认当前可用的锁定版本号
+        model="qwen3.7-plus-241226",  # 未实测（无 API key）——实测前请去 DashScope 控制台确认当前可用的锁定版本号
         supports_json_schema=False,
     ),
 ]
@@ -72,6 +81,18 @@ def run_comparison(
     results = []
     for provider in providers:
         api_key = os.environ.get(provider.api_key_env, "")
+        if not api_key:
+            results.append(
+                ComparisonResult(
+                    provider_name=provider.name,
+                    schema_valid=False,
+                    latency_ms=0.0,
+                    raw_output="",
+                    error=f"跳过：环境变量 {provider.api_key_env} 未设置",
+                    skipped=True,
+                )
+            )
+            continue
         gateway = LLMGateway(
             api_key=api_key,
             base_url=provider.base_url,
@@ -111,8 +132,10 @@ def run_comparison(
 
 
 def summarize(results: list[ComparisonResult]) -> ComparisonSummary:
-    passing = [r for r in results if r.schema_valid]
-    disqualified = [r.provider_name for r in results if not r.schema_valid]
+    active = [r for r in results if not r.skipped]
+    passing = [r for r in active if r.schema_valid]
+    disqualified = [r.provider_name for r in active if not r.schema_valid]
+    skipped = [r.provider_name for r in results if r.skipped]
 
     if not passing:
         raise ValueError("没有供应商通过 Schema 校验，需要人工排查或换供应商")
@@ -121,6 +144,7 @@ def summarize(results: list[ComparisonResult]) -> ComparisonSummary:
     return ComparisonSummary(
         recommended_provider=best.provider_name,
         disqualified=disqualified,
+        skipped=skipped,
         results=results,
     )
 
@@ -130,5 +154,9 @@ if __name__ == "__main__":
     summary = summarize(results)
     print(f"推荐供应商: {summary.recommended_provider}")
     print(f"未通过 Schema 校验: {summary.disqualified}")
+    print(f"跳过（无 API key）: {summary.skipped}")
     for r in results:
-        print(f"- {r.provider_name}: schema_valid={r.schema_valid} latency={r.latency_ms:.0f}ms")
+        if r.skipped:
+            print(f"- {r.provider_name}: skipped ({r.error})")
+        else:
+            print(f"- {r.provider_name}: schema_valid={r.schema_valid} latency={r.latency_ms:.0f}ms")
