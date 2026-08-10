@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   卓品智能招聘助手 Demo 首次部署脚本 —— Windows venv + 计划任务，无 Docker（部署约束4）。
 .DESCRIPTION
