@@ -86,13 +86,15 @@ Register-ScheduledTask `
 Write-Host "==> 开放防火墙规则: $FirewallRuleName (TCP $Port)"
 $existingRule = Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
 if ($existingRule) {
-    Write-Host "    规则已存在，跳过"
+    Write-Host "    规则已存在，确保 Profile 覆盖 Any"
+    Set-NetFirewallRule -DisplayName $FirewallRuleName -Profile Any | Out-Null
 } else {
     New-NetFirewallRule `
         -DisplayName $FirewallRuleName `
         -Direction Inbound `
         -Protocol TCP `
         -LocalPort $Port `
+        -Profile Any `
         -Action Allow | Out-Null
 }
 
