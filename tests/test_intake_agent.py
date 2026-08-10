@@ -134,6 +134,76 @@ def test_questions_capped_at_three_even_if_model_returns_more():
     assert len(result.questions) == 3
 
 
+def test_repeating_previous_question_forces_completion_before_round_limit():
+    """
+    2026-08-10 真实环境试跑发现：用户对"CP 还是 AP"这种二选一问题回答"是的"时，
+    profile_patch 提不出任何字段，ECU 知识库的追问建议又逐轮原样重新注入，模型在
+    temperature=0 下生成了和上一轮几乎一字不差的问题——不能等到 MAX_ROUNDS（5）轮
+    才发现自己在打转，那之前每一轮都是把同一组问题原样再发一次给用户。
+
+    这里断言：当这一轮生成的问题和上一轮 assistant 说的内容只有空白差异地相同时，
+    不应该把它再发一次——应该提前判定 is_complete，把没问出来的字段留给
+    unspecified_fields，而不是重复发问。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": ["AUTOSAR具体需要CP还是AP？", "MCU平台族是？"],
+                    "profile_patch": {},
+                    "unspecified_fields": ["autosar_experience", "mcu_family"],
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "要个懂AUTOSAR的"},
+            {
+                "role": "assistant",
+                "content": "AUTOSAR 具体需要 CP 还是 AP？\nMCU 平台族是？",
+            },
+            {"role": "user", "content": "是的"},
+        ],
+        round_count=1,
+    )
+
+    assert result.is_complete is True
+    assert result.questions == []
+    assert "autosar_experience" in result.unspecified_fields
+
+
+def test_new_question_different_from_previous_turn_is_not_treated_as_stuck():
+    """反向证明：只要这轮问题和上一轮不同，就不该被误判为卡住而提前结束。"""
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": ["招聘人数是？"],
+                    "profile_patch": {"autosar_experience": ["CP"]},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "要个懂AUTOSAR的"},
+            {"role": "assistant", "content": "AUTOSAR 具体需要 CP 还是 AP？"},
+            {"role": "user", "content": "CP"},
+        ],
+        round_count=1,
+    )
+
+    assert result.is_complete is False
+    assert result.questions == ["招聘人数是？"]
+
+
 def _sent_prompt(gateway: LLMGateway) -> str:
     """把这次调用真正发给模型的 system+user 文本拼起来，用于断言"某段内容确实进了 prompt"。"""
     call = gateway._client.chat.completions.calls[0]

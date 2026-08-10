@@ -157,6 +157,28 @@ def _build_user_prompt(
     return "\n\n".join(sections)
 
 
+def _repeats_last_assistant_turn(questions: list[str], history: list[dict]) -> bool:
+    """
+    判断这轮生成的问题是否和上一轮 assistant 说的内容只有空白差异地相同。
+
+    2026-08-10 真实环境试跑发现：用户回答模糊（如对"CP 还是 AP"这种二选一问题
+    回答"是的"）时，profile_patch 常年提不出任何字段，ECU 知识库的追问建议又
+    逐轮原样重新注入 prompt，模型在 temperature=0 下倾向于生成和上一轮几乎
+    一字不差的问题——不能靠 MAX_ROUNDS 兜底，那之前每一轮都在把同一组问题
+    原样再发一次给用户。
+    """
+    if not questions:
+        return False
+    last_assistant = next(
+        (turn.get("content", "") for turn in reversed(history) if turn.get("role") == "assistant"),
+        None,
+    )
+    if last_assistant is None:
+        return False
+    normalize = lambda s: "".join(str(s).split())
+    return normalize("\n".join(questions)) == normalize(last_assistant)
+
+
 def run_intake_turn(
     gateway: LLMGateway,
     *,
@@ -184,12 +206,16 @@ def run_intake_turn(
         )
 
     at_round_limit = round_count >= MAX_ROUNDS
-    questions = [] if at_round_limit else parsed.questions[:MAX_QUESTIONS_PER_ROUND]
+    capped_questions = [] if at_round_limit else parsed.questions[:MAX_QUESTIONS_PER_ROUND]
+
+    stuck = not at_round_limit and _repeats_last_assistant_turn(capped_questions, history)
+    give_up = at_round_limit or stuck
+    questions = [] if give_up else capped_questions
 
     return IntakeTurnResult(
         is_job_related=True,
         questions=questions,
         profile_patch=parsed.profile_patch,
-        is_complete=at_round_limit or not questions,
-        unspecified_fields=parsed.unspecified_fields if at_round_limit else [],
+        is_complete=give_up or not questions,
+        unspecified_fields=parsed.unspecified_fields if give_up else [],
     )
