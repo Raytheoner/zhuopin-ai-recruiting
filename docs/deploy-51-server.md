@@ -6,14 +6,14 @@
 ## 前置条件
 
 - 服务器已装 Python 3.11+（与其他现有服务共用的解释器版本对齐，若不确定找 IT 确认）
-- 本机（开发机）到服务器的 SSH 访问已配置（`sync-to-server.ps1` 用 scp/ssh）
+- 本机（开发机）到服务器的 SSH 访问已配置（`sync-to-server.sh` 用 scp/ssh）
 - 服务器能出公网访问 LLM 供应商 API（已实测：DeepSeek / 火山方舟 / 阿里百炼三家域名连通，见
   `04-部署与门户挂载.md` §4）
 
 ## 首次部署
 
 1. 在服务器上创建部署目录（默认 `C:\apps\zhuopin-recruit-agent`）
-2. 从开发机运行 `sync-to-server.ps1` 把代码推过去（首次也可以手工 scp，效果一样）
+2. 从开发机运行 `sync-to-server.sh` 把代码推过去（首次也可以手工 scp，效果一样）
 3. RDP 登录服务器，以管理员身份打开 PowerShell，进入部署目录，创建 `.env`
    （**不要把 `.env` 提交进 git，也不要放在门户可访问的路径下**）：
 
@@ -42,8 +42,8 @@ ROOT_PATH=/hr/recruit-agent
 
 代码有更新后，从开发机运行：
 
-```powershell
-.\sync-to-server.ps1
+```bash
+./sync-to-server.sh
 ```
 
 它会把代码 scp 推过去并重启计划任务。**依赖变更**（`requirements.txt` 改了）时，
