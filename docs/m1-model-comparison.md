@@ -132,6 +132,10 @@ flash 中位数比 pro 低约 14%，但**不构成"延迟明显更低"**：flash
   开发（PaddleOCR/MinerU 抽取链路等）能继续推进。
 - **flash vs pro 的选型**：数据不支持"flash 明显更快"，两者延迟区间重叠，字段质量都可接受
   （flash 编造倾向略低）。**留给决策者定夺**，本文件不替决策者下结论。
+- **flash vs pro 的最终结论**：flash 与 pro 的延迟差异在 n=3 时不显著，不构成选型理由。但实测中
+  pro 有 1/3 概率（3 次里 1 次）抽出输入未提及的 MCU 型号与工具链，flash 3 次均留空。对本项目而言
+  编造倾向比延迟更关键——画像里多出未提及的硬性要求会导致寻源方向偏，且业务经理看到一份专业画像
+  时不会逐字核对哪些是自己说的，很难被发现。**结论：demo 阶段用 flash，待 pilot 反馈后再评估。**
 - **理由（选 DeepSeek 而非其他供应商）**：唯一持有 API key 的供应商；实测 schema 遵循度通过
   （json_object + prompt 内嵌 schema 路径）；单价未纳入本轮对比（无其他供应商价格做参照，比较
   没有意义）。
@@ -147,5 +151,5 @@ flash 中位数比 pro 低约 14%，但**不构成"延迟明显更低"**：flash
      都偏慢，需要评估是否要换交互模式（减少轮次/流式反馈/异步通知）而不只是换模型。
 - **写回配置**：`.env` 的 `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` /
   `LLM_SUPPORTS_JSON_SCHEMA` 五项待决策者选定 flash/pro 后再更新（`LLM_API_KEY` 只在本地 `.env`
-  里填，不进版本库）。当前 `.env` 仍是本轮实测前的值（`LLM_MODEL=deepseek-v4-pro`），本文件
-  不代为改写，避免抢在决策者拍板前动生产配置。
+  里填，不进版本库）。**决策已定（见上）**，`.env` 与 `.env.example` 的 `LLM_MODEL` 已同步改为
+  `deepseek-v4-flash`。

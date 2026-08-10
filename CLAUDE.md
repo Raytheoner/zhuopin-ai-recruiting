@@ -11,6 +11,36 @@
 
 ---
 
+## 📋 给 Paul 任务指令时的强制格式
+
+**任何**要 Paul 去执行的指令，开头必须完整声明四项，缺一不可。**没有"小任务可以省略"这种例外**——省略就是让他猜，猜错的代价远大于多写四行。
+
+```
+界面：Cowork / Claude Code tab（说到具体 tab）
+Session：新开 / 利旧（利旧必须给理由）
+分支：main / worktree 分支
+Worktree：❌ 不勾 / ✅ 勾选
+```
+
+固定判据：
+
+| 要做的事 | 界面 | Session | Worktree |
+|---|---|---|---|
+| 需求契约、文档、调研 | Cowork 或 CC 均可 | 新开 | ❌ |
+| 出实现计划（spec-to-plan） | **CC** | 新开 | ❌ |
+| 写代码（run-build） | **CC** | 新开 | ✅ |
+| git 提交/推送、跑脚本、改配置 | **CC** | 利旧即可 | ❌ |
+| 中断后恢复同一阶段 | 同原阶段 | **利旧**（有进度台账） | 同原阶段 |
+
+- **git 相关只能在 CC**：Cowork 的 bash 在隔离 VM 里，对 `.git/` 只能写不能删，git 操作必失败
+- **提交 main 上的未提交改动必须不勾 worktree**，否则改动不在工作区里
+- **分支名不要指定**：CC Desktop 勾 worktree 后自己生成 `claude/<任务名>-dev-<hash>`，指定只会导致多建一个
+- **在服务器上跑的命令**要写明"在 .51 上跑"并给 ssh 包装形式，不给裸命令
+
+完整 Opener 模板见 `.claude/skills/kickoff/SKILL.md`。**每份指令必须是完整可整块复制的，不要让 Paul 拼接片段。**
+
+---
+
 ## 🚫 绝对禁止
 
 **不得读取或修改 `~/Library/CloudStorage/OneDrive-Personal/Projects/企业AI转型/` 下任何内容。** 那是 Paul 在另一台 Windows 机器上维护的独立项目，通过 OneDrive 同步，跨端写入会造成文件锁冲突与覆盖。需要参考其做法时只能询问 Paul，不要自己去读。
