@@ -4,7 +4,7 @@
 
 这不是一次性 demo —— 它就是本变更的 `job-profile-intake` + `job-description` 两个 capability，只是先跳过企微通道与 Postgres。架构（LangGraph 图结构、`compute_*`/`effect_*` 节点划分、通道抽象）从第一天就按正式版做，后面换基础设施只改配置。
 
-- [ ] 0.1 **模型对比实测**（与 2.1 是同一件事，提前到这里做，阻塞后续全部 LLM 工作）—— 代码/脚本/模板已交付（`scripts/compare_models.py` + `docs/m1-model-comparison.md`），**实测数据待工程师用真实 API Key 跑一遍并填表**，不可编造，故不勾
+- [x] 0.1 **模型对比实测**（与 2.1 是同一件事，提前到这里做，阻塞后续全部 LLM 工作）—— DeepSeek 单供应商实测完成（含 flash vs pro 对比，见 `docs/m1-model-comparison.md`）；2026-08-11 决策者明确拍板不等 doubao/qwen 补测账号，M1 demo 阶段直接定 DeepSeek——不是数据缺失下的权宜之计，是显式决策，故勾选
 - [x] 0.2 画像 Pydantic Schema（同 5.1，正式版直接沿用）
 - [x] 0.3 LLM 网关最小版：单供应商、版本锁定、`temperature=0`、schema 校验 + 重试
 - [x] 0.4 LangGraph 图骨架，节点命名区分 `compute_*` / `effect_*`；checkpointer 先用 SqliteSaver
