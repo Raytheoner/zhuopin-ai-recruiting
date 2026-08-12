@@ -64,6 +64,21 @@ ROOT_PATH=/hr/recruit-agent
 - [ ] 页面「演示环境，不进入正式招聘流程」标注清晰可见
 - [ ] 访问日志沿用现有四服务同款做法（JSONL，不采集个人身份信息）
 
+## 故障排查
+
+- **重启计划任务后服务起不来，`curl` 连接被拒绝**：先看 `.env` 是否是合法 UTF-8——
+  2026-08-11 真实遇到过：RDP 上用 Windows 原生编辑器/PowerShell 重定向改过 `.env`
+  后，文件里混入了非 UTF-8 字节，`python-dotenv` 解析整个文件直接崩溃，
+  `Settings()` 初始化失败，进程启动即退出（`schtasks /query /tn ZhuopinRecruitAgent
+  /v` 看到"上次结果: 1"）。旧进程只要没重启就还在正常跑（问题是重启才会暴露的），
+  一旦 `sync-to-server.sh`/手动重启触发进程重新加载 `.env`，这个坑就会炸。
+  排查：`.venv\Scripts\python.exe -c "import app.main"` 直接跑，看 Traceback 里
+  是不是 `UnicodeDecodeError`。修复不要猜编码重新写整个文件——按行用严格 UTF-8
+  解码逐行探测，只有坏的那几行需要处理（如果那几行对应的变量当前代码根本不用，
+  最简单是直接删掉那几行，不用管原来写的是什么）；改之前一定先备份原文件。
+  预防：以后编辑 `.env` 用能显式选 UTF-8（无 BOM）保存的编辑器，不要用 PowerShell
+  `>`/`>>` 重定向或默认编码的 Notepad。
+
 ## 技术债提醒
 
 - **过渡端口 8095 是临时的**：统一门户网关上线即迁移，届时只需网关加一条

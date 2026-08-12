@@ -15,6 +15,15 @@
 
 set -euo pipefail
 
+# 2026-08-11 修复：本机 shell 默认 locale 是 "C"（非 UTF-8）。旧版脚本用
+# `for item in *` 遍历仓库根目录时，会把中文文件名（如 03-工具链协作规则.md）
+# 原样传给 scp——在 "C" locale 下这些多字节文件名被静默改写成八进制转义，
+# 远端收到的是一串乱码路径，scp 直接报 "No such file or directory" 失败，
+# 且是在中途失败，此前已经 scp 过去的文件不会回滚。显式切到 UTF-8，不依赖
+# 调用者的 shell 环境是否已经配好。
+export LANG="${LANG:-en_US.UTF-8}"
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+
 SERVER="${SERVER:-zp51}"
 REMOTE_APP_DIR="${REMOTE_APP_DIR:-C:/apps/zhuopin-recruit-agent}"
 TASK_NAME="${TASK_NAME:-ZhuopinRecruitAgent}"
@@ -22,38 +31,47 @@ HEALTH_URL="${HEALTH_URL:-http://localhost:8095/hr/recruit-agent/}"
 
 cd "$(dirname "$0")"
 
-# 不推送：.venv（服务器自己建）、data（运行时数据）、缓存、.git、脚本自身无所谓但保持整洁
-EXCLUDES=(".venv" "venv" "data" "__pycache__" ".pytest_cache" ".git" ".claude" ".superpowers")
+# 白名单而不是黑名单：服务器只需要真正跑起来这个 app 所需的东西。
+# 2026-08-11 review 发现旧的黑名单实现（遍历仓库根目录、排除少数几个名字）
+# 会把仓库根目录下的调研/架构/协作规则这些中文文件名的策略文档、.claude/、
+# openspec/、.agents 之类统统推到生产服务器——不仅没必要（app 运行时不读
+# 这些），中文文件名还正是触发上面那个 locale 编码 bug 的原因。改成白名单
+# 后 .env 也不再需要运行时判断跳过：它本来就从没出现在这份列表里，结构上
+# 不可能被同步（服务器 .env 是独立维护的生产凭据，按 docs/deploy-51-server.md
+# 单独维护）。
+SYNC_PATHS=(
+    "app"
+    "scripts"
+    "requirements.txt"
+    "pyproject.toml"
+    ".env.example"
+    "deploy-server.ps1"
+    "sync-to-server.sh"
+)
+
+# 即使在上面的白名单路径里，这些子目录也不推：.venv/venv（服务器自己建）、
+# data（运行时数据）、缓存。
+EXCLUDE_NAMES=(".venv" "venv" "data" "__pycache__" ".pytest_cache")
 
 echo "==> 推送代码到 ${SERVER}:${REMOTE_APP_DIR}"
 
-shopt -s dotglob nullglob
-for item in *; do
-    name="$(basename "$item")"
+for item in "${SYNC_PATHS[@]}"; do
+    [[ -e "$item" ]] || { echo "    (跳过，不存在: ${item})" >&2; continue; }
 
+    name="$(basename "$item")"
     skip=0
-    for ex in "${EXCLUDES[@]}"; do
+    for ex in "${EXCLUDE_NAMES[@]}"; do
         if [[ "$name" == "$ex" ]]; then skip=1; break; fi
     done
     [[ $skip -eq 1 ]] && continue
 
-    # .env 及其变体绝不能从开发机同步：服务器的 .env 是独立维护的生产凭据
-    # （真实 LLM_API_KEY、锁定的模型版本，工程铁律5），会被开发机本地 .env
-    # 静默覆盖且没有任何提示。.env.example 是例外——那是随代码分发的占位模板，
-    # 不含真实凭据。服务器 .env 按 docs/deploy-51-server.md 单独维护。
-    if [[ "$name" == .env* && "$name" != ".env.example" ]]; then
-        echo "    ⚠️  跳过 ${name}：服务器 .env 是独立维护的生产配置，不从开发机同步" >&2
-        continue
-    fi
-
-    echo "    scp: ${name}"
+    echo "    scp: ${item}"
     if [[ -d "$item" ]]; then
         scp -q -r "$item" "${SERVER}:${REMOTE_APP_DIR}/"
     else
         scp -q "$item" "${SERVER}:${REMOTE_APP_DIR}/"
     fi
 done
-shopt -u dotglob nullglob
 
 echo "==> 远程重启计划任务: ${TASK_NAME}"
 # /end 在任务未运行时会返回非零退出码，用 & 而不是 && 让 /run 无论如何都执行。
