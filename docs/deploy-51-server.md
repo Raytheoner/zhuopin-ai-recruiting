@@ -33,8 +33,26 @@ ROOT_PATH=/hr/recruit-agent
 .\deploy-server.ps1
 ```
 
-5. 验证：`curl.exe http://localhost:8095/hr/recruit-agent/` 应返回带「演示环境」横幅的页面；
-   `Get-ScheduledTask -TaskName ZhuopinRecruitAgent` 应显示 `Ready`/`Running`
+5. 验证分两步，缺一不可——只做 5a 会漏掉防火墙问题（服务器本机 200，但外部全部超时，
+   企业AI转型那边真踩过这个坑）：
+
+   - **5a（服务器上）**：`curl.exe http://localhost:8095/hr/recruit-agent/` 应返回带
+     「演示环境」横幅的页面；`Get-ScheduledTask -TaskName ZhuopinRecruitAgent` 应显示
+     `Ready`/`Running`。这一步只证明服务本身起来了，**不能**证明外部能访问到。
+   - **5b（回到开发机，不要 ssh 到服务器上跑）**：
+     ```bash
+     curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 \
+       http://192.168.100.51:8095/hr/recruit-agent/
+     ```
+     预期 `HTTP 200`。ssh 到服务器上再 curl localhost 测的还是本机回环，测不出防火墙问题，
+     等于没做这一步。若超时或连接被拒，按 `04-部署与门户挂载.md` 防火墙规则排查
+     （常见原因：入站规则没补 `-Profile Any`）。
+     然后在浏览器打开同一地址，F12 看 Network 面板：所有资源与接口调用必须 200，
+     不能有任何 404——这是验证 `root_path` 路径前缀真的做对了的唯一方法。
+
+     **2026-08-12 实测记录**：5b 直接通过，`curl` 返回 `HTTP 200`；浏览器 Network 面板
+     确认主文档 `GET /hr/recruit-agent/ → 200`、发消息触发的
+     `POST /hr/recruit-agent/api/jobs → 200`，无 404，无需改防火墙规则。
 6. 请 Paul 在门户导航加一行外链，指向 `http://192.168.100.51:8095/hr/recruit-agent/`
    （板块名「HR·招聘智能体」，见 `04-部署与门户挂载.md` §2「门户导航挂法」）
 
