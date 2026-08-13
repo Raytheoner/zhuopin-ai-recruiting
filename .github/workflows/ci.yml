@@ -35,6 +35,7 @@ jobs:
       - name: 版本留痕（排查版本偏斜时要看这一段）
         run: |
           python --version
+          python -c "import sqlite3; print('sqlite3 library:', sqlite3.sqlite_version); print('sqlite3 module:', sqlite3.version)"
           pip list
 
       - name: pytest
