@@ -24,6 +24,10 @@ __pycache__/
 .superpowers/
 # 注意：docs/superpowers/plans/ 要入库，那是实现计划，不是 scratch
 
+# === CC ↔ Cowork 握手通道（过程产物，不入库）===
+# scripts/hoff 的命令输出与 _next.md 指令，两边靠文件系统交换，用完即弃
+.claude/handoff/
+
 # === OpenSpec 临时文件 ===
 .openspec-test-*
 

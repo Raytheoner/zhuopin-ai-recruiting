@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# hoff —— Claude Code ↔ Cowork 文件握手通道（handoff）
+#
+# 背景：Cowork 的 list_sessions 看不到 Claude Code tab 的会话（只能看到其他
+# Cowork 会话），所以两边没有会话级通信。但两边都挂载同一个仓库目录，
+# 文件系统就是最可靠的通道——这也是 07 文档第三节第 4 条的结论。
+#
+# 用法：
+#   scripts/hoff <步骤名> '<要跑的命令>'
+#
+# 效果：
+#   1. 命令照常在终端实时输出，你能看到
+#   2. 同时落到 .claude/handoff/<步骤名>.log，带时间/命令/退出码的表头
+#   3. Cowork 侧直接读那个文件，不用你复制粘贴
+#
+# 反向（Cowork → CC）：Cowork 把下一步指令写进 .claude/handoff/_next.md，
+# 你在 CC 里说「执行 .claude/handoff/_next.md」即可，同样不用粘贴。
+#
+# 例：
+#   scripts/hoff py314-rebuild 'python3.14 -m venv venv && venv/bin/pip install -r requirements.txt'
+#   scripts/hoff pytest 'venv/bin/python -m pytest -q'
+#
+set -uo pipefail
+
+# 与 sync-to-server.sh 同样的理由：本机 shell 默认 locale 是 C，
+# 中文输出/中文文件名会被静默转义。这两行不要删。
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT_DIR="$REPO_ROOT/.claude/handoff"
+mkdir -p "$OUT_DIR"
+
+if [ $# -lt 2 ]; then
+  echo "用法: scripts/hoff <步骤名> '<命令>'" >&2
+  echo "例:   scripts/hoff pytest 'venv/bin/python -m pytest -q'" >&2
+  exit 64
+fi
+
+NAME="$1"; shift
+CMD="$*"
+LOG="$OUT_DIR/${NAME}.log"
+
+{
+  echo "### handoff : ${NAME}"
+  echo "### time    : $(date '+%Y-%m-%d %H:%M:%S %z')"
+  echo "### host    : $(hostname -s)"
+  echo "### pwd     : $(pwd)"
+  echo "### cmd     : ${CMD}"
+  echo "--- output ---"
+} > "$LOG"
+
+cd "$REPO_ROOT"
+bash -c "$CMD" 2>&1 | tee -a "$LOG"
+RC=${PIPESTATUS[0]}
+
+{
+  echo "--- end ---"
+  echo "### exit    : ${RC}"
+} >> "$LOG"
+
+echo
+if [ "$RC" -eq 0 ]; then
+  echo "✅ 已写入 .claude/handoff/${NAME}.log —— 回 Cowork 说一声「${NAME} 跑完了」就行，不用粘贴"
+else
+  echo "❌ 退出码 ${RC}，详情已写入 .claude/handoff/${NAME}.log —— 回 Cowork 说「${NAME} 失败了」"
+fi
+exit "$RC"

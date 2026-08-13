@@ -1,7 +1,10 @@
 [project]
 name = "zhuopin-recruiting-agent"
 version = "0.1.0-demo"
-requires-python = ">=3.11"
+# 与部署目标（.51 服务器，Windows，Python 3.14）严格对齐。
+# 收紧到单一版本区间是刻意的：测试环境 = 运行环境，否则「本地 81 全绿」证明不了服务器行为。
+# pydantic 被迫从 2.10.4 升到 2.13.4 就是版本偏斜的第一个症状。
+requires-python = ">=3.14,<3.15"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

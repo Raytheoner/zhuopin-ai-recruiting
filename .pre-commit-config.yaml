@@ -1,0 +1,50 @@
+# pre-commit —— 提交前的第一道防线
+#
+# ⚠️ 刻意的取舍：这套配置只做「拦截」，不做「修正」。
+#    没有启用任何会改写文件内容的钩子（end-of-file-fixer / trailing-whitespace /
+#    mixed-line-ending / fix-byte-order-marker）。原因：
+#      · fix-byte-order-marker 会剥掉 deploy-server.ps1 的 UTF-8 BOM
+#        → 服务器 PowerShell 5.1 按系统 ANSI 读中文注释，会直接语法错误
+#      · mixed-line-ending 会改 .ps1 的 CRLF
+#    这两处都是修过的真实 bug，自动"修正"回去就是复发。宁可少管一点。
+#
+# 安装（每个 clone 各做一次，git 不会自动装钩子）：
+#     pip install pre-commit && pre-commit install
+#
+# 钩子能被 `git commit --no-verify` 绕过，所以 CI 里同一套配置还会跑一遍
+# （.github/workflows/ci.yml 的 hooks job），那一层绕不过去。
+
+minimum_pre_commit_version: "3.5.0"
+fail_fast: false
+
+repos:
+  # 凭据 / token / API key 扫描
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # 私钥内容（不只看扩展名）
+      - id: detect-private-key
+      # 误提交的简历 PDF / 评测集 / 模型权重
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      # Mac 大小写不敏感 → 同名文件在 Windows 服务器上会互相覆盖
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      # 配置文件语法（CI workflow、pre-commit 自身、openspec config）
+      - id: check-yaml
+      - id: check-toml
+
+  # 路径黑名单：.gitignore 挡不住 `git add -f`，这是第二道
+  - repo: local
+    hooks:
+      - id: check-forbidden-paths
+        name: "拦截敏感路径（.env / data / evalset / 密钥 / 简历）"
+        entry: scripts/hooks/check-forbidden-paths.sh
+        language: script
+        pass_filenames: true
+        always_run: false
