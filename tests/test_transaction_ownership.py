@@ -40,6 +40,29 @@ def test_checkpointer_and_effect_layer_do_not_share_a_connection(tmp_path):
     )
 
 
+def test_build_intake_graph_rejects_mismatched_db_path_and_conn(tmp_path):
+    """
+    review Finding 1：build_intake_graph(db_path, conn=conn) 里 checkpointer
+    用 db_path 单独开一个连接，effect 层用调用方传入的 conn——这两者"指向
+    同一个数据库文件"是本次修复（方向 A）整个成立的前提，但此前完全没有
+    校验。传一个与 conn 实际打开的文件不一致的 db_path，此前会被静默接受：
+    业务写入 + effect_log 落在 conn 的文件里，checkpoint 行却落在 db_path
+    指向的另一个文件里，产生一个悄无声息的数据分裂。
+
+    修复后应该拒绝这种调用，而不是静默接受。
+    """
+    from app.graph.build import build_intake_graph
+
+    conn_db_path = str(tmp_path / "actual.db")
+    conn = get_connection(conn_db_path)
+    init_schema(conn)
+
+    mismatched_db_path = str(tmp_path / "different.db")
+
+    with pytest.raises(ValueError, match="db_path"):
+        build_intake_graph(mismatched_db_path, gateway=None, conn=conn, channel=None)
+
+
 class _CrashableConnection(sqlite3.Connection):
     """
     在指定的那一次 commit() 调用上模拟"进程恰好在真正落盘之前崩溃"——

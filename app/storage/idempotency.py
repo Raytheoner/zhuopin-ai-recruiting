@@ -1,6 +1,9 @@
 import functools
+import logging
 import sqlite3
 from typing import Callable, TypeVar
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -46,11 +49,22 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
                 # The rollback itself can fail (e.g. the transaction was
                 # already ended by another owner before we got here) — that
                 # failure must never replace the original exception the
-                # caller needs to see and act on.
+                # caller needs to see and act on. But it must not be silent
+                # either: if the rollback fails, the partial write it was
+                # supposed to undo is left sitting in the still-open
+                # transaction and will be durably committed by the next,
+                # unrelated effect's conn.commit() — log it at ERROR so this
+                # failure mode leaves a trace somewhere.
                 try:
                     conn.rollback()
-                except Exception:
-                    pass
+                except Exception as rollback_exc:
+                    logger.error(
+                        "rollback failed while cleaning up after effect_key=%s "
+                        "raised; the effect's partial write was NOT undone and "
+                        "may be silently committed by a later, unrelated effect",
+                        effect_key,
+                        exc_info=rollback_exc,
+                    )
                 raise
 
             conn.execute(

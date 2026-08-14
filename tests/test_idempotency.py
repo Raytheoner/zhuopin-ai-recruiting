@@ -138,3 +138,49 @@ def test_cleanup_rollback_failure_does_not_mask_original_exception(tmp_path):
 
     with pytest.raises(ValueError, match="original business failure"):
         failing_effect(conn, thread_id="job1", business_key="1")
+
+
+def test_cleanup_rollback_failure_is_logged(tmp_path, caplog):
+    """
+    review Finding 2：当清理用的 conn.rollback() 自己也失败时，此前的行为是
+    `except Exception: pass`——原始业务异常仍然正确传播（这是 Task 3 的核心
+    修复，必须保持不变），但 rollback 失败这件事本身没有留下任何痕迹。被
+    rollback undo 掉的那次部分写入会一直留在连接的隐式事务里，直到下一个
+    *不相关*的 effect 调用 conn.commit() 时被悄悄一并落盘
+    （tests/test_idempotency.py::test_partial_write_is_rolled_back_not_leaked_into_later_commit
+    保护的正是这个不变式），而这个场景——rollback 本身失败——之前完全没有
+    测试覆盖。
+
+    本测试同时验证两件事：(a) 原始业务异常仍然原样传播（不能被 rollback
+    的次生异常掩盖，这是回归防护）；(b) rollback 失败现在会打一条 ERROR
+    级别日志，带上 effect_key，不再是彻底静默。
+    """
+    import logging
+    import sqlite3
+
+    from app.storage.idempotency import idempotent_effect
+
+    class _RollbackFailingConnection(sqlite3.Connection):
+        def rollback(self):
+            raise sqlite3.OperationalError(
+                "cannot rollback - no transaction is active (simulated)"
+            )
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path, check_same_thread=False, factory=_RollbackFailingConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)
+
+    @idempotent_effect("effect_masking_probe")
+    def failing_effect(conn, thread_id, business_key):
+        raise ValueError("original business failure")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(ValueError, match="original business failure"):
+            failing_effect(conn, thread_id="job1", business_key="1")
+
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records, "rollback 失败时应该有 ERROR 级别日志，而不是彻底静默"
+    assert any("job1:effect_masking_probe:1" in r.getMessage() for r in error_records), (
+        "日志里应该包含 effect_key，方便定位是哪个 effect 的部分写入被泄漏"
+    )

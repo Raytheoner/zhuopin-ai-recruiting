@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
@@ -7,11 +9,38 @@ from app.graph.nodes import compute_intake_turn, effect_deliver_message, effect_
 from app.graph.state import IntakeState
 
 
+def _conn_main_db_path(conn) -> str:
+    """conn 自己认为的主数据库文件路径。PRAGMA database_list 返回
+    (seq, name, file) 行，name='main' 那一行的 file 是 SQLite 在这个连接上
+    实际打开的绝对路径——不是调用方声称的路径，是连接自己知道的路径。"""
+    for _seq, name, file in conn.execute("PRAGMA database_list"):
+        if name == "main":
+            return file
+    raise RuntimeError("conn 的 PRAGMA database_list 里没有 'main' 数据库，无法校验 db_path")
+
+
 def build_intake_graph(db_path: str, *, gateway, conn, channel):
     """
     单轮采集流程：compute_intake_turn → effect_persist_draft → effect_deliver_message → END。
     每次 HTTP 请求 invoke 一次；跨请求的对话历史由 SqliteSaver 按 thread_id 持久化恢复。
     """
+    # 本函数的前提是"checkpointer 与 effect 层的 conn 打开的是同一个数据库
+    # 文件、但用两个独立连接"（方向 A，见下方 checkpointer_conn 处的说明）。
+    # 这个前提此前完全没有校验：调用方传入一个与 conn 实际打开的文件不一致
+    # 的 db_path 会被静默接受，业务写入 + effect_log 落在 conn 的文件里，
+    # checkpoint 行却落在另一个文件里，产生一个悄无声息、极难排查的数据分裂。
+    # 这里直接问 conn 自己打开的是哪个文件（而不是信任调用方分别传入的两个
+    # 参数互相一致），据此做校验，从根上排除"标称路径"与"实际路径"能够
+    # 分道扬镳的可能。
+    conn_db_path = _conn_main_db_path(conn)
+    if os.path.realpath(conn_db_path) != os.path.realpath(db_path):
+        raise ValueError(
+            "build_intake_graph 收到的 db_path 与 conn 实际打开的数据库文件不一致："
+            f"db_path={db_path!r}，conn 打开的是 {conn_db_path!r}。"
+            "checkpointer 会用 db_path 单独开一个连接，两者不一致会导致 checkpoint "
+            "行与业务写入/effect_log 悄悄落在两个不同的文件里。"
+        )
+
     graph = StateGraph(IntakeState)
 
     def _compute_node(state: IntakeState) -> IntakeState:
