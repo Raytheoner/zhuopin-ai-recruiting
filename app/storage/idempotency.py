@@ -42,7 +42,15 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
                 # would otherwise be durably committed the next time ANY
                 # unrelated effect calls conn.commit(). Roll back so a failed
                 # effect leaves no trace for a later, unrelated commit to pick up.
-                conn.rollback()
+                #
+                # The rollback itself can fail (e.g. the transaction was
+                # already ended by another owner before we got here) — that
+                # failure must never replace the original exception the
+                # caller needs to see and act on.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 raise
 
             conn.execute(

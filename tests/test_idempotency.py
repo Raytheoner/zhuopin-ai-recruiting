@@ -102,3 +102,39 @@ def test_partial_write_is_rolled_back_not_leaked_into_later_commit(tmp_path):
         "SELECT 1 FROM job WHERE id = ?", ("leaked-job",)
     ).fetchone()
     assert leaked is None
+
+
+def test_cleanup_rollback_failure_does_not_mask_original_exception(tmp_path):
+    """
+    spec Requirement「异常路径不掩盖原始错误」：一个带幂等保护的写入函数体
+    执行过程中抛出异常时，兜底的 conn.rollback() 如果自己也失败（例如连接
+    上已经没有活跃事务——事务已被另一个所有者提前结束），调用方最终看到的
+    必须是导致失败的原始异常，而不是清理动作产生的次生异常。
+
+    用一个"rollback() 总是抛异常"的连接子类直接、确定性地制造这个条件，
+    不依赖任何 SQLite 版本/平台对"在无活跃事务的连接上调用 rollback()"这件
+    事是否报错的行为差异（已验证：本机 Python 3.14.6 + SQLite 3.53.3 上这
+    是静默 no-op，不会自然报错——所以必须用连接子类主动模拟，而不是指望
+    自然触发）。
+    """
+    import sqlite3
+
+    from app.storage.idempotency import idempotent_effect
+
+    class _RollbackFailingConnection(sqlite3.Connection):
+        def rollback(self):
+            raise sqlite3.OperationalError(
+                "cannot rollback - no transaction is active (simulated)"
+            )
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path, check_same_thread=False, factory=_RollbackFailingConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)  # init_schema 只用 commit()，不用 rollback()，对这个子类安全
+
+    @idempotent_effect("effect_masking_probe")
+    def failing_effect(conn, thread_id, business_key):
+        raise ValueError("original business failure")
+
+    with pytest.raises(ValueError, match="original business failure"):
+        failing_effect(conn, thread_id="job1", business_key="1")
