@@ -160,13 +160,25 @@ def test_shared_connection_lets_checkpoint_commit_break_effect_atomicity(tmp_pat
         effect_fn_replay(fresh_conn, thread_id="job1", business_key="1")
 
 
-def test_multiple_requests_reuse_the_same_checkpointer_connection(tmp_path):
+def test_multiple_requests_reuse_the_same_checkpointer_connection(tmp_path, monkeypatch):
     """
     app/web/server.py::create_app._run_turn 修复前在每次 HTTP 请求时都调用一次
     build_intake_graph()——方向 A 让 checkpointer 拿独立连接后，如果调用位置不
     上提，这个独立连接会每请求泄漏一个（长期运行的 Windows 计划任务进程会
-    积累未关闭的文件描述符）。断言两次请求之间 checkpointer 用的是同一个
-    连接对象，证明生命周期已经收敛到应用启动阶段，而不是每请求重开。
+    积累未关闭的文件描述符）。
+
+    用 monkeypatch 在 app.web.server.build_intake_graph 上打一个计数 spy：断言
+    它在 create_app() 启动时被调用恰好一次，且两次 HTTP 请求之后调用次数仍然
+    是 1——这直接证伪"每请求重建 graph"这个回归场景：如果有人把 _run_turn
+    改回每请求调用一次 build_intake_graph()，这个断言会失败。早期版本这里比较
+    的是同一个 app.state.graph 属性和它自己，那种写法在任何实现下（包括这个
+    回归场景）都恒真，起不到保护作用（review Finding 1）。
+
+    同时验证生命周期收敛的另一半：应用关闭（lifespan shutdown）时必须真的
+    关闭 checkpointer 的连接，而不是关错了 conn（effect 层连接）或者根本没关
+    （review Finding 2）——TestClient 退出 `with` 块会触发 FastAPI 的 lifespan
+    shutdown，之后再对捕获到的 checkpointer 连接执行操作应该报
+    sqlite3.ProgrammingError（"Cannot operate on a closed database"）。
     """
     import json
     from dataclasses import dataclass
@@ -174,6 +186,7 @@ def test_multiple_requests_reuse_the_same_checkpointer_connection(tmp_path):
     from fastapi.testclient import TestClient
 
     from app.llm.gateway import LLMGateway
+    from app.web import server as server_module
     from app.web.server import create_app
 
     @dataclass
@@ -219,32 +232,37 @@ def test_multiple_requests_reuse_the_same_checkpointer_connection(tmp_path):
             client=FakeOpenAIClient([response, response]),
         )
 
+    real_build_intake_graph = server_module.build_intake_graph
+    call_count = {"n": 0}
+    built_graphs = []
+
+    def counting_build_intake_graph(*args, **kwargs):
+        call_count["n"] += 1
+        graph = real_build_intake_graph(*args, **kwargs)
+        built_graphs.append(graph)
+        return graph
+
+    monkeypatch.setattr(server_module, "build_intake_graph", counting_build_intake_graph)
+
     app = create_app(db_path=db_path, gateway_factory=gateway_factory, root_path="")
 
-    # create_app() 只构造一次 graph——从这个具体的 app 实例上，通过它注册的
-    # 路由闭包拿不到 graph 引用（FastAPI 不暴露这个），所以本测试改为直接调用
-    # create_app 两次、比较两次拿到的 app 各自开出的 checkpointer 连接确实
-    # 是"每个 app 一个"而不是"每个请求一个"——用一次请求内部触发两次
-    # _run_turn（create + reply）来验证同一个 app 生命周期内连接不重开，
-    # 比较的是 sqlite3.Connection 底层文件描述符层面的稳定性：两次请求都
-    # 成功，且第二次请求不需要重新建表（init_schema 只在 create_app 顶层跑
-    # 一次），说明用的是同一个 conn；checkpointer 连接是否复用直接用
-    # graph.checkpointer.conn 的 id() 在两次 _run_turn 之间比较最直接，
-    # server.py 通过 app.state.graph 暴露了这个非公开引用（仅供测试使用，
-    # 不是路由契约的一部分），所以这里直接做 `is` 恒等比较，而不是只验证
-    # 行为后果。
-    checkpointer_conn_before = app.state.graph.checkpointer.conn
+    assert call_count["n"] == 1, "build_intake_graph 应该只在 create_app() 启动时被调用一次"
+    checkpointer_conn = built_graphs[0].checkpointer.conn
 
     with TestClient(app) as client:
         r1 = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"})
         job_id = r1.json()["job_id"]
         r2 = client.post(f"/api/jobs/{job_id}/reply", json={"message": "AUTOSAR CP"})
 
-    checkpointer_conn_after = app.state.graph.checkpointer.conn
-
     assert r1.status_code == 200
     assert r2.status_code == 200
-    assert checkpointer_conn_after is checkpointer_conn_before, (
-        "checkpointer 连接在两次请求之间被换成了不同对象，说明 graph 构造没有"
-        "真正收敛到应用启动阶段（仍然是每请求重建，独立连接会每请求泄漏一个）"
+    assert call_count["n"] == 1, (
+        "build_intake_graph 在两次请求之间被重新调用了，说明 graph 构造没有真正"
+        "收敛到应用启动阶段（回归成了每请求重建，独立连接会每请求泄漏一个）"
     )
+
+    # TestClient 退出 with 块时已经触发了 lifespan shutdown；此刻应该已经关闭
+    # 的是 checkpointer 的独立连接，而不是 conn（effect 层连接）或者压根没关闭
+    # 任何连接——两种都是方向 A 这次修复本应防止的错误（review Finding 2）。
+    with pytest.raises(sqlite3.ProgrammingError):
+        checkpointer_conn.execute("SELECT 1")

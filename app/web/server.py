@@ -64,9 +64,6 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
 
     app = FastAPI(title="卓品智能招聘助手 · Demo", lifespan=_lifespan)
     app.add_middleware(AuthMiddleware)
-    # 非公开属性，仅供测试直接验证 graph（进而 checkpointer 连接）确实只在
-    # 应用启动时构造一次——不是路由契约的一部分，调用方不应依赖它。
-    app.state.graph = graph
     router = APIRouter()
 
     def _run_turn(job_id: str, message: str) -> dict:
