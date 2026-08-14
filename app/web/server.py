@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -38,18 +39,37 @@ def _render_index(root_path: str) -> str:
 
 
 def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") -> FastAPI:
-    app = FastAPI(title="卓品智能招聘助手 · Demo")
-    app.add_middleware(AuthMiddleware)
-
     conn = get_connection(db_path)
     init_schema(conn)
     channel = WebChannel(conn)
+
+    # gateway 与 graph 的构造从"每次请求一次"上提到"应用启动一次"，与 conn/
+    # channel 的现有生命周期对齐。方向 A 让 build_intake_graph() 内部为
+    # checkpointer 开一个独立连接（app/graph/build.py）后，如果每次请求都
+    # 重新调用 build_intake_graph()，这个独立连接会每请求泄漏一个——LLMGateway
+    # 本身是无状态的配置+client 包装（app/llm/gateway.py），复用是安全的；
+    # 图对象也是无状态可重入的，不同 job_id（LangGraph 的 thread_id）之间由
+    # checkpointer 按 thread_id 分区，复用同一个编译好的图不会造成跨 job 串扰。
+    gateway = gateway_factory()
+    graph = build_intake_graph(db_path, gateway=gateway, conn=conn, channel=channel)
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        yield
+        # 应用正常关闭时显式释放 checkpointer 的独立连接（设计要求：进程
+        # 正常退出与异常退出都不遗留未关闭连接）。conn 本身继续沿用现有代码
+        # 一直以来的做法——不显式关闭，随进程退出释放（Windows 计划任务场景
+        # 下与部署约束4一致，SYSTEM 账户进程退出即释放所有句柄）。
+        graph.checkpointer.conn.close()
+
+    app = FastAPI(title="卓品智能招聘助手 · Demo", lifespan=_lifespan)
+    app.add_middleware(AuthMiddleware)
+    # 非公开属性，仅供测试直接验证 graph（进而 checkpointer 连接）确实只在
+    # 应用启动时构造一次——不是路由契约的一部分，调用方不应依赖它。
+    app.state.graph = graph
     router = APIRouter()
 
     def _run_turn(job_id: str, message: str) -> dict:
-        gateway = gateway_factory()
-        graph = build_intake_graph(db_path, gateway=gateway, conn=conn, channel=channel)
-
         profile_row = conn.execute(
             "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
             (job_id,),

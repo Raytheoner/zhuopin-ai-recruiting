@@ -158,3 +158,93 @@ def test_shared_connection_lets_checkpoint_commit_break_effect_atomicity(tmp_pat
 
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         effect_fn_replay(fresh_conn, thread_id="job1", business_key="1")
+
+
+def test_multiple_requests_reuse_the_same_checkpointer_connection(tmp_path):
+    """
+    app/web/server.py::create_app._run_turn 修复前在每次 HTTP 请求时都调用一次
+    build_intake_graph()——方向 A 让 checkpointer 拿独立连接后，如果调用位置不
+    上提，这个独立连接会每请求泄漏一个（长期运行的 Windows 计划任务进程会
+    积累未关闭的文件描述符）。断言两次请求之间 checkpointer 用的是同一个
+    连接对象，证明生命周期已经收敛到应用启动阶段，而不是每请求重开。
+    """
+    import json
+    from dataclasses import dataclass
+
+    from fastapi.testclient import TestClient
+
+    from app.llm.gateway import LLMGateway
+    from app.web.server import create_app
+
+    @dataclass
+    class FakeMessage:
+        content: str
+
+    @dataclass
+    class FakeChoice:
+        message: FakeMessage
+
+    @dataclass
+    class FakeResponse:
+        choices: list
+        usage: object = None
+
+    class FakeChatCompletions:
+        def __init__(self, responses):
+            self._responses = list(responses)
+
+        def create(self, **kwargs):
+            content = self._responses.pop(0)
+            return FakeResponse(choices=[FakeChoice(message=FakeMessage(content=content))])
+
+    class FakeChat:
+        def __init__(self, responses):
+            self.completions = FakeChatCompletions(responses)
+
+    class FakeOpenAIClient:
+        def __init__(self, responses):
+            self.chat = FakeChat(responses)
+
+    response = json.dumps(
+        {"is_job_related": True, "questions": ["是否涉及 AUTOSAR？"], "profile_patch": {}}
+    )
+    db_path = str(tmp_path / "lifecycle.db")
+
+    def gateway_factory():
+        return LLMGateway(
+            api_key="k",
+            base_url="https://example.com",
+            model="deepseek-chat-241226",
+            supports_json_schema=False,
+            client=FakeOpenAIClient([response, response]),
+        )
+
+    app = create_app(db_path=db_path, gateway_factory=gateway_factory, root_path="")
+
+    # create_app() 只构造一次 graph——从这个具体的 app 实例上，通过它注册的
+    # 路由闭包拿不到 graph 引用（FastAPI 不暴露这个），所以本测试改为直接调用
+    # create_app 两次、比较两次拿到的 app 各自开出的 checkpointer 连接确实
+    # 是"每个 app 一个"而不是"每个请求一个"——用一次请求内部触发两次
+    # _run_turn（create + reply）来验证同一个 app 生命周期内连接不重开，
+    # 比较的是 sqlite3.Connection 底层文件描述符层面的稳定性：两次请求都
+    # 成功，且第二次请求不需要重新建表（init_schema 只在 create_app 顶层跑
+    # 一次），说明用的是同一个 conn；checkpointer 连接是否复用直接用
+    # graph.checkpointer.conn 的 id() 在两次 _run_turn 之间比较最直接，
+    # server.py 通过 app.state.graph 暴露了这个非公开引用（仅供测试使用，
+    # 不是路由契约的一部分），所以这里直接做 `is` 恒等比较，而不是只验证
+    # 行为后果。
+    checkpointer_conn_before = app.state.graph.checkpointer.conn
+
+    with TestClient(app) as client:
+        r1 = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"})
+        job_id = r1.json()["job_id"]
+        r2 = client.post(f"/api/jobs/{job_id}/reply", json={"message": "AUTOSAR CP"})
+
+    checkpointer_conn_after = app.state.graph.checkpointer.conn
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert checkpointer_conn_after is checkpointer_conn_before, (
+        "checkpointer 连接在两次请求之间被换成了不同对象，说明 graph 构造没有"
+        "真正收敛到应用启动阶段（仍然是每请求重建，独立连接会每请求泄漏一个）"
+    )

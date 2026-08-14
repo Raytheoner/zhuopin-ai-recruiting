@@ -64,11 +64,21 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
     graph.add_edge("effect_persist_draft", "effect_deliver_message")
     graph.add_edge("effect_deliver_message", END)
 
-    # SqliteSaver.from_conn_string(db_path) returns a context manager, not a
-    # ready checkpointer — using it directly (without `with`) breaks
-    # graph.compile() with "Invalid checkpointer provided". SqliteSaver(conn)
-    # takes a raw sqlite3.Connection instead, so it reuses the connection this
-    # function already received rather than opening a second one to the same
-    # file.
-    checkpointer = SqliteSaver(conn)
+    # 修复 CI 抓到的事务归属冲突（docs/findings/2026-08-13-sqlite-事务归属冲突.md）：
+    # checkpointer 与 effect 层（app/storage/idempotency.py 的 idempotent_effect）
+    # 曾经共用调用方传入的这一个 conn，导致同一个连接上有两个互相不知情的事务
+    # 管理者各自 commit/rollback。方向 A（design.md 已选定并评估过 WAL 代价）：
+    # 让 checkpointer 拿一个指向同一个数据库文件、但完全独立的连接。
+    #
+    # 不用 SqliteSaver.from_conn_string(db_path)：它返回的是一个 context
+    # manager，不是 ready checkpointer——不经 `with` 直接传给 graph.compile()
+    # 会报 "Invalid checkpointer provided"（本函数上一版这条注释踩过的坑），
+    # 而这里需要连接活到编译出的图对象的生命周期结束，不能在本函数返回前就
+    # 提前退出 `with` 块。直接复用 app.storage.db.get_connection() 再开一个
+    # 连接，拿到的是一个可以自由持有、随时通过 `.conn` 属性访问、显式关闭的
+    # sqlite3.Connection，语义更直接。
+    from app.storage.db import get_connection
+
+    checkpointer_conn = get_connection(db_path)
+    checkpointer = SqliteSaver(checkpointer_conn)
     return graph.compile(checkpointer=checkpointer)

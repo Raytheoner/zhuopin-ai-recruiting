@@ -60,6 +60,15 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     # M2's move to Postgres replaces this with per-request pooled connections.
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL: 方向 A 让 checkpointer 与 effect 层各自持有独立连接后，两个连接
+    # 写同一个数据库文件；默认 rollback-journal 模式下，一个连接持有写锁时
+    # 另一个连接的写操作会立刻收到 database is locked（SQLITE_BUSY）。WAL
+    # 是文件级设置，任一连接设置一次即对整个文件生效（design.md 方向 A 代价
+    # 分析）。busy_timeout 是纵深防御：已证伪并发写入假设（本图严格线性），
+    # 理论上两个连接不会真正竞争同一把写锁，这条只是防御未来假设被打破时
+    # 表现为短暂阻塞重试而不是立刻报错崩溃。
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
