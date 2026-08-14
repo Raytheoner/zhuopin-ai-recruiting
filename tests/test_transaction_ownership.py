@@ -266,3 +266,161 @@ def test_multiple_requests_reuse_the_same_checkpointer_connection(tmp_path, monk
     # 任何连接——两种都是方向 A 这次修复本应防止的错误（review Finding 2）。
     with pytest.raises(sqlite3.ProgrammingError):
         checkpointer_conn.execute("SELECT 1")
+
+
+class _CrashAfterEffectLogInsertConnection(sqlite3.Connection):
+    """
+    在"紧跟 INSERT INTO effect_log 之后的下一次 commit()"上模拟崩溃——
+    这一次 commit() 在 idempotency.py 里就是 effect 层唯一所有者自己的
+    那次提交，与 checkpointer 在（分离后）自己的连接上提交了多少次无关，
+    因为这个连接只会被 effect 层 touch。只崩溃一次（crashed_once），避免
+    影响后续调用。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._arm_next_commit = False
+        self.crashed_once = False
+
+    def execute(self, sql, *args, **kwargs):
+        if sql.strip().upper().startswith("INSERT INTO EFFECT_LOG"):
+            self._arm_next_commit = True
+        return super().execute(sql, *args, **kwargs)
+
+    def commit(self):
+        if self._arm_next_commit and not self.crashed_once:
+            self._arm_next_commit = False
+            self.crashed_once = True
+            raise RuntimeError("simulated crash exactly before durable commit")
+        return super().commit()
+
+
+def _open_crash_after_effect_log_connection(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(
+        db_path, check_same_thread=False, factory=_CrashAfterEffectLogInsertConnection
+    )
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def test_effect_survives_crash_and_replays_exactly_once_with_checkpointer_attached(tmp_path):
+    """
+    Requirement「幂等键与业务写入原子提交在事务中断后仍然成立」，Scenario
+    「强制中断后重放验证幂等性」，通过真实 build_intake_graph()（已修复，
+    checkpointer 用独立连接）走一次完整的 compute→persist→deliver 流程，
+    在 effect 层自己即将提交的那一刻强制中断，随后模拟"进程重启、编排引擎
+    从该节点开头重新执行"（工程铁律1），断言重放后业务写入与 effect_log
+    记录恰好各一份，不多不少。
+    """
+    import json
+    from dataclasses import dataclass
+
+    from app.channels.web_channel import WebChannel
+    from app.graph.build import build_intake_graph
+    from app.llm.gateway import LLMGateway
+
+    @dataclass
+    class FakeMessage:
+        content: str
+
+    @dataclass
+    class FakeChoice:
+        message: FakeMessage
+
+    @dataclass
+    class FakeResponse:
+        choices: list
+        usage: object = None
+
+    class FakeChatCompletions:
+        def __init__(self, responses):
+            self._responses = list(responses)
+
+        def create(self, **kwargs):
+            content = self._responses.pop(0)
+            return FakeResponse(choices=[FakeChoice(message=FakeMessage(content=content))])
+
+    class FakeChat:
+        def __init__(self, responses):
+            self.completions = FakeChatCompletions(responses)
+
+    class FakeOpenAIClient:
+        def __init__(self, responses):
+            self.chat = FakeChat(responses)
+
+    db_path = str(tmp_path / "crash_replay.db")
+    conn = _open_crash_after_effect_log_connection(db_path)
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    conn.commit()
+
+    response = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": ["是否涉及 AUTOSAR？"],
+            "profile_patch": {"job_title": "嵌入式软件工程师"},
+        }
+    )
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        client=FakeOpenAIClient([response, response]),
+    )
+    channel = WebChannel(conn)
+    graph = build_intake_graph(db_path, gateway=gateway, conn=conn, channel=channel)
+    config = {"configurable": {"thread_id": "job1"}}
+
+    initial_state = {
+        "job_id": "job1",
+        "history": [{"role": "user", "content": "要个做嵌入式开发的"}],
+        "round_count": 0,
+        "profile_patch_accumulated": {},
+    }
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        graph.invoke(initial_state, config=config)
+
+    graph.checkpointer.conn.close()
+    conn.close()  # 模拟进程真的死了
+
+    # 模拟进程重启：全新的、不带崩溃拦截的连接，与生产代码路径一致。
+    fresh_conn = get_connection(db_path)
+    fresh_channel = WebChannel(fresh_conn)
+    fresh_gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        client=FakeOpenAIClient([response, response]),
+    )
+    fresh_graph = build_intake_graph(
+        db_path, gateway=fresh_gateway, conn=fresh_conn, channel=fresh_channel
+    )
+
+    # 重放：LangGraph 恢复时节点从头整个重跑——同一 thread_id、同一份原始
+    # 输入再 invoke 一次。
+    fresh_graph.invoke(initial_state, config=config)
+
+    profile_count = fresh_conn.execute(
+        "SELECT COUNT(*) FROM job_profile WHERE job_id='job1'"
+    ).fetchone()[0]
+    outbox_count = fresh_conn.execute(
+        "SELECT COUNT(*) FROM outbox WHERE thread_id='job1'"
+    ).fetchone()[0]
+    persist_effect_count = fresh_conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_persist_draft'"
+    ).fetchone()[0]
+    deliver_effect_count = fresh_conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_deliver_message'"
+    ).fetchone()[0]
+
+    assert profile_count == 1, "崩溃后重放不应产生重复的 job_profile 草案行"
+    assert outbox_count == 1, "崩溃后重放不应二次投递消息到 outbox"
+    assert persist_effect_count == 1
+    assert deliver_effect_count == 1
+
+    fresh_graph.checkpointer.conn.close()
