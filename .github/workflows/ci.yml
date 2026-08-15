@@ -10,6 +10,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# windows-latest runner 的 Python stdout/stderr 默认编码是 cp1252（legacy 代码页），
+# 本项目代码与文档大量中文——姊妹项目 zhuopin-ai-transformation 的 CI 首次上线时
+# 就因为这个在 windows-latest 上被 print 中文/emoji 直接 UnicodeEncodeError 打挂
+# （'charmap' codec can't encode character...）。这里的 test job 同样跑在
+# windows-latest，提前设对，不等真的炸了再修。
+env:
+  PYTHONUTF8: "1"
+
 jobs:
   # 跑在 windows-latest 而不是 ubuntu，理由跟把 Python 收紧到 3.14 是同一个：
   # 测试环境要等于运行环境（.51 是 Windows + Py3.14，无 Docker）。
