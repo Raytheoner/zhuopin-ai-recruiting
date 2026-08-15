@@ -61,7 +61,7 @@ jobs:
       - name: 全仓库跑一遍钩子
         run: pre-commit run --all-files --show-diff-on-failure
 
-  # 需求契约的机器门禁。CLI 版本与本地全局安装的一致（@fission-ai/openspec@1.8.0），
+  # 需求契约的机器门禁。CLI 版本与本地全局安装的一致（@fission-ai/openspec@1.9.0），
   # 不用 latest —— 校验规则漂移会让「昨天绿今天红」变成无从解释的事。
   #
   # 暂设 continue-on-error：这条 job 从未在 CI 里跑过，先观察一轮它对现有变更包
@@ -87,7 +87,7 @@ jobs:
             [ "$name" = "archive" ] && continue
             found=1
             echo "── $name"
-            npx --yes @fission-ai/openspec@1.8.0 validate "$name" --strict || failed=1
+            npx --yes @fission-ai/openspec@1.9.0 validate "$name" --strict || failed=1
           done
           if [ "$found" -eq 0 ]; then
             echo "没有未归档的变更包，跳过"

@@ -17,9 +17,10 @@ description: 卓品AI招聘项目的开发环境自检与修复。当用户说"�
 ## 检查项
 
 1. **Node 版本** —— `node -v`，OpenSpec 要求 ≥ 20.19.0
-2. **OpenSpec CLI** —— `openspec --version`
-   - 若 command not found：执行 `npm install -g @fission-ai/openspec@latest`
-   - 若 EACCES 权限错误：改用 `npm config set prefix ~/.npm-global && npm install -g @fission-ai/openspec@latest`，并提示把 `~/.npm-global/bin` 加进 PATH
+2. **OpenSpec CLI** —— `openspec --version`，要求精确 1.9.0（不用 `latest`——CI 的机器门禁把版本硬编码锁在 1.9.0，理由同工程铁律 5：校验规则漂移会让「昨天绿今天红」变成无从解释的事；本地版本落后或超前 CI 都可能导致「本地过了 CI 不过」或反过来）
+   - 若 command not found：执行 `npm install -g @fission-ai/openspec@1.9.0`
+   - 若 EACCES 权限错误：改用 `npm config set prefix ~/.npm-global && npm install -g @fission-ai/openspec@1.9.0`，并提示把 `~/.npm-global/bin` 加进 PATH
+   - 若版本号不是 1.9.0（不论新旧）：重装到精确版本，`npm install -g @fission-ai/openspec@1.9.0`
 3. **OpenSpec 项目结构** —— `openspec/config.yaml` 存在，`openspec list` 能跑通
 4. **Superpowers 可用性** —— 检查当前会话能否调用 `superpowers:writing-plans` 与 `superpowers:subagent-driven-development`
    - 不可用时**不要**建议用户重装。先说明：superpowers 是 Claude Code 插件，作用域绑定在某个目录上，且不一定在所有界面暴露
