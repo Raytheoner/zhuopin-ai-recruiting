@@ -11,6 +11,6 @@
 
 ## 2. 跨平台验证与收尾（依赖第 1 章完成并合并）
 
-- [ ] 2.1 推送触发真实 CI（Windows），确认原始三个已知失败用例（`test_build_intake_graph_runs_end_to_end` / `test_app_works_when_mounted_at_arbitrary_subpath` / `test_second_turn_prompt_contains_first_turn_message_and_known_fields`）与本轮自检额外观察到的同根因用例（`test_create_job_returns_first_question` / `test_reply_and_confirm_then_generate_jd`）全部转绿
-- [ ] 2.2 确认 1.1 新增的回归测试在本地与 CI 上都稳定通过，且其失败/通过判定不依赖具体哪个业务用例中招——用来防止"只是换了个环境侥幸没触发"这种假阳性
-- [ ] 2.3 更新 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` 状态为「已修复」，记录实际采用的方案（方向 A + 异常掩盖修复）与跨平台验证结果，供未来 M2 Postgres 迁移参考
+- [x] 2.1 推送触发真实 CI（Windows），确认原始三个已知失败用例（`test_build_intake_graph_runs_end_to_end` / `test_app_works_when_mounted_at_arbitrary_subpath` / `test_second_turn_prompt_contains_first_turn_message_and_known_fields`）与本轮自检额外观察到的同根因用例（`test_create_job_returns_first_question` / `test_reply_and_confirm_then_generate_jd`）全部转绿——CI run 31763141141（commit `1a33322`）：`88 passed`，零失败
+- [x] 2.2 确认 1.1 新增的回归测试在本地与 CI 上都稳定通过，且其失败/通过判定不依赖具体哪个业务用例中招——CI run 31763141141 与 31768797970（commit `d2801bd`）两次独立运行均 `88 passed`，`tests/test_transaction_ownership.py` 的确定性结构测试与特征测试均在其中，不依赖自然时序侥幸
+- [x] 2.3 更新 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` 状态为「已修复」，记录实际采用的方案（方向 A + 异常掩盖修复）与跨平台验证结果，供未来 M2 Postgres 迁移参考
