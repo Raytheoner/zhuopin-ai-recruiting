@@ -132,3 +132,5 @@ Python · LangGraph ≥1.0.10 + Postgres Checkpointer · Postgres + pgvector · 
 ## 沟通
 
 中文。结论先行。不确定的标注可信度，不编造数据。
+
+**称呼**：本文档里"Paul"是口语昵称，专用于本文档内部指代（如"给 Paul 任务指令时的强制格式"这类开场 Prompt 场景，对象是同一个人）。**跟进信、业务经理反馈单、报告等正式或对外文档**，一律用全名 **Shao Peishen**，不用"Paul"——避免和其他人重名混淆。
