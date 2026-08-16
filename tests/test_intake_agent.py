@@ -176,6 +176,47 @@ def test_repeating_previous_question_forces_completion_before_round_limit():
     assert "autosar_experience" in result.unspecified_fields
 
 
+def test_repeating_a_question_from_an_earlier_non_adjacent_round_is_detected():
+    """
+    2026-08-16 姚祖怡试跑反馈"重复问了同一件事情"——`_repeats_last_assistant_turn`
+    只跟"上一轮" assistant 内容比对，一旦中间隔了一轮问了别的问题，第 1 轮问过的
+    问题在第 3 轮被模型重新问出来，跟"上一轮"（第 2 轮）文本不同，检测不到，会
+    被原样再发一次给用户——这正是"重复问同一件事"的另一种真实成因，不是只有
+    "连续两轮一字不差"这一种。
+
+    这里断言：即使重复的是更早一轮（不是紧邻上一轮）问过的问题，也要判定为卡住，
+    提前完成而不是把已经问过的问题再发一次。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": ["AUTOSAR 具体需要 CP 还是 AP？"],
+                    "profile_patch": {},
+                    "unspecified_fields": ["autosar_experience"],
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "要个懂AUTOSAR的"},
+            {"role": "assistant", "content": "AUTOSAR 具体需要 CP 还是 AP？"},
+            {"role": "user", "content": "是的"},
+            {"role": "assistant", "content": "招聘人数是？"},
+            {"role": "user", "content": "3人"},
+        ],
+        round_count=2,
+    )
+
+    assert result.is_complete is True
+    assert result.questions == []
+    assert "autosar_experience" in result.unspecified_fields
+
+
 def test_new_question_different_from_previous_turn_is_not_treated_as_stuck():
     """反向证明：只要这轮问题和上一轮不同，就不该被误判为卡住而提前结束。"""
     gateway = make_gateway(

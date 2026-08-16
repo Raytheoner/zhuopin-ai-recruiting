@@ -157,26 +157,29 @@ def _build_user_prompt(
     return "\n\n".join(sections)
 
 
-def _repeats_last_assistant_turn(questions: list[str], history: list[dict]) -> bool:
+def _repeats_earlier_assistant_turn(questions: list[str], history: list[dict]) -> bool:
     """
-    判断这轮生成的问题是否和上一轮 assistant 说的内容只有空白差异地相同。
+    判断这轮生成的问题是否和历史上**任意一轮** assistant 说过的内容只有空白差异地相同。
 
     2026-08-10 真实环境试跑发现：用户回答模糊（如对"CP 还是 AP"这种二选一问题
     回答"是的"）时，profile_patch 常年提不出任何字段，ECU 知识库的追问建议又
     逐轮原样重新注入 prompt，模型在 temperature=0 下倾向于生成和上一轮几乎
     一字不差的问题——不能靠 MAX_ROUNDS 兜底，那之前每一轮都在把同一组问题
     原样再发一次给用户。
+
+    2026-08-16 姚祖怡试跑反馈"重复问了同一件事情"，追查发现只比对"上一轮"不够：
+    只要中间隔了一轮问别的，第 1 轮问过的问题在第 3 轮被模型重新问出来，跟
+    "上一轮"（第 2 轮）文本不同，原先的检测完全看不到——比对范围改为历史上
+    **所有** assistant 轮次，而不只是最后一轮。
     """
     if not questions:
         return False
-    last_assistant = next(
-        (turn.get("content", "") for turn in reversed(history) if turn.get("role") == "assistant"),
-        None,
-    )
-    if last_assistant is None:
-        return False
     normalize = lambda s: "".join(str(s).split())
-    return normalize("\n".join(questions)) == normalize(last_assistant)
+    candidate = normalize("\n".join(questions))
+    earlier_assistant_turns = (
+        turn.get("content", "") for turn in history if turn.get("role") == "assistant"
+    )
+    return any(candidate == normalize(turn) for turn in earlier_assistant_turns)
 
 
 def run_intake_turn(
@@ -208,7 +211,7 @@ def run_intake_turn(
     at_round_limit = round_count >= MAX_ROUNDS
     capped_questions = [] if at_round_limit else parsed.questions[:MAX_QUESTIONS_PER_ROUND]
 
-    stuck = not at_round_limit and _repeats_last_assistant_turn(capped_questions, history)
+    stuck = not at_round_limit and _repeats_earlier_assistant_turn(capped_questions, history)
     give_up = at_round_limit or stuck
     questions = [] if give_up else capped_questions
 
