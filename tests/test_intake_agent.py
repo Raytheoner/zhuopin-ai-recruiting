@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 
-from app.agents.intake_agent import run_intake_turn
+from app.agents.intake_agent import SYSTEM_PROMPT, run_intake_turn
 from app.llm.gateway import LLMGateway
 
 
@@ -369,3 +369,58 @@ def test_prompt_declares_job_profile_field_names_and_enum_values():
     assert "functional_safety" in prompt
     assert "ASIL-B" in prompt  # 枚举取值要原样列出，避免模型写成 "ASIL B"
     assert "core_skills" in prompt
+
+
+def test_prompt_instructs_offering_concrete_options_for_vague_replies():
+    """
+    2026-08-18 试运行反馈复盘发现的真实产品缺口：业务经理回"这些我不太了解，
+    你有什么建议"这类模糊表态时，模型只回了句"您可以按建议补充……我来帮您
+    整理"——没给出任何具体选项，profile_patch 也是空的，白白浪费一整轮
+    （round_count 照常 +1，但没有任何新信息进来），导致后面轮次不够用，
+    toolchain / soft_skill_keywords / functional_safety 这些字段最终都
+    进了 unspecified_fields。
+
+    修复是 prompt 层面的：要求模型遇到这种模糊回复时，必须在 questions 里给
+    2-3 个具体可选项（而不是空话），同时明确禁止模型因为用户说"你决定"就
+    自己把猜的值写进 profile_patch——画像里的硬性要求必须由用户明确选定，
+    不能是模型代替业务经理做的决定（合规红线：主观判断不能变成硬门槛）。
+    """
+    prompt = SYSTEM_PROMPT
+    assert "不知道" in prompt or "模糊" in prompt
+    assert "具体" in prompt and ("可选项" in prompt or "选项" in prompt)
+    assert "不能" in prompt and "profile_patch" in prompt
+
+
+def test_vague_reply_with_concrete_options_response_is_not_treated_as_stuck():
+    """
+    回归测试：模型改进后遇到模糊回复会给出一组新的具体选项（而不是空话）。
+    这组新问题不该被 `_repeats_earlier_assistant_turn` 误判成"卡住了"——
+    它们是新内容，只是回应的是同一个"用户没给出具体信息"的困境。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        "行业内常见档位供参考：ASIL-B（多数岗位）或 ASIL-C 及以上（核心安全岗位），选哪个？",
+                        "工具链常见组合是 Keil + Lauterbach，或者你们有指定工具链？",
+                    ],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "要个懂功能安全的"},
+            {"role": "assistant", "content": "功能安全等级要求是？工具链用什么？"},
+            {"role": "user", "content": "这些我不太了解，你有什么建议"},
+        ],
+        round_count=1,
+    )
+
+    assert result.is_complete is False
+    assert len(result.questions) == 2
