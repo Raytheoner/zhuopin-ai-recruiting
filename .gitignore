@@ -31,6 +31,10 @@ __pycache__/
 # === OpenSpec 临时文件 ===
 .openspec-test-*
 
+# === 对外汇报材料（决定不入库，留本地）===
+# 二进制大文件、diff 不可读，且内容随每次汇报重写；不入库避免 git add -A 误带
+卓品智能AI招聘智能体-阶段一进展汇报.pptx
+
 # === Python ===
 __pycache__/
 *.py[cod]
