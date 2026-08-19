@@ -39,6 +39,8 @@
 - [x] 4.2 验证 `sync-to-server.sh` 的同步白名单不含日志目录，并补一条断言把这件事固化下来——日志目录若被反向同步回开发机构成未授权的个人信息转移（design Risks 最后一条）
 - [x] 4.3 推送触发真实 CI（Windows runner）：轮转与文件锁的平台差异只有真实 Windows 才测得出（SQLite 事务冲突那次的教训），确认全量测试在 Windows 上跑绿
   - 验证留痕：run 32254799721，`windows-latest` + Python 3.14.7，**124 passed, 1 skipped**（本地 125，差额是 `test_unwritable_log_dir_degrades_instead_of_crashing`——全仓唯一的 `skipif`，Windows 上 chmod 不阻止 SYSTEM/管理员写入，故意跳过）。轮转重命名、`tmp_path` 句柄释放、中文断言的 cp1252 编码三类平台差异至此实证通过。**`deploy-server.ps1` 的 ACL 段仍未验证**——它不在 CI 里跑，只有 4.4 在 `.51` 上真跑一次才算数。
-- [ ] 4.4 **决策点（不可代，须 Shao Peishen 拍板）**：`.51` 生产发版。同步代码 → 确认 `logs/` 目录 SYSTEM 可写 → 重启计划任务 → 验证日志文件确实产生且内容非空、健康检查端点未报降级
-- [ ] 4.5 发版后回填 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` 第 8.3 节：日志缺口已闭环，记录实际采用的方案与留存期取值
+- [x] 4.4 **决策点（不可代，须 Shao Peishen 拍板）**：`.51` 生产发版。同步代码 → 确认 `logs/` 目录 SYSTEM 可写 → 重启计划任务 → 验证日志文件确实产生且内容非空、健康检查端点未报降级
+  - 发版留痕：Shao Peishen 2026-08-19 拍板授权，留存期沿用代码默认 30 天（未改）。`./sync-to-server.sh` 推码 + 重启计划任务，21:24 完成。**未执行 `deploy-server.ps1`**——`/health` 直接返回 `degraded:false`，日志目录由应用自身 `mkdir` 出来，无需人工建目录设权限。四条验证结果见 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` §8.3.1。
+- [x] 4.5 发版后回填 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` 第 8.3 节：日志缺口已闭环，记录实际采用的方案与留存期取值
+  - 已回填至 §8.3.1，含实际方案对照（**不是**当初设想的计划任务重定向/`--log-config`——那两条管不到 `app.storage.idempotency` 的应用侧 logger）、留存期 30 天、四条发版验证，并如实记录了脱敏层本次「未被触发」这一局限。
 - [x] 4.6 确认本变更代码改动的行为边界与 `specs/runtime-observability/spec.md` 一致，没有引入 spec 未覆盖的新行为
