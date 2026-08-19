@@ -14,6 +14,15 @@ class Settings(BaseSettings):
     db_path: str = "data/demo.db"
     root_path: str = "/hr/recruit-agent"
 
+    # 日志配置全部带默认值，零配置即生效（design 决策 6）。.51 的 .env 是
+    # 服务器上独立维护、不随代码同步的生产凭据文件；若日志功能依赖 .env 新增
+    # 字段，"推代码"与"改 .env"就成了两个必须同时做对的步骤，漏一个就静默地
+    # 没有日志——正是这次要根治的失败模式。
+    log_dir: str = "logs"
+    log_level: str = "INFO"
+    log_retention_days: int = 30
+    log_max_bytes: int = 50 * 1024 * 1024
+
     def validate_model_version(self) -> None:
         if self.llm_model == "latest" or self.llm_model.endswith(":latest"):
             raise ValueError(
