@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA = """
@@ -17,7 +18,23 @@ CREATE TABLE IF NOT EXISTS job_profile (
     status TEXT NOT NULL,
     profile_json TEXT NOT NULL,
     unspecified_fields TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- 本轮是否有产出（新字段或新问题）。追问预算按有产出轮计数，判定在
+    -- compute_intake_turn 里做（m1-intake-quality-fixes 第 3 章）。默认 1
+    -- 保证历史行与"未接入判定前"的行为与今天完全一致。
+    is_productive INTEGER NOT NULL DEFAULT 1,
+    -- 本轮起始时刻（HTTP 请求进入、尚未调模型）。轮次**结束**时刻沿用
+    -- created_at，不另加列。两者格式必须一致，见 sqlite_utc_now()。
+    turn_started_at TEXT,
+    -- 本轮 LLM 累计耗时（含重试），单位毫秒。
+    llm_latency_ms REAL,
+    -- 系统按画像字段表推导出的未指定字段（第 6 章写）。与上面那列 LLM
+    -- 自由生成的 unspecified_fields 并存，前者是真源、后者降级为对照。
+    derived_unspecified_fields TEXT NOT NULL DEFAULT '[]',
+    -- 本轮未通过来源校验的字段清单（第 7 章写）。
+    ungrounded_fields TEXT NOT NULL DEFAULT '[]',
+    -- 本轮 API 响应里实际返回的模型标识（第 7 章写，铁律 5）。
+    llm_response_model TEXT
 );
 
 -- 每个 job（thread_id）一行，存该会话到目前为止的完整对话记录。
@@ -51,6 +68,61 @@ CREATE TABLE IF NOT EXISTS outbox (
 """
 
 
+# 2026-08-19 起新增的列必须同时出现在两处：上面的 CREATE TABLE（新库）与下面的
+# _ADDED_COLUMNS（老库）。CREATE TABLE IF NOT EXISTS 对已存在的表完全无效，
+# .51 上 data/demo.db 有 15 个真实 job、部署脚本不重建库——只改 CREATE TABLE
+# 的话新列在服务器上永远不会出现，而且不报错（design.md 决策 10）。
+# tests/test_db_migration.py 的漂移守卫测试盯着这两处的一致性。
+#
+# DDL 片段里的 DEFAULT 必须是常量：SQLite 拒绝 ALTER TABLE ADD COLUMN 带
+# 非常量默认值（"Cannot add a column with non-constant default"），所以这里
+# 不能写 DEFAULT (datetime('now'))。
+#
+# turn_started_at / llm_latency_ms 是过渡形态，见 docs/tech-debt.md TD-1
+# （analysis_run 落地即删）。
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("job_profile", "is_productive", "INTEGER NOT NULL DEFAULT 1"),
+    ("job_profile", "turn_started_at", "TEXT"),
+    ("job_profile", "llm_latency_ms", "REAL"),
+    ("job_profile", "derived_unspecified_fields", "TEXT NOT NULL DEFAULT '[]'"),
+    ("job_profile", "ungrounded_fields", "TEXT NOT NULL DEFAULT '[]'"),
+    ("job_profile", "llm_response_model", "TEXT"),
+)
+
+
+def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def apply_column_migrations(conn: sqlite3.Connection) -> list[str]:
+    """
+    幂等加列：逐列独立判断、缺哪列补哪列，返回本次真的加上的列名。
+
+    逐列独立是刻意的（design.md 风险表「服务器 SQLite 加列失败或部分成功」）：
+    一列失败不影响其余列，重跑一次会把上次没加上的补齐。
+    """
+    added: list[str] = []
+    for table, column, ddl in _ADDED_COLUMNS:
+        if column in _existing_columns(conn, table):
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        added.append(column)
+    return added
+
+
+def sqlite_utc_now() -> str:
+    """
+    与 SQLite `datetime('now')` 完全一致的 UTC 时间串（秒级、无时区后缀）。
+
+    为什么不用 datetime.now().isoformat()：job_profile.created_at 由
+    `datetime('now')`（UTC，格式 "YYYY-MM-DD HH:MM:SS"）写入，代表轮次结束
+    时刻；turn_started_at 由 Python 侧写入，代表轮次开始时刻。两者格式必须
+    一模一样，否则"结束 − 开始"这个减法要先做时区与格式对齐，而这类对齐
+    迟早会有人做错——最省事的做法是从一开始就不给人做错的机会。
+    """
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def get_connection(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     # check_same_thread=False: FastAPI dispatches sync route handlers into a
@@ -74,4 +146,8 @@ def get_connection(db_path: str) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # 新库走 CREATE TABLE 就已经带全新列，这里是空转；老库（.51 的 demo.db）
+    # 靠这一步补列。两条路径的结果必须一致，由 tests/test_db_migration.py 的
+    # test_fresh_and_migrated_schemas_have_identical_columns 守着。
+    apply_column_migrations(conn)
     conn.commit()

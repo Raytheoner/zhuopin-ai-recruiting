@@ -41,9 +41,21 @@
       chat.scrollTop = chat.scrollHeight;
     }
 
+    // payload.questions 现在是结构化问题对象数组（question_id / text / field /
+    // options / allow_free_text / is_reask）。**本章只渲染文本**：可点选控件与
+    //「以下为 AI 建议选项」标识属第 4 章（后者是《AI 生成合成内容标识办法》
+    // 的要求，不能先渲染选项、后补标识）。
+    // 兜一层裸字符串：升级前写进 outbox 的历史行里 questions 是字符串数组。
+    function questionText(q) {
+      return typeof q === "string" ? q : (q && q.text) || "";
+    }
+
     function renderMessage(message) {
       if (message.type === "question") {
-        appendTurn("assistant", message.payload.questions.join("\n"));
+        const questions = message.payload.questions || [];
+        const text =
+          message.payload.questions_text || questions.map(questionText).join("\n");
+        appendTurn("assistant", text);
         document.getElementById("confirm-btn").style.display = "none";
       } else if (message.type === "confirmation_prompt") {
         const unspecified = message.payload.unspecified_fields || [];

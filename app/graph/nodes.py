@@ -31,9 +31,14 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
 
     # 把本轮助手说的话也记进历史，让下一轮的 prompt 是一段真正的对话，而不是
     # 一串没有上下文的用户独白——否则模型不知道上一轮已经问过什么。
+    #
+    # 文本直接用 result.questions_text，不在这里自己 join：渲染入口必须唯一
+    # （app/agents/intake_question.render_questions_text），否则 history 里的
+    # 文本和下发给通道的文本会分叉，_repeats_earlier_assistant_turn 就在比对
+    # 一个从未真正下发过的字符串（design.md 决策 1「代价」）。
     assistant_turn = {
         "role": "assistant",
-        "content": "\n".join(result.questions)
+        "content": result.questions_text
         if result.questions
         else "（信息已收集完整，等待用人部门确认画像）",
     }
@@ -42,11 +47,14 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         **state,
         "history": [*history, assistant_turn],
         "is_job_related": result.is_job_related,
-        "pending_questions": result.questions,
+        "pending_questions": [question.to_payload() for question in result.questions],
         "profile_patch_accumulated": accumulated,
         "is_complete": result.is_complete,
         "round_count": state.get("round_count", 0) + 1,
         "unspecified_fields": result.unspecified_fields,
+        # 时序：只放耗时，不放模型标识——intake-turn-observability 要求时序
+        # 留痕不承担审计职责。模型标识由第 7 章按 intake-field-grounding 落库。
+        "llm_latency_ms": result.llm_latency_ms,
     }
 
 
@@ -67,15 +75,35 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     没有 reducer，每次 invoke 的输入会静默覆盖上一轮的值，第二轮起模型就只看得到
     最新一句话（review Critical 发现1）。放在同一个 effect 里写，保证"这一轮的画像"
     和"这一轮的对话"要么一起落盘、要么一起不落盘。
+
+    2026-08-19（m1-intake-quality-fixes tasks 1.5）：本轮时序（turn_started_at /
+    llm_latency_ms）写在**同一条 INSERT** 里。intake-turn-observability 要求
+    "画像有这一轮、时序没有这一轮"不可能出现，所以不新增 effect 节点、不另起
+    一次写入——多一次写入就多一个能失败的地方，而这两份数据必须同生共死。
+    business_key 语义不变（仍是 round_count），幂等键不受影响。
+
+    is_productive / derived_unspecified_fields / ungrounded_fields /
+    llm_response_model 这几列本单元**不写值**，靠列默认值成立（第 3、6、7 章
+    各自接上）。
     """
     profile_json = json.dumps(state.get("profile_patch_accumulated", {}), ensure_ascii=False)
     unspecified_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
     version = int(business_key) + 1
 
     conn.execute(
-        "INSERT INTO job_profile (id, job_id, version, status, profile_json, unspecified_fields) "
-        "VALUES (?, ?, ?, 'drafting', ?, ?)",
-        (f"{thread_id}-v{version}", thread_id, version, profile_json, unspecified_json),
+        "INSERT INTO job_profile "
+        "(id, job_id, version, status, profile_json, unspecified_fields, "
+        "turn_started_at, llm_latency_ms) "
+        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?)",
+        (
+            f"{thread_id}-v{version}",
+            thread_id,
+            version,
+            profile_json,
+            unspecified_json,
+            state.get("turn_started_at"),
+            state.get("llm_latency_ms"),
+        ),
     )
     conn.execute(
         "INSERT INTO conversation (thread_id, history_json, updated_at) "

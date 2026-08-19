@@ -409,3 +409,132 @@ def test_json_object_mode_embeds_schema_in_system_prompt():
     system_content = client.chat.completions.calls[0]["messages"][0]["content"]
     assert "education_requirement" in system_content
     assert "ASIL-B" in system_content  # 枚举取值要原样出现，否则模型会写成 "ASIL B"
+
+
+def test_extract_structured_with_meta_returns_latency_and_response_model():
+    class Payload(BaseModel):
+        a: int
+
+    client = FakeOpenAIClient(
+        [json.dumps({"a": 1})], response_model="deepseek-chat-241226"
+    )
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat",  # 配置里写的是会漂移的别名
+        supports_json_schema=False,
+        client=client,
+    )
+
+    parsed, meta = gateway.extract_structured_with_meta(
+        system_prompt="sys", user_prompt="user", schema=Payload
+    )
+
+    assert parsed.a == 1
+    assert meta.latency_ms >= 0
+    # 铁律 5：配置里写的名字不算数，响应返回的才算
+    assert meta.response_model == "deepseek-chat-241226"
+    assert meta.attempts == 1
+
+
+def test_meta_latency_accumulates_across_retries(monkeypatch):
+    """
+    intake-turn-observability「重试计入耗时」：调用方要落库的是"这一轮用户等了
+    多久"，不是"最后那次成功的尝试花了多久"。
+    """
+    from app.llm import gateway as gateway_module
+
+    class Payload(BaseModel):
+        a: int
+
+    # (start, end) × 2 次尝试：第一次 1.5s，第二次 2.25s
+    ticks = iter([0.0, 1.5, 10.0, 12.25])
+    monkeypatch.setattr(gateway_module.time, "monotonic", lambda: next(ticks))
+
+    client = FakeOpenAIClient(["这不是 JSON", json.dumps({"a": 1})])
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        client=client,
+    )
+
+    _parsed, meta = gateway.extract_structured_with_meta(
+        system_prompt="sys", user_prompt="user", schema=Payload
+    )
+
+    assert meta.attempts == 2
+    assert meta.latency_ms == pytest.approx(3750.0)
+
+
+def test_audit_hook_still_records_per_attempt_with_unchanged_signature(monkeypatch):
+    """
+    时序改走返回值而不是 hook：AuditHook 的签名与"每次尝试记一条"的语义都不动
+    （design.md 决策 9——ai-audit-trail-and-outbound-gate 正基于现签名设计）。
+    """
+    from app.llm import gateway as gateway_module
+
+    class Payload(BaseModel):
+        a: int
+
+    ticks = iter([0.0, 1.5, 10.0, 12.25])
+    monkeypatch.setattr(gateway_module.time, "monotonic", lambda: next(ticks))
+
+    class RecordingHook:
+        def __init__(self):
+            self.calls = []
+
+        def record(self, **kwargs):
+            self.calls.append(kwargs)
+
+    hook = RecordingHook()
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        audit_hook=hook,
+        client=FakeOpenAIClient(["这不是 JSON", json.dumps({"a": 1})]),
+    )
+
+    _parsed, meta = gateway.extract_structured_with_meta(
+        system_prompt="sys", user_prompt="user", schema=Payload
+    )
+
+    assert len(hook.calls) == 2  # 每次尝试各一条，语义不变
+    # hook 记的是单次尝试耗时；累计只在返回值里，两者不互相污染
+    assert [call["latency_ms"] for call in hook.calls] == pytest.approx([1500.0, 2250.0])
+    assert meta.latency_ms == pytest.approx(3750.0)
+    assert set(hook.calls[0]) == {
+        "model",
+        "response_model",
+        "system_fingerprint",
+        "prompt_version",
+        "input_hash",
+        "raw_response",
+        "token_usage",
+        "latency_ms",
+    }
+
+
+def test_extract_structured_still_returns_bare_model():
+    """jd_agent 与 scripts/compare_models.py 不关心时序，旧签名必须原样可用。"""
+
+    class Payload(BaseModel):
+        a: int
+
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        client=FakeOpenAIClient([json.dumps({"a": 1})]),
+    )
+
+    parsed = gateway.extract_structured(
+        system_prompt="sys", user_prompt="user", schema=Payload
+    )
+
+    assert parsed.a == 1
+    assert not isinstance(parsed, tuple)

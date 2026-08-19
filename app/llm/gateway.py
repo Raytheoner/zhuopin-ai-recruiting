@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from openai import OpenAI
@@ -136,6 +137,26 @@ class NoopAuditHook:
         logger.debug("audit_hook(noop): %s", kwargs)
 
 
+@dataclass(frozen=True)
+class LLMCallMeta:
+    """
+    一次 extract_structured 调用的可观测元数据。
+
+    为什么走返回值而不是扩展 AuditHook：AuditHook 的签名不能动
+    （design.md 决策 9——ai-audit-trail-and-outbound-gate 正基于现签名设计），
+    而调用方（compute_intake_turn → effect_persist_draft）需要在**同一个事务**
+    里把耗时和画像一起写下去，hook 是单向的、拿不回来。
+
+    只承载"这次调用花了多久、真正回答的是哪个模型"。prompt 版本、input_hash、
+    原始响应仍然只经 AuditHook 走——intake-turn-observability 明确要求时序留痕
+    不承担审计职责。
+    """
+
+    latency_ms: float
+    response_model: str | None
+    attempts: int
+
+
 class LLMGateway:
     def __init__(
         self,
@@ -165,17 +186,39 @@ class LLMGateway:
         schema: type[T],
         prompt_version: str = "v1",
     ) -> T:
+        """原签名保留：不关心时序的调用方（jd_agent、scripts/compare_models.py）继续用这个。"""
+        parsed, _meta = self.extract_structured_with_meta(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=schema,
+            prompt_version=prompt_version,
+        )
+        return parsed
+
+    def extract_structured_with_meta(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        schema: type[T],
+        prompt_version: str = "v1",
+    ) -> tuple[T, LLMCallMeta]:
         input_hash = hashlib.sha256(
             f"{system_prompt}\n{user_prompt}".encode("utf-8")
         ).hexdigest()
 
         last_error: Exception | None = None
         attempts = self._max_retries + 1
+        total_latency_ms = 0.0
 
-        for _ in range(attempts):
+        for attempt_index in range(attempts):
             started = time.monotonic()
             response = self._call_model(system_prompt, user_prompt, schema)
             latency_ms = (time.monotonic() - started) * 1000
+            # 累计而不是覆盖：调用方落库的是"这一轮用户等了多久"，重试的时间
+            # 用户也在等（intake-turn-observability「重试计入耗时」）。
+            # AuditHook 那边继续按单次尝试记录，两个口径互不污染。
+            total_latency_ms += latency_ms
             raw_content = response.choices[0].message.content
 
             # 铁律 5（2026-08-09 现行版）：response.model 是 API 实际返回的模型标识，
@@ -212,10 +255,16 @@ class LLMGateway:
 
             try:
                 data = json.loads(raw_content)
-                return schema.model_validate(data)
+                parsed = schema.model_validate(data)
             except (json.JSONDecodeError, ValidationError) as exc:
                 last_error = exc
                 continue
+
+            return parsed, LLMCallMeta(
+                latency_ms=total_latency_ms,
+                response_model=response_model,
+                attempts=attempt_index + 1,
+            )
 
         raise SchemaExtractionFailed(
             f"{attempts} 次尝试后仍未通过 Schema 校验（{schema.__name__}）: {last_error}"

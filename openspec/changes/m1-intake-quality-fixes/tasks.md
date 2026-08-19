@@ -6,30 +6,34 @@
 
 对应 `intake-turn-observability`。设计依据：design.md 决策 9、决策 10。
 
-- [ ] 1.1 在 `app/storage/db.py` 的 `init_schema` 里加幂等加列逻辑：读 `PRAGMA table_info(job_profile)`，缺列则 `ALTER TABLE job_profile ADD COLUMN`。本变更需要的新列：`is_productive INTEGER NOT NULL DEFAULT 1`、`turn_started_at TEXT`、`llm_latency_ms REAL`、`derived_unspecified_fields TEXT NOT NULL DEFAULT '[]'`、`ungrounded_fields TEXT NOT NULL DEFAULT '[]'`、`llm_response_model TEXT`（后两列服务第 7 章）。所有新列必须可空或有默认值，既有行不需要回填
-- [ ] 1.2 加列逻辑的测试：对一个用**旧 schema** 建好并塞了数据的库跑 `init_schema`，断言新列出现、旧行可读、旧行的新列为默认值；重复跑第二次不报错（幂等）
-- [ ] 1.3 让 `LLMGateway.extract_structured` 把已算出的 `latency_ms`（`app/llm/gateway.py:176-178`）与已取回的 `response_model`（`app/llm/gateway.py:184`）一并透出给调用方。**不得改动 `AuditHook` Protocol 的签名**（design.md 决策 9：`ai-audit-trail-and-outbound-gate` 正基于现签名设计）。含重试时记累计耗时
-- [ ] 1.4 `IntakeState` 增加 `turn_started_at` / `llm_latency_ms`；`app/web/server.py` 的 `_run_turn` 在 invoke 前打时间戳并放进 state
-- [ ] 1.5 `effect_persist_draft` 把时序两列与画像草案写在**同一次 INSERT** 里（spec 要求"时序与画像同生共死"）。不新增 effect 节点，不改 `business_key` 语义
-- [ ] 1.6 测试：一轮采集完成后画像行上带 `turn_started_at` / `llm_latency_ms`；画像写入失败时时序留痕同样不存在；LLM 重试后耗时覆盖重试
-- [ ] 1.7 在本仓库技术债清单里登记：**这两列在 `ai-audit-trail-and-outbound-gate` 的 `analysis_run` 落地后删除**，触发条件写明。不登记会导致两套时序数据长期并存互相矛盾（design.md 决策 9「边界」）
+- [x] 1.1 在 `app/storage/db.py` 的 `init_schema` 里加幂等加列逻辑：读 `PRAGMA table_info(job_profile)`，缺列则 `ALTER TABLE job_profile ADD COLUMN`。本变更需要的新列：`is_productive INTEGER NOT NULL DEFAULT 1`、`turn_started_at TEXT`、`llm_latency_ms REAL`、`derived_unspecified_fields TEXT NOT NULL DEFAULT '[]'`、`ungrounded_fields TEXT NOT NULL DEFAULT '[]'`、`llm_response_model TEXT`（后两列服务第 7 章）。所有新列必须可空或有默认值，既有行不需要回填
+- [x] 1.2 加列逻辑的测试：对一个用**旧 schema** 建好并塞了数据的库跑 `init_schema`，断言新列出现、旧行可读、旧行的新列为默认值；重复跑第二次不报错（幂等）
+- [x] 1.3 让 `LLMGateway.extract_structured` 把已算出的 `latency_ms`（`app/llm/gateway.py:176-178`）与已取回的 `response_model`（`app/llm/gateway.py:184`）一并透出给调用方。**不得改动 `AuditHook` Protocol 的签名**（design.md 决策 9：`ai-audit-trail-and-outbound-gate` 正基于现签名设计）。含重试时记累计耗时
+- [x] 1.4 `IntakeState` 增加 `turn_started_at` / `llm_latency_ms`；`app/web/server.py` 的 `_run_turn` 在 invoke 前打时间戳并放进 state
+- [x] 1.5 `effect_persist_draft` 把时序两列与画像草案写在**同一次 INSERT** 里（spec 要求"时序与画像同生共死"）。不新增 effect 节点，不改 `business_key` 语义
+- [x] 1.6 测试：一轮采集完成后画像行上带 `turn_started_at` / `llm_latency_ms`；画像写入失败时时序留痕同样不存在；LLM 重试后耗时覆盖重试
+- [x] 1.7 在本仓库技术债清单里登记：**这两列在 `ai-audit-trail-and-outbound-gate` 的 `analysis_run` 落地后删除**，触发条件写明。不登记会导致两套时序数据长期并存互相矛盾（design.md 决策 9「边界」）
 
 ## 2. 结构化追问对象端到端透传
 
-对应 `intake-guided-options` 的「结构化追问与可选项作答」与 `intake-question-tracking` 的「子问题的稳定标识与拆分」。设计依据：design.md 决策 1、决策 2。**本章只换载体，不改任何判定行为**——合并后用户可见行为应与合并前一致。
+对应 `intake-guided-options` 的「结构化追问与可选项作答」与 `intake-question-tracking` 的「子问题的稳定标识与拆分」。设计依据：design.md 决策 1、决策 2。**本章只换载体，不把第 3/4/5 章的判定逻辑（`is_vague_reply`、选项填充、`is_productive`/`is_reask` 判定、`derive_unspecified_fields`、可点选控件）提前带进来**——这条约束本身仍然成立，也被本单元遵守了。
 
-- [ ] 2.1 定义 `IntakeQuestion`：`question_id` / `text` / `field` / `options: list[str]` / `allow_free_text: bool` / `is_reask: bool`。除 `text` 外全部可空或有默认值（design.md 风险表第 1 条：模型退化时降级成纯文本问题，不报错）
-- [ ] 2.2 `_IntakeTurnSchema.questions` 改为 `list[IntakeQuestion]`；确认 `_to_strict_json_schema` 能正确处理嵌套对象数组，必要时补 `app/llm/gateway.py` 的 schema 转换测试
-- [ ] 2.3 `question_id` 由系统按 `field` 派生（**不让模型自己编 id**，design.md 决策 2）；模型只给 `field` / `text` / `options`。`field` 缺失时的兜底 id 规则要有测试
-- [ ] 2.4 `SYSTEM_PROMPT` 增加"一个问题条目只能承载一个可独立作答的子问题"的约束，并给出反例（"是否需要熟悉 IATF 16949 或 ISO 26262？"必须拆成两条）
-- [ ] 2.5 唯一的问题→文本渲染函数：`compute_intake_turn` 写 history 的 assistant 内容与下发给通道的文本必须出自同一个函数（design.md 决策 1「代价」）。两处各渲染一遍会让 `_repeats_earlier_assistant_turn` 比对到与实际下发不一致的文本
-- [ ] 2.6 `OutboundMessage` 的 `question` payload 从 `{"questions": [str]}` 改为携带结构化问题列表；`app/web/server.py` 的响应体同步
-- [ ] 2.7 前端 `index.html` 的 `renderMessage` 适配新 payload，本章仍只渲染文本（选项控件在第 4 章）
-- [ ] 2.8 回归测试：既有采集流程测试全绿；一轮追问的端到端响应体结构符合新契约
+但本章不是行为零变化：**2.4 是一处授权的、影响可观察行为的 prompt 级改动**（tasks 2.4 明文要求"一个问题条目只能承载一个可独立作答的子问题"，对应的 spec 要求在覆盖矩阵里已为本单元标 ✅）。把复合问题拆成多条会让单轮消耗的 `MAX_QUESTIONS_PER_ROUND` 槽位变多，从而改变追问预算的消耗节奏——这是拆分规则本身带来的、意料之中的影响，不是判定逻辑被提前带入。该影响与第 3 章 `MAX_TOTAL_ROUNDS` 取值的关系见第 3 章开头的附注。
+
+- [x] 2.1 定义 `IntakeQuestion`：`question_id` / `text` / `field` / `options: list[str]` / `allow_free_text: bool` / `is_reask: bool`。除 `text` 外全部可空或有默认值（design.md 风险表第 1 条：模型退化时降级成纯文本问题，不报错）
+- [x] 2.2 `_IntakeTurnSchema.questions` 改为 `list[IntakeQuestion]`；确认 `_to_strict_json_schema` 能正确处理嵌套对象数组，必要时补 `app/llm/gateway.py` 的 schema 转换测试
+- [x] 2.3 `question_id` 由系统按 `field` 派生（**不让模型自己编 id**，design.md 决策 2）；模型只给 `field` / `text` / `options`。`field` 缺失时的兜底 id 规则要有测试
+- [x] 2.4 `SYSTEM_PROMPT` 增加"一个问题条目只能承载一个可独立作答的子问题"的约束，并给出反例（"是否需要熟悉 IATF 16949 或 ISO 26262？"必须拆成两条）
+- [x] 2.5 唯一的问题→文本渲染函数：`compute_intake_turn` 写 history 的 assistant 内容与下发给通道的文本必须出自同一个函数（design.md 决策 1「代价」）。两处各渲染一遍会让 `_repeats_earlier_assistant_turn` 比对到与实际下发不一致的文本
+- [x] 2.6 `OutboundMessage` 的 `question` payload 从 `{"questions": [str]}` 改为携带结构化问题列表；`app/web/server.py` 的响应体同步
+- [x] 2.7 前端 `index.html` 的 `renderMessage` 适配新 payload，本章仍只渲染文本（选项控件在第 4 章）
+- [x] 2.8 回归测试：既有采集流程测试全绿；一轮追问的端到端响应体结构符合新契约
 
 ## 3. 模糊回复兜底与领域选项库
 
 对应 `intake-guided-options` 的「模糊回复与反问的兜底档位」「候选档位不得代替用户做决定」「零产出轮不消耗追问预算」。设计依据：design.md 决策 3、4、5。依赖第 2 章。
+
+> **附注（unit A 收尾复核记录，写给 3.10 取 `MAX_TOTAL_ROUNDS` 值的人）**：第 2 章 2.4 引入了"一个问题条目只能承载一个可独立作答的子问题"的拆分规则——像"是否需要熟悉 IATF 16949 或 ISO 26262？"这类复合问题会被拆成两条，各占一个 `MAX_QUESTIONS_PER_ROUND` 槽位。合并后同一个话题平均消耗的问题槽位数会增加，`MAX_ROUNDS`（有产出轮计数）固定的情况下，收尾前能覆盖的独立话题数会变少，更多字段被推入"未指定"。取 `MAX_TOTAL_ROUNDS`（3.10）时请把这一层消耗算进去，不要只按拆分前的历史会话估算。
 
 - [ ] 3.1 `app/agents/ecu_knowledge.py` 的 `FOLLOWUP_RULES` 从 `list[str]` 升级为 `list[FollowupSpec]`（`text` / `field` / `options`），既有 4 个词条补齐 `field` 与档位
 - [ ] 3.2 新增采购/非 ECU 侧词条：一般材料、办公采购、非标产品、供应商开发。**姚祖怡那场就是卡死在"一般材料"上**——知识库当时一个采购词条都没有（design.md 决策 4）
