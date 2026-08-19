@@ -16,7 +16,9 @@
 
 ## 2. 结构化追问对象端到端透传
 
-对应 `intake-guided-options` 的「结构化追问与可选项作答」与 `intake-question-tracking` 的「子问题的稳定标识与拆分」。设计依据：design.md 决策 1、决策 2。**本章只换载体，不改任何判定行为**——合并后用户可见行为应与合并前一致。
+对应 `intake-guided-options` 的「结构化追问与可选项作答」与 `intake-question-tracking` 的「子问题的稳定标识与拆分」。设计依据：design.md 决策 1、决策 2。**本章只换载体，不把第 3/4/5 章的判定逻辑（`is_vague_reply`、选项填充、`is_productive`/`is_reask` 判定、`derive_unspecified_fields`、可点选控件）提前带进来**——这条约束本身仍然成立，也被本单元遵守了。
+
+但本章不是行为零变化：**2.4 是一处授权的、影响可观察行为的 prompt 级改动**（tasks 2.4 明文要求"一个问题条目只能承载一个可独立作答的子问题"，对应的 spec 要求在覆盖矩阵里已为本单元标 ✅）。把复合问题拆成多条会让单轮消耗的 `MAX_QUESTIONS_PER_ROUND` 槽位变多，从而改变追问预算的消耗节奏——这是拆分规则本身带来的、意料之中的影响，不是判定逻辑被提前带入。该影响与第 3 章 `MAX_TOTAL_ROUNDS` 取值的关系见第 3 章开头的附注。
 
 - [ ] 2.1 定义 `IntakeQuestion`：`question_id` / `text` / `field` / `options: list[str]` / `allow_free_text: bool` / `is_reask: bool`。除 `text` 外全部可空或有默认值（design.md 风险表第 1 条：模型退化时降级成纯文本问题，不报错）
 - [ ] 2.2 `_IntakeTurnSchema.questions` 改为 `list[IntakeQuestion]`；确认 `_to_strict_json_schema` 能正确处理嵌套对象数组，必要时补 `app/llm/gateway.py` 的 schema 转换测试
@@ -30,6 +32,8 @@
 ## 3. 模糊回复兜底与领域选项库
 
 对应 `intake-guided-options` 的「模糊回复与反问的兜底档位」「候选档位不得代替用户做决定」「零产出轮不消耗追问预算」。设计依据：design.md 决策 3、4、5。依赖第 2 章。
+
+> **附注（unit A 收尾复核记录，写给 3.10 取 `MAX_TOTAL_ROUNDS` 值的人）**：第 2 章 2.4 引入了"一个问题条目只能承载一个可独立作答的子问题"的拆分规则——像"是否需要熟悉 IATF 16949 或 ISO 26262？"这类复合问题会被拆成两条，各占一个 `MAX_QUESTIONS_PER_ROUND` 槽位。合并后同一个话题平均消耗的问题槽位数会增加，`MAX_ROUNDS`（有产出轮计数）固定的情况下，收尾前能覆盖的独立话题数会变少，更多字段被推入"未指定"。取 `MAX_TOTAL_ROUNDS`（3.10）时请把这一层消耗算进去，不要只按拆分前的历史会话估算。
 
 - [ ] 3.1 `app/agents/ecu_knowledge.py` 的 `FOLLOWUP_RULES` 从 `list[str]` 升级为 `list[FollowupSpec]`（`text` / `field` / `options`），既有 4 个词条补齐 `field` 与档位
 - [ ] 3.2 新增采购/非 ECU 侧词条：一般材料、办公采购、非标产品、供应商开发。**姚祖怡那场就是卡死在"一般材料"上**——知识库当时一个采购词条都没有（design.md 决策 4）
