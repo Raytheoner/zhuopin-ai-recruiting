@@ -67,9 +67,13 @@ class IntakeQuestion:
     def from_payload(cls, payload: dict) -> "IntakeQuestion":
         text = str(payload.get("text", ""))
         field = payload.get("field") or None
+        # 任何传入的 question_id 一律丢弃、重新派生——不让不可信来源（模型、
+        # 外部 payload）覆盖系统派生结果。这不是漏看，是刻意的：
+        # "question_id 由系统派生，不让模型自己编" 的地基如果在这里松口，
+        # 就是给不可信 id 开了一条后门。不要把这行"恢复"成读取 payload 里的值。
         return cls(
             text=text,
-            question_id=str(payload.get("question_id") or derive_question_id(field, text)),
+            question_id=derive_question_id(field, text),
             field=field,
             options=tuple(payload.get("options") or ()),
             allow_free_text=bool(payload.get("allow_free_text", True)),

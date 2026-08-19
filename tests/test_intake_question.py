@@ -63,6 +63,26 @@ def test_from_payload_fills_missing_id_and_defaults():
     assert restored.is_reask is False
 
 
+def test_from_payload_ignores_conflicting_supplied_question_id_when_field_present():
+    """
+    from_payload 必须重新派生 question_id，不能采信 payload 里带来的值——
+    否则模型（或任何不可信来源）就能通过这个公共入口伪造 id，
+    而这正是 question_id 由系统派生这条地基要堵的口子。
+    """
+    restored = IntakeQuestion.from_payload(
+        {"text": "招几个人？", "field": "headcount", "question_id": "模型自己编的-q1"}
+    )
+    assert restored.question_id == "headcount"
+
+
+def test_from_payload_ignores_conflicting_supplied_question_id_when_field_missing():
+    text = "具体车型与量产时间是？"
+    expected = derive_question_id(None, text)
+    restored = IntakeQuestion.from_payload({"text": text, "question_id": "模型自己编的-q2"})
+    assert restored.question_id == expected
+    assert restored.question_id != "模型自己编的-q2"
+
+
 def test_render_questions_text_joins_with_newline():
     questions = [
         IntakeQuestion(text="A？", question_id="a"),
