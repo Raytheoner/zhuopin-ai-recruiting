@@ -37,7 +37,8 @@
 
 - [x] 4.1 修改 `deploy-server.ps1`：创建日志目录并确认 SYSTEM 账户可写。**幂等策略**：目录已存在则跳过创建、不重置权限、不清空内容；脚本对已部署环境重复执行结果一致（沿用该脚本现有的幂等约定）
 - [x] 4.2 验证 `sync-to-server.sh` 的同步白名单不含日志目录，并补一条断言把这件事固化下来——日志目录若被反向同步回开发机构成未授权的个人信息转移（design Risks 最后一条）
-- [ ] 4.3 推送触发真实 CI（Windows runner）：轮转与文件锁的平台差异只有真实 Windows 才测得出（SQLite 事务冲突那次的教训），确认全量测试在 Windows 上跑绿
+- [x] 4.3 推送触发真实 CI（Windows runner）：轮转与文件锁的平台差异只有真实 Windows 才测得出（SQLite 事务冲突那次的教训），确认全量测试在 Windows 上跑绿
+  - 验证留痕：run 32254799721，`windows-latest` + Python 3.14.7，**124 passed, 1 skipped**（本地 125，差额是 `test_unwritable_log_dir_degrades_instead_of_crashing`——全仓唯一的 `skipif`，Windows 上 chmod 不阻止 SYSTEM/管理员写入，故意跳过）。轮转重命名、`tmp_path` 句柄释放、中文断言的 cp1252 编码三类平台差异至此实证通过。**`deploy-server.ps1` 的 ACL 段仍未验证**——它不在 CI 里跑，只有 4.4 在 `.51` 上真跑一次才算数。
 - [ ] 4.4 **决策点（不可代，须 Shao Peishen 拍板）**：`.51` 生产发版。同步代码 → 确认 `logs/` 目录 SYSTEM 可写 → 重启计划任务 → 验证日志文件确实产生且内容非空、健康检查端点未报降级
 - [ ] 4.5 发版后回填 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` 第 8.3 节：日志缺口已闭环，记录实际采用的方案与留存期取值
 - [x] 4.6 确认本变更代码改动的行为边界与 `specs/runtime-observability/spec.md` 一致，没有引入 spec 未覆盖的新行为
