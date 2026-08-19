@@ -30,20 +30,57 @@ RISKY_KEYS = (
     "content",
     "message",
     "_jd_text",
+    # 以下补齐 app/schemas/job_profile.py::JobProfile 的真实自由文本/结构化内容
+    # 字段（Task 4 review finding 5：上面这批键名是按预想业务对象猜的，跟真实
+    # schema 对不上，等于形同虚设）。保留原有猜测键不删——它们不花代价，且
+    # 可能命中未来或相邻对象。
+    "education_requirement",
+    "experience_years",
+    "core_skills",
+    "project_experience_requirement",
+    "soft_skill_keywords",
+    "autosar_experience",
+    "mcu_family",
+    "diag_stack",
+    "sop_projects",
+    "toolchain",
+    "vehicle_model",  # SopProject 的嵌套字段
+    "role",  # SopProject 的嵌套字段
+    # 真实的 graph state 键（app/graph/nodes.py / app/graph/state.py）是
+    # profile_patch_accumulated，而不是 profile_patch；单独列一项覆盖它，
+    # 而不是把 "profile_patch" 改成子串匹配（子串匹配会误伤不相关的键名）。
+    "profile_patch_accumulated",
 )
 
 _KEY_ALTERNATION = "|".join(re.escape(k) for k in RISKY_KEYS)
-# 匹配 dict/JSON 两种渲染形态里的 "键: '值'" 或 "键": "值"，只吃掉值。
+# 匹配 dict/JSON 两种渲染形态里的 "键: '值'" 或 "键": "值"，以及值为列表的
+# 形态 "键: ['a', 'b']" / "键": ["a", "b"]（如 must_have_skills 这类字段的
+# repr）。列表分支用 [^\]]* 只吃到第一个 ]，不处理嵌套列表/字典——这是探测
+# 性兜底，不是完整解析器，且 [^\]]* 是线性的，不会带来灾难性回溯。只吃掉值
+# 部分，键名保留在日志里（键名不是内容，值才是）。
 _RISKY_VALUE_RE = re.compile(
     r"(['\"](?:" + _KEY_ALTERNATION + r")['\"]\s*:\s*)"
-    r"('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")"
+    r"('(?:[^'\\]|\\.)*'"
+    r"|\"(?:[^\"\\]|\\.)*\""
+    r"|\[[^\]]*\])"
 )
 
 _local = threading.local()
 
 
 def content_digest(value: Any) -> str:
-    """非还原性摘要：短哈希。用于「同一段内容是否变过」的排障，不可逆推原文。"""
+    """短哈希变更探测器，仅用于判断「同一段内容是否变过」——**不是隐私边界**。
+
+    保证的是：同一 value 的规范化 JSON 表示总映射到同一个 16 位十六进制串，
+    可用来对比两次记录是否指向同一份内容。**不保证不可逆**——这是无盐的
+    确定性 SHA-256 截断，对手机号/身份证号/姓名这类低熵单值，攻击者可以在
+    可接受时间内穷举撞回原文（已验证：11 位手机号可在 1 秒内暴力还原）。
+
+    因此：只能对「完整业务对象的内容字典」这类高熵输入调用（当前唯一调用点
+    `loggable_summary` 正是这样用的）。**严禁对手机号、身份证号、姓名等单个
+    低熵字段单独调用**——那等价于把这类字段明文换个编码方式写进日志，在
+    PIPL 意义上仍然是个人信息，不是脱敏。
+    """
     payload = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -73,6 +110,12 @@ class RedactionFilter(logging.Filter):
 
     命中即额外记一条 WARNING，使「主防线被绕过」这件事可见而不是被悄悄修正。
     _local.busy 是重入护栏：那条 WARNING 自己也会流经本 Filter。
+
+    同一条 record 可能被挂在同一 logger 树上的多个 handler 各自 filter 一遍
+    （例如 console + file）；用 record.redacted_fields 做已处理标记，防止
+    第二个 handler 把第一个 handler 已经替换成 '<redacted>' 的值当成"新的
+    命中"重新替换一遍、重新告警一遍——那会让一次绕过被计成两次事故，并且
+    拖累 50MB 轮转预算下的日志量。
     """
 
     def __init__(self, name: str = "") -> None:
@@ -80,9 +123,26 @@ class RedactionFilter(logging.Filter):
         self.hits = 0
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if getattr(record, "redacted_fields", 0):
+            # 本 record 已经被（同一条流水线上的）另一个 handler 处理过。
+            return True
+
         try:
             rendered = record.getMessage()
-        except Exception:
+        except Exception as exc:
+            # record.getMessage() 本身可能因为 %-占位符与 args 数量不匹配而
+            # 抛异常。绝不能在这里把未脱敏的 record 原样放行——它会在
+            # emit() 里再次触发同样的异常，落进 stdlib Handler.handleError()，
+            # 后者会把 record.msg / record.args 原文写进 sys.stderr，绕开
+            # Filter 和 Formatter 两层防线。这里直接就地中和：丢弃原始
+            # msg/args，换成一句不带负载的诊断信息。
+            record.msg = (
+                "[redaction] 日志格式化失败，原始 msg/args 已丢弃以避免明文外泄："
+                f"logger={record.name} 位置={record.pathname}:{record.lineno} "
+                f"错误类型={type(exc).__name__}"
+            )
+            record.args = ()
+            record.redacted_fields = 1
             return True
 
         redacted, count = _RISKY_VALUE_RE.subn(r"\1'" + REDACTED + "'", rendered)
@@ -116,6 +176,14 @@ class RedactingFormatter(logging.Formatter):
     堆栈里会出现局部变量的 repr（例如 `profile_dict = {...}` 的那一帧），
     以及 `ValidationError` 把原始输入回显进 str(exc) 的情况——所以格式化
     之后再扫一遍最终文本，是 Filter 之外必须补的一刀。
+
+    注意：`super().format(record)` 会把原始（未脱敏）的 traceback 文本写进
+    `record.exc_text` 缓存下来，本方法只对**返回值**做替换，不回写
+    record.exc_text。今天这是安全的，因为本项目所有 handler 都配置了
+    RedactingFormatter，没有第二个 formatter 会读到这个未脱敏缓存；但它不是
+    对 record 的纯粹只读——调用方如果换成裸 logging.Formatter 读同一个
+    record，会读到未脱敏的 exc_text。轮转检查路径下的重复调用是安全的
+    （两次 format() 输出一致，不依赖调用次数），但这个缓存写回不是。
     """
 
     def format(self, record: logging.LogRecord) -> str:
