@@ -87,6 +87,10 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         return normalize_question_payload(message.payload)
 
     def _run_turn(job_id: str, message: str) -> dict:
+        # 轮次起始时刻在这里打，不在 compute 节点里打：那才是"用户开始等"
+        # 的时刻，节点里打会漏掉下面几次取数的时间。格式与 job_profile
+        # .created_at 的 datetime('now') 完全一致（见 sqlite_utc_now）。
+        turn_started_at = sqlite_utc_now()
         profile_row = conn.execute(
             "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
             (job_id,),
@@ -111,10 +115,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "history": [*prior_history, {"role": "user", "content": message}],
             "round_count": round_count,
             "profile_patch_accumulated": accumulated,
-            # 轮次起始时刻在这里打，不在 compute 节点里打：那才是"用户开始等"
-            # 的时刻，节点里打会漏掉上面几次取数的时间。格式与 job_profile
-            # .created_at 的 datetime('now') 完全一致（见 sqlite_utc_now）。
-            "turn_started_at": sqlite_utc_now(),
+            "turn_started_at": turn_started_at,
         }
         graph.invoke(state, config={"configurable": {"thread_id": job_id}})
 

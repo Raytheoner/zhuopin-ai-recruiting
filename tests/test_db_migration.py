@@ -1,8 +1,6 @@
 import json
 import sqlite3
 
-import pytest
-
 from app.storage.db import _ADDED_COLUMNS, apply_column_migrations, get_connection, init_schema
 
 # 2026-08-18 及之前 .51 现网 data/demo.db 里 job / job_profile 的真实形态。

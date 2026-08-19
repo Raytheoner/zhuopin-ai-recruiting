@@ -114,6 +114,7 @@ def normalize_question_payload(payload: dict) -> dict:
     幂等：已经是新形态的 payload 过一遍不变。
     """
     raw = payload.get("questions") or []
+    raw = raw if isinstance(raw, list) else []
     questions = [
         IntakeQuestion.from_payload({"text": item} if isinstance(item, str) else item)
         for item in raw
