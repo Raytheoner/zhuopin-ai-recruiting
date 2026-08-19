@@ -50,6 +50,35 @@ if (-not (Test-Path $envFile)) {
     Write-Warning ".env 不存在！请在 $envFile 手工创建（参考 .env.example），填入真实 LLM_API_KEY 后再启动服务。"
 }
 
+Write-Host "==> 准备日志目录"
+# 幂等：目录已存在则跳过创建、不重置权限、不清空内容（沿用本脚本既有约定）。
+# 计划任务以 SYSTEM 账户运行，日志目录必须 SYSTEM 可写，否则应用启动时会
+# 降级为仅 stdout——而计划任务没有控制台，等于回到零日志。
+$logDir = Join-Path $AppDir "logs"
+if (-not (Test-Path $logDir)) {
+    New-Item -ItemType Directory -Path $logDir | Out-Null
+    Write-Host "    已创建: $logDir"
+} else {
+    Write-Host "    已存在，跳过创建: $logDir"
+}
+
+$acl = Get-Acl $logDir
+$systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "SYSTEM", "Modify",
+    "ContainerInherit,ObjectInherit", "None", "Allow")
+$acl.SetAccessRule($systemRule)
+Set-Acl -Path $logDir -AclObject $acl
+
+# 只验证不假设：写一个探针文件确认真的可写，失败就当场报错而不是等到运行时静默降级。
+$probe = Join-Path $logDir ".deploy-write-probe"
+try {
+    Set-Content -Path $probe -Value "" -ErrorAction Stop
+    Remove-Item $probe -ErrorAction SilentlyContinue
+    Write-Host "    可写性验证通过"
+} catch {
+    throw "日志目录 $logDir 不可写：$_。计划任务以 SYSTEM 运行，请检查该目录的 ACL。"
+}
+
 Write-Host "==> 注册 Windows 计划任务: $TaskName"
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existingTask) {
@@ -104,4 +133,7 @@ Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 3
 $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName
 Write-Host "==> 计划任务状态: LastTaskResult=$($taskInfo.LastTaskResult)（0 = 成功启动）"
-Write-Host "==> 部署完成。验证: curl.exe http://localhost:$Port/hr/recruit-agent/"
+Write-Host "==> 部署完成。验证:"
+Write-Host "    curl.exe http://localhost:$Port/hr/recruit-agent/"
+Write-Host "    curl.exe http://localhost:$Port/hr/recruit-agent/health   # status 应为 ok，degraded 表示日志没落盘"
+Write-Host "    Get-Content (Join-Path $AppDir \"logs\app.log\") -Tail 20"

@@ -51,7 +51,11 @@ SYNC_PATHS=(
 
 # 即使在上面的白名单路径里，这些子目录也不推：.venv/venv（服务器自己建）、
 # data（运行时数据）、缓存。
-EXCLUDE_NAMES=(".venv" "venv" "data" "__pycache__" ".pytest_cache")
+# logs 与 data 同属运行时数据：生产日志含个人信息，被反向同步回开发机
+# 会构成一次未经授权的个人信息转移（server-runtime-logging design Risks）。
+# 它本来就不在 SYNC_PATHS 白名单里，这里再写一遍是为了让「不同步」这件事
+# 有一个显式的、可被测试断言的落点，而不是依赖「现在没有就永远没有」。
+EXCLUDE_NAMES=(".venv" "venv" "data" "logs" "__pycache__" ".pytest_cache")
 
 echo "==> 推送代码到 ${SERVER}:${REMOTE_APP_DIR}"
 
