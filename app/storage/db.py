@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS outbox (
 # DDL 片段里的 DEFAULT 必须是常量：SQLite 拒绝 ALTER TABLE ADD COLUMN 带
 # 非常量默认值（"Cannot add a column with non-constant default"），所以这里
 # 不能写 DEFAULT (datetime('now'))。
+#
+# turn_started_at / llm_latency_ms 是过渡形态，见 docs/tech-debt.md TD-1
+# （analysis_run 落地即删）。
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("job_profile", "is_productive", "INTEGER NOT NULL DEFAULT 1"),
     ("job_profile", "turn_started_at", "TEXT"),
