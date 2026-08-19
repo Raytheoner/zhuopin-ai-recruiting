@@ -51,6 +51,12 @@ description: 把 OpenSpec 的 spec 转成 Superpowers 实现计划，是本项�
 
 ### 5. 交付前自查
 
+- [ ] **任务标题必须是三级 `### Task N: ` —— 不是二级 `## Task N:`**
+      `scripts/task-brief PLAN_FILE N` 按三级标题抽取任务全文。用二级会**静默失败**：
+      脚本返回空，controller 拿着空 brief 去派发 implementer，看不出哪里错了。
+      自查命令：`grep -c '^### Task ' <计划文件>` 应等于实际任务数，不能是 0。
+      *实证*：2026-08-19 `server-runtime-logging` 那份计划 1900 行、7 个任务，
+      全用了 `## Task N:`，三级标题数为 0。
 - [ ] 有 **Global Constraints** 段，内容与 CLAUDE.md 一致
 - [ ] spec 里每条 `### Requirement:` 都能指到至少一个 Task
 - [ ] 每个 Task 有确切文件路径、完整代码、确切命令与预期输出
