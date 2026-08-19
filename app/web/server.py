@@ -15,6 +15,8 @@ from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.nodes import effect_confirm_profile, effect_generate_and_persist_jd
 from app.middleware.auth import AuthMiddleware
+from app.observability.logging_config import logging_status
+from app.observability.middleware import RequestIdMiddleware
 from app.schemas.job_profile import JobProfile
 from app.storage.db import get_connection, init_schema
 
@@ -64,6 +66,9 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
 
     app = FastAPI(title="卓品智能招聘助手 · Demo", lifespan=_lifespan)
     app.add_middleware(AuthMiddleware)
+    # 后 add 的更靠外：RequestIdMiddleware 必须包住 AuthMiddleware，
+    # 否则鉴权层自己产生的日志与异常拿不到请求标识。
+    app.add_middleware(RequestIdMiddleware)
     router = APIRouter()
 
     def _run_turn(job_id: str, message: str) -> dict:
@@ -227,6 +232,20 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "job_id": job[0],
             "status": job[2],
             "message": {"type": latest.type, "payload": latest.payload} if latest else None,
+        }
+
+    @router.get("/health")
+    def health() -> dict:
+        """日志子系统坏掉时唯一还能对外说话的通道（design 决策 5）。
+
+        降级时仍返回 200：服务照常提供业务功能，用 503 会诱导监控去重启一个
+        其实健康的进程——拿更大的故障换更小的故障。降级事实放在 body 里，
+        运维检查看 status 字段而不是 HTTP 码。
+        """
+        status = logging_status()
+        return {
+            "status": "degraded" if status.degraded else "ok",
+            "logging": status.as_dict(),
         }
 
     @router.get("/")
