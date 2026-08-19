@@ -51,9 +51,12 @@ if (-not (Test-Path $envFile)) {
 }
 
 Write-Host "==> 准备日志目录"
-# 幂等：目录已存在则跳过创建、不重置权限、不清空内容（沿用本脚本既有约定）。
-# 计划任务以 SYSTEM 账户运行，日志目录必须 SYSTEM 可写，否则应用启动时会
-# 降级为仅 stdout——而计划任务没有控制台，等于回到零日志。
+# 幂等：目录已存在则跳过创建、不清空内容（沿用本脚本既有约定）。
+# 但下面的 ACL 设置不受这个跳过影响，每次运行都会重新应用——这是有意为之的
+# 自愈：如果有人手动收回了 SYSTEM 的写权限，重跑本脚本应该能把它找回来，而
+# 不是把"目录已存在"当成"权限也一定还对"。计划任务以 SYSTEM 账户运行，日志
+# 目录必须 SYSTEM 可写，否则应用启动时会降级为仅 stdout——而计划任务没有
+# 控制台，等于回到零日志。
 $logDir = Join-Path $AppDir "logs"
 if (-not (Test-Path $logDir)) {
     New-Item -ItemType Directory -Path $logDir | Out-Null
@@ -136,4 +139,4 @@ Write-Host "==> 计划任务状态: LastTaskResult=$($taskInfo.LastTaskResult)�
 Write-Host "==> 部署完成。验证:"
 Write-Host "    curl.exe http://localhost:$Port/hr/recruit-agent/"
 Write-Host "    curl.exe http://localhost:$Port/hr/recruit-agent/health   # status 应为 ok，degraded 表示日志没落盘"
-Write-Host "    Get-Content (Join-Path $AppDir \"logs\app.log\") -Tail 20"
+Write-Host "    Get-Content (Join-Path $AppDir logs\app.log) -Tail 20"
