@@ -19,36 +19,41 @@ class FakeChoice:
 class FakeResponse:
     choices: list[FakeChoice]
     usage: object = None
+    model: str | None = None
 
 
 class FakeChatCompletions:
-    def __init__(self, responses: list[str]):
+    def __init__(self, responses: list[str], response_model: str | None = None):
         self._responses = list(responses)
+        self._response_model = response_model
         self.calls = []
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
         content = self._responses.pop(0)
-        return FakeResponse(choices=[FakeChoice(message=FakeMessage(content=content))])
+        return FakeResponse(
+            choices=[FakeChoice(message=FakeMessage(content=content))],
+            model=self._response_model,
+        )
 
 
 class FakeChat:
-    def __init__(self, responses):
-        self.completions = FakeChatCompletions(responses)
+    def __init__(self, responses, response_model: str | None = None):
+        self.completions = FakeChatCompletions(responses, response_model=response_model)
 
 
 class FakeOpenAIClient:
-    def __init__(self, responses):
-        self.chat = FakeChat(responses)
+    def __init__(self, responses, response_model: str | None = None):
+        self.chat = FakeChat(responses, response_model=response_model)
 
 
-def make_gateway(responses: list[str]) -> LLMGateway:
+def make_gateway(responses: list[str], response_model: str | None = None) -> LLMGateway:
     return LLMGateway(
         api_key="k",
         base_url="https://example.com",
         model="deepseek-chat-241226",
         supports_json_schema=False,
-        client=FakeOpenAIClient(responses),
+        client=FakeOpenAIClient(responses, response_model=response_model),
     )
 
 
@@ -84,7 +89,7 @@ def test_job_related_message_returns_followup_questions():
     )
 
     assert result.is_job_related is True
-    assert result.questions == ["是否涉及 AUTOSAR？"]
+    assert [q.text for q in result.questions] == ["是否涉及 AUTOSAR？"]
     assert result.profile_patch == {"job_title": "嵌入式软件工程师"}
     assert result.is_complete is False
 
@@ -242,7 +247,7 @@ def test_new_question_different_from_previous_turn_is_not_treated_as_stuck():
     )
 
     assert result.is_complete is False
-    assert result.questions == ["招聘人数是？"]
+    assert [q.text for q in result.questions] == ["招聘人数是？"]
 
 
 def _sent_prompt(gateway: LLMGateway) -> str:
@@ -424,3 +429,160 @@ def test_vague_reply_with_concrete_options_response_is_not_treated_as_stuck():
 
     assert result.is_complete is False
     assert len(result.questions) == 2
+
+
+def test_plain_string_questions_degrade_to_text_only_questions():
+    """
+    模型退化成只给一句文本时降级，而不是校验失败重试三次
+    （design.md 风险表第 1 条）。这条路径是真实会走到的：本 schema 含自由
+    dict（profile_patch），网关始终走 json_object 模式，供应商不校验形状。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": ["是否涉及 AUTOSAR？"],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要个做嵌入式开发的"}], round_count=0
+    )
+
+    assert len(result.questions) == 1
+    question = result.questions[0]
+    assert question.text == "是否涉及 AUTOSAR？"
+    assert question.field is None
+    assert question.options == ()
+    assert question.allow_free_text is True
+    assert question.is_reask is False
+    assert question.question_id.startswith("free:")
+
+
+def test_structured_question_carries_field_and_options():
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        {
+                            "text": "要哪个 ASIL 等级？",
+                            "field": "functional_safety",
+                            "options": ["ASIL-B", "ASIL-D", "无"],
+                            "allow_free_text": True,
+                        }
+                    ],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要个做功能安全的"}], round_count=0
+    )
+
+    question = result.questions[0]
+    assert question.question_id == "functional_safety"
+    assert question.field == "functional_safety"
+    assert question.options == ("ASIL-B", "ASIL-D", "无")
+
+
+def test_question_id_is_derived_by_system_even_if_model_supplies_one():
+    """模型自己编的 id 必须被丢弃（design.md 决策 2）。"""
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        {
+                            "text": "招几个人？",
+                            "field": "headcount",
+                            "question_id": "模型自己编的-q1",
+                        }
+                    ],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要个嵌入式"}], round_count=0
+    )
+
+    assert result.questions[0].question_id == "headcount"
+
+
+def test_questions_text_comes_from_the_single_renderer():
+    """
+    history 里的 assistant 文本与下发给通道的文本必须同源
+    （design.md 决策 1「代价」）。这条测试锁住"result 自带渲染结果"，
+    让 compute_intake_turn 没有理由自己再 join 一遍。
+    """
+    from app.agents.intake_question import render_questions_text
+
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        {"text": "要哪个 ASIL 等级？", "field": "functional_safety"},
+                        {"text": "招几个人？", "field": "headcount"},
+                    ],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要个嵌入式"}], round_count=0
+    )
+
+    assert result.questions_text == render_questions_text(result.questions)
+    assert result.questions_text == "要哪个 ASIL 等级？\n招几个人？"
+
+
+def test_result_carries_llm_latency_and_response_model():
+    """
+    铁律 5：配置里写的名字不算数，响应返回的才算。本单元把它透到 agent 层
+    （第 7 章才落库），时序则由第 6 章落库。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {"is_job_related": True, "questions": [], "profile_patch": {"headcount": 2}}
+            )
+        ],
+        response_model="deepseek-chat-241226",
+    )
+
+    result = run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要两个嵌入式"}], round_count=0
+    )
+
+    assert result.llm_latency_ms >= 0
+    assert result.llm_response_model == "deepseek-chat-241226"
+
+
+def test_system_prompt_requires_one_answerable_subquestion_per_item():
+    """
+    tasks 2.4：一个问题条目只能承载一个可独立作答的子问题，且要给反例。
+    反例用真实事故里的那一对（2494103e 第 3 轮把 IATF 16949 与 ISO 26262
+    打包成一句，用户只答了前者，第 4 轮被换措辞重问）。
+    """
+    assert "只能承载一个" in SYSTEM_PROMPT
+    assert "IATF 16949" in SYSTEM_PROMPT
+    assert "ISO 26262" in SYSTEM_PROMPT
+    # 问题对象的形状要用中文写清楚：json_object 模式下嵌套模型在 schema 里是
+    # $ref，不能只指望模型自己解引用
+    assert "allow_free_text" in SYSTEM_PROMPT
+    assert "question_id" in SYSTEM_PROMPT  # 明确告诉模型不要自己编 id

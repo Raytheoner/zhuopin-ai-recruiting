@@ -98,7 +98,7 @@ def test_create_job_returns_first_question(tmp_path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["message"]["type"] == "question"
-    assert body["message"]["payload"]["questions"] == ["是否涉及 AUTOSAR？"]
+    assert [q["text"] for q in body["message"]["payload"]["questions"]] == ["是否涉及 AUTOSAR？"]
 
 
 def test_reply_and_confirm_then_generate_jd(tmp_path):

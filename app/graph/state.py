@@ -23,7 +23,21 @@ class IntakeState(TypedDict, total=False):
 
     round_count: int
     profile_patch_accumulated: dict
-    pending_questions: list[str]
+
+    # 每项是 IntakeQuestion.to_payload() 的结果（纯 dict），不是 IntakeQuestion
+    # 实例：state 会被 SqliteSaver 序列化进 checkpoint，纯 dict 的往返语义是
+    # 确定的，dataclass 则依赖序列化器实现细节——"重放后类型变了"是只在恢复
+    # 路径上炸的故障。结构定义见 app/agents/intake_question.py。
+    pending_questions: list[dict]
+
     is_complete: bool
     is_job_related: bool
     unspecified_fields: list[str]
+
+    # 本轮开始时刻（HTTP 请求进入、还没调模型），由 app/web/server.py 的
+    # _run_turn 写入，节点只透传。轮次**结束**时刻沿用 job_profile.created_at。
+    turn_started_at: str
+
+    # 本轮 LLM 累计耗时（含重试），由 compute_intake_turn 写入、
+    # effect_persist_draft 与画像草案在同一条 INSERT 里落库。
+    llm_latency_ms: float

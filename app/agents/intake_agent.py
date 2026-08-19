@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.agents.ecu_knowledge import FOLLOWUP_RULES, match_ambiguous_terms
+from app.agents.intake_question import IntakeQuestion, derive_question_id, render_questions_text
 from app.llm.gateway import LLMGateway
 from app.schemas.job_profile import JobProfile
 
@@ -99,25 +100,79 @@ SYSTEM_PROMPT = (
     "写进 profile_patch；画像里的要求必须由用户明确选定，不是模型代替业务经理"
     "做的决定。\n"
     "\n"
-    "输出 JSON，字段：is_job_related(bool), questions(string[]), profile_patch(object), "
-    "unspecified_fields(string[], 可选)。"
+    "【追问的拆分规则】questions 里一个条目**只能承载一个可独立作答的子问题**。"
+    "反例：「是否需要熟悉 IATF 16949 或 ISO 26262？」——这是两个独立要求，"
+    "用户只会答其中一个，另一个就永远悬着。必须拆成两条："
+    "「是否要求熟悉 IATF 16949？」与「是否要求熟悉 ISO 26262？」。\n"
+    "\n"
+    "【追问的字段形状】questions 的每一项是一个对象：\n"
+    "- text（必填，字符串）：问给用户看的那句话\n"
+    "- field（选填，字符串）：这个问题想补全上面字段表里的哪个字段名；"
+    "拿不准就留 null，不要硬填一个不存在的字段名\n"
+    "- options（选填，字符串数组）：可供用户直接选择的具体档位；"
+    "没有可枚举档位的问题（如「具体车型与量产时间」）留空数组\n"
+    "- allow_free_text（选填，布尔）：是否允许用户自由文本作答，默认 true\n"
+    "不要输出 question_id，那个由系统按 field 派生；你自己编的 id 会被丢弃。\n"
+    "\n"
+    "输出 JSON，字段：is_job_related(bool), questions(上述问题对象的数组), "
+    "profile_patch(object), unspecified_fields(string[], 可选)。"
 )
+
+
+class _IntakeQuestionSchema(BaseModel):
+    """
+    模型侧的问题形状。**不含 question_id / is_reask**——那两个由系统派生与判定
+    （design.md 决策 2），放进模型 schema 等于邀请模型自己编 id。
+    """
+
+    text: str
+    field: str | None = None
+    options: list[str] = []
+    allow_free_text: bool = True
 
 
 class _IntakeTurnSchema(BaseModel):
     is_job_related: bool
-    questions: list[str] = []
+    questions: list[_IntakeQuestionSchema] = []
     profile_patch: dict = {}
     unspecified_fields: list[str] = []
+
+    @field_validator("questions", mode="before")
+    @classmethod
+    def _tolerate_plain_strings(cls, value):
+        """
+        模型只给一句文本时降级成纯文本问题，而不是校验失败、重试三次、
+        最后抛 SchemaExtractionFailed 把整轮采集废掉（design.md 风险表第 1 条）。
+
+        这条路径是真实会走到的：本 schema 含自由 dict（profile_patch），
+        _has_free_form_object 命中后网关始终走 json_object 模式，供应商只保证
+        "是合法 JSON"、不校验形状（见 app/llm/gateway.py 的 _call_model）。
+
+        只兜"整项是字符串"这一种退化。dict 里缺 text 之类的结构性错误仍然走
+        既有的 SchemaExtractionFailed 重试路径——那是模型没按 schema 输出，
+        重试一次比猜一个 text 更对。
+        """
+        if not isinstance(value, list):
+            return value
+        return [{"text": item} if isinstance(item, str) else item for item in value]
 
 
 @dataclass
 class IntakeTurnResult:
     is_job_related: bool
-    questions: list[str]
+    questions: list[IntakeQuestion]
     profile_patch: dict
     is_complete: bool
     unspecified_fields: list[str] = field(default_factory=list)
+    # 已渲染的问题文本。带在结果里而不是让调用方自己 join：history 里的
+    # assistant 文本与下发给通道的文本必须同源（design.md 决策 1「代价」）。
+    questions_text: str = ""
+    # 本轮 LLM 累计耗时（含重试），由 effect_persist_draft 落库（第 1 章）。
+    llm_latency_ms: float = 0.0
+    # API 响应里实际返回的模型标识（铁律 5）。本单元只透出不落库——落库属
+    # 第 7 章（字段溯源要按模型版本归因），而 intake-turn-observability 明确
+    # 要求时序留痕不记模型标识。
+    llm_response_model: str | None = None
 
 
 def suggested_followups(history: list[dict]) -> list[str]:
@@ -167,9 +222,10 @@ def _build_user_prompt(
     return "\n\n".join(sections)
 
 
-def _repeats_earlier_assistant_turn(questions: list[str], history: list[dict]) -> bool:
+def _repeats_earlier_assistant_turn(candidate_text: str, history: list[dict]) -> bool:
     """
-    判断这轮生成的问题是否和历史上**任意一轮** assistant 说过的内容只有空白差异地相同。
+    判断这轮生成的问题文本是否和历史上**任意一轮** assistant 说过的内容只有
+    空白差异地相同。
 
     2026-08-10 真实环境试跑发现：用户回答模糊（如对"CP 还是 AP"这种二选一问题
     回答"是的"）时，profile_patch 常年提不出任何字段，ECU 知识库的追问建议又
@@ -181,15 +237,51 @@ def _repeats_earlier_assistant_turn(questions: list[str], history: list[dict]) -
     只要中间隔了一轮问别的，第 1 轮问过的问题在第 3 轮被模型重新问出来，跟
     "上一轮"（第 2 轮）文本不同，原先的检测完全看不到——比对范围改为历史上
     **所有** assistant 轮次，而不只是最后一轮。
+
+    2026-08-19：入参从 list[str] 改为**已渲染的文本**，渲染由
+    app/agents/intake_question.render_questions_text 唯一负责——两处各渲染一遍
+    会让这里比对到与实际下发不一致的文本，逐字比对静默失效。
+
+    这道防线**保留不动**。同期取证（docs/findings/2026-08-13-sqlite-事务归属冲突.md
+    §8.5）证明"用户体感重复"还有第三种成因：投递丢失导致用户没收到上一轮回复，
+    模型从 checkpoint 读到自己问过、便道歉并换措辞重问。那一层已由
+    fix-sqlite-transaction-ownership 修复，与本函数无关。按 question_id 追踪
+    未答子问题是 m1-intake-quality-fixes 第 5 章的事（tasks 5.8 给本函数去留的
+    结论），本单元不动它的判定逻辑。
     """
-    if not questions:
+    if not candidate_text:
         return False
     normalize = lambda s: "".join(str(s).split())
-    candidate = normalize("\n".join(questions))
+    candidate = normalize(candidate_text)
     earlier_assistant_turns = (
         turn.get("content", "") for turn in history if turn.get("role") == "assistant"
     )
     return any(candidate == normalize(turn) for turn in earlier_assistant_turns)
+
+
+_GUIDANCE_TEXT = "没听懂是不是用人需求，可以试试：'要招一个做XX的工程师'"
+
+
+def _to_intake_questions(raw: list[_IntakeQuestionSchema]) -> list[IntakeQuestion]:
+    """模型侧形状 → 系统侧一等对象。question_id 在这里派生，模型给的 id 拿不到
+    这一步（_IntakeQuestionSchema 里根本没有那个字段，pydantic 默认忽略多余键）。"""
+    return [
+        IntakeQuestion(
+            text=item.text,
+            question_id=derive_question_id(item.field, item.text),
+            field=item.field or None,
+            options=tuple(item.options),
+            allow_free_text=item.allow_free_text,
+        )
+        for item in raw
+    ]
+
+
+def _guidance_question() -> IntakeQuestion:
+    return IntakeQuestion(
+        text=_GUIDANCE_TEXT,
+        question_id=derive_question_id(None, _GUIDANCE_TEXT),
+    )
 
 
 def run_intake_turn(
@@ -203,25 +295,38 @@ def run_intake_turn(
         history, profile_patch_accumulated or {}, suggested_followups(history)
     )
 
-    parsed = gateway.extract_structured(
+    # extract_structured_with_meta 而不是 extract_structured：本轮的 LLM 累计
+    # 耗时与实际响应模型标识要透给编排层落库（tasks 1.3）。AuditHook 的签名
+    # 没有变（design.md 决策 9）。
+    parsed, meta = gateway.extract_structured_with_meta(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=user_prompt,
         schema=_IntakeTurnSchema,
-        prompt_version="intake-v2",
+        # SYSTEM_PROMPT 改了就必须升版本：input_hash 与 prompt_version 是
+        # "这条结果是哪一版提示词产出的"的唯一依据（铁律 5 的可解释性要求）。
+        prompt_version="intake-v3",
     )
 
     if not parsed.is_job_related:
+        questions = _to_intake_questions(parsed.questions) or [_guidance_question()]
         return IntakeTurnResult(
             is_job_related=False,
-            questions=parsed.questions or ["没听懂是不是用人需求，可以试试：'要招一个做XX的工程师'"],
+            questions=questions,
             profile_patch={},
             is_complete=False,
+            questions_text=render_questions_text(questions),
+            llm_latency_ms=meta.latency_ms,
+            llm_response_model=meta.response_model,
         )
 
     at_round_limit = round_count >= MAX_ROUNDS
-    capped_questions = [] if at_round_limit else parsed.questions[:MAX_QUESTIONS_PER_ROUND]
+    capped_questions = (
+        [] if at_round_limit else _to_intake_questions(parsed.questions)[:MAX_QUESTIONS_PER_ROUND]
+    )
 
-    stuck = not at_round_limit and _repeats_earlier_assistant_turn(capped_questions, history)
+    stuck = not at_round_limit and _repeats_earlier_assistant_turn(
+        render_questions_text(capped_questions), history
+    )
     give_up = at_round_limit or stuck
     questions = [] if give_up else capped_questions
 
@@ -231,4 +336,7 @@ def run_intake_turn(
         profile_patch=parsed.profile_patch,
         is_complete=give_up or not questions,
         unspecified_fields=parsed.unspecified_fields if give_up else [],
+        questions_text=render_questions_text(questions),
+        llm_latency_ms=meta.latency_ms,
+        llm_response_model=meta.response_model,
     )

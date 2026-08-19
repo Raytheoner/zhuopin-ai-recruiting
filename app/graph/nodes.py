@@ -31,9 +31,14 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
 
     # 把本轮助手说的话也记进历史，让下一轮的 prompt 是一段真正的对话，而不是
     # 一串没有上下文的用户独白——否则模型不知道上一轮已经问过什么。
+    #
+    # 文本直接用 result.questions_text，不在这里自己 join：渲染入口必须唯一
+    # （app/agents/intake_question.render_questions_text），否则 history 里的
+    # 文本和下发给通道的文本会分叉，_repeats_earlier_assistant_turn 就在比对
+    # 一个从未真正下发过的字符串（design.md 决策 1「代价」）。
     assistant_turn = {
         "role": "assistant",
-        "content": "\n".join(result.questions)
+        "content": result.questions_text
         if result.questions
         else "（信息已收集完整，等待用人部门确认画像）",
     }
@@ -42,11 +47,14 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         **state,
         "history": [*history, assistant_turn],
         "is_job_related": result.is_job_related,
-        "pending_questions": result.questions,
+        "pending_questions": [question.to_payload() for question in result.questions],
         "profile_patch_accumulated": accumulated,
         "is_complete": result.is_complete,
         "round_count": state.get("round_count", 0) + 1,
         "unspecified_fields": result.unspecified_fields,
+        # 时序：只放耗时，不放模型标识——intake-turn-observability 要求时序
+        # 留痕不承担审计职责。模型标识由第 7 章按 intake-field-grounding 落库。
+        "llm_latency_ms": result.llm_latency_ms,
     }
 
 
