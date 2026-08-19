@@ -16,7 +16,10 @@ from app.graph.build import build_intake_graph
 from app.graph.nodes import effect_confirm_profile, effect_generate_and_persist_jd
 from app.middleware.auth import AuthMiddleware
 from app.observability.logging_config import logging_status
-from app.observability.middleware import RequestIdMiddleware
+from app.observability.middleware import (
+    RequestIdMiddleware,
+    unhandled_exception_handler,
+)
 from app.schemas.job_profile import JobProfile
 from app.storage.db import get_connection, init_schema
 
@@ -69,6 +72,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
     # 后 add 的更靠外：RequestIdMiddleware 必须包住 AuthMiddleware，
     # 否则鉴权层自己产生的日志与异常拿不到请求标识。
     app.add_middleware(RequestIdMiddleware)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
     router = APIRouter()
 
     def _run_turn(job_id: str, message: str) -> dict:

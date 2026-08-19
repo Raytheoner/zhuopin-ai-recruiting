@@ -4,10 +4,17 @@ import logging
 import uuid
 
 from starlette.datastructures import MutableHeaders
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from app.observability.context import REQUEST_ID_HEADER, request_id_var
+from app.observability.context import REQUEST_ID_HEADER, UNSET_REQUEST_ID, request_id_var
 
 logger = logging.getLogger(__name__)
+
+# 业务会话标识在路由里的参数名。Starlette 在把请求交给 endpoint 之前就把
+# path_params 写进了 scope，所以即使 endpoint 抛异常也依然读得到是哪个会话
+# 出的问题——不需要另行查库反推（spec 明确要求这一点）。
+SESSION_PARAM_NAMES = ("job_id", "thread_id")
 
 
 class RequestIdMiddleware:
@@ -44,3 +51,31 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send_with_header)
         finally:
             request_id_var.reset(token)
+
+
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """未捕获异常的统一记录点，挂在 FastAPI 的 Exception handler 上。
+
+    挂这里而不是挂在中间件的 except 分支里，是因为 ServerErrorMiddleware 位于
+    全部用户中间件之外：它捕获异常后用自己的 send 发 500，中间件加的响应头到
+    不了那个响应上。而「使用者报告问题时可以提供标识」要救的恰恰是出错这一次。
+
+    注意 request_id 必须显式经 extra 传入：此刻 contextvar 已被中间件的 finally
+    复位，RequestIdFilter 只在 record 没有该属性时才回填，extra 优先。
+    """
+    request_id = getattr(request.state, "request_id", UNSET_REQUEST_ID)
+    params = request.scope.get("path_params") or {}
+    session = {k: params[k] for k in SESSION_PARAM_NAMES if k in params}
+    logger.error(
+        "未捕获异常导致服务端错误：method=%s path=%s session=%s",
+        request.method,
+        request.url.path,
+        session or "<无会话上下文>",
+        exc_info=exc,
+        extra={"request_id": request_id},
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "internal server error", "request_id": request_id},
+        headers={REQUEST_ID_HEADER: request_id},
+    )
