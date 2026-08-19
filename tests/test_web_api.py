@@ -441,3 +441,85 @@ def test_run_turn_stamps_turn_started_at(tmp_path):
     assert row[0] is not None
     assert row[1] is not None and row[1] >= 0
     assert row[2] >= row[0]  # 结束不早于开始，说明两者格式一致
+
+
+def test_question_payload_carries_structured_questions(tmp_path):
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [
+                    {
+                        "text": "要哪个 ASIL 等级？",
+                        "field": "functional_safety",
+                        "options": ["ASIL-B", "ASIL-D", "无要求"],
+                    }
+                ],
+                "profile_patch": {"job_title": "功能安全工程师"},
+            }
+        )
+    ]
+    client = make_app(tmp_path, responses)
+
+    body = client.post("/api/jobs", json={"message": "要个做功能安全的"}).json()
+
+    payload = body["message"]["payload"]
+    assert payload["questions"][0] == {
+        "question_id": "functional_safety",
+        "text": "要哪个 ASIL 等级？",
+        "field": "functional_safety",
+        "options": ["ASIL-B", "ASIL-D", "无要求"],
+        "allow_free_text": True,
+        "is_reask": False,
+    }
+    assert payload["questions_text"] == "要哪个 ASIL 等级？"
+
+
+def test_legacy_string_question_rows_are_normalized_on_read(tmp_path):
+    """
+    .51 现网 data/demo.db 的 outbox 里存着 2026-08-18 及之前写下的裸字符串问题。
+    GET /api/jobs/{id} 会把这些历史行原样读回来，新前端按对象访问 q.text 会在
+    真实数据上直接崩——本地测试库全是新写的行，不专门测就走不到这条路径
+    （与 design.md 决策 10 同一类只在服务器上炸的坑）。
+    """
+    from app.storage.db import get_connection
+
+    responses = [
+        json.dumps({"is_job_related": True, "questions": [], "profile_patch": {"headcount": 1}})
+    ]
+    client = make_app(tmp_path, responses)
+    job_id = client.post("/api/jobs", json={"message": "要一个人"}).json()["job_id"]
+
+    # 手写一条老形态的 outbox 行，模拟升级前留下的数据
+    conn = get_connection(str(tmp_path / "web.db"))
+    conn.execute(
+        "INSERT INTO outbox (thread_id, message_type, payload_json) VALUES (?, 'question', ?)",
+        (job_id, json.dumps({"questions": ["是否涉及 AUTOSAR？"]}, ensure_ascii=False)),
+    )
+    conn.commit()
+
+    payload = client.get(f"/api/jobs/{job_id}").json()["message"]["payload"]
+
+    assert payload["questions"][0]["text"] == "是否涉及 AUTOSAR？"
+    assert payload["questions"][0]["question_id"]
+    assert payload["questions"][0]["options"] == []
+    assert payload["questions_text"] == "是否涉及 AUTOSAR？"
+
+
+def test_confirmation_prompt_payload_is_untouched(tmp_path):
+    """
+    第 2 章只换追问的载体。确认提示的 payload 本章不动（缺口警示块属第 6 章），
+    这条测试防止"顺手一起改了"。
+    """
+    responses = [
+        json.dumps({"is_job_related": True, "questions": [], "profile_patch": {"headcount": 1}})
+    ]
+    client = make_app(tmp_path, responses)
+
+    body = client.post("/api/jobs", json={"message": "要一个人"}).json()
+
+    assert body["message"]["type"] == "confirmation_prompt"
+    payload = body["message"]["payload"]
+    assert payload["type"] == "confirmation_prompt"
+    assert "profile_patch_accumulated" in payload
+    assert "unspecified_fields" in payload

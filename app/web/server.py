@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
+from app.agents.intake_question import normalize_question_payload
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.nodes import effect_confirm_profile, effect_generate_and_persist_jd
@@ -75,6 +76,16 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
     app.add_exception_handler(Exception, unhandled_exception_handler)
     router = APIRouter()
 
+    def _response_payload(message) -> dict:
+        """
+        对外响应统一过一遍归一化。为什么必须在读的这一侧做：outbox 里存着
+        2026-08-18 及之前写下的 {"questions": ["裸字符串"]}（.51 现网 15 个 job
+        的历史行），新前端按对象访问会直接崩。归一化是幂等的，新行过一遍不变。
+        """
+        if message.type != "question":
+            return message.payload
+        return normalize_question_payload(message.payload)
+
     def _run_turn(job_id: str, message: str) -> dict:
         profile_row = conn.execute(
             "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
@@ -108,7 +119,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         graph.invoke(state, config={"configurable": {"thread_id": job_id}})
 
         latest = channel.latest(job_id)
-        return {"type": latest.type, "payload": latest.payload}
+        return {"type": latest.type, "payload": _response_payload(latest)}
 
     @router.post("/api/jobs")
     def create_job(req: CreateJobRequest):
@@ -239,7 +250,9 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         return {
             "job_id": job[0],
             "status": job[2],
-            "message": {"type": latest.type, "payload": latest.payload} if latest else None,
+            "message": {"type": latest.type, "payload": _response_payload(latest)}
+            if latest
+            else None,
         }
 
     @router.get("/health")

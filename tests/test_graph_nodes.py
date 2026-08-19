@@ -179,6 +179,7 @@ def test_build_intake_graph_runs_end_to_end(tmp_path):
     latest = channel.latest("job1")
     assert latest.type == "question"
     assert [q["text"] for q in latest.payload["questions"]] == ["是否涉及 AUTOSAR？"]
+    assert latest.payload["questions_text"] == "是否涉及 AUTOSAR？"
 
 
 def test_compute_intake_turn_emits_serializable_structured_questions():

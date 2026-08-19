@@ -66,7 +66,20 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
             }
             message = OutboundMessage(type="confirmation_prompt", payload=payload)
         else:
-            payload = {"questions": state.get("pending_questions", [])}
+            # 结构化问题原样透传（design.md 决策 1）：payload 里既有对象列表
+            # （给能渲染控件的通道，第 4 章的 Web 与将来的企微卡片），也有
+            # 已渲染的 questions_text（给纯文本通道）。questions_text 与
+            # history 里的 assistant 文本同源，都出自 render_questions_text。
+            from app.agents.intake_question import IntakeQuestion, render_questions_text
+
+            questions = [
+                IntakeQuestion.from_payload(item)
+                for item in state.get("pending_questions", [])
+            ]
+            payload = {
+                "questions": [question.to_payload() for question in questions],
+                "questions_text": render_questions_text(questions),
+            }
             message = OutboundMessage(type="question", payload=payload)
 
         # business_key 前缀带上 round_count：message_business_key() 本身只是
