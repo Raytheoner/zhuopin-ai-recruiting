@@ -21,7 +21,7 @@ from app.observability.middleware import (
     unhandled_exception_handler,
 )
 from app.schemas.job_profile import JobProfile
-from app.storage.db import get_connection, init_schema
+from app.storage.db import get_connection, init_schema, sqlite_utc_now
 
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_TEMPLATE_PATH = STATIC_DIR / "index.html"
@@ -100,6 +100,10 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "history": [*prior_history, {"role": "user", "content": message}],
             "round_count": round_count,
             "profile_patch_accumulated": accumulated,
+            # 轮次起始时刻在这里打，不在 compute 节点里打：那才是"用户开始等"
+            # 的时刻，节点里打会漏掉上面几次取数的时间。格式与 job_profile
+            # .created_at 的 datetime('now') 完全一致（见 sqlite_utc_now）。
+            "turn_started_at": sqlite_utc_now(),
         }
         graph.invoke(state, config={"configurable": {"thread_id": job_id}})
 

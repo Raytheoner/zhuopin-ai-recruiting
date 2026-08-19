@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA = """
@@ -104,6 +105,19 @@ def apply_column_migrations(conn: sqlite3.Connection) -> list[str]:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
         added.append(column)
     return added
+
+
+def sqlite_utc_now() -> str:
+    """
+    与 SQLite `datetime('now')` 完全一致的 UTC 时间串（秒级、无时区后缀）。
+
+    为什么不用 datetime.now().isoformat()：job_profile.created_at 由
+    `datetime('now')`（UTC，格式 "YYYY-MM-DD HH:MM:SS"）写入，代表轮次结束
+    时刻；turn_started_at 由 Python 侧写入，代表轮次开始时刻。两者格式必须
+    一模一样，否则"结束 − 开始"这个减法要先做时区与格式对齐，而这类对齐
+    迟早会有人做错——最省事的做法是从一开始就不给人做错的机会。
+    """
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:

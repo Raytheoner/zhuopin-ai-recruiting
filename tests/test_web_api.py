@@ -410,3 +410,34 @@ def test_confirm_returns_422_when_llm_patch_violates_schema(tmp_path):
     assert "headcount" in json.dumps(detail, ensure_ascii=False), (
         "422 的 detail 应该指出是哪个字段有问题，便于人工修正"
     )
+
+
+def test_run_turn_stamps_turn_started_at(tmp_path):
+    """
+    轮次起始时刻必须在 HTTP 请求进入时打——那才是"用户开始等"的时刻。
+    在 compute 节点里打会漏掉排队与取数的时间。
+    """
+    from app.storage.db import get_connection
+
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "招几个人？", "field": "headcount"}],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+            }
+        )
+    ]
+    client = make_app(tmp_path, responses)
+
+    resp = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"})
+    job_id = resp.json()["job_id"]
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    row = conn.execute(
+        "SELECT turn_started_at, llm_latency_ms, created_at FROM job_profile WHERE job_id=?",
+        (job_id,),
+    ).fetchone()
+    assert row[0] is not None
+    assert row[1] is not None and row[1] >= 0
+    assert row[2] >= row[0]  # 结束不早于开始，说明两者格式一致

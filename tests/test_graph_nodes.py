@@ -294,3 +294,186 @@ def test_assistant_history_text_equals_rendered_questions():
         [IntakeQuestion.from_payload(q) for q in new_state["pending_questions"]]
     )
     assert new_state["history"][-1] == {"role": "assistant", "content": expected}
+
+
+def test_effect_persist_draft_writes_turn_timing_in_the_same_row(tmp_path):
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    conn.commit()
+
+    effect_persist_draft(
+        conn,
+        thread_id="job1",
+        business_key="0",
+        state={
+            "profile_patch_accumulated": {"job_title": "x"},
+            "unspecified_fields": [],
+            "turn_started_at": "2026-08-19 01:02:03",
+            "llm_latency_ms": 8123.5,
+        },
+    )
+
+    row = conn.execute(
+        "SELECT turn_started_at, llm_latency_ms, created_at FROM job_profile WHERE job_id='job1'"
+    ).fetchone()
+    assert row[0] == "2026-08-19 01:02:03"
+    assert row[1] == 8123.5
+    # 轮次结束时刻沿用 created_at，不另加列；两者同格式所以可直接比较
+    assert row[2] >= row[0]
+
+
+def test_timing_does_not_exist_when_profile_write_fails(tmp_path):
+    """
+    intake-turn-observability「时序与画像同生共死」+ 铁律 1 的不变式：
+    业务写失败时，effect_log 也不能留下记录——否则重放会判定"已执行"而静默
+    跳过，这正是 .51 现网 2026-08-10/08-12 各丢一轮 outbox 的机理
+    （docs/findings/2026-08-13-sqlite-事务归属冲突.md §8.5）。
+    """
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    # 不插 job 行：job_profile.job_id 的外键（PRAGMA foreign_keys=ON）会让
+    # INSERT 直接失败，模拟"这一轮的画像写不进去"
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        effect_persist_draft(
+            conn,
+            thread_id="ghost-job",
+            business_key="0",
+            state={
+                "profile_patch_accumulated": {"job_title": "x"},
+                "unspecified_fields": [],
+                "turn_started_at": "2026-08-19 01:02:03",
+                "llm_latency_ms": 8123.5,
+            },
+        )
+
+    profiles = conn.execute(
+        "SELECT COUNT(*) FROM job_profile WHERE job_id='ghost-job'"
+    ).fetchone()[0]
+    effects = conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE thread_id='ghost-job'"
+    ).fetchone()[0]
+    assert profiles == 0
+    assert effects == 0  # 画像与幂等记录按 thread 恒等，都是 0
+
+
+def test_persisted_latency_covers_llm_retries(tmp_path, monkeypatch):
+    """intake-turn-observability「重试计入耗时」的端到端版本：
+    模型第一次返回非法 JSON、第二次成功，落库的耗时必须覆盖两次。"""
+    from app.llm import gateway as gateway_module
+
+    ticks = iter([0.0, 1.5, 10.0, 12.25])
+    monkeypatch.setattr(gateway_module.time, "monotonic", lambda: next(ticks))
+
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    conn.commit()
+
+    gateway = make_gateway(
+        [
+            "这不是 JSON",
+            json.dumps(
+                {"is_job_related": True, "questions": [], "profile_patch": {"headcount": 1}}
+            ),
+        ]
+    )
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "要一个人"}],
+            "round_count": 0,
+            "profile_patch_accumulated": {},
+            "turn_started_at": "2026-08-19 01:02:03",
+        },
+        gateway=gateway,
+    )
+
+    effect_persist_draft(conn, thread_id="job1", business_key="0", state=state)
+
+    latency = conn.execute(
+        "SELECT llm_latency_ms FROM job_profile WHERE job_id='job1'"
+    ).fetchone()[0]
+    assert latency == pytest.approx(3750.0)  # 1500 + 2250，不是只记最后一次
+
+
+def test_system_time_and_user_think_time_are_separable(tmp_path):
+    """
+    intake-turn-observability「系统延迟与用户思考时长可分离」。
+    这条测试同时是**统计口径的可执行文档**：下面这段 SQL 就是运维查"业务经理
+    到底等了多久"要跑的东西。修复前只有 created_at（轮次结束时刻），相邻两轮
+    的间隔把 LLM 耗时和用户打字时间混在一起，问不出"单轮等待感受"。
+    """
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    # 直接写两行：本测试验证的是报表口径能不能算出来，不是 effect 的行为
+    conn.executemany(
+        "INSERT INTO job_profile "
+        "(id, job_id, version, status, profile_json, turn_started_at, created_at, llm_latency_ms) "
+        "VALUES (?, 'job1', ?, 'drafting', '{}', ?, ?, ?)",
+        [
+            ("job1-v1", 1, "2026-08-18 09:00:00", "2026-08-18 09:00:12", 12000.0),
+            ("job1-v2", 2, "2026-08-18 09:01:30", "2026-08-18 09:01:45", 15000.0),
+        ],
+    )
+    conn.commit()
+
+    rows = conn.execute(
+        """
+        SELECT version,
+               CAST(strftime('%s', created_at) AS INTEGER)
+                 - CAST(strftime('%s', turn_started_at) AS INTEGER) AS system_seconds,
+               CAST(strftime('%s', turn_started_at) AS INTEGER)
+                 - LAG(CAST(strftime('%s', created_at) AS INTEGER)) OVER (ORDER BY version)
+                 AS user_seconds
+        FROM job_profile WHERE job_id='job1' ORDER BY version
+        """
+    ).fetchall()
+
+    assert rows[0][1] == 12 and rows[0][2] is None  # 第一轮没有"上一轮"
+    assert rows[1][1] == 15  # 系统处理耗时
+    assert rows[1][2] == 78  # 用户思考与输入耗时，与系统耗时分开
+
+    total = conn.execute(
+        "SELECT CAST(strftime('%s', MAX(created_at)) AS INTEGER) "
+        "- CAST(strftime('%s', MIN(turn_started_at)) AS INTEGER) FROM job_profile "
+        "WHERE job_id='job1'"
+    ).fetchone()[0]
+    assert total == 105
+
+
+def test_timing_trace_records_no_model_identity(tmp_path):
+    """
+    intake-turn-observability「时序留痕不承担审计职责」：本单元的留痕里只有
+    时间与耗时。llm_response_model 这一列已经建好（Task 1）但**本单元不写值**，
+    它归第 7 章的 intake-field-grounding（按模型版本归因编造率）。
+    """
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    conn.commit()
+
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {"headcount": 1}})]
+    )
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "要一个人"}],
+            "round_count": 0,
+            "profile_patch_accumulated": {},
+            "turn_started_at": "2026-08-19 01:02:03",
+        },
+        gateway=gateway,
+    )
+    effect_persist_draft(conn, thread_id="job1", business_key="0", state=state)
+
+    row = conn.execute(
+        "SELECT llm_response_model, ungrounded_fields FROM job_profile WHERE job_id='job1'"
+    ).fetchone()
+    assert row[0] is None
+    assert json.loads(row[1]) == []
+    assert "llm_response_model" not in state  # 也不许经 state 漏进来
