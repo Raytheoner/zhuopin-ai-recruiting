@@ -53,22 +53,41 @@ RISKY_KEYS = (
 )
 
 _KEY_ALTERNATION = "|".join(re.escape(k) for k in RISKY_KEYS)
-# 匹配 dict/JSON 两种渲染形态里的 "键: '值'" 或 "键": "值"，以及值为列表的
-# 形态 "键: ['a', 'b']" / "键": ["a", "b"]（如 must_have_skills 这类字段的
-# repr）。列表分支用 [^\]]* 只吃到第一个 ]，不处理嵌套列表/字典——这是探测
-# 性兜底，不是完整解析器，且 [^\]]* 是线性的，不会带来灾难性回溯。只吃掉值
-# 部分，键名保留在日志里（键名不是内容，值才是）。
+# 匹配三种键值渲染形态：
+#   1) dict/JSON 形态： "键": "值" / '键': '值'
+#   2) pydantic 模型 repr 形态： 键=值（无引号键名 + 等号，例如
+#      `JobProfile(job_title='...', department='...')`）——finding 1：这个
+#      形态之前完全漏网，%r 打印一个真实模型会让全部内容字段明文落盘且不
+#      触发兜底告警，是「静默泄漏」。
+#   3) pydantic ValidationError 回显形态： input_value=值（`str(ValidationError)`
+#      把被拒绝的原始输入原样回显在这个键后面，键名本身不在 RISKY_KEYS 里
+#      也必须兜——它天然就是「刚被拒绝、可能是任意自由文本」的值）。
+# 值本身有四种形态，按顺序尝试（互不重叠，第一个字符不同即可判定分支，不
+# 存在回溯歧义）：单引号串、双引号串、列表 [^\]]*（只吃到第一个 ]，不处理
+# 嵌套列表/字典）、裸值兜底（数字/None/True/枚举 repr 等未加引号的值，吃到
+# 下一个 , ] ) 或换行为止）。四个分支都是线性扫描的字符类，不含嵌套量词，
+# 不会带来灾难性回溯。只吃掉值部分，键名保留在日志里（键名不是内容，值才
+# 是）。前缀始终是唯一的捕获组 1，值不单独捕获——调用方用 \1 + REDACTED
+# 拼接替换整个匹配，不依赖值的具体内容，因此三种前缀分支可以共用同一套值
+# 分支而不改变现有调用方的替换逻辑。
 _RISKY_VALUE_RE = re.compile(
-    r"(['\"](?:" + _KEY_ALTERNATION + r")['\"]\s*:\s*)"
-    r"('(?:[^'\\]|\\.)*'"
+    r"("
+    r"['\"](?:" + _KEY_ALTERNATION + r")['\"]\s*:\s*"
+    r"|\b(?:" + _KEY_ALTERNATION + r")\s*=\s*"
+    r"|\binput_value\s*=\s*"
+    r")"
+    r"(?:"
+    r"'(?:[^'\\]|\\.)*'"
     r"|\"(?:[^\"\\]|\\.)*\""
-    r"|\[[^\]]*\])"
+    r"|\[[^\]]*\]"
+    r"|[^,\]\)\n]*"
+    r")"
 )
 
 _local = threading.local()
 
 
-def content_digest(value: Any) -> str:
+def content_digest(value: Mapping[str, Any]) -> str:
     """短哈希变更探测器，仅用于判断「同一段内容是否变过」——**不是隐私边界**。
 
     保证的是：同一 value 的规范化 JSON 表示总映射到同一个 16 位十六进制串，
@@ -76,11 +95,34 @@ def content_digest(value: Any) -> str:
     确定性 SHA-256 截断，对手机号/身份证号/姓名这类低熵单值，攻击者可以在
     可接受时间内穷举撞回原文（已验证：11 位手机号可在 1 秒内暴力还原）。
 
-    因此：只能对「完整业务对象的内容字典」这类高熵输入调用（当前唯一调用点
-    `loggable_summary` 正是这样用的）。**严禁对手机号、身份证号、姓名等单个
-    低熵字段单独调用**——那等价于把这类字段明文换个编码方式写进日志，在
-    PIPL 意义上仍然是个人信息，不是脱敏。
+    因此这不是「调用方自觉遵守的约定」，而是**运行时强制的不变式**：只接受
+    `Mapping`，且至少要有 2 个条目，否则拒绝执行并抛异常。**严禁**对手机号、
+    身份证号、姓名等单个低熵字段单独调用——那等价于把这类字段明文换个编码
+    方式写进日志，在 PIPL 意义上仍然是个人信息，不是脱敏。
+
+    零配置是本函数的设计前提：拒绝低熵输入不能靠加盐/加 HMAC key 解决（那
+    需要引入新的配置项，而生产 `.env` 与代码分开维护，要求两边同步变更正是
+    本次改动要消除的失败模式）；能做且必须做的是在类型层面堵死误用——把
+    「不要对单值调用」从文档警告升级成强制校验。
+
+    当前唯一调用点 `loggable_summary` 在内容字段不足 2 个时**不会**把异常
+    传播出日志调用——见该函数文档：跳过摘要、留空更安全，而不是让一次记录
+    动作因为业务对象恰好只有 0/1 个内容字段而抛异常中断日志记录本身。
+
+    Raises:
+        TypeError: value 不是 Mapping。
+        ValueError: value 是 Mapping 但条目数 < 2（单值，不足以抵抗穷举）。
     """
+    if not isinstance(value, Mapping):
+        raise TypeError(
+            f"content_digest 只接受 Mapping（完整内容字典），收到 {type(value).__name__}；"
+            "对单个标量字段调用等价于把它明文换个编码方式写进日志。"
+        )
+    if len(value) < 2:
+        raise ValueError(
+            f"content_digest 拒绝对少于 2 个条目的 Mapping 计算摘要（收到 {len(value)} 个）；"
+            "单值输入熵太低，无盐 SHA-256 可在可接受时间内被暴力穷举还原。"
+        )
     payload = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -91,6 +133,14 @@ def loggable_summary(obj: Mapping[str, Any], *, known_fields: frozenset[str] | N
     白名单外的键**只贡献名字与统计量，不贡献取值**；且键名本身也要过一遍
     known_fields（画像 patch 是 LLM 自由生成的裸 dict，键名理论上也可能是
     模型幻觉出来的自由文本）。
+
+    `content_digest` 现在会对少于 2 个内容字段的输入抛 ValueError（见其
+    docstring）——这里刻意不让那个异常穿透到调用方：`loggable_summary` 是
+    日志路径的一部分，一次记录动作不应该因为业务对象恰好只有 0/1 个内容
+    字段就抛异常、打断日志记录本身（脱敏助手不该把一行日志变成一次崩溃）。
+    内容字段不足 2 个时直接把 `content_digest` 置 None——单值本来就不该被
+    摘要（那等价于明文换个编码方式），跳过是唯一安全的选择，字段仍然保留
+    在摘要里以维持下游消费者读取的 schema 稳定。
     """
     summary: dict[str, Any] = {k: obj[k] for k in NON_CONTENT_KEYS if k in obj}
     content_keys = [k for k in obj if k not in NON_CONTENT_KEYS]
@@ -101,7 +151,9 @@ def loggable_summary(obj: Mapping[str, Any], *, known_fields: frozenset[str] | N
     else:
         summary["unknown_field_count"] = len(content_keys)
     summary["content_chars"] = sum(len(str(obj[k])) for k in content_keys)
-    summary["content_digest"] = content_digest({k: obj[k] for k in content_keys})
+    summary["content_digest"] = (
+        content_digest({k: obj[k] for k in content_keys}) if len(content_keys) >= 2 else None
+    )
     return summary
 
 

@@ -14,6 +14,11 @@ data/candidates/
 data/recordings/
 *.resume.pdf
 evalset/          # 200 份真实简历评测集，本地保存，走安全通道分发
+# setup_logging 在 app/main.py import 时创建，日志是个人信息的第二份拷贝
+# （脱敏是尽力而为的兜底，不是零风险保证）；本地跑真实数据后 git add -A
+# 会把它连带带进去，和 data/ 是同一类风险
+logs/
+
 
 # === Python 工件（Task 1 检查清单）===
 __pycache__/
