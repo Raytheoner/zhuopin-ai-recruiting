@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.observability.context import RequestIdFilter
 from app.observability.handlers import DailyRotatingFileHandler, purge_expired_logs
+from app.observability.redaction import RedactingFormatter, RedactionFilter
 
 LOG_FILENAME = "app.log"
 LOG_FORMAT = "%(asctime)s %(levelname)-8s [%(request_id)s] %(name)s: %(message)s"
@@ -80,7 +81,7 @@ def setup_logging(
             "class": "logging.StreamHandler",
             "stream": sys.stdout,
             "formatter": "standard",
-            "filters": ["request_id"],
+            "filters": ["request_id", "redaction"],
             "level": level,
         }
     }
@@ -92,7 +93,7 @@ def setup_logging(
             "max_bytes": max_bytes,
             "encoding": "utf-8",
             "formatter": "standard",
-            "filters": ["request_id"],
+            "filters": ["request_id", "redaction"],
             "level": level,
         }
 
@@ -105,8 +106,9 @@ def setup_logging(
             "disable_existing_loggers": False,
             "filters": {
                 "request_id": {"()": RequestIdFilter},
+                "redaction": {"()": RedactionFilter},
             },
-            "formatters": {"standard": {"format": LOG_FORMAT}},
+            "formatters": {"standard": {"()": RedactingFormatter, "format": LOG_FORMAT}},
             "handlers": handlers,
             "root": {"level": level, "handlers": handler_names},
             "loggers": {
