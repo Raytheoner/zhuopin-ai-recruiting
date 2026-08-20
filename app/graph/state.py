@@ -21,8 +21,24 @@ class IntakeState(TypedDict, total=False):
     # 追加本轮新消息，再整份传进来。
     history: list[dict]
 
+    # job_profile 总行数。business_key 的口径，语义不变（design.md 决策 5）。
     round_count: int
+    # is_productive=1 的行数。MAX_ROUNDS 按它计数，MAX_TOTAL_ROUNDS 按
+    # round_count 计数，任一命中即收尾。两个都由 app/web/server.py 的 _run_turn
+    # 从库里查出来传进来——预算计数器**不放进 state 自增**，那会引入第二个
+    # 真源（design.md 决策 5 否决的替代方案）。
+    productive_round_count: int
     profile_patch_accumulated: dict
+
+    # 这个 job 此前所有轮次问过的 question_id 并集（已问台账），由 _run_turn
+    # 从 job_profile.asked_questions 读出。compute_intake_turn 用它判定本轮
+    # 有没有问出新问题。
+    asked_question_ids_before: list[str]
+
+    # 上一轮实际问出的问题（IntakeQuestion.to_payload() 的列表），同样由
+    # _run_turn 从库里读。用途有二：反问判定要拿上一轮的问题文本当"线索"；
+    # "候选档位不得代替用户做决定"要知道上一轮给过哪些档位。
+    previous_questions: list[dict]
 
     # 每项是 IntakeQuestion.to_payload() 的结果（纯 dict），不是 IntakeQuestion
     # 实例：state 会被 SqliteSaver 序列化进 checkpoint，纯 dict 的往返语义是
@@ -33,6 +49,12 @@ class IntakeState(TypedDict, total=False):
     is_complete: bool
     is_job_related: bool
     unspecified_fields: list[str]
+
+    # 本轮是否有产出，由 compute_intake_turn 判定、effect_persist_draft 落进
+    # job_profile.is_productive。
+    is_productive: bool
+    # 本轮实际问出的问题（payload 列表），与 is_productive 同一条 INSERT 落库。
+    asked_questions: list[dict]
 
     # 本轮开始时刻（HTTP 请求进入、还没调模型），由 app/web/server.py 的
     # _run_turn 写入，节点只透传。轮次**结束**时刻沿用 job_profile.created_at。

@@ -130,3 +130,18 @@ def test_every_added_column_is_nullable_or_has_constant_default(tmp_path):
         if notnull:
             assert default is not None, f"{name} 是 NOT NULL 却没有默认值，老行无法回填"
         assert "datetime(" not in str(default or ""), f"{name} 用了非常量默认值，ALTER TABLE 会被 SQLite 拒绝"
+
+
+def test_asked_questions_column_defaults_to_empty_list_on_legacy_rows(tmp_path):
+    """
+    已问台账走的是 1.1 已经建立的幂等加列路径（delivery-units §5 约定 4）。
+    历史行拿到 '[]'，读台账的代码不需要为老库写特例。
+    """
+    conn = _legacy_db(tmp_path)
+
+    init_schema(conn)
+
+    row = conn.execute(
+        "SELECT asked_questions FROM job_profile WHERE id='old-job-v1'"
+    ).fetchone()
+    assert json.loads(row[0]) == []

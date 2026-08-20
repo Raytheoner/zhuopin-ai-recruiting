@@ -100,6 +100,30 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "SELECT COUNT(*) FROM job_profile WHERE job_id=?", (job_id,)
         ).fetchone()[0]
 
+        # 预算的第二个口径：只数有产出的轮次（design.md 决策 5）。空转轮不
+        # 消耗 MAX_ROUNDS，但仍然占 round_count，因此仍受 MAX_TOTAL_ROUNDS 约束。
+        productive_round_count = conn.execute(
+            "SELECT COUNT(*) FROM job_profile WHERE job_id=? AND is_productive=1", (job_id,)
+        ).fetchone()[0]
+
+        # 已问台账：全部轮次的 question_id 并集 + 上一轮问出的问题原样读回。
+        # 一次查询取两样东西，按 version 升序，最后一行就是上一轮。
+        asked_rows = conn.execute(
+            "SELECT asked_questions FROM job_profile WHERE job_id=? ORDER BY version ASC",
+            (job_id,),
+        ).fetchall()
+        asked_question_ids_before: list[str] = []
+        previous_questions: list[dict] = []
+        for (raw,) in asked_rows:
+            # 历史行（.51 上 2026-08-19 之前写的）这一列是默认值 '[]'；老库补列
+            # 时也拿到 '[]'。两条路径都不需要回填。
+            payloads = json.loads(raw or "[]")
+            previous_questions = payloads
+            for payload in payloads:
+                question_id = payload.get("question_id")
+                if question_id and question_id not in asked_question_ids_before:
+                    asked_question_ids_before.append(question_id)
+
         # 对话历史和画像、轮次一样从库里读回完整的一份，再追加本轮新消息。
         # 修复前这里只塞了本轮消息（history=[{本轮}]），而 IntakeState.history
         # 没有 reducer、LangGraph 按 LastValue 覆盖 checkpoint 里的旧值——第二轮起
@@ -114,7 +138,10 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "job_id": job_id,
             "history": [*prior_history, {"role": "user", "content": message}],
             "round_count": round_count,
+            "productive_round_count": productive_round_count,
             "profile_patch_accumulated": accumulated,
+            "asked_question_ids_before": asked_question_ids_before,
+            "previous_questions": previous_questions,
             "turn_started_at": turn_started_at,
         }
         graph.invoke(state, config={"configurable": {"thread_id": job_id}})

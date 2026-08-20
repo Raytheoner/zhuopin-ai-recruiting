@@ -188,6 +188,13 @@ class IntakeTurnResult:
     # 第 7 章（字段溯源要按模型版本归因），而 intake-turn-observability 明确
     # 要求时序留痕不记模型标识。
     llm_response_model: str | None = None
+    # 本轮是否有产出（新画像内容 **或** 问出了未问过的 question_id）。
+    # 由 effect_persist_draft 落进 job_profile.is_productive，追问预算按它计数
+    # （design.md 决策 5）。默认 True：判定路径没接上时的行为与今天一致。
+    is_productive: bool = True
+    # 本轮实际问出的问题（已问台账的本轮增量），落进
+    # job_profile.asked_questions。第 5 章在其上扩"已答 / 重问次数"。
+    asked_questions: list[IntakeQuestion] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -416,18 +423,29 @@ _GUIDANCE_TEXT = "没听懂是不是用人需求，可以试试：'要招一个�
 
 
 def _to_intake_questions(raw: list[_IntakeQuestionSchema]) -> list[IntakeQuestion]:
-    """模型侧形状 → 系统侧一等对象。question_id 在这里派生，模型给的 id 拿不到
-    这一步（_IntakeQuestionSchema 里根本没有那个字段，pydantic 默认忽略多余键）。"""
-    return [
-        IntakeQuestion(
+    """
+    模型侧形状 → 系统侧一等对象。question_id 在这里派生，模型给的 id 拿不到
+    这一步（_IntakeQuestionSchema 里根本没有那个字段，pydantic 默认忽略多余键）。
+
+    同一轮内 question_id 撞了就只留第一条。撞 id 的两条问题在下游是同一个问题
+    （台账、is_productive 判定、第 5 章的重问追踪全按 id 走），留着第二条只会
+    让"本轮问了几个问题"和"本轮问了几个 question_id"两个数对不上。
+    """
+    questions: list[IntakeQuestion] = []
+    seen: set[str] = set()
+    for item in raw:
+        question = IntakeQuestion(
             text=item.text,
             question_id=derive_question_id(item.field, item.text),
             field=item.field or None,
             options=tuple(item.options),
             allow_free_text=item.allow_free_text,
         )
-        for item in raw
-    ]
+        if question.question_id in seen:
+            continue
+        seen.add(question.question_id)
+        questions.append(question)
+    return questions
 
 
 def _guidance_question() -> IntakeQuestion:
@@ -443,10 +461,23 @@ def run_intake_turn(
     history: list[dict],
     round_count: int,
     profile_patch_accumulated: dict | None = None,
+    productive_round_count: int | None = None,
+    asked_question_ids_before: list[str] | None = None,
+    previous_questions: list[IntakeQuestion] | None = None,
 ) -> IntakeTurnResult:
-    user_prompt = _build_user_prompt(
-        history, profile_patch_accumulated or {}, suggested_followups(history)
-    )
+    """
+    round_count = job_profile 总行数（business_key 的口径，不变）。
+    productive_round_count = is_productive=1 的行数；省略时退化成 round_count，
+    保持"没接上判定前的行为与今天完全一致"。
+    asked_question_ids_before / previous_questions 都由调用方从数据库读出来传入
+    ——IntakeState 没有 reducer，真源是库（见 app/graph/state.py 的说明）。
+    """
+    accumulated = dict(profile_patch_accumulated or {})
+    asked_before = list(asked_question_ids_before or [])
+    prior_questions = list(previous_questions or [])
+    productive_rounds = round_count if productive_round_count is None else productive_round_count
+
+    user_prompt = _build_user_prompt(history, accumulated, suggested_followups(history))
 
     # extract_structured_with_meta 而不是 extract_structured：本轮的 LLM 累计
     # 耗时与实际响应模型标识要透给编排层落库（tasks 1.3）。AuditHook 的签名
@@ -483,13 +514,26 @@ def run_intake_turn(
     give_up = at_round_limit or stuck
     questions = [] if give_up else capped_questions
 
+    profile_patch = parsed.profile_patch
+
+    # 零产出轮判定（design.md 决策 5）：本轮 profile_patch 相对已累积内容有新
+    # 字段或改了值，**或**问出了此前未问过的 question_id。两者都没有 = 空转，
+    # 不消耗追问预算。
+    has_new_profile_content = any(
+        name not in accumulated or accumulated[name] != value
+        for name, value in profile_patch.items()
+    )
+    has_new_question = any(question.question_id not in asked_before for question in questions)
+
     return IntakeTurnResult(
         is_job_related=True,
         questions=questions,
-        profile_patch=parsed.profile_patch,
+        profile_patch=profile_patch,
         is_complete=give_up or not questions,
         unspecified_fields=parsed.unspecified_fields if give_up else [],
         questions_text=render_questions_text(questions),
         llm_latency_ms=meta.latency_ms,
         llm_response_model=meta.response_model,
+        is_productive=has_new_profile_content or has_new_question,
+        asked_questions=questions,
     )

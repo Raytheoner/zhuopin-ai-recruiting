@@ -5,6 +5,7 @@ import json
 import sqlite3
 
 from app.agents.intake_agent import run_intake_turn
+from app.agents.intake_question import IntakeQuestion
 from app.agents.jd_agent import JDGenerationResult, generate_jd
 from app.channels.base import Channel, OutboundMessage
 from app.graph.state import IntakeState
@@ -17,14 +18,23 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
     """compute_* 节点：纯函数，只调用 LLM 与做数据转换，不写库、不发消息。"""
     history = list(state.get("history", []))
     accumulated_before = dict(state.get("profile_patch_accumulated", {}))
+    round_count = state.get("round_count", 0)
+    previous_questions = [
+        IntakeQuestion.from_payload(item) for item in state.get("previous_questions", [])
+    ]
 
     result = run_intake_turn(
         gateway,
         history=history,
-        round_count=state.get("round_count", 0),
+        round_count=round_count,
         # 已累积的字段必须一起送进 prompt：SYSTEM_PROMPT 要求"不要重复历史已有
         # 字段"，模型看不见这份内容就无从遵守（review Critical 发现1）。
         profile_patch_accumulated=accumulated_before,
+        # 预算的两个口径与已问台账都从 state 透传，真源是数据库（_run_turn 查
+        # 出来放进 state），compute 节点自己不查库——它是 compute_*，纯函数。
+        productive_round_count=state.get("productive_round_count", round_count),
+        asked_question_ids_before=list(state.get("asked_question_ids_before", [])),
+        previous_questions=previous_questions,
     )
 
     accumulated = {**accumulated_before, **result.profile_patch}
@@ -50,8 +60,12 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         "pending_questions": [question.to_payload() for question in result.questions],
         "profile_patch_accumulated": accumulated,
         "is_complete": result.is_complete,
-        "round_count": state.get("round_count", 0) + 1,
+        "round_count": round_count + 1,
         "unspecified_fields": result.unspecified_fields,
+        # 零产出轮判定与本轮台账增量，由 effect_persist_draft 与画像草案写在
+        # 同一条 INSERT 里。
+        "is_productive": result.is_productive,
+        "asked_questions": [question.to_payload() for question in result.asked_questions],
         # 时序：只放耗时，不放模型标识——intake-turn-observability 要求时序
         # 留痕不承担审计职责。模型标识由第 7 章按 intake-field-grounding 落库。
         "llm_latency_ms": result.llm_latency_ms,
@@ -82,19 +96,23 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     一次写入——多一次写入就多一个能失败的地方，而这两份数据必须同生共死。
     business_key 语义不变（仍是 round_count），幂等键不受影响。
 
-    is_productive / derived_unspecified_fields / ungrounded_fields /
-    llm_response_model 这几列本单元**不写值**，靠列默认值成立（第 3、6、7 章
-    各自接上）。
+    2026-08-19（第 3 章）：is_productive 与 asked_questions 也进同一条 INSERT。
+    它们和画像草案是同一轮的三份事实，分开写就会出现"这一轮的画像在、这一轮
+    问过什么不在"——而追问预算正是按这两列取数的。
+
+    derived_unspecified_fields / ungrounded_fields / llm_response_model 这三列
+    仍然**不写值**，靠列默认值成立（第 6、7 章各自接上）。
     """
     profile_json = json.dumps(state.get("profile_patch_accumulated", {}), ensure_ascii=False)
     unspecified_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
     version = int(business_key) + 1
+    asked_questions_json = json.dumps(state.get("asked_questions", []), ensure_ascii=False)
 
     conn.execute(
         "INSERT INTO job_profile "
         "(id, job_id, version, status, profile_json, unspecified_fields, "
-        "turn_started_at, llm_latency_ms) "
-        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?)",
+        "turn_started_at, llm_latency_ms, is_productive, asked_questions) "
+        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?, ?, ?)",
         (
             f"{thread_id}-v{version}",
             thread_id,
@@ -103,6 +121,9 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
             unspecified_json,
             state.get("turn_started_at"),
             state.get("llm_latency_ms"),
+            # 默认 True：判定没接上时按"有产出"算，与列默认值和历史行一致。
+            1 if state.get("is_productive", True) else 0,
+            asked_questions_json,
         ),
     )
     conn.execute(

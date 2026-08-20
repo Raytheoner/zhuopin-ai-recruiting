@@ -644,3 +644,100 @@ def test_substantive_reply_ending_in_a_question_is_still_treated_as_vague():
     assert is_vague_reply(
         "是要社招还是校招都可以，你说的是哪种？", asked_questions=asked
     )
+
+
+def test_turn_with_new_profile_field_is_productive():
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "招几个人？", "field": "headcount"}],
+                    "profile_patch": {"job_title": "嵌入式工程师"},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "要个嵌入式工程师"}],
+        round_count=0,
+    )
+
+    assert result.is_productive is True
+    assert [q.question_id for q in result.asked_questions] == ["headcount"]
+
+
+def test_turn_with_nothing_new_is_not_productive():
+    """画像与上一轮完全相同、问出的问题此前都问过 = 空转轮。"""
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "招几个人？", "field": "headcount"}],
+                    "profile_patch": {"job_title": "嵌入式工程师"},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "嗯"}],
+        round_count=2,
+        profile_patch_accumulated={"job_title": "嵌入式工程师"},
+        asked_question_ids_before=["headcount"],
+    )
+
+    assert result.is_productive is False
+
+
+def test_new_question_alone_makes_a_turn_productive():
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+                    "profile_patch": {"job_title": "嵌入式工程师"},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "没别的了"}],
+        round_count=2,
+        profile_patch_accumulated={"job_title": "嵌入式工程师"},
+        asked_question_ids_before=["headcount"],
+    )
+
+    assert result.is_productive is True
+
+
+def test_duplicate_question_ids_in_one_round_are_deduped():
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        {"text": "要哪个 ASIL 等级？", "field": "functional_safety"},
+                        {"text": "功能安全有要求吗？", "field": "functional_safety"},
+                    ],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "招个功能安全工程师"}],
+        round_count=0,
+    )
+
+    assert [q.question_id for q in result.questions] == ["functional_safety"]

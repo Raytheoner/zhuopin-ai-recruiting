@@ -523,3 +523,38 @@ def test_confirmation_prompt_payload_is_untouched(tmp_path):
     assert payload["type"] == "confirmation_prompt"
     assert "profile_patch_accumulated" in payload
     assert "unspecified_fields" in payload
+
+
+def test_asked_questions_ledger_accumulates_across_turns(tmp_path):
+    """已问台账是第 5 章重问追踪的载体，先在这里证明它真的按轮累积。"""
+    import sqlite3
+
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "招几个人？", "field": "headcount"}],
+                "profile_patch": {"job_title": "嵌入式工程师"},
+            }
+        ),
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+                "profile_patch": {"headcount": 2},
+            }
+        ),
+    ]
+    client = make_app(tmp_path, responses)
+
+    job_id = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/reply", json={"message": "招 2 个"})
+
+    conn = sqlite3.connect(str(tmp_path / "web.db"))
+    rows = conn.execute(
+        "SELECT asked_questions FROM job_profile WHERE job_id=? ORDER BY version ASC", (job_id,)
+    ).fetchall()
+    conn.close()
+
+    ledger = [item["question_id"] for (raw,) in rows for item in json.loads(raw)]
+    assert ledger == ["headcount", "toolchain"]

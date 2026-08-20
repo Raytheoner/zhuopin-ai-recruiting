@@ -34,7 +34,13 @@ CREATE TABLE IF NOT EXISTS job_profile (
     -- 本轮未通过来源校验的字段清单（第 7 章写）。
     ungrounded_fields TEXT NOT NULL DEFAULT '[]',
     -- 本轮 API 响应里实际返回的模型标识（第 7 章写，铁律 5）。
-    llm_response_model TEXT
+    llm_response_model TEXT,
+    -- 本轮实际问出的问题（IntakeQuestion.to_payload() 的 JSON 数组）。
+    -- 全部行的并集 = 这个 job 的"已问台账"：is_productive 判定要拿它算
+    -- "有没有问出未问过的 question_id"（第 3 章），第 5 章在其上扩
+    -- "已答 / 重问次数"。存整份 payload 而不是只存 id：候选档位要能回查，
+    -- "用户没选定的档位不得入画像"这条判定需要知道上一轮给过哪些档位。
+    asked_questions TEXT NOT NULL DEFAULT '[]'
 );
 
 -- 每个 job（thread_id）一行，存该会话到目前为止的完整对话记录。
@@ -87,6 +93,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("job_profile", "derived_unspecified_fields", "TEXT NOT NULL DEFAULT '[]'"),
     ("job_profile", "ungrounded_fields", "TEXT NOT NULL DEFAULT '[]'"),
     ("job_profile", "llm_response_model", "TEXT"),
+    ("job_profile", "asked_questions", "TEXT NOT NULL DEFAULT '[]'"),
 )
 
 

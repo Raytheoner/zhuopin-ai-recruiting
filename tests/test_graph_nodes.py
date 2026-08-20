@@ -478,3 +478,83 @@ def test_timing_trace_records_no_model_identity(tmp_path):
     assert row[0] is None
     assert json.loads(row[1]) == []
     assert "llm_response_model" not in state  # 也不许经 state 漏进来
+
+
+def _job1_conn(tmp_path):
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    conn.commit()
+    return conn
+
+
+def test_persist_writes_is_productive_and_asked_questions_in_the_same_insert(tmp_path):
+    """
+    这一轮的画像、这一轮有没有产出、这一轮问了什么，是同一轮的三份事实。
+    分开写就会出现"画像有这一轮、台账没这一轮"，而追问预算正是按后两列取数的。
+    """
+    conn = _job1_conn(tmp_path)
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "招几个人？", "field": "headcount"}],
+                    "profile_patch": {"job_title": "嵌入式工程师"},
+                }
+            )
+        ]
+    )
+
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "要个嵌入式工程师"}],
+            "round_count": 0,
+            "productive_round_count": 0,
+            "profile_patch_accumulated": {},
+            "asked_question_ids_before": [],
+            "previous_questions": [],
+        },
+        gateway=gateway,
+    )
+    effect_persist_draft(conn, thread_id="job1", business_key="0", state=state)
+
+    row = conn.execute(
+        "SELECT is_productive, asked_questions FROM job_profile WHERE job_id='job1'"
+    ).fetchone()
+    assert row[0] == 1
+    assert [item["question_id"] for item in json.loads(row[1])] == ["headcount"]
+
+
+def test_persist_records_zero_productive_for_an_idle_turn(tmp_path):
+    conn = _job1_conn(tmp_path)
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "招几个人？", "field": "headcount"}],
+                    "profile_patch": {"job_title": "嵌入式工程师"},
+                }
+            )
+        ]
+    )
+
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "嗯"}],
+            "round_count": 2,
+            "productive_round_count": 1,
+            "profile_patch_accumulated": {"job_title": "嵌入式工程师"},
+            "asked_question_ids_before": ["headcount"],
+            "previous_questions": [],
+        },
+        gateway=gateway,
+    )
+    effect_persist_draft(conn, thread_id="job1", business_key="2", state=state)
+
+    assert conn.execute(
+        "SELECT is_productive FROM job_profile WHERE job_id='job1'"
+    ).fetchone()[0] == 0
