@@ -48,3 +48,77 @@ def test_index_html_renders_structured_questions_and_tolerates_legacy_strings():
     assert "questions_text" in INDEX_HTML
     # 历史 outbox 行里 questions 是裸字符串，前端也要兜一层
     assert 'typeof q === "string"' in INDEX_HTML
+
+
+def test_options_render_with_ai_disclosure_and_degrade_to_plain_text():
+    """
+    tasks 4.1 / 4.3。**弱断言**——本仓库没有 JS 测试运行器，这里只能证明
+    "这几段代码还在文件里"，证明不了"点一下会发生什么"。真正的验收是
+    Task 3 的手工验证清单（对应 tasks 8.4）。
+
+    尽管如此，这几条仍然值得写：它们锁住的是"被人顺手改回去"这一类回退，
+    而这类回退在单文件前端里既容易发生、又不会有任何其它信号。
+    """
+    # 有档位 → 渲染 checkbox 控件
+    assert 'box.type = "checkbox"' in INDEX_HTML
+    # 档位为空 → 走不进渲染分支（既不渲染控件也不渲染孤立标识）
+    assert "if (options.length > 0)" in INDEX_HTML
+    # 三种"没有 options"的输入都要归一到 []，不能对 undefined 取 .length
+    assert "function questionOptions" in INDEX_HTML
+    assert "if (!Array.isArray(options)) return [];" in INDEX_HTML
+    # 历史 outbox 行里 questions 是裸字符串，前端也要兜一层
+    assert 'typeof q === "string"' in INDEX_HTML
+
+
+def test_ai_generated_options_carry_disclosure_label():
+    """
+    《AI 生成合成内容标识办法》（2025-09-01 施行）+ proposal.md「合规影响说明」：
+    档位是 AI 生成内容，UI 上 MUST 标明是"建议选项"而非既定要求。
+
+    断言标识文案存在，且它与选项控件在同一个分支里创建——标识出现在
+    `if (options.length > 0)` 之后、`.opts` 容器创建之前，不存在"先渲染选项、
+    后补标识"的中间态。
+    """
+    assert "AI_OPTIONS_HINT" in INDEX_HTML
+    assert "建议选项" in INDEX_HTML
+    assert "不是既定要求" in INDEX_HTML
+
+    branch = INDEX_HTML.split("if (options.length > 0)", 1)
+    assert len(branch) == 2, "选项渲染的条件分支不见了，标识与选项的绑定关系失效"
+    body = branch[1]
+    hint_at = body.find("AI_OPTIONS_HINT")
+    opts_at = body.find('"opts"')
+    assert hint_at != -1 and opts_at != -1
+    assert hint_at < opts_at, "AI 建议标识必须先于选项控件创建，不允许后补"
+
+
+def test_no_option_is_pre_selected():
+    """
+    合规红线「AI 不得代替业务经理做决定」在前端的机械判据：
+    任何档位都不得默认勾选。预勾选等于系统替用户做了选择——用户直接点发送，
+    AI 的建议就进了画像。
+
+    对应 spec 的 Requirement:「候选档位不得代替用户做决定」/ Scenario:「未选定不入画像」。
+    """
+    assert ".checked = true" not in INDEX_HTML
+    assert ".checked=true" not in INDEX_HTML
+    assert "checked=" not in INDEX_HTML  # HTML 属性形式的预勾选
+
+
+def test_reask_prefix_stays_in_sync_with_backend():
+    """
+    **强断言**（区别于本文件里其它几条字符串弱断言）。
+
+    重问前缀在前后端各有一份字面量：后端 app/agents/intake_question.py 的
+    _REASK_PREFIX 负责写进 conversation history，前端负责显示给用户。前端无构建、
+    拿不到后端常量，重复不可避免——但"重复了就会漂移"是可以被机械挡住的。
+
+    后端改了前缀而前端没跟上时，用户看到的问题文本会与系统记下的那一份不一致，
+    而这个不一致**没有任何其它信号**（不报错、不失败，只是悄悄对不上）。
+    """
+    from app.agents.intake_question import _REASK_PREFIX
+
+    assert _REASK_PREFIX in INDEX_HTML, (
+        f"后端重问前缀是 {_REASK_PREFIX!r}，index.html 里没有这个字面量——"
+        "两边已经漂移。改前端的 REASK_PREFIX 常量与后端对齐，不要改本测试。"
+    )

@@ -8,7 +8,18 @@
   body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
   .banner { background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; padding: 12px 16px; border-radius: 8px; margin-bottom: 24px; font-weight: 600; }
   .chat { border: 1px solid #ddd; border-radius: 8px; padding: 16px; min-height: 200px; margin-bottom: 16px; }
-  .turn { margin-bottom: 12px; }
+  /* pre-wrap：questions_text 兜底分支里是多行文本，不加这条换行会被折叠成一行
+     （这是改动前就存在的显示缺陷，本单元按问题逐条渲染后顺带修掉）。 */
+  .turn { margin-bottom: 12px; white-space: pre-wrap; }
+  .qblock { margin-bottom: 10px; }
+  .qblock + .qblock { padding-top: 10px; border-top: 1px dashed #e9ecef; }
+  /* 标识文案的样式刻意做得可读而不是"小字免责声明"：《AI 生成合成内容标识
+     办法》要的是让人看见，不是让人看不见。 */
+  .ai-hint { font-size: 13px; color: #6c757d; margin: 6px 0 6px; }
+  .opts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #adb5bd; border-radius: 16px; padding: 4px 12px; cursor: pointer; font-size: 14px; }
+  .opt input { margin: 0; }
+  .turn.done .opt { opacity: 0.45; cursor: default; }
   .turn.user { text-align: right; color: #0d6efd; }
   .turn.assistant { color: #333; }
   textarea { width: 100%; box-sizing: border-box; padding: 8px; }
@@ -31,31 +42,118 @@
     // 全部请求用相对路径（不带开头的 "/"），配合 <head> 里的 <base href> 解析，
     // 挂在任意前缀下都不需要改这段代码（部署约束1）。
     let jobId = null;
+    // 当前这一轮的问题块容器。Task 2 的发送逻辑从这里读勾选结果。
+    let activeQuestions = null;
 
-    function appendTurn(role, text) {
+    // 追问要往气泡里塞 DOM 节点（选项控件），不能再只走 textContent。
+    // 拆成"建气泡"与"填文本"两步，纯文本的调用点行为逐字不变。
+    function appendNode(role) {
       const chat = document.getElementById("chat");
       const div = document.createElement("div");
       div.className = "turn " + role;
-      div.textContent = text;
       chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
+      return div;
     }
 
-    // payload.questions 现在是结构化问题对象数组（question_id / text / field /
-    // options / allow_free_text / is_reask）。**本章只渲染文本**：可点选控件与
-    //「以下为 AI 建议选项」标识属第 4 章（后者是《AI 生成合成内容标识办法》
-    // 的要求，不能先渲染选项、后补标识）。
+    function appendTurn(role, text) {
+      appendNode(role).textContent = text;
+    }
+
+    // 与后端 app/agents/intake_question.py 的 _REASK_PREFIX 逐字一致。
+    // 这是一处刻意的跨语言常量重复（前端无构建、拿不到后端常量），
+    // 由 tests/test_static_frontend.py 的 test_reask_prefix_stays_in_sync_with_backend
+    // 机械锁死：后端改了这个前缀而这里没跟，测试必然失败。不要就地改字面量。
+    const REASK_PREFIX = "（这个你刚才没答）";
+
+    // 《AI 生成合成内容标识办法》（2025-09-01 施行）+ proposal.md「合规影响说明」：
+    // 档位是 AI 生成内容，UI 上必须标明是"建议选项"而非既定要求。
+    const AI_OPTIONS_HINT = "以下为 AI 建议选项，不是既定要求；可直接点选，也可自行填写";
+
+    // payload.questions 是结构化问题对象数组（question_id / text / field /
+    // options / allow_free_text / is_reask）。
     // 兜一层裸字符串：升级前写进 outbox 的历史行里 questions 是字符串数组。
     function questionText(q) {
       return typeof q === "string" ? q : (q && q.text) || "";
     }
 
+    // 三种情况一律返回 []，渲染分支自然退化成今天的纯文本：
+    //   1) 历史裸字符串（.51 现网 2026-08-18 之前写的 outbox 行）
+    //   2) 单元 B 合并前——模型基本不会主动给档位
+    //   3) 目标字段没有可枚举档位（spec:「无法给出有意义选项的问题」）
+    // 顺带过滤掉空串与非字符串项：渲染一个没有文字的 chip 比不渲染更糟。
+    function questionOptions(q) {
+      if (!q || typeof q === "string") return [];
+      const options = q.options;
+      if (!Array.isArray(options)) return [];
+      return options.filter((o) => typeof o === "string" && o.trim() !== "");
+    }
+
+    function renderQuestionBlock(container, q) {
+      const block = document.createElement("div");
+      block.className = "qblock";
+      // 拼回复文本时要用问题原文，且不带重问前缀——前缀是系统给用户看的提示，
+      // 不该跑进用户这一轮的原话里（会污染第 7 章的来源子串判定）。
+      block.dataset.qtext = questionText(q);
+
+      const line = document.createElement("div");
+      // 重问前缀与后端 render_questions_text() 保持逐字一致：用户看到的问题文本
+      // 必须与写进 conversation history 的那一份相同。判定 is_reask 属第 5 章
+      // （tasks 5.4），这里只读不写，也不做更强的视觉区分。
+      line.textContent = (q && q.is_reask ? REASK_PREFIX : "") + questionText(q);
+      block.appendChild(line);
+
+      const options = questionOptions(q);
+      if (options.length > 0) {
+        // 标识与选项在同一个分支里创建：不存在"先渲染选项、后补标识"的中间态。
+        const hint = document.createElement("div");
+        hint.className = "ai-hint";
+        hint.textContent = AI_OPTIONS_HINT;
+        block.appendChild(hint);
+
+        const group = document.createElement("div");
+        group.className = "opts";
+        options.forEach((opt) => {
+          const label = document.createElement("label");
+          label.className = "opt";
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.value = opt;
+          // ⛔ 绝不把 box 的 checked 属性设为 true。预勾选 = 系统替业务经理做了选择，
+          // 用户直接点发送就把 AI 建议写进了画像——正是「候选档位不得代替
+          // 用户做决定」这条红线要挡的事。
+          // checkbox 而非单选：spec 的「点选即可作答」明确要求"点选了两个
+          // 选项并提交"这条路径成立。
+          label.appendChild(box);
+          label.appendChild(document.createTextNode(opt));
+          group.appendChild(label);
+        });
+        block.appendChild(group);
+      }
+      // options 为空时到此为止：不渲染空的选项控件，也不渲染孤立的 AI 标识
+      // （tasks 4.1 + spec:「界面只渲染自由文本输入，不渲染空的选项控件」）。
+      // 自由文本输入是页面上那个常驻的 textarea，任何分支下都在。
+
+      container.appendChild(block);
+      return block;
+    }
+
     function renderMessage(message) {
       if (message.type === "question") {
         const questions = message.payload.questions || [];
-        const text =
-          message.payload.questions_text || questions.map(questionText).join("\n");
-        appendTurn("assistant", text);
+        if (questions.length === 0) {
+          // 极端降级：payload 里连问题数组都没有时退回整段文本，
+          // 绝不渲染一个空白气泡。
+          appendTurn("assistant", message.payload.questions_text || "");
+          activeQuestions = null;
+        } else {
+          const turn = appendNode("assistant");
+          questions.forEach((q) => renderQuestionBlock(turn, q));
+          // 记住"本轮"的问题块。只有它里面的勾选会被 Task 2 的发送逻辑读取——
+          // 上一轮的块在提交后置灰，否则用户点了两轮之前的档位，拼出来的
+          // 回复文本会对不上当前问题。
+          activeQuestions = turn;
+        }
         document.getElementById("confirm-btn").style.display = "none";
       } else if (message.type === "confirmation_prompt") {
         const unspecified = message.payload.unspecified_fields || [];
