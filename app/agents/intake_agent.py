@@ -296,6 +296,18 @@ def is_vague_reply(text: str, *, asked_questions: list[IntakeQuestion] | None = 
 
     空串返回 False 而不是 True：没有用户发言的场景（第一轮之前）不该被当成
     模糊回复，否则系统会在用户还没说话时就开始塞档位。
+
+    **已知且接受的代价（2026-08-20 review 定论，未改算法）**：反问判定只看
+    「问号结尾 + 与上一轮问题无二字片段交集」，**不检查回复本身是否已经带了
+    实质信息**。所以一句本身有实质内容、但顺带反问了一句的回复——例如
+    「是要社招还是校招都可以，你说的是哪种？」——会被判成 True。这不是漏改的
+    bug，是刻意选择的方向：错判成本是"多给一组用户不需要的档位"，漏判成本是
+    "真的遇到模糊回复却不给档位、把用户晾在原地"——后者正是这个交付单元要修的
+    那次事故本身。两者不对称，所以判定刻意偏向"宁可多给，不可漏给"。
+    这个误判**不占用追问预算**：`is_productive`（Task 4/6）只看新增的 profile
+    字段与新的 question_id，不读 `is_vague_reply` 的结果。如果未来有单元要收紧
+    这条反问启发式，预期 `test_substantive_reply_ending_in_a_question_is_still_treated_as_vague`
+    会变红——那条红是信号，不是回归。
     """
     if not str(text).strip():
         return False

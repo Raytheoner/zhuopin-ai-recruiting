@@ -629,3 +629,18 @@ def test_is_vague_reply_does_not_flag_follow_up_question_that_shares_clues():
     """追着上一轮问细节是有信息的，不是反问。"""
     asked = [IntakeQuestion(text="要哪个 ASIL 等级？", question_id="functional_safety")]
     assert not is_vague_reply("ASIL 等级和量产项目有关系吗？", asked_questions=asked)
+
+
+def test_substantive_reply_ending_in_a_question_is_still_treated_as_vague():
+    """
+    2026-08-20 review 定论（未改算法，钉住当前行为）：这是刻意接受的权衡，不是
+    潜藏 bug。反问判定不检查回复是否已带实质信息，所以一句本身有实质内容、
+    但顺带反问了一句的回复也会被判成 True。宁可多给一组档位，也不漏给——
+    漏给正是本单元要修的那个故障。这条误判不占用追问预算：is_productive
+    (Task 4/6) 只看新字段与新 question_id，不读 is_vague_reply 的结果。
+    未来若收紧这条启发式，预期本测试会变红——那条红是信号，不是回归。
+    """
+    asked = [IntakeQuestion(text="计划招几个人？", question_id="headcount")]
+    assert is_vague_reply(
+        "是要社招还是校招都可以，你说的是哪种？", asked_questions=asked
+    )
