@@ -343,6 +343,26 @@ def _user_conversation_text(history: list[dict]) -> str:
     )
 
 
+def _matched_terms_by_recency(history: list[dict]) -> tuple[str, ...]:
+    """
+    给兜底档位用的 matched_terms：按术语在 `_user_conversation_text` 里**最后一次
+    出现的位置**排序，最近提到的排最前。
+
+    2026-08-20 review 发现：`match_ambiguous_terms` 按 `FOLLOWUP_RULES` 的**声明
+    顺序**返回术语，不是对话里出现的顺序。多域对话里，一个提过又被显式否掉的
+    领域（"先说要驱动开发的，算了，改成供应商开发的"）如果声明顺序排在用户最终
+    选定的领域前面，`library_options_for_field` 会先取到被否掉的那个域的档位——
+    这是"跨域串档"换了个形态回来：上次是通过签名（不传 matched_terms），这次是
+    通过顺序。改成按最后出现位置降序排列，让对话里"当前在谈"的领域优先。
+
+    仍然是确定性的：`str.rfind` 只看文本内容，同一份历史重放，最后出现位置不变，
+    `sorted` 又是稳定排序，排序结果永远一致。
+    """
+    text = _user_conversation_text(history)
+    terms = match_ambiguous_terms(text)
+    return tuple(sorted(terms, key=lambda term: text.rfind(term), reverse=True))
+
+
 def suggested_followups(history: list[dict]) -> list[FollowupSpec]:
     """
     根据历史里的**用户**发言命中 ecu_knowledge 的术语规则，给出该问的领域追问。
@@ -510,6 +530,10 @@ def _synthesize_fallback_question(
 
 
 def _value_matches_option(value, option: str) -> bool:
+    """value 是字符串时逐字比对；value 是 list/tuple 时**任一元素**逐字命中即算
+    命中——调用方（`_drop_unchosen_candidate_values`）按值的形状分别处理："字符串
+    整体命中就删字段"与"列表只删命中的那个元素"是两条不同的路径，这个函数只
+    负责"命中判定"本身。"""
     compact_option = _compact(option)
     if not compact_option:
         return False
@@ -536,6 +560,13 @@ def _drop_unchosen_candidate_values(
     (c) 是给"你决定吧，ASIL-D 也行"留的门：用户自己打出了这个档位就是选定，
     不能摘。三条之外一律不动 patch——design.md 风险表第 2 条要求"误判时已提取
     字段不被清空"，这里是唯一允许删字段的地方，收窄到这个程度才不会和它冲突。
+
+    2026-08-20 review 发现并修复：字段值是 list（如 `core_skills:
+    ["CAN-FD", "LIN"]`）时，原实现只要**任一**元素命中未选档位就删掉**整个
+    字段**——用户明确打出的另一个元素（"CAN-FD 肯定要的"）跟着一起被摘掉，
+    这正是 (c) 想保住的东西。列表值现在只摘掉命中未选档位的那些元素，标量值
+    的行为不变（整条命中即删）；三条判据本身没有放宽，只是把"删"的粒度从
+    "字段"细化到"值的元素"。
     """
     if not patch:
         return patch
@@ -545,10 +576,31 @@ def _drop_unchosen_candidate_values(
         name = question.field
         if not name or name not in cleaned:
             continue
-        for option in question.options:
-            if _value_matches_option(cleaned[name], option) and _compact(option) not in compact_reply:
+        # 只在"用户原话里没出现"的档位里找命中——出现过的档位是 (c) 放行的，
+        # 不能作为删除依据，无论值是标量还是列表。
+        unchosen_options = [
+            option for option in question.options if _compact(option) not in compact_reply
+        ]
+        if not unchosen_options:
+            continue
+        value = cleaned[name]
+        if isinstance(value, (list, tuple)):
+            kept = [
+                item
+                for item in value
+                if not (
+                    isinstance(item, str)
+                    and any(_value_matches_option(item, option) for option in unchosen_options)
+                )
+            ]
+            if len(kept) == len(value):
+                continue
+            if kept:
+                cleaned[name] = kept
+            else:
                 del cleaned[name]
-                break
+        elif any(_value_matches_option(value, option) for option in unchosen_options):
+            del cleaned[name]
     return cleaned
 
 
@@ -657,8 +709,10 @@ def run_intake_turn(
     if vague and not at_round_limit:
         # matched_terms 用整段对话的用户发言算，跟 suggested_followups 用同一份
         # 文本（_user_conversation_text）：同一份对话重放要问出同一组档位，且
-        # 域判定不能只看本轮这一句模糊回复——它本身通常不含任何领域术语。
-        matched_terms = tuple(match_ambiguous_terms(_user_conversation_text(history)))
+        # 域判定不能只看本轮这一句模糊回复——它本身通常不含任何领域术语。按最后
+        # 出现位置排序（_matched_terms_by_recency），让"当前在谈"的领域优先于
+        # 提过又被否掉的领域（2026-08-20 review）。
+        matched_terms = _matched_terms_by_recency(history)
         capped_questions = _fill_missing_options(capped_questions, matched_terms)
         if not capped_questions:
             synthesized = _synthesize_fallback_question(

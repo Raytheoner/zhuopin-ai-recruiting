@@ -962,3 +962,119 @@ def test_prompt_version_is_intake_v4():
     run_intake_turn(gateway, history=[{"role": "user", "content": "要个工程师"}], round_count=0)
 
     assert captured["prompt_version"] == "intake-v4"
+
+
+# ---------------------------------------------------------------------------
+# Task 5 review 修复：2026-08-20
+# Finding 1：matched_terms 排序改按最后出现位置，堵住"提过又被否掉的领域"
+#            靠 FOLLOWUP_RULES 声明顺序抢先的串档
+# Finding 2：候选档位守卫处理 list 值时只摘命中未选档位的元素，不再连用户
+#            自己打出的同字段其它元素一起摘掉
+# ---------------------------------------------------------------------------
+
+
+def test_matched_terms_prefer_the_domain_mentioned_most_recently():
+    """
+    2026-08-20 review：`match_ambiguous_terms` 按 FOLLOWUP_RULES 声明顺序返回
+    术语，不是对话里出现的顺序。"先说要驱动开发的，算了改成供应商开发的"——
+    用户最终选定的是供应商开发，但"驱动开发"在声明顺序里排在前面，如果不按
+    对话里的先后排序，core_skills 会拿到已经被否掉的驱动总线档位
+    （CAN-FD/LIN/车载以太网），而不是供应商开发的档位。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "这块最看重哪项能力？", "field": "core_skills"}],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {
+                "role": "user",
+                "content": "先说下，我们要个驱动开发的，算了，改成招供应商开发的",
+            },
+            {"role": "user", "content": "你决定吧"},
+        ],
+        round_count=1,
+    )
+
+    assert result.questions
+    supplier_options = {"新供应商导入与审核", "供应商绩效与降本", "供应商质量改善"}
+    driver_options = {"CAN-FD", "LIN", "车载以太网"}
+    assert set(result.questions[0].options) == supplier_options
+    assert set(result.questions[0].options) != driver_options
+
+
+def test_matched_terms_ordering_is_deterministic_on_replay():
+    """同一份对话重放两次，域判定与最终档位必须完全一致——排序只能依赖文本
+    内容本身，不能引入任何非确定性来源（如集合迭代顺序）。"""
+    history = [
+        {
+            "role": "user",
+            "content": "先说下，我们要个驱动开发的，算了，改成招供应商开发的",
+        },
+        {"role": "user", "content": "你决定吧"},
+    ]
+
+    def _run():
+        gateway = make_gateway(
+            [
+                json.dumps(
+                    {
+                        "is_job_related": True,
+                        "questions": [{"text": "这块最看重哪项能力？", "field": "core_skills"}],
+                        "profile_patch": {},
+                    }
+                )
+            ]
+        )
+        return run_intake_turn(gateway, history=history, round_count=1)
+
+    first = _run()
+    second = _run()
+
+    assert first.questions[0].options == second.questions[0].options
+
+
+def test_typed_list_item_survives_while_unchosen_sibling_is_dropped():
+    """
+    2026-08-20 review：字段值是 list（如 core_skills: ["CAN-FD", "LIN"]）时，
+    原实现只要任一元素命中未选档位就删掉整个字段——用户自己打出的"CAN-FD"会
+    跟着一起被摘掉。现在只摘掉命中未选档位的那个元素（"LIN"），用户自己打出
+    的"CAN-FD"必须保留。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {"core_skills": ["CAN-FD", "LIN"]},
+                }
+            )
+        ]
+    )
+    previous = [
+        IntakeQuestion(
+            text="驱动对接的总线类型是？",
+            question_id="core_skills",
+            field="core_skills",
+            options=("CAN-FD", "LIN", "车载以太网"),
+        )
+    ]
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "你决定吧，CAN-FD 肯定要的"}],
+        round_count=1,
+        previous_questions=previous,
+    )
+
+    assert result.profile_patch["core_skills"] == ["CAN-FD"]
