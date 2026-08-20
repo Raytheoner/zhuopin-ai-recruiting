@@ -166,18 +166,69 @@
       }
     }
 
+    // 把本轮点选拼成该轮回复文本。**刻意不改 API 契约**（delivery-units.md
+    // §5 约定 2）：POST 出去的仍然只有 {message}，被选中的档位以逐字原文出现在
+    // 用户这一轮的原话里。给 ReplyRequest 加 selected_options 会碰到
+    // app/web/server.py，单元 C 与并行进行的单元 B/D 立刻从并行变串行。
+    //
+    // 附带好处：档位文本逐字出现在用户原话里，第 7 章 7.3 的来源子串判定天然
+    // 命中，7.4 的“点选来源例外”大概率不必单独实现。
+    function collectSelections() {
+      if (!activeQuestions) return [];
+      const lines = [];
+      activeQuestions.querySelectorAll(".qblock").forEach((block) => {
+        const picked = Array.from(block.querySelectorAll("input[type=checkbox]"))
+          .filter((box) => box.checked)
+          .map((box) => box.value);
+        if (picked.length > 0) {
+          // 带上问题原文：一轮问 2-3 个问题时，光丢回一个 "ASIL-D" 模型不知道
+          // 在答哪一条。这个选择的代价（问题文本自身逐字含某个档位值时，会让
+          // 该值即使未被勾选也出现在用户原话里，污染第 7 章的子串判定）已写进
+          // 本计划的「给单元 F 的接口说明」，由 F 决定是否收窄搜索范围。
+          lines.push(block.dataset.qtext + "：" + picked.join("、"));
+        }
+      });
+      return lines;
+    }
+
+    // 提交后置灰上一轮的选项：再点一次拼出来的文本会对不上当前问题，
+    // 而用户看不出这个错位——他只会觉得“我明明选了，系统怎么答非所问”。
+    // done 这个类挂在 assistant 气泡（.turn）上，对应样式 .turn.done .opt。
+    function freezeActiveQuestions() {
+      if (!activeQuestions) return;
+      activeQuestions.classList.add("done");
+      activeQuestions.querySelectorAll("input[type=checkbox]").forEach((box) => {
+        box.disabled = true;
+      });
+      activeQuestions = null;
+    }
+
     document.getElementById("send-btn").addEventListener("click", async () => {
       const input = document.getElementById("input");
-      const text = input.value.trim();
-      if (!text) return;
-      appendTurn("user", text);
+      const typed = input.value.trim();
+      // 三条路径都要成立（spec 的三条 Scenario）：
+      //   点选、一个字没打        → 能提交（「点选即可作答」）
+      //   只打字、一个都没点      → 能提交，不因“未点选”被拒（「选项之外的答案」）
+      //   既没点也没打            → 什么都不做，与改动前 if (!text) return 一致
+      // 用户**不需要**复制粘贴或改写系统给出的问题文本才能回答——这是三份
+      // pilot 反馈里业务经理原话抱怨的那一点（tasks 4.2）。
+      const parts = collectSelections();
+      if (typed) parts.push(typed);
+      const message = parts.join("\n");
+      if (!message) return;
+
       input.value = "";
+      freezeActiveQuestions();
+      // 聊天区显示的，就是实际发出去的那一段文本，一字不差——用户要能核对
+      // 系统替他拼了什么。
+      appendTurn("user", message);
 
       const url = jobId ? `api/jobs/${jobId}/reply` : "api/jobs";
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        // 请求体逐字不变：{message: "..."}。这是 B ∥ C 并行成立的全部前提。
+        body: JSON.stringify({ message: message }),
       });
       const data = await resp.json();
       if (!jobId) jobId = data.job_id;

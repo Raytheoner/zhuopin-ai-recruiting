@@ -122,3 +122,44 @@ def test_reask_prefix_stays_in_sync_with_backend():
         f"后端重问前缀是 {_REASK_PREFIX!r}，index.html 里没有这个字面量——"
         "两边已经漂移。改前端的 REASK_PREFIX 常量与后端对齐，不要改本测试。"
     )
+
+
+def test_reply_api_contract_has_no_selected_options():
+    """
+    **强断言**（本单元最有价值的一条自动化测试，与前端怎么写完全无关）。
+
+    delivery-units.md §5 跨单元接口约定 2：「C 的点选提交不改 API 契约」。
+    点选形态一旦改成请求体新增 selected_options 字段，就会碰 app/web/server.py 的
+    ReplyRequest，单元 C 与并行进行的 B/D 从并行变串行——而这个代价在代码评审里
+    看不出来（改动本身很小、很自然），只会表现为"另一条分支莫名其妙冲突了"。
+
+    ⚠️ 这条测试将来若失败，是一次设计对话，不是一个可以删掉的测试。
+    要给采集接口加字段，先回去看 delivery-units.md §2.C 与 §5，确认没有并行分支
+    正在等这两个文件。
+    """
+    from app.web.server import CreateJobRequest, ReplyRequest
+
+    assert set(ReplyRequest.model_fields) == {"message"}
+    assert set(CreateJobRequest.model_fields) == {"message"}
+
+
+def test_selection_and_free_text_compose_one_message():
+    """
+    tasks 4.2 / 4.5。**弱断言**——拼装逻辑在浏览器里跑，这里只能证明代码还在。
+    真正的验收是 Task 3 手工验证清单的第 3、4、5 条。
+
+    锁住三件事：
+      1. 勾选结果与自由文本合并成**一条** message（而不是两次请求、或新字段）
+      2. 空 + 空才 return，不再是改动前"文本框空就 return"（那会让纯点选提交失效）
+      3. 请求体仍然是 {message: ...}
+    """
+    assert "function collectSelections" in INDEX_HTML
+    assert "if (typed) parts.push(typed);" in INDEX_HTML
+    assert 'const message = parts.join("\\n");' in INDEX_HTML
+    assert "if (!message) return;" in INDEX_HTML
+    assert "JSON.stringify({ message: message })" in INDEX_HTML
+    # 改动前的短路条件必须已经消失，否则"只点选不打字"会被静默丢弃
+    assert "if (!text) return;" not in INDEX_HTML
+    # 提交后上一轮的选项要冻结，防止用户点到两轮之前的档位
+    assert "function freezeActiveQuestions" in INDEX_HTML
+    assert "box.disabled = true;" in INDEX_HTML
