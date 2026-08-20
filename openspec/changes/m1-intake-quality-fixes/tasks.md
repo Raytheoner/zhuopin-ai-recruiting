@@ -49,7 +49,9 @@
 
 ## 4. 前端可点选选项
 
-对应 `intake-guided-options` 的「结构化追问与可选项作答」在 Web 通道的落地。依赖第 2、3 章。
+对应 `intake-guided-options` 的「结构化追问与可选项作答」在 Web 通道的落地。依赖第 2 章的 payload 契约（已随单元 A 合并）。
+
+> **并行性更正（2026-08-19，`delivery-units.md` §2.C）**：本章＝交付单元 **C**，**不依赖第 3 章的代码**，与第 3 章（单元 B）**可真并行**——B 全在后端、C 只碰 `index.html`，零文件重叠。B 未合并时 `options` 基本为空，本章的渲染分支自然退化成今天的纯文本。并行成立的前提：点选提交采用「选中档位文本原样拼进该轮回复、POST 既有 `/reply`、**不改 API 契约**」的最简形态（§5 约定 2）。
 
 - [ ] 4.1 `index.html` 按 `options` 渲染可点选控件（原生 DOM，不引入框架），保留自由文本输入；`options` 为空时只渲染自由文本，不渲染空控件
 - [ ] 4.2 点选结果构造该轮回复文本并提交，**不要求用户复制粘贴或改写系统的问题文本**（这是经理原话抱怨的点）
@@ -72,7 +74,9 @@
 
 ## 6. 未指定字段推导与确认前警示
 
-对应 `intake-completeness-warning` 全部三条要求。设计依据：design.md 决策 6、7、8。可与第 3-5 章并行。
+对应 `intake-completeness-warning` 全部三条要求。设计依据：design.md 决策 6、7、8。
+
+> **并行性更正（2026-08-19，`delivery-units.md` §3.1）**：原写「可与第 3-5 章并行」**不成立**。本章要改 `intake_agent.py` / `graph/nodes.py` / `web/server.py` / `index.html`，与第 3、4、5 章四个文件全线重叠。按「触碰文件重叠即须串行」判据，本章＝交付单元 **D**，排在 B∥C 之后、E 之前。
 
 - [ ] 6.1 纯函数 `derive_unspecified_fields(accumulated: dict) -> list[str]`：遍历 `JobProfile.model_json_schema()` 属性（排除 `_SYSTEM_MANAGED_FIELDS`），值缺失 / 为 `None` / 为空容器 / 等于占位符（"未指定"）即列为未指定。同一输入必须每次得到相同结果
 - [ ] 6.2 **停止透传** `parsed.unspecified_fields`（`app/agents/intake_agent.py:233`）。模型输出降级为 debug 日志对照，不进结果
@@ -87,7 +91,9 @@
 
 ## 7. 字段溯源与编造率度量（只观测不拦截）
 
-对应 `intake-field-grounding` 全部四条要求。设计依据：design.md 决策 11、决策 12。依赖第 1 章（新增两列）。可与第 3-6 章并行。
+对应 `intake-field-grounding` 全部四条要求。设计依据：design.md 决策 11、决策 12。依赖第 1 章（新增两列）。
+
+> **并行性更正（2026-08-19，`delivery-units.md` §3.1）**：原写「可与第 3-6 章并行」**不成立**——本章同样要改 `intake_agent.py` / `graph/nodes.py`，与第 3、5、6 章重叠。本章＝交付单元 **F**，Shao Peishen 已定**排在 E 之后、G 之前**（按业务感受排；接受编造率 20 场样本的时钟晚开始一轮）。
 
 **这一章存在的理由**：三位业务经理的编造检查全部答"无编造"，但反馈 2、3 贴的是 JD 文本截图而非"确认画像"页截图，反馈 1 连看的是哪一页都没记录——**这个核对动作一次都没有针对正确对象做过**（proposal.md「Why」第 5 条）。`deepseek-v4-pro` 实测 1/3 编造率，现已换 flash，flash 的真实编造率至今未知。本章把这件事从"靠人凭印象看"改成"系统算得出来"。
 
