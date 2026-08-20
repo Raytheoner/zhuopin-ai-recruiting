@@ -287,8 +287,13 @@ def test_matched_ecu_terms_inject_curated_followups_into_prompt():
     )
 
     prompt = _sent_prompt(gateway)
-    for question in FOLLOWUP_RULES["嵌入式开发"]:
-        assert question in prompt, f"命中术语的领域追问 {question!r} 没有进入 prompt"
+    for spec in FOLLOWUP_RULES["嵌入式开发"]:
+        assert spec.text in prompt, f"命中术语的领域追问 {spec.text!r} 没有进入 prompt"
+        # 3.1 起 prompt 里还要带上目标字段与候选档位，否则模型只看得到问题文本、
+        # 档位仍然要自己编——那正是决策 4 要堵的编造面。
+        assert spec.field is None or spec.field in prompt
+        for option in spec.options:
+            assert option in prompt
 
 
 def test_unmatched_text_does_not_inject_followups():
@@ -306,8 +311,8 @@ def test_unmatched_text_does_not_inject_followups():
     )
 
     prompt = _sent_prompt(gateway)
-    for question in FOLLOWUP_RULES["驱动开发"]:
-        assert question not in prompt
+    for spec in FOLLOWUP_RULES["驱动开发"]:
+        assert spec.text not in prompt
 
 
 def test_only_user_turns_are_matched_for_ambiguous_terms():
@@ -333,7 +338,7 @@ def test_only_user_turns_are_matched_for_ambiguous_terms():
     )
 
     prompt = _sent_prompt(gateway)
-    assert FOLLOWUP_RULES["功能安全"][1] not in prompt
+    assert FOLLOWUP_RULES["功能安全"][1].text not in prompt
 
 
 def test_accumulated_profile_is_visible_to_model():

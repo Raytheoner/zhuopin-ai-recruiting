@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, field_validator
 
-from app.agents.ecu_knowledge import FOLLOWUP_RULES, match_ambiguous_terms
+from app.agents.ecu_knowledge import (
+    FALLBACK_FIELD_ORDER,
+    FALLBACK_QUESTION_TEXT,
+    FOLLOWUP_RULES,
+    FollowupSpec,
+    fallback_options_for_field,
+    match_ambiguous_terms,
+)
 from app.agents.intake_question import IntakeQuestion, derive_question_id, render_questions_text
 from app.llm.gateway import LLMGateway
 from app.schemas.job_profile import JobProfile
@@ -175,7 +182,7 @@ class IntakeTurnResult:
     llm_response_model: str | None = None
 
 
-def suggested_followups(history: list[dict]) -> list[str]:
+def suggested_followups(history: list[dict]) -> list[FollowupSpec]:
     """
     根据历史里的**用户**发言命中 ecu_knowledge 的术语规则，给出该问的领域追问。
 
@@ -186,16 +193,27 @@ def suggested_followups(history: list[dict]) -> list[str]:
     user_text = "\n".join(
         str(turn.get("content", "")) for turn in history if turn.get("role") == "user"
     )
-    questions: list[str] = []
+    specs: list[FollowupSpec] = []
     for term in match_ambiguous_terms(user_text):
-        for question in FOLLOWUP_RULES[term]:
-            if question not in questions:
-                questions.append(question)
-    return questions
+        for spec in FOLLOWUP_RULES[term]:
+            if spec not in specs:
+                specs.append(spec)
+    return specs
+
+
+def _render_followup_line(spec: FollowupSpec) -> str:
+    """把一条知识库追问渲染进 prompt。带上 field 与 options，模型才知道该照抄
+    哪个字段名、有哪些现成档位可用——否则它只看得到问题文本，档位又要自己编。"""
+    parts = [f"- {spec.text}"]
+    if spec.field:
+        parts.append(f"（目标字段：{spec.field}）")
+    if spec.options:
+        parts.append("（可选档位：" + "、".join(spec.options) + "）")
+    return "".join(parts)
 
 
 def _build_user_prompt(
-    history: list[dict], profile_patch_accumulated: dict, followups: list[str]
+    history: list[dict], profile_patch_accumulated: dict, followups: list[FollowupSpec]
 ) -> str:
     transcript = "\n".join(
         f"{turn.get('role', 'user')}: {turn.get('content', '')}" for turn in history
@@ -216,7 +234,7 @@ def _build_user_prompt(
         sections.append(
             "【本行业标准追问】以下问题由 ECU 领域知识库根据用户提到的术语给出，"
             "请优先从中挑选（最多 3 个）；已确认字段对应的问题跳过：\n"
-            + "\n".join(f"- {q}" for q in followups)
+            + "\n".join(_render_followup_line(spec) for spec in followups)
         )
 
     return "\n\n".join(sections)
