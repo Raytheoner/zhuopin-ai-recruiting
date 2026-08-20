@@ -27,20 +27,56 @@ QUESTION_TARGET_FIELDS: frozenset[str] = frozenset(JobProfile.model_fields) - SY
 # 只在进程内累计、不进日志：野 field 名是模型自由生成的不可信字符串，
 # 打进日志既可能撞上 RedactionFilter 的高危键名正则，也没有留存价值——
 # 需要的是比例，不是每一次的现场。
+#
+# 计数上界注意事项（不在本 Task 范围内修复，读 8.1 回放数字前必须知道）：
+# LangGraph 恢复时节点从头整个重跑（工程铁律 1）。derive_question_id 是
+# L3 纯函数边界内唯一的例外——它靠这个模块全局计数器做统计，本身带副
+# 作用。节点被重跑时会对同一次真实事件重复调用，计数器无法区分"重跑"
+# 与"首次执行"，于是重复计数。8.1 回放读到的降级比例因此是**降级次数
+# 的上界，不是精确的一次性事件计数**。
 _METRICS_LOCK = threading.Lock()
 _metrics_counter: Counter = Counter()
+
+# 部署形态是 Windows 计划任务/常驻进程，只在失败时重启、不会被例行回收
+# （04-部署与门户挂载.md）。unknown_field:<name> 的 key 由模型自由生成的
+# 字符串（拼错、幻觉字段名）驱动，不设上限的话进程存活越久、明细 key 越
+# 多，是一处无界内存增长点。这里只给"明细"设上限：聚合计数 unknown_field
+# 本身不受影响，永远精确；超过上限的新字段名统一并入下面的溢出桶。
+_MAX_UNKNOWN_FIELD_NAMES = 50
+# 溢出桶的 key。名字刻意用双下划线包起来、不像任何真实字段名，避免 8.1
+# 回放的人把它当成模型真的幻觉出了一个叫 "__overflow__" 的字段来读。
+_UNKNOWN_FIELD_OVERFLOW_KEY = "unknown_field:__overflow__"
+_tracked_unknown_field_names: set[str] = set()
 
 
 def _record_question_id_metric(kind: str, field_name: str | None = None) -> None:
     with _METRICS_LOCK:
         _metrics_counter[kind] += 1
         if field_name is not None:
-            _metrics_counter[f"unknown_field:{field_name}"] += 1
+            if (
+                field_name in _tracked_unknown_field_names
+                or len(_tracked_unknown_field_names) < _MAX_UNKNOWN_FIELD_NAMES
+            ):
+                _tracked_unknown_field_names.add(field_name)
+                _metrics_counter[f"unknown_field:{field_name}"] += 1
+            else:
+                _metrics_counter[_UNKNOWN_FIELD_OVERFLOW_KEY] += 1
 
 
 def question_id_metrics() -> dict[str, int]:
     """派生指标快照。键：total / null_field / unknown_field，以及每个被拒绝的
-    字段名一条 `unknown_field:<name>`（只在进程内，不落库不进日志）。"""
+    字段名一条 `unknown_field:<name>`（只在进程内，不落库不进日志）。
+
+    `unknown_field:<name>` 明细最多保留 `_MAX_UNKNOWN_FIELD_NAMES`（50）个
+    不同字段名；超出的新字段名一律并入 `unknown_field:__overflow__`——这是
+    一个溢出桶，不是某个真实字段名，读数时不要当成模型幻觉出了一个叫
+    `__overflow__` 的字段。聚合计数 `unknown_field` 不受这个上限影响，永远
+    精确等于野 field 的总次数。
+
+    注意：LangGraph 节点重跑（工程铁律 1）会让同一次真实事件被重复调用
+    derive_question_id、从而重复计数——这里的数字是降级次数的**上界**，
+    不是精确的一次性事件计数，8.1 回放读比例时按此口径解读。
+    """
     with _METRICS_LOCK:
         return dict(_metrics_counter)
 
@@ -49,6 +85,7 @@ def reset_question_id_metrics() -> None:
     """测试与 8.1 回放前清零。生产路径不调用。"""
     with _METRICS_LOCK:
         _metrics_counter.clear()
+        _tracked_unknown_field_names.clear()
 
 
 def derive_question_id(field: str | None, text: str) -> str:

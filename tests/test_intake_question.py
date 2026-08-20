@@ -193,3 +193,35 @@ def test_metrics_count_null_and_unknown_fields():
     assert metrics["unknown_field"] == 1
     assert metrics["unknown_field:mcu_familly"] == 1
     reset_question_id_metrics()
+
+
+def test_unknown_field_metric_breakdown_caps_distinct_names():
+    """
+    常驻进程 + 模型自由生成的野字段名 = 无界内存增长点。明细超过上限后必须
+    落进溢出桶，而不是继续按字段名开新 key；聚合计数 unknown_field 不受
+    这个上限影响，必须保持精确。
+    """
+    from app.agents import intake_question
+    from app.agents.intake_question import (
+        derive_question_id,
+        question_id_metrics,
+        reset_question_id_metrics,
+    )
+
+    reset_question_id_metrics()
+    cap = intake_question._MAX_UNKNOWN_FIELD_NAMES
+    overflow_key = intake_question._UNKNOWN_FIELD_OVERFLOW_KEY
+
+    for i in range(cap + 5):
+        derive_question_id(f"野字段_{i}", "随便问一句？")
+
+    metrics = question_id_metrics()
+    assert metrics["unknown_field"] == cap + 5
+    assert metrics[overflow_key] == 5
+    distinct_name_keys = [
+        key
+        for key in metrics
+        if key.startswith("unknown_field:") and key != overflow_key
+    ]
+    assert len(distinct_name_keys) == cap
+    reset_question_id_metrics()
