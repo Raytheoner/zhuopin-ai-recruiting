@@ -142,8 +142,12 @@
       if (message.type === "question") {
         const questions = message.payload.questions || [];
         if (questions.length === 0) {
-          // 极端降级：payload 里连问题数组都没有时退回整段文本，
-          // 绝不渲染一个空白气泡。
+          // 极端降级：payload 里连问题数组都没有时退回整段文本。
+          // 注意这里**不保证**非空气泡——questions: [] 且 questions_text: ""
+          // 时（零产出轮，app/graph/build.py 今天就会发出这种 payload）
+          // appendTurn 拿到的是空字符串，渲染出来就是一个空白气泡。这不是
+          // 本单元引入的行为，改动前就是如此；给空气泡兜底文案属于零产出轮
+          // 的处理范围，由交付单元 B 负责（tasks 3.9-3.11），这里不动。
           appendTurn("assistant", message.payload.questions_text || "");
           activeQuestions = null;
         } else {

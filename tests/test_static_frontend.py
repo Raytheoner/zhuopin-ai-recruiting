@@ -99,6 +99,25 @@ def test_no_option_is_pre_selected():
     AI 的建议就进了画像。
 
     对应 spec 的 Requirement:「候选档位不得代替用户做决定」/ Scenario:「未选定不入画像」。
+
+    这是一条字符串子串扫描，不是行为验证，两头都有已知的盲区：
+
+    - **假阴性**（预勾选实际发生但测试仍然通过）：`box.defaultChecked = true`、
+      `box.setAttribute("checked", "")`、或代码里干脆用 `.click()` 模拟点击，
+      都能让某个档位一打开就处于选中状态，却不命中下面任何一条断言——
+      注意 `defaultChecked` 里的 `C` 是大写，`.checked = true` 不是它的子串。
+    - **假阳性**（合规写法被误判失败）：第三条 `"checked=" not in INDEX_HTML`
+      是过宽的扫描，`checked=` 这四个字母加一个等号，只要连着出现就命中，
+      不管前后是赋值还是比较。例如未来一处合法的只读判断写成
+      `box.checked===true`，字面上就含有 `checked=` 这个子串（`checked`
+      后面紧跟着比较运算符的第一个 `=`），会被这条断言误判为预勾选而失败，
+      逼着后人要么绕开要么削弱这条测试。
+
+    这条测试的价值是当"顺手写了 `checked` 属性/赋值"这种最常见的回退发生时
+    机械挡一下，而不是对"页面打开时没有任何档位被选中"这件事本身的证明——
+    那件事的真正验收是 task-3-report.md 手工验证清单的第 4 条（浏览器里
+    实际查询三个 checkbox 的 `checked` 状态）。这条自动化测试连同该清单
+    第 4 条一起，才构成完整的合规保证；单看这条测试不够。
     """
     assert ".checked = true" not in INDEX_HTML
     assert ".checked=true" not in INDEX_HTML
@@ -121,6 +140,20 @@ def test_reask_prefix_stays_in_sync_with_backend():
     assert _REASK_PREFIX in INDEX_HTML, (
         f"后端重问前缀是 {_REASK_PREFIX!r}，index.html 里没有这个字面量——"
         "两边已经漂移。改前端的 REASK_PREFIX 常量与后端对齐，不要改本测试。"
+    )
+
+    # 光有常量声明不够：常量声明可以在使用点被删掉之后仍然留在文件里，
+    # 上面那条断言照样通过，却已经不再对用户可见（is_reask 不再触发任何
+    # 前缀显示）。这条断言锁住的是使用点本身，不是常量声明。
+    # 交付单元 E 会为了「重问问题的视觉区分」去改这一行——改颜色/加图标是
+    # 允许的，把 REASK_PREFIX 从条件表达式里删掉、或不再拼进 textContent
+    # 则会让这条断言失败。
+    assert (
+        'line.textContent = (q && q.is_reask ? REASK_PREFIX : "") + questionText(q);'
+        in INDEX_HTML
+    ), (
+        "REASK_PREFIX 的使用点（is_reask 触发前缀拼接的那一行）不见了——"
+        "常量还在文件里不代表还在生效，用户可能已经看不到重问提示了。"
     )
 
 
