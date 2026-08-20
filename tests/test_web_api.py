@@ -472,7 +472,11 @@ def test_question_payload_carries_structured_questions(tmp_path):
         "allow_free_text": True,
         "is_reask": False,
     }
-    assert payload["questions_text"] == "要哪个 ASIL 等级？"
+    # 3.4 起 questions_text 把档位也渲出来：第 4 章的可点选控件合并之前，
+    # 文本是用户唯一看得到档位的地方。标识是《AI 生成合成内容标识办法》要求的。
+    assert payload["questions_text"] == (
+        "要哪个 ASIL 等级？\n可选（以下为 AI 建议选项，也可自由作答）：ASIL-B / ASIL-D / 无要求"
+    )
 
 
 def test_legacy_string_question_rows_are_normalized_on_read(tmp_path):

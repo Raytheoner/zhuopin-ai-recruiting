@@ -746,3 +746,219 @@ def test_duplicate_question_ids_in_one_round_are_deduped():
     )
 
     assert [q.question_id for q in result.questions] == ["functional_safety"]
+
+
+# ---------------------------------------------------------------------------
+# Task 5：兜底档位强制注入、候选档位不入画像、prompt_version 升 v4
+# ---------------------------------------------------------------------------
+
+
+def test_vague_reply_forces_options_onto_questions():
+    """
+    真实回放：`19b6ec6d` 第 4 轮。模型给了问题但没给档位（今天的行为），
+    系统必须补上 2-3 个具体档位（spec「用户说不知道，系统给档位」）。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "要个底层软件开发工程师"},
+            {"role": "assistant", "content": "工具链上有什么要求？"},
+            {"role": "user", "content": "这些我不太了解，你有什么建议"},
+        ],
+        round_count=1,
+    )
+
+    assert result.questions
+    for question in result.questions:
+        assert 2 <= len(question.options) <= 3
+        assert question.allow_free_text is True
+    assert "AI 建议选项" in result.questions_text
+
+
+def test_vague_reply_synthesizes_question_when_model_returns_nothing():
+    """
+    真实回放：`19b6ec6d` 第 4 轮模型实际回的是"我来帮您整理"式空话、一个问题
+    都没问。这一轮必须由系统合成一个带档位的问题，否则 spec 的兜底在最需要它
+    的那次直接落空。
+    """
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "要个底层软件开发工程师"},
+            {"role": "user", "content": "这些我不太了解，你有什么建议"},
+        ],
+        round_count=1,
+        profile_patch_accumulated={"job_title": "底层软件开发工程师"},
+    )
+
+    assert len(result.questions) == 1
+    assert 2 <= len(result.questions[0].options) <= 3
+    assert result.is_complete is False
+    assert "我来帮您整理" not in result.questions_text
+
+
+def test_counter_question_about_uncovered_domain_still_gets_options():
+    """
+    真实回放：`a478499c` 第 5 轮"一般材料是什么，你都不知道吗"。
+    采购不在 ECU 知识库覆盖范围内，仍然必须给出档位——spec「领域外的字段也要
+    有兜底」不允许因为知识库未命中而退回空话。
+    """
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "招个采购员"},
+            {"role": "assistant", "content": "该岗位采购的「一般材料」指哪些品类？"},
+            {"role": "user", "content": "一般材料是什么，你都不知道吗"},
+        ],
+        round_count=2,
+        profile_patch_accumulated={"job_title": "采购员"},
+    )
+
+    assert result.questions
+    assert all(2 <= len(q.options) <= 3 for q in result.questions)
+
+
+def test_candidate_option_is_not_written_into_profile_when_user_defers():
+    """
+    合规红线：AI 不做决定。用户回"你决定吧"时，模型顺手把上一轮的候选档位写进
+    profile_patch 的，必须被摘掉（spec「候选档位不得代替用户做决定」）。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {"functional_safety": "ASIL-D"},
+                }
+            )
+        ]
+    )
+    previous = [
+        IntakeQuestion(
+            text="要哪个 ASIL 等级？",
+            question_id="functional_safety",
+            field="functional_safety",
+            options=("ASIL-B", "ASIL-D", "无要求"),
+        )
+    ]
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "user", "content": "招个功能安全工程师"},
+            {"role": "assistant", "content": "要哪个 ASIL 等级？"},
+            {"role": "user", "content": "你决定吧"},
+        ],
+        round_count=1,
+        profile_patch_accumulated={"job_title": "功能安全工程师"},
+        previous_questions=previous,
+    )
+
+    assert "functional_safety" not in result.profile_patch
+
+
+def test_user_typed_option_is_kept_even_on_a_vague_turn():
+    """"你决定吧，ASIL-D 也行"——用户自己打出了档位就是选定，不能摘。"""
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {"functional_safety": "ASIL-D"},
+                }
+            )
+        ]
+    )
+    previous = [
+        IntakeQuestion(
+            text="要哪个 ASIL 等级？",
+            question_id="functional_safety",
+            field="functional_safety",
+            options=("ASIL-B", "ASIL-D", "无要求"),
+        )
+    ]
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "你决定吧，ASIL-D 也行"}],
+        round_count=1,
+        previous_questions=previous,
+    )
+
+    assert result.profile_patch["functional_safety"] == "ASIL-D"
+
+
+def test_misjudged_vague_reply_does_not_clear_extracted_fields():
+    """
+    design.md 风险表第 2 条：误判只影响"是否额外给一组选项"，绝不允许影响
+    profile_patch 的写入。这里 is_vague_reply 会命中"都行"，但模型提取到的
+    字段和上一轮给的候选档位无关，必须原样保留。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {"headcount": 2, "mcu_family": ["英飞凌 Aurix"]},
+                }
+            )
+        ]
+    )
+    previous = [
+        IntakeQuestion(
+            text="要哪个 ASIL 等级？",
+            question_id="functional_safety",
+            field="functional_safety",
+            options=("ASIL-B", "ASIL-D", "无要求"),
+        )
+    ]
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "随便哪个 MCU 都行，招 2 个"}],
+        round_count=1,
+        previous_questions=previous,
+    )
+
+    assert result.profile_patch == {"headcount": 2, "mcu_family": ["英飞凌 Aurix"]}
+
+
+def test_prompt_version_is_intake_v4():
+    """铁律 5：SYSTEM_PROMPT 改了就必须升版本。"""
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})]
+    )
+    captured = {}
+    original = gateway.extract_structured_with_meta
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return original(**kwargs)
+
+    gateway.extract_structured_with_meta = _spy
+    run_intake_turn(gateway, history=[{"role": "user", "content": "要个工程师"}], round_count=0)
+
+    assert captured["prompt_version"] == "intake-v4"

@@ -106,14 +106,16 @@ SYSTEM_PROMPT = (
     "用户消息里的「已确认字段」是前几轮已经收集到的内容，不要重复追问，也不要原样重复输出。\n"
     "\n"
     "【回答模糊/不知道时怎么办】如果用户的回复没有给出具体信息——比如"
-    "「不知道」「你决定」「随便」「你有什么建议」这类模糊表态——不要只回一句"
-    "「我来帮你整理」这样的空话，那等于浪费一轮却什么都没问出来。这种情况下"
-    "questions 里必须给出 2-3 个具体的可选项（例如该细分领域行业内常见的档位"
-    "或惯例做法），让用户下一轮回一个选项、「都要」或「随便选」就能推进，而"
-    "不是继续面对一个自己答不出来的开放问题。但 profile_patch 仍然只能放用户"
-    "已经明确选定或确认的字段——不能因为用户说「你决定」，就自己把猜的值直接"
-    "写进 profile_patch；画像里的要求必须由用户明确选定，不是模型代替业务经理"
-    "做的决定。\n"
+    "「不知道」「你决定」「随便」「你有什么建议」这类模糊表态，或者把问题反问"
+    "回来（「一般材料是什么，你都不知道吗」）——不要只回一句「我来帮你整理」"
+    "这样的空话，那等于浪费一轮却什么都没问出来。这种情况下 questions 里必须"
+    "给出 2-3 个具体的可选项（例如该细分领域行业内常见的档位或惯例做法），"
+    "让用户下一轮回一个选项、「都要」或「随便选」就能推进，而不是继续面对一个"
+    "自己答不出来的开放问题。**这一条不靠你自觉**：系统会用确定性规则判定"
+    "模糊回复，你没给 options 时由系统从领域选项库补上。但 profile_patch 仍然"
+    "只能放用户已经明确选定或确认的字段——不能因为用户说「你决定」，就自己把"
+    "猜的值直接写进 profile_patch；画像里的要求必须由用户明确选定，不是模型"
+    "代替业务经理做的决定。\n"
     "\n"
     "【追问的拆分规则】questions 里一个条目**只能承载一个可独立作答的子问题**。"
     "反例：「是否需要熟悉 IATF 16949 或 ISO 26262？」——这是两个独立要求，"
@@ -324,19 +326,29 @@ def is_vague_reply(text: str, *, asked_questions: list[IntakeQuestion] | None = 
     return _looks_like_counter_question(text, list(asked_questions or []))
 
 
-def suggested_followups(history: list[dict]) -> list[FollowupSpec]:
+def _user_conversation_text(history: list[dict]) -> str:
     """
-    根据历史里的**用户**发言命中 ecu_knowledge 的术语规则，给出该问的领域追问。
+    历史里全部**用户**发言拼接成一段文本，供术语匹配复用。
 
     只看 role="user" 的轮次：助手自己问出的"是否有功能安全等级（ASIL）要求？"里
     含有"功能安全"这个术语，如果把助手轮次也算进来，规则问过一次之后就会永远
     自我触发，把同一组问题反复推给模型。
+
+    `suggested_followups` 与 `run_intake_turn` 里给兜底档位算 matched_terms 都
+    要用同一份文本——两处各拼一份，同一份对话在两处可能匹配到不同的术语集合，
+    "同一份对话重放问出同一组档位"这条不变式就保不住。
     """
-    user_text = "\n".join(
+    return "\n".join(
         str(turn.get("content", "")) for turn in history if turn.get("role") == "user"
     )
+
+
+def suggested_followups(history: list[dict]) -> list[FollowupSpec]:
+    """
+    根据历史里的**用户**发言命中 ecu_knowledge 的术语规则，给出该问的领域追问。
+    """
     specs: list[FollowupSpec] = []
-    for term in match_ambiguous_terms(user_text):
+    for term in match_ambiguous_terms(_user_conversation_text(history)):
         for spec in FOLLOWUP_RULES[term]:
             if spec not in specs:
                 specs.append(spec)
@@ -419,6 +431,127 @@ def _repeats_earlier_assistant_turn(candidate_text: str, history: list[dict]) ->
     return any(candidate == normalize(turn) for turn in earlier_assistant_turns)
 
 
+def _last_user_text(history: list[dict]) -> str:
+    for turn in reversed(history):
+        if turn.get("role") == "user":
+            return str(turn.get("content", ""))
+    return ""
+
+
+def _fill_missing_options(
+    questions: list[IntakeQuestion], matched_terms: tuple[str, ...] = ()
+) -> list[IntakeQuestion]:
+    """
+    命中模糊回复时的强制兜底：本轮下发的每个问题都必须带 options。
+
+    模型给了就用模型的（它更懂当前话题），没给由系统从领域选项库补，库里没有
+    就用该字段的通用档位——fallback_options_for_field 保证非空且 2-3 个
+    （spec「领域外的字段也要有兜底」）。allow_free_text 一律保持 True：
+    spec「选项之外的答案」要求不点选也能自由作答。
+
+    matched_terms 由调用方按当前对话命中的 ECU/采购领域术语算好传入——
+    2026-08-19 review 定论：不传或传空会让 fallback_options_for_field 退化成
+    "只看 field、不看命中了哪个术语"的旧行为，把驱动总线档位（CAN-FD/LIN/
+    车载以太网）错发给算法开发、供应商开发等其它挂在 core_skills 下的领域，
+    见 ecu_knowledge.library_options_for_field 的说明。
+    """
+    filled: list[IntakeQuestion] = []
+    for question in questions:
+        if question.options:
+            filled.append(question)
+            continue
+        filled.append(
+            replace(
+                question,
+                options=fallback_options_for_field(question.field, matched_terms),
+                allow_free_text=True,
+            )
+        )
+    return filled
+
+
+def _has_value(value) -> bool:
+    return value not in (None, "", [], {}, ())
+
+
+def _synthesize_fallback_question(
+    accumulated: dict,
+    patch: dict,
+    asked_question_ids_before: list[str],
+    matched_terms: tuple[str, ...] = (),
+) -> IntakeQuestion | None:
+    """
+    模糊回复那一轮模型一个问题都没给时，由系统合成一个带档位的问题。
+
+    没有这一步，spec「用户说不知道，系统给档位」在模型返回空 questions 时就
+    落空了——而那恰恰是最需要兜底的一次：`19b6ec6d` 第 4 轮就是模型回了一句
+    "我来帮您整理"、没问出任何东西。
+
+    优先挑**还没问过**的字段，让这一轮真的推进；全问过时退回第一个仍然没值的
+    字段（这一轮会被判成零产出、不消耗预算，符合 spec「空转轮不计入预算」）。
+    字段顺序取 FALLBACK_FIELD_ORDER，固定顺序保证同一份对话重跑问出同一个问题。
+
+    matched_terms 语义同 `_fill_missing_options`：让合成问题的候选档位也按
+    当前对话命中的术语选域，而不是固定退回通用档位。
+    """
+    merged = {**accumulated, **patch}
+    missing = [name for name in FALLBACK_FIELD_ORDER if not _has_value(merged.get(name))]
+    if not missing:
+        return None
+    asked = set(asked_question_ids_before)
+    target = next((name for name in missing if name not in asked), missing[0])
+    text = FALLBACK_QUESTION_TEXT[target]
+    return IntakeQuestion(
+        text=text,
+        question_id=derive_question_id(target, text),
+        field=target,
+        options=fallback_options_for_field(target, matched_terms),
+    )
+
+
+def _value_matches_option(value, option: str) -> bool:
+    compact_option = _compact(option)
+    if not compact_option:
+        return False
+    if isinstance(value, str):
+        return _compact(value) == compact_option
+    if isinstance(value, (list, tuple)):
+        return any(isinstance(item, str) and _compact(item) == compact_option for item in value)
+    return False
+
+
+def _drop_unchosen_candidate_values(
+    patch: dict, *, reply_text: str, previous_questions: list[IntakeQuestion]
+) -> dict:
+    """
+    候选档位不得代替用户做决定（spec「候选档位不得代替用户做决定」）。
+
+    用户回"你决定吧"时，模型有时会顺手把上一轮我们给出的某个候选档位直接写进
+    profile_patch——那就是 AI 替业务经理做了决定。这里把这类字段摘掉。
+
+    判据刻意收得很窄，三条同时成立才摘：
+      (a) 本轮回复已被 is_vague_reply 判成模糊（调用方保证）；
+      (b) 该字段的值**逐字等于**上一轮我们为这个字段给出的某个候选档位；
+      (c) 该档位文本**没有**出现在用户这一轮的原话里。
+    (c) 是给"你决定吧，ASIL-D 也行"留的门：用户自己打出了这个档位就是选定，
+    不能摘。三条之外一律不动 patch——design.md 风险表第 2 条要求"误判时已提取
+    字段不被清空"，这里是唯一允许删字段的地方，收窄到这个程度才不会和它冲突。
+    """
+    if not patch:
+        return patch
+    compact_reply = _compact(reply_text)
+    cleaned = dict(patch)
+    for question in previous_questions:
+        name = question.field
+        if not name or name not in cleaned:
+            continue
+        for option in question.options:
+            if _value_matches_option(cleaned[name], option) and _compact(option) not in compact_reply:
+                del cleaned[name]
+                break
+    return cleaned
+
+
 _GUIDANCE_TEXT = "没听懂是不是用人需求，可以试试：'要招一个做XX的工程师'"
 
 
@@ -488,7 +621,10 @@ def run_intake_turn(
         schema=_IntakeTurnSchema,
         # SYSTEM_PROMPT 改了就必须升版本：input_hash 与 prompt_version 是
         # "这条结果是哪一版提示词产出的"的唯一依据（铁律 5 的可解释性要求）。
-        prompt_version="intake-v3",
+        # intake-v3 → intake-v4：本轮改了 SYSTEM_PROMPT 的「回答模糊/不知道时
+        # 怎么办」段（补反问场景与"系统会强制补 options"的说明）。提示词改了
+        # 就必须升版本，否则 input_hash 与历史记录对不上（铁律 5）。
+        prompt_version="intake-v4",
     )
 
     if not parsed.is_job_related:
@@ -516,13 +652,33 @@ def run_intake_turn(
         [] if at_round_limit else _to_intake_questions(parsed.questions)[:MAX_QUESTIONS_PER_ROUND]
     )
 
+    reply_text = _last_user_text(history)
+    vague = is_vague_reply(reply_text, asked_questions=prior_questions)
+    if vague and not at_round_limit:
+        # matched_terms 用整段对话的用户发言算，跟 suggested_followups 用同一份
+        # 文本（_user_conversation_text）：同一份对话重放要问出同一组档位，且
+        # 域判定不能只看本轮这一句模糊回复——它本身通常不含任何领域术语。
+        matched_terms = tuple(match_ambiguous_terms(_user_conversation_text(history)))
+        capped_questions = _fill_missing_options(capped_questions, matched_terms)
+        if not capped_questions:
+            synthesized = _synthesize_fallback_question(
+                accumulated, parsed.profile_patch, asked_before, matched_terms
+            )
+            capped_questions = [synthesized] if synthesized else []
+
     stuck = not at_round_limit and _repeats_earlier_assistant_turn(
         render_questions_text(capped_questions), history
     )
     give_up = at_round_limit or stuck
     questions = [] if give_up else capped_questions
 
-    profile_patch = parsed.profile_patch
+    profile_patch = (
+        _drop_unchosen_candidate_values(
+            parsed.profile_patch, reply_text=reply_text, previous_questions=prior_questions
+        )
+        if vague
+        else parsed.profile_patch
+    )
 
     # 零产出轮判定（design.md 决策 5）：本轮 profile_patch 相对已累积内容有新
     # 字段或改了值，**或**问出了此前未问过的 question_id。两者都没有 = 空转，

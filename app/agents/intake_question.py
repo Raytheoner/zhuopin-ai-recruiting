@@ -11,6 +11,13 @@ from app.schemas.job_profile import SYSTEM_MANAGED_FIELDS, JobProfile
 # （tasks 5.4），本模块只负责一旦置了标记就渲染出来。
 _REASK_PREFIX = "（这个你刚才没答）"
 
+# 档位在纯文本通道里的呈现。"以下为 AI 建议"是《AI 生成合成内容标识办法》
+# （2025-09-01 施行）的要求：候选档位是 AI 生成内容，渲染出来就必须带标识。
+# 第 4 章给 Web 通道做可点选控件时同样要带标识（tasks 4.3），两处各自负责
+# 自己的呈现形态，标识不能只做一处。
+_OPTIONS_PREFIX = "可选（以下为 AI 建议选项，也可自由作答）："
+_OPTIONS_SEPARATOR = " / "
+
 # field 缺失时的 id 前缀。带前缀是为了在库里一眼看出"这个问题没有目标字段"，
 # 而不是让它和真实字段名混在一起。
 _FREE_ID_PREFIX = "free:"
@@ -181,14 +188,18 @@ def render_questions_text(questions: list[IntakeQuestion]) -> str:
     _repeats_earlier_assistant_turn 就会拿"历史里的那一版"去比对"实际下发的
     另一版"，逐字比对静默失效——而它现在是重复追问的最后一道防线。
 
-    本单元不把 options 渲进文本：第 2 章的自我约束是"只换载体、用户可见行为
-    与合并前一致"，选项的可点选控件与"AI 建议选项"标识属第 4 章
-    （tasks 4.1/4.3，后者是《AI 生成合成内容标识办法》的要求）。
+    2026-08-19（第 3 章）：options 开始渲进文本。第 2 章刻意没渲是因为那一章
+    的自我约束是"用户可见行为与合并前一致"；第 3 章的整个目的就是让用户在
+    对话里看见具体档位，**在第 4 章的可点选控件之前就要看得见**——纯文本通道
+    （以及第 4 章合并前的 Web）否则拿不到任何档位，spec「用户说不知道，系统给
+    档位」在文本侧就落空了。带 AI 建议标识，见 _OPTIONS_PREFIX。
     """
     lines = []
     for question in questions:
         prefix = _REASK_PREFIX if question.is_reask else ""
         lines.append(f"{prefix}{question.text}")
+        if question.options:
+            lines.append(_OPTIONS_PREFIX + _OPTIONS_SEPARATOR.join(question.options))
     return "\n".join(lines)
 
 

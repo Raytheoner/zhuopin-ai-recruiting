@@ -225,3 +225,31 @@ def test_unknown_field_metric_breakdown_caps_distinct_names():
     ]
     assert len(distinct_name_keys) == cap
     reset_question_id_metrics()
+
+
+def test_render_questions_text_includes_options_with_ai_disclosure():
+    """
+    档位在纯文本通道里也要看得见，且必须带 AI 建议标识
+    （《AI 生成合成内容标识办法》）。第 4 章的可点选控件合并之前，这是用户
+    唯一能看到档位的地方。
+    """
+    questions = [
+        IntakeQuestion(
+            text="要哪个 ASIL 等级？",
+            question_id="functional_safety",
+            field="functional_safety",
+            options=("ASIL-B", "ASIL-D", "无要求"),
+        )
+    ]
+
+    rendered = render_questions_text(questions)
+
+    assert rendered.splitlines()[0] == "要哪个 ASIL 等级？"
+    assert "AI 建议选项" in rendered
+    for option in ("ASIL-B", "ASIL-D", "无要求"):
+        assert option in rendered
+
+
+def test_render_questions_text_omits_options_line_when_empty():
+    questions = [IntakeQuestion(text="具体车型与量产时间是？", question_id="free:x")]
+    assert render_questions_text(questions) == "具体车型与量产时间是？"
