@@ -184,25 +184,48 @@ def match_ambiguous_terms(text: str) -> list[str]:
     return [term for term in FOLLOWUP_RULES if term in text]
 
 
-def library_options_for_field(field: str | None) -> tuple[str, ...]:
-    """知识库里为这个字段登记过的档位，取第一条命中的。没有则返回空。"""
+def library_options_for_field(
+    field: str | None, matched_terms: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """
+    知识库里为这个字段登记过的档位，只在**当前对话实际命中的术语**范围内找。
+
+    2026-08-19 review 发现：`core_skills` 和 `project_experience_requirement`
+    各有 3 个词条在竞争同一个字段（如"驱动开发"/"算法开发"/"供应商开发"都往
+    `core_skills` 写档位），如果不看命中了哪个术语、只按 `FOLLOWUP_RULES` 的
+    声明顺序取第一条命中的，供应商开发相关的对话会被塞进"CAN-FD / LIN /
+    车载以太网"这种驱动总线档位——不是没有选项，是选错了域。姚祖怡那场要
+    补的正是"域选对了但选项没有"，选错域和没有选项一样是空话的变体。
+
+    matched_terms 为空（调用方不知道匹配到了哪些术语）时返回空——不回退到
+    跨术语的第一条命中，避免把"不知道该用哪个术语的档位"悄悄伪装成"知识库
+    没有档位"以外的第三种结果。这是刻意的默认值，不是遗漏。
+
+    matched_terms 非空时，按 matched_terms 给定的顺序（即
+    `match_ambiguous_terms` 的返回顺序，跟随 `FOLLOWUP_RULES` 声明顺序）遍历，
+    只在这些术语名下的 spec 里找——保证同一份对话重放，同一个字段永远问出
+    同一组档位。
+    """
     if not field:
         return ()
-    for specs in FOLLOWUP_RULES.values():
-        for spec in specs:
+    for term in matched_terms:
+        for spec in FOLLOWUP_RULES.get(term, ()):
             if spec.field == field and spec.options:
                 return spec.options
     return ()
 
 
-def fallback_options_for_field(field: str | None) -> tuple[str, ...]:
+def fallback_options_for_field(
+    field: str | None, matched_terms: tuple[str, ...] = ()
+) -> tuple[str, ...]:
     """
-    兜底档位的三级取数：领域选项库 → 通用字段档位 → 最后一道。
+    兜底档位的三级取数：领域选项库（按命中术语限定） → 通用字段档位 → 最后一道。
 
-    **保证非空且长度在 2-3 之间**——spec「领域外的字段也要有兜底」要求
-    "不得因为知识库未命中而退回空话"，返回空元组就是退回空话。
+    **保证非空且长度在 2-3 之间，对 `matched_terms` 传或不传都成立**——
+    spec「领域外的字段也要有兜底」要求"不得因为知识库未命中而退回空话"，
+    返回空元组就是退回空话；一个通用但正确的档位胜过一个自信但跨域答错的档位。
     """
-    options = library_options_for_field(field)
+    options = library_options_for_field(field, matched_terms)
     if not options and field:
         options = GENERIC_FIELD_OPTIONS.get(field, ())
     if not options:
