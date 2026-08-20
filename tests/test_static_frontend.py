@@ -163,3 +163,36 @@ def test_selection_and_free_text_compose_one_message():
     # 提交后上一轮的选项要冻结，防止用户点到两轮之前的档位
     assert "function freezeActiveQuestions" in INDEX_HTML
     assert "box.disabled = true;" in INDEX_HTML
+
+
+def test_served_html_under_root_path_keeps_option_rendering():
+    """
+    部署约束 1：挂到任意子路径下都能正常工作，且有测试覆盖。
+
+    既有的 tests/test_web_api.py 已经覆盖了 <base href> 本身的取值。这里补的是
+    另一半：**经过 _render_index() 之后，选项渲染那几段代码仍然在页面里**。
+    占位符替换是一次字符串替换，理论上不会吃掉别的内容——但"理论上"正是
+    root_path 这类问题最爱翻车的地方（改动前的旧断言就曾经是个永不失败的摆设，
+    见本文件 test_index_html_has_no_absolute_paths 的 docstring）。
+
+    直接调 _render_index() 而不是起一个 TestClient：本用例要验的是渲染这一步，
+    起 app 会把 LLM gateway、graph、checkpointer 一并拖进来，还会与单元 B 的
+    测试 fixture 维护面重叠。
+    """
+    from app.web.server import _render_index
+
+    for root_path, expected_base in [
+        ("", '<base href="/">'),
+        ("/hr/recruit-agent", '<base href="/hr/recruit-agent/">'),
+        ("/foo/bar", '<base href="/foo/bar/">'),
+    ]:
+        html = _render_index(root_path)
+        assert expected_base in html
+        assert "<!--BASE_HREF-->" not in html, "占位符没被替换，相对路径会解析到域根"
+        # 选项渲染与 AI 标识必须一起活到渲染之后
+        assert "AI_OPTIONS_HINT" in html
+        assert 'box.type = "checkbox"' in html
+        assert "function collectSelections" in html
+        # 本单元没有新增 fetch 调用点，既有的两个仍然是相对路径
+        assert "api/jobs" in html
+        assert '"/api/jobs' not in html
