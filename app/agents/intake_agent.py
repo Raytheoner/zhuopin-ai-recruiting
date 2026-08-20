@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 
 from pydantic import BaseModel, field_validator
 
@@ -15,14 +16,21 @@ from app.agents.ecu_knowledge import (
 )
 from app.agents.intake_question import IntakeQuestion, derive_question_id, render_questions_text
 from app.llm.gateway import LLMGateway
-from app.schemas.job_profile import JobProfile
+from app.schemas.job_profile import SYSTEM_MANAGED_FIELDS, JobProfile
 
+# 有产出轮的预算：只对 is_productive=1 的行计数（design.md 决策 5）。
 MAX_ROUNDS = 5
+# 总轮次硬上限：对 job_profile 总行数计数，让"零产出轮不消耗预算"不会把对话
+# 拖成无限。任一命中即收尾。取 8 = 5 轮有产出 + 最多 3 轮空转（design.md
+# Open Questions 里写明这个数字是拍的，上线后拿真实空转轮分布复核）。
+MAX_TOTAL_ROUNDS = 8
 MAX_QUESTIONS_PER_ROUND = 3
 
 # unspecified_fields 由系统在追问超限降级时填写，不该出现在给模型的字段表里，
 # 否则模型会把它当成一个可以自己往 profile_patch 里塞的业务字段。
-_SYSTEM_MANAGED_FIELDS = {"unspecified_fields"}
+# 真源在 app/schemas/job_profile.py：intake_question 也要用同一份清单，
+# 从这里导入会形成循环。
+_SYSTEM_MANAGED_FIELDS = SYSTEM_MANAGED_FIELDS
 
 _PRIMITIVE_NAMES = {
     "string": "字符串",
@@ -180,6 +188,121 @@ class IntakeTurnResult:
     # 第 7 章（字段溯源要按模型版本归因），而 intake-turn-observability 明确
     # 要求时序留痕不记模型标识。
     llm_response_model: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# 模糊回复与反问的确定性判定（design.md 决策 3）
+# ---------------------------------------------------------------------------
+
+# 模糊表态词表。**硬编码的中文规则，会有漏判**（用户用没收录的说法表达"不知道"），
+# 漏判的后果是退回今天的行为、不会更差；误判的后果是多给一组选项，也不致命——
+# 但绝不允许影响 profile_patch 的写入（design.md 决策 3「代价」）。
+_VAGUE_MARKERS: tuple[str, ...] = (
+    "不知道",
+    "不太了解",
+    "不了解",
+    "不清楚",
+    "不确定",
+    "没想好",
+    "说不好",
+    "不理解你想问",
+    "不理解你的问题",
+    "你决定",
+    "您决定",
+    "你看着办",
+    "您看着办",
+    "你定吧",
+    "随便",
+    "无所谓",
+    "都行",
+    "都可以",
+    "你有什么建议",
+    "有什么建议",
+    "你觉得呢",
+    "你说呢",
+    "听你的",
+    "看你的",
+)
+
+_QUESTION_MARKS = ("？", "?")
+
+# 反问判定里要忽略的通用二字片段：它们在任何一句问句里都会出现，算作"线索"
+# 会让反问判定几乎永远不触发。
+_STOPWORD_BIGRAMS: frozenset[str] = frozenset(
+    {
+        "是否",
+        "要求",
+        "请问",
+        "哪些",
+        "什么",
+        "这个",
+        "那个",
+        "需要",
+        "可以",
+        "具体",
+        "岗位",
+        "方面",
+        "多少",
+        "建议",
+        "相关",
+        "经验",
+        "以及",
+        "或者",
+        "如果",
+        "我们",
+        "你们",
+    }
+)
+
+_NON_WORD = re.compile(r"[^0-9A-Za-z一-鿿]+")
+
+
+def _compact(text: str) -> str:
+    """去掉全部空白与标点，只留中文/字母/数字。比对必须在同一个归一化面上做。"""
+    return _NON_WORD.sub("", str(text))
+
+
+def _bigrams(text: str) -> set[str]:
+    compact = _compact(text)
+    return {compact[i : i + 2] for i in range(len(compact) - 1)}
+
+
+def _looks_like_counter_question(text: str, asked_questions: list[IntakeQuestion]) -> bool:
+    """
+    反问模式：用户回复以问号结尾，且**不含任何上一轮问题的线索**。
+
+    "不含线索"用二字片段（bigram）交集判定：上一轮问「该岗位采购的『一般材料』
+    指哪些品类」，用户回「一般材料是什么，你都不知道吗」——共享"一般/般材/材料"，
+    这条判不成反问，靠 _VAGUE_MARKERS 的"不知道"命中；而「你们公司是做什么的？」
+    跟上一轮毫无交集，判成反问。这样切能把"追着上一轮问细节"（有信息）和
+    "把问题原样丢回来"（没信息）分开。
+    """
+    stripped = str(text).strip().rstrip("。！!」』\"'）) 　")
+    if not stripped.endswith(_QUESTION_MARKS):
+        return False
+    clues: set[str] = set()
+    for question in asked_questions:
+        clues |= _bigrams(question.text)
+    clues -= _STOPWORD_BIGRAMS
+    return not (_bigrams(text) & clues)
+
+
+def is_vague_reply(text: str, *, asked_questions: list[IntakeQuestion] | None = None) -> bool:
+    """
+    纯函数：这条用户回复是不是"没有给出可提取信息"。**不调模型**。
+
+    spec「模糊回复与反问的兜底档位」明确要求"判定 MUST 是确定性的，不得只依赖
+    模型自觉"——这次事故本身就是"提示词说了、模型没做"。
+
+    空串返回 False 而不是 True：没有用户发言的场景（第一轮之前）不该被当成
+    模糊回复，否则系统会在用户还没说话时就开始塞档位。
+    """
+    if not str(text).strip():
+        return False
+    compact = _compact(text)
+    if any(_compact(marker) in compact for marker in _VAGUE_MARKERS):
+        return True
+    return _looks_like_counter_question(text, list(asked_questions or []))
 
 
 def suggested_followups(history: list[dict]) -> list[FollowupSpec]:

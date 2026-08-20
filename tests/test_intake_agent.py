@@ -591,3 +591,41 @@ def test_system_prompt_requires_one_answerable_subquestion_per_item():
     # $ref，不能只指望模型自己解引用
     assert "allow_free_text" in SYSTEM_PROMPT
     assert "question_id" in SYSTEM_PROMPT  # 明确告诉模型不要自己编 id
+
+
+# ---------------------------------------------------------------------------
+# 第 3 章：模糊回复兜底与预算口径
+# ---------------------------------------------------------------------------
+
+from app.agents.intake_agent import MAX_ROUNDS, MAX_TOTAL_ROUNDS, is_vague_reply  # noqa: E402
+from app.agents.intake_question import IntakeQuestion  # noqa: E402
+
+
+def test_is_vague_reply_hits_marker_words():
+    assert is_vague_reply("这些我不太了解，你有什么建议")
+    assert is_vague_reply("你决定吧")
+    assert is_vague_reply("随便")
+    assert is_vague_reply("不理解你想问的问题，我不知道怎么回答")
+
+
+def test_is_vague_reply_accepts_real_answers():
+    """误判的代价是多给一组选项，但真答案不该被判成模糊。"""
+    assert not is_vague_reply("要 ASIL-D，必须有 AUTOSAR CP 经验")
+    assert not is_vague_reply("招 2 个人，本科以上")
+
+
+def test_is_vague_reply_empty_text_is_not_vague():
+    """第一轮之前没有用户发言，不该被当成模糊回复而提前塞档位。"""
+    assert not is_vague_reply("")
+    assert not is_vague_reply("   ")
+
+
+def test_is_vague_reply_detects_counter_question_without_clues():
+    asked = [IntakeQuestion(text="要哪个 ASIL 等级？", question_id="functional_safety")]
+    assert is_vague_reply("你们公司是干嘛的？", asked_questions=asked)
+
+
+def test_is_vague_reply_does_not_flag_follow_up_question_that_shares_clues():
+    """追着上一轮问细节是有信息的，不是反问。"""
+    asked = [IntakeQuestion(text="要哪个 ASIL 等级？", question_id="functional_safety")]
+    assert not is_vague_reply("ASIL 等级和量产项目有关系吗？", asked_questions=asked)
