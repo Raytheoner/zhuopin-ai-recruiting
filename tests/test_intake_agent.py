@@ -67,6 +67,11 @@ def test_unrelated_message_returns_guidance_and_not_complete():
     assert result.is_job_related is False
     assert result.is_complete is False
     assert result.questions  # 引导语非空
+    # 离题轮没有任何产出（profile_patch 恒为 {}），不能落成默认值
+    # is_productive=True，否则连续几条离题消息就能耗光 MAX_ROUNDS
+    # （Task 4 review 发现1）。引导语确实下发给了用户，已问台账必须记它。
+    assert result.is_productive is False
+    assert result.asked_questions == result.questions
 
 
 def test_job_related_message_returns_followup_questions():

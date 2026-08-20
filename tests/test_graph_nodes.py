@@ -558,3 +558,38 @@ def test_persist_records_zero_productive_for_an_idle_turn(tmp_path):
     assert conn.execute(
         "SELECT is_productive FROM job_profile WHERE job_id='job1'"
     ).fetchone()[0] == 0
+
+
+def test_persist_records_off_topic_turn_as_not_productive_but_asks_guidance(tmp_path):
+    """
+    离题轮：profile_patch 恒为 {}，没有任何产出，不能落成 is_productive=1
+    （否则连续几条离题消息就能耗光 MAX_ROUNDS）。但引导语确实下发给了用户，
+    已问台账必须如实记它，否则第 5 章的重问追踪会漏掉这一条
+    （app/agents/intake_agent.py 的 is_job_related=False 分支，Task 4 review 发现1）。
+    """
+    conn = _job1_conn(tmp_path)
+    gateway = make_gateway(
+        [json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}})]
+    )
+
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "今天天气不错"}],
+            "round_count": 0,
+            "productive_round_count": 0,
+            "profile_patch_accumulated": {},
+            "asked_question_ids_before": [],
+            "previous_questions": [],
+        },
+        gateway=gateway,
+    )
+    effect_persist_draft(conn, thread_id="job1", business_key="0", state=state)
+
+    row = conn.execute(
+        "SELECT is_productive, asked_questions FROM job_profile WHERE job_id='job1'"
+    ).fetchone()
+    assert row[0] == 0
+    ledger = json.loads(row[1])
+    assert len(ledger) == 1
+    assert ledger[0]["text"]  # 引导语文本真的进了台账，不是空列表

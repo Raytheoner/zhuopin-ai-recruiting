@@ -501,6 +501,14 @@ def run_intake_turn(
             questions_text=render_questions_text(questions),
             llm_latency_ms=meta.latency_ms,
             llm_response_model=meta.response_model,
+            # 离题轮：profile_patch 恒为 {}，没有任何产出，不能让默认值
+            # is_productive=True 把它算成有效轮（否则五条离题消息就能耗光
+            # MAX_ROUNDS——这正是本单元要修的故障从另一条路径复现）。
+            is_productive=False,
+            # 引导语确实下发给了用户（走 questions_text / pending_questions
+            # 同一条渲染路径），已问台账必须如实记它，否则第 5 章的重问
+            # 追踪会漏掉这一条。
+            asked_questions=questions,
         )
 
     at_round_limit = round_count >= MAX_ROUNDS
