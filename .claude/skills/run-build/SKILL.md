@@ -65,7 +65,15 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
 1. 回到 `openspec/changes/<change>/tasks.md`，把本交付单元覆盖的章节条目 `- [ ]` 改成 `- [x]`
    **只有 final review 通过才勾**，写完代码不算完
 2. 调用 `superpowers:finishing-a-development-branch` 处理合并
-3. 若该变更 tasks.md 已全部勾完，提示用户用 `openspec-archive-change` 收口，把 spec 折进 `openspec/specs/`
+3. **验证合并真的发生了**：`git rev-list --count main..<分支名>` 必须是 `0`。
+
+   不是 0 就说明第 2 步没跑或没跑完，**代码还挂在分支上**。
+
+   *为什么要单独验一次*：这一步被跳过时，本地看起来一切正常——测试全绿、
+   tasks.md 勾满、review 通过、汇报也说"已完成"。**唯一的症状是 main 上什么都没有**，
+   而没有任何东西会报错。实证：2026-08-19 `server-runtime-logging` 跑完全部 7 个 Task
+   并通过终审，11 个提交在分支上挂了整整一轮，直到下一次会话查 git 才发现。
+4. 若该变更 tasks.md 已全部勾完，提示用户用 `openspec-archive-change` 收口，把 spec 折进 `openspec/specs/`
 
 ## 输出
 
