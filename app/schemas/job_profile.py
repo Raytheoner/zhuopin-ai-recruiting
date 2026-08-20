@@ -4,6 +4,12 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+# 由系统填写、不接受模型或用户直接作答的字段。追问的 field 落在这里面时
+# 与"字段名不存在"同等处理（app/agents/intake_question.derive_question_id）。
+# 放在 schema 模块而不是 intake_agent：intake_question 也要用，从 intake_agent
+# 导入会形成 intake_agent → intake_question → intake_agent 的循环。
+SYSTEM_MANAGED_FIELDS: frozenset[str] = frozenset({"unspecified_fields"})
+
 
 class JobStatus(str, Enum):
     DRAFTING = "drafting"

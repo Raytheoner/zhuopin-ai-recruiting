@@ -145,3 +145,51 @@ def test_normalize_question_payload_handles_missing_questions_key():
     normalized = normalize_question_payload({"type": "confirmation_prompt"})
     assert normalized["questions"] == []
     assert normalized["questions_text"] == ""
+
+
+def test_unknown_field_degrades_to_text_hash():
+    """
+    模型幻觉出一个不存在的字段名时按"无 field"降级。
+    不降级的后果不是脏数据，是判定失效：每轮一个新 id → 每轮都被判成有产出
+    → MAX_ROUNDS 的有产出轮计数当场归零（第 3 章 3.9）。
+    """
+    from app.agents.intake_question import derive_question_id
+
+    text = "要哪个 ASIL 等级？"
+    assert derive_question_id("functional_safety_level", text) == derive_question_id(None, text)
+
+
+def test_unknown_field_does_not_raise():
+    """降级而非报错——单元 A 已确立的基调，一个野字段不该炸掉整轮采集。"""
+    from app.agents.intake_question import derive_question_id
+
+    assert derive_question_id("完全不存在的字段", "随便问一句？").startswith("free:")
+
+
+def test_system_managed_field_is_not_a_valid_question_target():
+    """unspecified_fields 由系统填，不该成为追问目标。"""
+    from app.agents.intake_question import QUESTION_TARGET_FIELDS, derive_question_id
+
+    assert "unspecified_fields" not in QUESTION_TARGET_FIELDS
+    assert derive_question_id("unspecified_fields", "哪些字段没定？").startswith("free:")
+
+
+def test_metrics_count_null_and_unknown_fields():
+    """8.1 回放要看降级比例，所以计数必须真的在累计。"""
+    from app.agents.intake_question import (
+        derive_question_id,
+        question_id_metrics,
+        reset_question_id_metrics,
+    )
+
+    reset_question_id_metrics()
+    derive_question_id("headcount", "招几个人？")
+    derive_question_id(None, "车型是？")
+    derive_question_id("mcu_familly", "MCU 平台族是？")  # 拼错
+
+    metrics = question_id_metrics()
+    assert metrics["total"] == 3
+    assert metrics["null_field"] == 1
+    assert metrics["unknown_field"] == 1
+    assert metrics["unknown_field:mcu_familly"] == 1
+    reset_question_id_metrics()

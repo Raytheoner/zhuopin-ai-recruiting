@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+from collections import Counter
 from dataclasses import dataclass
+
+from app.schemas.job_profile import SYSTEM_MANAGED_FIELDS, JobProfile
 
 # 重问前缀：让"这个你刚才没答"在文本通道里也看得见。判定 is_reask 属第 5 章
 # （tasks 5.4），本模块只负责一旦置了标记就渲染出来。
@@ -11,10 +15,52 @@ _REASK_PREFIX = "（这个你刚才没答）"
 # 而不是让它和真实字段名混在一起。
 _FREE_ID_PREFIX = "free:"
 
+# 允许作为追问目标的字段 = JobProfile 的字段表减去系统管理字段。
+# 从 model_fields 取而不是手写一份：手写的清单会和 schema 悄悄漂移，而这里
+# 一旦漂移，合法字段会被当成野字段降级——降级不报错，没人会发现。
+QUESTION_TARGET_FIELDS: frozenset[str] = frozenset(JobProfile.model_fields) - SYSTEM_MANAGED_FIELDS
+
+# question_id 派生的降级计数。第 8 章 8.1 回放时看比例用：野 field 占比高
+# 说明 SYSTEM_PROMPT 的字段表没被模型遵守，null-field 占比高说明模型普遍
+# 拿不准目标字段——两者都会让第 5 章的重问追踪失效，必须看得见。
+#
+# 只在进程内累计、不进日志：野 field 名是模型自由生成的不可信字符串，
+# 打进日志既可能撞上 RedactionFilter 的高危键名正则，也没有留存价值——
+# 需要的是比例，不是每一次的现场。
+_METRICS_LOCK = threading.Lock()
+_metrics_counter: Counter = Counter()
+
+
+def _record_question_id_metric(kind: str, field_name: str | None = None) -> None:
+    with _METRICS_LOCK:
+        _metrics_counter[kind] += 1
+        if field_name is not None:
+            _metrics_counter[f"unknown_field:{field_name}"] += 1
+
+
+def question_id_metrics() -> dict[str, int]:
+    """派生指标快照。键：total / null_field / unknown_field，以及每个被拒绝的
+    字段名一条 `unknown_field:<name>`（只在进程内，不落库不进日志）。"""
+    with _METRICS_LOCK:
+        return dict(_metrics_counter)
+
+
+def reset_question_id_metrics() -> None:
+    """测试与 8.1 回放前清零。生产路径不调用。"""
+    with _METRICS_LOCK:
+        _metrics_counter.clear()
+
 
 def derive_question_id(field: str | None, text: str) -> str:
     """
     question_id 由系统按目标字段派生，不让模型自己编（design.md 决策 2）。
+
+    field 必须是 JobProfile 字段表里的真实字段（QUESTION_TARGET_FIELDS）。
+    不在表里的一律按"无 field"降级走文本哈希分支。为什么这是硬要求而不是
+    洁癖：第 3 章的 is_productive 按"有没有问出未问过的 question_id"取值，
+    模型每轮幻觉一个新字段名就每轮产出一个"新" id，于是每一轮都被判成有
+    产出——MAX_ROUNDS 的有产出轮计数当场失效，正是第 3 章要修的那个故障
+    换了个形式回来。
 
     field 缺失时退回文本哈希。代价必须说清楚：文本一变 id 就变，这类问题
     换措辞之后追踪不到——所以"没有 field"是降级，不是等价方案。第 5 章的
@@ -25,6 +71,14 @@ def derive_question_id(field: str | None, text: str) -> str:
     重问次数上限取 2 就是给这种递进留的余量。
     """
     normalized_field = (field or "").strip()
+    _record_question_id_metric("total")
+    if normalized_field and normalized_field not in QUESTION_TARGET_FIELDS:
+        # 野 field（模型拼错、或幻觉出一个不存在的字段名）按"无 field"降级，
+        # 不抛异常——降级而非报错是本模块已确立的基调。
+        _record_question_id_metric("unknown_field", normalized_field)
+        normalized_field = ""
+    elif not normalized_field:
+        _record_question_id_metric("null_field")
     if normalized_field:
         return normalized_field
     digest = hashlib.sha256("".join(str(text).split()).encode("utf-8")).hexdigest()[:8]
