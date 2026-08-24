@@ -17,8 +17,8 @@
 
 | 项 | 现状 |
 |---|---|
-| main | `17542f9` — 单元 A 已合并 + 第 3-8 章拆分方案已落档 |
-| 测试 | **169**（本地）；Windows CI 实证基线 124 → 单元 A 后未再跑 CI |
+| main | `4c010a5` — 单元 A、C 已合并；**单元 B 做到一半卡在分支上未合并** |
+| 测试 | **176**（本地，单元 C 后）；Windows CI 实证基线 124 → 单元 A 后未再跑 CI |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，结构化日志版已上线（08-19 21:24 发版） |
 | 已归档变更包 | `2026-08-18-fix-sqlite-transaction-ownership`、`2026-08-19-server-runtime-logging` |
 | 活跃变更包 | `m1-job-profile-intake`、`m1-intake-quality-fixes`（15/69，剩 54 项拆成 B–G 六单元）、`ai-audit-trail-and-outbound-gate`（0/53） |
