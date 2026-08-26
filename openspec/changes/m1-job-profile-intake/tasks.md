@@ -38,7 +38,9 @@
 >
 > 8 + 2 + 4 + 4 + 10 = 28 ✓
 >
-> **两条待人判定**见文末「⏳ 待 Shao Peishen 判定的归类」，已按预案先归 D。
+> ~~**两条待人判定**见文末「⏳ 待 Shao Peishen 判定的归类」，已按预案先归 D。~~
+> **✅ 2026-08-26 Shao Peishen 已判定，两条均改判 A 类并回勾**，见文末「✅ 已判定的归类」。
+> 7.4 括号里"元数据记录模型"半条随判定移出到 `ai-audit-trail-and-outbound-gate`。
 >
 > ⚠️ 本次**只理 WBS**，未动 `specs/` 与 `design.md`——那两份是行为契约。
 >
@@ -122,8 +124,8 @@
 
 - [x] 4.1 LangGraph 图骨架，节点命名区分 `compute_*` / `effect_*` → **已实现**（同 0.4），见 `app/graph/build.py` 的 `build_intake_graph`：`compute_intake_turn` → `effect_persist_draft` → `effect_deliver_message` → END；节点函数在 `app/graph/nodes.py`，命名严格区分两类。另有两个 effect 节点走 HTTP 直调（`effect_confirm_profile` / `effect_generate_and_persist_jd`）
 - [x] 4.2 幂等装饰器：`effect_*` 节点执行前查 `effect_log`，命中即跳过；幂等键 `{thread_id}:{node_name}:{business_key}` → **已实现**，见 `app/storage/idempotency.py` 的 `idempotent_effect`：幂等键格式**逐字一致**（`f"{thread_id}:{node_name}:{business_key}"`），命中即返回 None 跳过；业务写与 `effect_log` 行由装饰器**在同一个事务里一次提交**（铁律 1），函数体抛异常时先 rollback 再上抛。测试 `tests/test_idempotency.py` / `tests/test_transaction_ownership.py`
-- [ ] 4.3 `interrupt()` 挂起与 `Command(resume=...)` 恢复的最小闭环打通
-      ⏳ **归类待判定，已按预案先归 D**——见文末「待 Shao Peishen 判定的归类」。事实：本图**刻意没有使用 `interrupt()`**（`tests/test_graph_idempotency.py:104` 的注释原文："本图没有用 interrupt"）；Web 通道下"挂起等人"由「HTTP 请求/响应 + 状态落 SQLite + 另一个 `/confirm` 端点」达成
+- [x] 4.3 `interrupt()` 挂起与 `Command(resume=...)` 恢复的最小闭环打通 → **已用其他方式实现（2026-08-26 Shao Peishen 判定行为等价）**：本图**刻意没有使用 `interrupt()`**（`tests/test_graph_idempotency.py:104` 注释原文："本图没有用 interrupt"）。Web 通道下"挂起等人"由「HTTP 请求/响应 + 状态落 SQLite + 独立 `/confirm` 端点」达成，本条要的"最小闭环"目的已达成。
+      ⚠️ **企微通道那批要重新审视这条**：消息异步推送、用户可能几小时后才回，那时才需要"图挂起在节点 → 回调到达 → `Command(resume=...)` 续上"。判定为等价的是**Web 通道下**的闭环，不等于企微通道也不需要 `interrupt()`
 - [ ] 4.4 **幂等专项测试**：对每个 `effect_*` 节点强制中断并恢复，断言副作用只发生一次
       ⚠️ 4 个 effect 节点里**覆盖了 3 个**（`effect_persist_draft` / `effect_deliver_message` / `effect_confirm_profile`，见 `tests/test_graph_idempotency.py`），**`effect_generate_and_persist_jd` 一条都没有**。而它恰恰是唯一一个在重放时会**重复触发真实付费 LLM 调用**的节点（`app/graph/nodes.py:149-198`），漏的正好是代价最大的那个。保持未勾
 - [x] 4.5 写入 `AGENTS.md` / `CLAUDE.md`：副作用节点铁律，让后续变更自动继承 → **已用 `CLAUDE.md` 实现**，见「工程铁律」第 1、2 条（副作用节点独占 + 幂等键格式 + 幂等记录与业务写同事务 + `compute_*`/`effect_*` 命名）。本仓库不使用 `AGENTS.md` 格式；`CLAUDE.md` 每会话自动加载，本条"让后续变更自动继承"的目的已达成
@@ -175,8 +177,8 @@
 - [ ] 7.3 **溯源校验**：断言文案中的技术要求都能追溯到画像字段，不得凭空出现
       ⚠️ 目前**只有 prompt 里一句要求**（`JD_SYSTEM_PROMPT`："文案中出现的技术要求必须能追溯到画像字段，不得凭空新增"），**没有任何校验代码、没有任何测试**——"提示词说了、模型没做"正是 `m1-intake-quality-fixes` 记录过的事故模式。
       ⚠️ **不要与 `m1-intake-quality-fixes` 第 7 章混为一谈**：那一章做的是**画像字段**对**用户原话**的溯源（`intake-field-grounding`），本条是 **JD 文案**对**画像字段**的溯源，两者对象不同，不能算已覆盖。保持未勾
-- [ ] 7.4 AI 生成内容标识注入（文案内显式提示 + 元数据记录模型与时间）
-      ⏳ **归类待判定，已按预案先归 D**——见文末「待 Shao Peishen 判定的归类」。事实：文案内标识与生成时间**已实现**（`app/agents/jd_agent.py` 的 `AI_LABEL_TEMPLATE` + `_compose_with_label`），**"元数据记录模型"没实现**（JD 落库时只写 `_jd_text` / `_jd_needs_manual`，不记模型标识）
+- [x] 7.4 AI 生成内容标识注入（文案内显式提示 + 元数据记录模型与时间） → **已完成（2026-08-26 Shao Peishen 判定）**：文案内显式标识与生成时间已实现（`app/agents/jd_agent.py` 的 `AI_LABEL_TEMPLATE` + `_compose_with_label`，测试见 `tests/test_jd_agent.py`）。《AI 生成合成内容标识办法》要求的**对外标识**这一层已达成。
+      ⤷ **括号里"元数据记录模型"这半条未实现，已移出**到 `ai-audit-trail-and-outbound-gate`（见文末「已移出」清单）。JD 落库时（`app/graph/nodes.py:183-197`）只写 `_jd_text` / `_jd_needs_manual`，不记模型标识——"这份 JD 是哪个模型哪一版生成的"目前答不出来。该包的 `analysis_run` 正是做模型标识持久化的，同向，不另起
 - [ ] 7.5 标识保护：常规编辑不可删除；提供"标记为人工撰写"显式操作并留痕
       ⚠️ 完全未实现——JD 目前根本没有编辑功能，也就无所谓"编辑时保护"；"标记为人工撰写"操作与其留痕都不存在。保持未勾
 - [x] 7.6 **歧视性表述拦截**：性别/年龄/婚育/地域/民族/健康状况关键词检测，命中则重新生成，连续 2 次转人工 → **已实现**（同 0.7），见 `app/agents/jd_agent.py`：`DISCRIMINATORY_PATTERNS` **六类逐个对上**，`generate_jd` 命中即重新生成、连续 2 次仍命中则 `needs_manual=True` 并回传 `blocked_categories`；前端 `index.html:265-267` 提示已转人工。测试 `tests/test_jd_agent.py`
@@ -258,10 +260,16 @@ Web 通道的等价端到端链路已由 `tests/test_web_api.py` 覆盖。
 
 ---
 
-## ⏳ 待 Shao Peishen 判定的归类（2026-08-20 登记）
+## ✅ 已判定的归类（2026-08-20 登记，2026-08-26 Shao Peishen 判定）
 
-> 下面 2 条的"行为等价"判断存疑。按预案**一律先归 D（保持未勾）**，不阻塞其余条目。
-> 判定后若改判为 A 或 C，本包的 D 类剩余数相应减少。
+> **两条均改判为 A 类（已完成），已回勾。** 本节保留原始论证供追溯，不要再当待办看。
+>
+> | 条目 | 判定 | 附带处置 |
+> |---|---|---|
+> | 4.3 `interrupt()` 闭环 | **A · 行为等价**——Web 通道下由 HTTP + SQLite 状态 + 独立 `/confirm` 端点达成 | 企微通道那批要重新审视：异步推送场景下仍可能真需要 `interrupt()` |
+> | 7.4 AI 标识注入 | **A · 已完成**——对外标识层达成 | 括号里"元数据记录模型"半条**移出**到 `ai-audit-trail-and-outbound-gate` |
+>
+> 下面是判定前的原始论证。
 
 ### 1. 条目 4.3 —— `interrupt()` 挂起与 `Command(resume=...)` 恢复的最小闭环
 
