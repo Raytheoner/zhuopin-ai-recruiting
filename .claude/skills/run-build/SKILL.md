@@ -69,6 +69,17 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
 
    不是 0 就说明第 2 步没跑或没跑完，**代码还挂在分支上**。
 
+   不是 0 时**先别下结论**，再跑一次 `git cherry -v main <分支名>`：
+
+   - 全部行以 `-` 开头 → **是假阳性**，内容已经在 main 上，只是 main 被 rebase 重写过
+     历史，commit 换了 hash，旧分支还指向旧 hash。此时该做的是删掉这个陈旧分支
+   - 有任何一行以 `+` 开头 → **是真的没合**，那几条就是漏掉的，去补第 2 步
+
+   `git cherry` 按 patch-id 比对内容，能穿透 rebase；`rev-list --count` 只比 hash，
+   不能。实证：2026-08-26 `claude/delivery-unit-c-run-build-22abbe` 的
+   `rev-list --count` 报 5，`git cherry` 五行全是 `-`，第 4 章 checkbox 也是 5/5 全勾
+   ——单元 C 早就合进去了。**只信 `rev-list` 会把已完成的单元误判成待补**。
+
    *为什么要单独验一次*：这一步被跳过时，本地看起来一切正常——测试全绿、
    tasks.md 勾满、review 通过、汇报也说"已完成"。**唯一的症状是 main 上什么都没有**，
    而没有任何东西会报错。实证：2026-08-19 `server-runtime-logging` 跑完全部 7 个 Task
