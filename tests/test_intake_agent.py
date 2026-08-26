@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from app.agents.intake_agent import SYSTEM_PROMPT, run_intake_turn
 from app.llm.gateway import LLMGateway
@@ -1158,3 +1159,38 @@ def test_productive_round_limit_still_wraps_up():
 
     assert result.questions == []
     assert result.is_complete is True
+
+
+# --- .51 真实回放基准（tasks 6.3） -----------------------------------------
+
+_REPLAY_PATH = Path(__file__).parent / "fixtures" / "pilot-replay-profiles.json"
+
+
+def _replay(prefix: str) -> dict:
+    """读取 .51 真实会话画像快照。取数出处见文件里的 _provenance 段。"""
+    return json.loads(_REPLAY_PATH.read_text(encoding="utf-8"))["sessions"][prefix]
+
+
+def test_replay_fixture_carries_provenance_and_no_dialogue_text():
+    """
+    这份基准的价值全部来自"它是真的"。没有出处的快照与手写的假数据无法区分，
+    半年后没人说得清它是从哪来的——那时 6.3 就退化成"用自己编的答案验证自己
+    写的推导"。同时守住脱敏边界：只允许画像字段进仓库，对话原文与人名不进。
+    """
+    raw = _REPLAY_PATH.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+
+    provenance = payload["_provenance"]
+    assert "192.168.100.51" in provenance["source"]
+    assert provenance["captured_at"]
+    assert "job_profile" in provenance["table"]
+
+    assert set(payload["sessions"]) == {"a478499c", "19b6ec6d"}
+    for prefix, session in payload["sessions"].items():
+        assert session["job_id"].startswith(prefix)
+        assert isinstance(session["profile_json"], dict)
+        assert isinstance(session["model_unspecified_fields"], list)
+
+    # 对话原文与人名一律不得进仓库
+    assert "history_json" not in raw
+    assert "姚祖怡" not in raw
