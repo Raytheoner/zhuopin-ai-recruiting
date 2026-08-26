@@ -1078,3 +1078,83 @@ def test_typed_list_item_survives_while_unchosen_sibling_is_dropped():
     )
 
     assert result.profile_patch["core_skills"] == ["CAN-FD"]
+
+
+def test_budget_counts_productive_rounds_not_total_rounds():
+    """
+    7 个总轮次但只有 3 轮有产出时不该收尾——这正是"空转轮不消耗预算"要买到的
+    东西（spec「空转轮不计入预算」）。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "继续"}],
+        round_count=7,
+        productive_round_count=3,
+    )
+
+    assert result.questions
+    assert result.is_complete is False
+
+
+def test_total_round_cap_forces_wrap_up_even_with_no_productive_rounds():
+    """spec「总轮次硬上限兜底」：连续零产出轮不能把对话拖成无限。"""
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+                    "profile_patch": {},
+                    "unspecified_fields": ["toolchain"],
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "不知道"}],
+        round_count=MAX_TOTAL_ROUNDS,
+        productive_round_count=0,
+    )
+
+    assert result.questions == []
+    assert result.is_complete is True
+    assert result.unspecified_fields == ["toolchain"]
+
+
+def test_productive_round_limit_still_wraps_up():
+    """MAX_ROUNDS 的既有行为不变：有产出轮吃满照样收尾。"""
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "继续"}],
+        round_count=MAX_ROUNDS,
+        productive_round_count=MAX_ROUNDS,
+    )
+
+    assert result.questions == []
+    assert result.is_complete is True

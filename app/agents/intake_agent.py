@@ -699,7 +699,10 @@ def run_intake_turn(
             asked_questions=questions,
         )
 
-    at_round_limit = round_count >= MAX_ROUNDS
+    # 两个口径任一命中即收尾：有产出轮吃满 MAX_ROUNDS，或总轮数吃满
+    # MAX_TOTAL_ROUNDS（后者是"零产出轮不消耗预算"的兜底，spec「总轮次硬上限
+    # 兜底」）。
+    at_round_limit = productive_rounds >= MAX_ROUNDS or round_count >= MAX_TOTAL_ROUNDS
     capped_questions = (
         [] if at_round_limit else _to_intake_questions(parsed.questions)[:MAX_QUESTIONS_PER_ROUND]
     )

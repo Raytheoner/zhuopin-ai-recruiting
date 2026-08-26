@@ -562,3 +562,78 @@ def test_asked_questions_ledger_accumulates_across_turns(tmp_path):
 
     ledger = [item["question_id"] for (raw,) in rows for item in json.loads(raw)]
     assert ledger == ["headcount", "toolchain"]
+
+
+def _idle_turn(n: int) -> str:
+    """
+    一轮空转：画像一字不变，问的还是同一个 question_id（field=toolchain），
+    只是换了措辞。
+
+    **必须换措辞**，不能逐字重复：`_repeats_earlier_assistant_turn` 会把逐字
+    重复直接判成 stuck 并当场收尾，那一轮根本走不到预算判定。换措辞重问正是
+    pilot 里真实发生的形态（采购岗 16949/26262，见 docs/m1-demo-pilot-feedback.md
+    的调查第 2 条），也是这一章要处理的那种空转。该检测本身的去留归 5.8，
+    本单元不动它。
+    """
+    return json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": f"工具链方面还有别的要求吗？（第 {n} 次问）", "field": "toolchain"}],
+            "profile_patch": {"job_title": "嵌入式工程师"},
+        }
+    )
+
+
+def test_idle_rounds_do_not_consume_the_followup_budget(tmp_path):
+    """
+    spec「空转轮不计入预算」的端到端证据：连跑 5 轮空转（总轮数已到 MAX_ROUNDS
+    以上），对话仍然停在追问状态，业务经理没有因为空转而失去有效追问机会。
+    """
+    from app.agents.intake_agent import MAX_ROUNDS
+
+    first = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+            "profile_patch": {"job_title": "嵌入式工程师"},
+        }
+    )
+    client = make_app(tmp_path, [first] + [_idle_turn(n) for n in range(MAX_ROUNDS)])
+
+    body = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()
+    job_id = body["job_id"]
+    for _ in range(MAX_ROUNDS):
+        body = client.post(f"/api/jobs/{job_id}/reply", json={"message": "嗯"}).json()
+
+    assert body["message"]["type"] == "question"
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "web.db"))
+    total, productive = conn.execute(
+        "SELECT COUNT(*), SUM(is_productive) FROM job_profile WHERE job_id=?", (job_id,)
+    ).fetchone()
+    assert total == MAX_ROUNDS + 1
+    assert productive == 1  # 只有第一轮真的有产出
+    conn.close()
+
+
+def test_total_round_cap_ends_the_conversation(tmp_path):
+    """spec「总轮次硬上限兜底」：空转到 MAX_TOTAL_ROUNDS 就进确认流程。"""
+    from app.agents.intake_agent import MAX_TOTAL_ROUNDS
+
+    first = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+            "profile_patch": {"job_title": "嵌入式工程师"},
+        }
+    )
+    client = make_app(tmp_path, [first] + [_idle_turn(n) for n in range(MAX_TOTAL_ROUNDS)])
+
+    body = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()
+    job_id = body["job_id"]
+    for _ in range(MAX_TOTAL_ROUNDS):
+        body = client.post(f"/api/jobs/{job_id}/reply", json={"message": "嗯"}).json()
+
+    assert body["message"]["type"] == "confirmation_prompt"
