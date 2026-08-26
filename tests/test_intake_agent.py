@@ -2,8 +2,13 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.agents.intake_agent import SYSTEM_PROMPT, run_intake_turn
+from app.agents.intake_agent import (
+    SYSTEM_PROMPT,
+    derive_unspecified_fields,
+    run_intake_turn,
+)
 from app.llm.gateway import LLMGateway
+from app.schemas.job_profile import JobProfile
 
 
 @dataclass
@@ -1194,3 +1199,122 @@ def test_replay_fixture_carries_provenance_and_no_dialogue_text():
     # 对话原文与人名一律不得进仓库
     assert "history_json" not in raw
     assert "姚祖怡" not in raw
+
+
+# --- derive_unspecified_fields：未指定字段的唯一真源（tasks 6.1 / 6.3） -------
+
+
+def test_derive_lists_every_business_field_for_empty_profile():
+    """空画像 = 所有业务字段都未指定；系统管理字段不算业务字段。"""
+    derived = derive_unspecified_fields({})
+
+    assert "unspecified_fields" not in derived
+    assert set(derived) == set(JobProfile.model_fields) - {"unspecified_fields"}
+
+
+def test_answered_field_does_not_enter_unspecified():
+    """spec Scenario: 已答字段不进未指定。"""
+    derived = derive_unspecified_fields({"functional_safety": "ASIL-B"})
+
+    assert "functional_safety" not in derived
+
+
+def test_unanswered_field_is_never_missed():
+    """spec Scenario: 未答字段不被遗漏。空容器、None、空白串、占位符都算未答。"""
+    derived = derive_unspecified_fields(
+        {
+            "toolchain": [],
+            "mcu_family": None,
+            "project_experience_requirement": "   ",
+            "department": "未指定",
+            "job_title": "底层软件开发工程师",
+        }
+    )
+
+    assert "toolchain" in derived
+    assert "mcu_family" in derived
+    assert "project_experience_requirement" in derived
+    assert "department" in derived
+    assert "job_title" not in derived
+
+
+def test_derivation_is_stable_across_repeated_calls():
+    """spec Scenario: 推导结果稳定。顺序也必须稳定——下游要直接渲染这个列表。"""
+    accumulated = {
+        "job_title": "嵌入式软件工程师",
+        "toolchain": ["CANoe"],
+        "core_skills": [],
+    }
+
+    first = derive_unspecified_fields(accumulated)
+    second = derive_unspecified_fields(dict(accumulated))
+
+    assert first == second
+    assert first == sorted(first, key=list(JobProfile.model_fields).index)
+
+
+def test_internal_underscore_keys_are_ignored():
+    """profile_json 里混着 _jd_text / _gap_acknowledgement 这类内部键，
+    它们不在字段表里，既不该被当成已答字段，也不该被列进未指定。"""
+    derived = derive_unspecified_fields(
+        {"_jd_text": "岗位职责……", "_gap_acknowledgement": {}}
+    )
+
+    assert "_jd_text" not in derived
+    assert "_gap_acknowledgement" not in derived
+    assert "job_title" in derived
+
+
+def test_derive_catches_what_the_model_underreported_in_a478499c():
+    """
+    真实回放反证（tasks 6.3 的第一半）：`a478499c` 强制收尾时，模型给的
+    unspecified_fields 是**空数组**——它宣称这份画像什么都不缺。系统推导必须给出
+    非空结果，否则本章等于什么都没修。
+    """
+    session = _replay("a478499c")
+
+    assert session["model_unspecified_fields"] == [], (
+        "前置事实变了：这个会话模型当时给的不再是空数组。停下报告，不要改这条断言去迁就"
+    )
+
+    derived = derive_unspecified_fields(session["profile_json"])
+
+    assert derived, "模型说没缺口，系统推导也说没缺口——漏报没有被修掉"
+    # 这份画像真实缺的就是这几项，逐个钉住，避免"非空即过"退化成弱断言
+    assert {"core_skills", "functional_safety", "mcu_family", "sop_projects"} <= set(
+        derived
+    )
+
+
+def test_derive_lists_every_field_the_model_flagged_in_19b6ec6d():
+    """
+    真实回放（tasks 6.3 的第二半）。
+
+    ⚠️ **与 plan / design.md 决策 6 的举证不符，已如实按真值写。** 那两份文档称
+    `19b6ec6d` 里模型把用户**已经答过**的 functional_safety / sop_projects 列进了
+    未指定（"虚报"）。核对 `.51` 真值后不成立：这两个字段在该会话**全部 6 个版本
+    里都是 None**，用户从未答过——模型列它们是**对的**，不是虚报。
+
+    因此本用例断言真值形态：模型标出的 5 个字段确实一个都没答，系统推导必须
+    **全部列出**，一个都不许漏。
+
+    ⛔ 不要把这条改回"断言 functional_safety / sop_projects 不在结果里"——那会
+    强迫推导漏掉两个真实缺口，与 6.1（不再漏报）直接矛盾。6.3 的措辞需要决策人
+    裁决，未裁决前 `tasks.md` 6.3 保持未勾。
+    """
+    session = _replay("19b6ec6d")
+    profile = session["profile_json"]
+    flagged = session["model_unspecified_fields"]
+
+    # 前置事实：模型标出的这几项，在最终画像里确实一个值都没有
+    assert flagged, "前置事实变了：模型当时并没有标出任何未指定字段。停下报告"
+    for name in flagged:
+        assert not profile.get(name), (
+            f"前置事实变了：{name} 在最终画像里有值了，模型这次才算虚报。停下报告"
+        )
+
+    derived = derive_unspecified_fields(profile)
+
+    assert set(flagged) <= set(derived), (
+        "系统推导漏掉了模型都发现了的真实缺口——比不修还糟"
+    )

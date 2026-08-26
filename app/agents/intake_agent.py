@@ -91,6 +91,63 @@ def _render_profile_field_guide() -> str:
 
 PROFILE_FIELD_GUIDE = _render_profile_field_guide()
 
+
+# 画像里表示"这个字段系统填过、但不是用户定的"的占位符。app/web/server.py 的
+# confirm 在必填字段缺失时就是拿它兜底的，所以推导必须认得它。
+# 刻意只认这一个字面量，不去猜"未确定""待定""不限"之类的近义词——那已经是在
+# 判断值的质量，而 design.md 决策 6 的「代价」段明确把质量判断排除在本章之外。
+_UNSPECIFIED_PLACEHOLDER = "未指定"
+
+
+def _is_unspecified_value(value) -> bool:
+    """一个字段的取值是否等于"用户从未确定过"。"""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped == "" or stripped == _UNSPECIFIED_PLACEHOLDER
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    # 数字/布尔等标量：有值就算已指定。headcount=0 进不来（JobProfile 有 ge=1），
+    # is_mass_production=False 是一个真实的答案，不是"没答"。
+    return False
+
+
+def derive_unspecified_fields(accumulated: dict) -> list[str]:
+    """
+    未指定字段的**唯一真源**（tasks 6.1、design.md 决策 6）。
+
+    遍历 JobProfile 的 JSON Schema 属性（排除系统管理字段），值缺失 / 为 None /
+    为空容器 / 为空白串 / 等于占位符的，就是未指定。返回顺序 = 字段定义顺序，
+    因此同一输入必然得到逐位相同的结果（spec 的「推导结果稳定」）。
+
+    为什么不用模型给的那份：真实数据上模型会**漏报**——`a478499c` 强制收尾时它给
+    的是空数组，而那份画像有一半字段是空的。一个会漏报的列表比没有更糟：它让人
+    以为"系统说没问题"。
+
+    ⚠️ design.md 决策 6 还举了"虚报"的一半（称 `19b6ec6d` 里模型把用户已答过的
+    functional_safety / sop_projects 列进了未指定）。2026-08-27 核对 `.51` 真值后
+    **该举证不成立**：这两个字段在该会话全部 6 个版本里都是 None，模型列它们是
+    对的。见 tests/test_intake_agent.py 里那条用例的说明。这不改变本函数的行为
+    ——推导只看字段有没有值，两种举证都指向同一份实现。
+
+    **入参必须是拍平后的裸值画像**（`{"headcount": 3}`，不是
+    `{"headcount": {"value": 3, "source_quote": ...}}`）。第 7 章会把 profile_patch
+    的字段升级成带来源的结构，`delivery-units.md` §5 约定 1 要求它在落库前拍平——
+    没拍平的话本函数会把 `{"value": null, ...}` 当成"这个字段有值"，漏报当场回到
+    今天的故障。
+
+    profile_json 里混着的下划线内部键（`_jd_text`、`_gap_acknowledgement`）天然被
+    忽略：本函数只看字段表里有的名字，不看入参里多出来的名字。
+    """
+    return [
+        name
+        for name in JobProfile.model_json_schema()["properties"]
+        if name not in SYSTEM_MANAGED_FIELDS
+        and (name not in accumulated or _is_unspecified_value(accumulated[name]))
+    ]
+
+
 SYSTEM_PROMPT = (
     "你是招聘助手，服务于一家汽车电子（ECU）研发制造企业。\n"
     "任务：判断用户消息是否是用人需求；如果是，结合 ECU 行业知识生成至多 3 个追问问题，"
