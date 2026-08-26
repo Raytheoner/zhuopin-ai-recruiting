@@ -35,17 +35,19 @@
 
 > **附注（unit A 收尾复核记录，写给 3.10 取 `MAX_TOTAL_ROUNDS` 值的人）**：第 2 章 2.4 引入了"一个问题条目只能承载一个可独立作答的子问题"的拆分规则——像"是否需要熟悉 IATF 16949 或 ISO 26262？"这类复合问题会被拆成两条，各占一个 `MAX_QUESTIONS_PER_ROUND` 槽位。合并后同一个话题平均消耗的问题槽位数会增加，`MAX_ROUNDS`（有产出轮计数）固定的情况下，收尾前能覆盖的独立话题数会变少，更多字段被推入"未指定"。取 `MAX_TOTAL_ROUNDS`（3.10）时请把这一层消耗算进去，不要只按拆分前的历史会话估算。
 
-- [ ] 3.1 `app/agents/ecu_knowledge.py` 的 `FOLLOWUP_RULES` 从 `list[str]` 升级为 `list[FollowupSpec]`（`text` / `field` / `options`），既有 4 个词条补齐 `field` 与档位
-- [ ] 3.2 新增采购/非 ECU 侧词条：一般材料、办公采购、非标产品、供应商开发。**姚祖怡那场就是卡死在"一般材料"上**——知识库当时一个采购词条都没有（design.md 决策 4）
-- [ ] 3.3 纯函数 `is_vague_reply(text) -> bool`：模糊表态词表（不知道 / 不太了解 / 你决定 / 随便 / 你看着办 / 你有什么建议 / 都行…）+ 反问模式（以问号结尾且不含目标字段线索）。**确定性判定，不调模型**
-- [ ] 3.4 命中模糊回复时的强制兜底：本轮下发的问题必须带 `options`；模型没给就由系统从领域选项库补；库里没有就用该字段的通用档位（必须含"无要求 / 不限"这类明确否定档位）
-- [ ] 3.5 `SYSTEM_PROMPT` 现有的「回答模糊/不知道时怎么办」段（`app/agents/intake_agent.py:92-100`）保留为第二道，但**判定与注入由代码保证**——这次事故本身就是"提示词说了、模型没做"（design.md 决策 3）
-- [ ] 3.6 测试（真实回放）：喂入 `19b6ec6d` 第 4 轮的"这些我不太了解，你有什么建议"与 `a478499c` 第 5 轮的"一般材料是什么，你都不知道吗"，断言产出的问题**必定带 2-3 个具体档位**，且回复中不出现无档位的"我来帮您整理"式内容
-- [ ] 3.7 测试（合规红线）：用户回"你决定吧"时，画像对应字段**保持未确定**，任何候选档位都不得进入 `profile_patch`（proposal.md「合规影响说明」：AI 不得代替业务经理做决定）
-- [ ] 3.8 测试（误判安全）：`is_vague_reply` 误判一条有效回答时，模型已提取到的字段**不被清空**（design.md 风险表第 2 条）
-- [ ] 3.9 零产出轮判定：`compute_intake_turn` 算出 `is_productive`（本轮 `profile_patch` 相对上轮有新字段 **或** 问出了未问过的 `question_id`），落进 1.1 加的列
-- [ ] 3.10 预算取数改口径：`app/web/server.py` 的 `round_count` 拆成两个 —— `MAX_ROUNDS`(5) 对 `is_productive=1` 计数，新增 `MAX_TOTAL_ROUNDS`(8) 对总行数计数，任一命中即收尾。**`business_key` 继续用总行数，幂等语义不变**（design.md 决策 5）
-- [ ] 3.11 测试：空转轮不减预算；有产出轮正常减预算；连续空转触顶 `MAX_TOTAL_ROUNDS` 后正常收尾进确认流程
+> **实施记录（2026-08-19，单元 B）**：已问台账落在**新增列 `job_profile.asked_questions`**（`IntakeQuestion.to_payload()` 的 JSON 数组），走 1.1 的 `init_schema` 幂等加列路径。否决 `profile_json` 内部键的理由：`profile_json` 每轮被读回来当 `profile_patch_accumulated` 送进 prompt，台账放进去会每轮泄漏进 prompt 并污染 `input_hash`；`_jd_text` 能用那个位置是因为它只在 `confirm` 那一刻写、从不进 prompt。单元 E 的 5.1 直接在 `IntakeState.asked_question_ids_before` / `previous_questions` 两个键上扩。
+
+- [x] 3.1 `app/agents/ecu_knowledge.py` 的 `FOLLOWUP_RULES` 从 `list[str]` 升级为 `list[FollowupSpec]`（`text` / `field` / `options`），既有 4 个词条补齐 `field` 与档位
+- [x] 3.2 新增采购/非 ECU 侧词条：一般材料、办公采购、非标产品、供应商开发。**姚祖怡那场就是卡死在"一般材料"上**——知识库当时一个采购词条都没有（design.md 决策 4）
+- [x] 3.3 纯函数 `is_vague_reply(text) -> bool`：模糊表态词表（不知道 / 不太了解 / 你决定 / 随便 / 你看着办 / 你有什么建议 / 都行…）+ 反问模式（以问号结尾且不含目标字段线索）。**确定性判定，不调模型**
+- [x] 3.4 命中模糊回复时的强制兜底：本轮下发的问题必须带 `options`；模型没给就由系统从领域选项库补；库里没有就用该字段的通用档位（必须含"无要求 / 不限"这类明确否定档位）
+- [x] 3.5 `SYSTEM_PROMPT` 现有的「回答模糊/不知道时怎么办」段（`app/agents/intake_agent.py:92-100`）保留为第二道，但**判定与注入由代码保证**——这次事故本身就是"提示词说了、模型没做"（design.md 决策 3）
+- [x] 3.6 测试（真实回放）：喂入 `19b6ec6d` 第 4 轮的"这些我不太了解，你有什么建议"与 `a478499c` 第 5 轮的"一般材料是什么，你都不知道吗"，断言产出的问题**必定带 2-3 个具体档位**，且回复中不出现无档位的"我来帮您整理"式内容
+- [x] 3.7 测试（合规红线）：用户回"你决定吧"时，画像对应字段**保持未确定**，任何候选档位都不得进入 `profile_patch`（proposal.md「合规影响说明」：AI 不得代替业务经理做决定）
+- [x] 3.8 测试（误判安全）：`is_vague_reply` 误判一条有效回答时，模型已提取到的字段**不被清空**（design.md 风险表第 2 条）
+- [x] 3.9 零产出轮判定：`compute_intake_turn` 算出 `is_productive`（本轮 `profile_patch` 相对上轮有新字段 **或** 问出了未问过的 `question_id`），落进 1.1 加的列
+- [x] 3.10 预算取数改口径：`app/web/server.py` 的 `round_count` 拆成两个 —— `MAX_ROUNDS`(5) 对 `is_productive=1` 计数，新增 `MAX_TOTAL_ROUNDS`(8) 对总行数计数，任一命中即收尾。**`business_key` 继续用总行数，幂等语义不变**（design.md 决策 5）（实施记录：`MAX_TOTAL_ROUNDS=8`，已把 2.4 拆分规则带来的槽位消耗算进去；口径为 `job_profile` 总行数，`MAX_ROUNDS` 改为对 `is_productive=1` 计数，`business_key` 不变）
+- [x] 3.11 测试：空转轮不减预算；有产出轮正常减预算；连续空转触顶 `MAX_TOTAL_ROUNDS` 后正常收尾进确认流程
 
 ## 4. 前端可点选选项
 

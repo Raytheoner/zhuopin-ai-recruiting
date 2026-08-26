@@ -172,4 +172,4 @@
 - `MAX_TOTAL_ROUNDS` 取 8 是拍的：5 轮有产出 + 最多 3 轮空转。上线后拿真实的空转轮分布复核，不影响本批的 spec 与任务拆分。
 - 兜底档位在企微卡片上的呈现形态（按钮 / 快捷回复 / 选人控件）留到企微通道那一批定；本变更只保证数据结构够用。
 - 未溯源率达到多少才值得拦截、拦截后如何降级（退回追问 vs 记为未指定），本批不定——按决策 12，等 ≥ 20 场真实会话的分布出来再单独开变更。
-- `derive_question_id` 未校验 `field` 是否属于 `JobProfile` schema，也没有 null-`field` 比例的监控指标——unit A 收尾复核记下，明确"第 5 章之前修"，本单元不实现。
+- ~~`derive_question_id` 未校验 `field` 是否属于 `JobProfile` schema，也没有 null-`field` 比例的监控指标~~ → **✅ 2026-08-19 单元 B Task 1 已实现**：野 `field` 按"无 field"降级走 `free:` 哈希分支（不抛异常），`question_id_metrics()` 在进程内累计 `total` / `null_field` / `unknown_field` 及每个被拒字段名，供 8.1 回放看比例。之所以提前到第 3 章而不是"第 5 章之前"：3.9 让 `question_id` 第一次参与判定，野 `field` 会让每轮都产出"新" id、每轮都被判成有产出，`MAX_ROUNDS` 的有产出轮计数当场失效。
