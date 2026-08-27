@@ -16,6 +16,7 @@ from app.audit.events import (
     CriterionScore,
     DecisionEvent,
 )
+from app.audit.recorder import AuditRecorder, Reconciliation, TransactionOwnershipError
 from app.audit.sinks import (
     AuditSink,
     ChainVerification,
@@ -32,6 +33,9 @@ __all__ = [
     "OUTBOUND_DELIVERED",
     "CriterionScore",
     "DecisionEvent",
+    "AuditRecorder",
+    "Reconciliation",
+    "TransactionOwnershipError",
     "AuditSink",
     "ChainVerification",
     "GENESIS_PREV_HASH",
