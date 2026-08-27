@@ -17,7 +17,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from app.agents.jd_agent import AI_LABEL_TEMPLATE
-from app.outbound.contracts import GATE_FIELDS
+from app.outbound.contracts import (
+    GATE_FIELDS,
+    KNOWN_SEVERITIES,
+    MAX_SEVERITY,
+    REGISTERED_MESSAGE_TYPES,
+)
 
 # AI 生成标识的不变前缀：把模板里的 {generated_at} 之前的部分取出来当作
 # 判定依据（生成时间每封信都不同，不能参与匹配）。
@@ -38,6 +43,18 @@ EVIDENCE_KEYS: tuple[str, ...] = (
     "ai_label_present",
     "outbound_enabled",
 )
+
+
+# 拦截原因。取值是**中文字面量**而不是英文枚举码：spec 逐字写了
+# 「外发总开关关闭」与「等待人工确认」两条要能区分开，U5 会把它原样写进
+# pending_approval.blocked_reason，U6 的 6.5 直接 GROUP BY 这一列。
+REASON_UNREGISTERED_TYPE = "未登记的消息类型"
+REASON_CONFIRMATION_FLAG_UNKNOWN = "确认标志缺失或取值未知"
+REASON_CONFIRMATION_REQUIRED = "消息自称需要人工确认"
+REASON_SEVERITY_UNKNOWN = "风险等级缺失或未登记"
+REASON_SEVERITY_MAX = "风险等级为最高级"
+REASON_MISSING_AI_LABEL = "缺少 AI 生成标识"
+REASON_GATE_ERROR = "门禁判定内部异常"
 
 
 class _Absent:
@@ -139,11 +156,88 @@ def _collect(
     return raw, evidence, absent_fields
 
 
+def _evaluate_outbound_gate(
+    message: object, outbound_enabled: Callable[[], bool]
+) -> GateDecision:
+    """实际判定逻辑，**可能抛异常**——外壳 compute_outbound_gate 统一兜成拦截。
+
+    判定顺序是契约的一部分（见 plan 的 D-3）：**消息自身的六条 fail-closed
+    先判，两道闸最后判**。理由是 design 迁移计划第 4 步——U5 合并时总开关
+    保持关闭、全拦，要靠这段观察期看拦截留痕是否符合预期；总开关若先判，
+    观察期内每一条拦截的 reason 都是"外发总开关关闭"，把其余五条真正的
+    畸形消息全部盖住，观察期当场失去意义。
+    """
+    raw, evidence, absent_fields = _collect(message, outbound_enabled)
+
+    def blocked(reason: str) -> GateDecision:
+        return GateDecision(
+            allowed=False, reason=reason, evidence=evidence, absent_fields=absent_fields
+        )
+
+    # ① 未知类型即拦截。_ABSENT 不在集合里，缺属性天然落进这一条。
+    if raw["message_type"] not in REGISTERED_MESSAGE_TYPES:
+        return blocked(REASON_UNREGISTERED_TYPE)
+
+    # ② 严格布尔。⛔ 不用真值性：字符串 "false" 的真值性是 True。
+    flag = raw["requires_confirmation"]
+    if flag is not True and flag is not False:
+        return blocked(REASON_CONFIRMATION_FLAG_UNKNOWN)
+
+    # ③ 消息自称需要确认。
+    if flag is True:
+        return blocked(REASON_CONFIRMATION_REQUIRED)
+
+    # ④ 风险等级必须是词表里的字符串。不做大小写归一化、不 strip——
+    #    归一化就是在猜作者的意图，而未知即拦截不允许猜。
+    severity = raw["severity"]
+    if severity not in KNOWN_SEVERITIES:
+        return blocked(REASON_SEVERITY_UNKNOWN)
+
+    # ⑤ 最高级一律拦。
+    if severity == MAX_SEVERITY:
+        return blocked(REASON_SEVERITY_MAX)
+
+    # ⑥ AI 生成标识（tasks 4.4，复用 jd_agent 的模板）。
+    if not evidence["ai_label_present"]:
+        return blocked(REASON_MISSING_AI_LABEL)
+
+    # 两道闸在下一个 Task 接上。
+    return GateDecision(
+        allowed=True, reason=None, evidence=evidence, absent_fields=absent_fields
+    )
+
+
 def compute_outbound_gate(
     message: object, outbound_enabled: Callable[[], bool]
 ) -> GateDecision:
-    """候选人外发门禁判定。本 Task 只到证据采集，判定在下一个 Task 接上。"""
-    _raw, evidence, absent_fields = _collect(message, outbound_enabled)
-    return GateDecision(
-        allowed=False, reason=None, evidence=evidence, absent_fields=absent_fields
-    )
+    """候选人外发门禁判定。纯函数：不写库、不发消息、不读配置文件。
+
+    Args:
+        message: 待外发消息。**任何形状都合法**——连属性都没有的裸对象
+            也必须能喂进来（fail-closed 的输入面），它会被判拦截并带着
+            完整证据返回，而不是抛错。
+        outbound_enabled: **零参 callable**，每次判定恰好被调用一次
+            （spec：总开关 MUST 在每次外发时求值，MUST NOT 启动时缓存）。
+            ⛔ 传 bool 属结构性误用，按拦截处理。
+
+    Returns:
+        GateDecision。`allowed is True` 是唯一的放行信号；⛔ 调用方不得用
+        真值性判断这个对象本身（GateDecision 实例恒为真）。
+    """
+    try:
+        return _evaluate_outbound_gate(message, outbound_enabled)
+    except Exception as exc:  # noqa: BLE001 —— 见下方注释，这里就是要抓全部
+        # ⛔ 契约由**结构**保证，不靠枚举异常类型。U1 的
+        # is_candidate_outbound_enabled() 用枚举法失败过两次（round 1 漏
+        # OSError 之外的类型，round 2 被 NUL 字节路径的裸 ValueError 逃掉，
+        # 见 tasks.md「1.x 落地偏离登记」偏离 5），最后改成同一个形状：
+        # 内部逻辑整体委托给一个私有函数，外层只做一件事——不管里面抛出
+        # 什么类型（哪怕是完全没预料到的新类型），一律截停判拦截。
+        # 之后任何人往判定里加一段没包线的新异常来源，都不需要再补一轮修复。
+        return GateDecision(
+            allowed=False,
+            reason=REASON_GATE_ERROR,
+            evidence={key: None for key in EVIDENCE_KEYS},
+            absent_fields=(),
+            error=repr(exc),
+        )

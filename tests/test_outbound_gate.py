@@ -198,3 +198,156 @@ def test_decision_is_frozen():
 
     with pytest.raises(Exception):
         decision.allowed = True
+
+
+from app.outbound.contracts import REGISTERED_MESSAGE_TYPES
+
+
+def test_a_bare_object_with_no_attributes_at_all_is_blocked():
+    """
+    ⭐ **本单元的主防线**（delivery-units §3.3 第 1 条逐字要求）。
+
+    这条用例是唯一能在"后来者写一句 getattr(msg, 'requires_confirmation',
+    False) 当作合理默认值"式重构下变红的：一个连 message_type 属性都没有
+    的裸对象喂进来，必须拦。所有既有用例喂的都是字段齐全的消息，那种
+    重构在它们眼里全绿。
+    """
+    decision = compute_outbound_gate(object(), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason is not None
+    assert decision.absent_fields == (
+        "message_type",
+        "requires_confirmation",
+        "severity",
+        "recipient",
+        "body",
+        "confirmed_by",
+    )
+
+
+@pytest.mark.parametrize("message_type", sorted(REGISTERED_MESSAGE_TYPES))
+@pytest.mark.parametrize("field_name", ["requires_confirmation", "severity", "body"])
+@pytest.mark.parametrize("bad_kind", ["absent", "none", "empty"])
+def test_registered_types_are_blocked_for_every_unknown_field_value(
+    message_type, field_name, bad_kind
+):
+    """
+    「已登记类型 × 判定字段 × {字段缺失, 字段为 None, 字段为空串}」的笛卡尔积
+    （delivery-units §3.3 第 1 条）。新增一个消息类型时，参数化会强制作者
+    面对每一种未知取值——这正是它铺满的意义。
+
+    ⚠️ field_name 这一维**不含 confirmed_by**：那道闸在下一个 Task 才接上，
+    放进来会让本 Task 的用例在实现尚未落地时就红。confirmed_by 的缺失 /
+    None / 空白三态由 Task 4 的
+    test_missing_or_blank_confirmer_is_blocked_awaiting_confirmation 与
+    test_an_absent_confirmed_by_attribute_is_blocked_awaiting_confirmation 覆盖。
+
+    ⚠️ 枚举用 REGISTERED_MESSAGE_TYPES（新增类型自动进入覆盖），
+    但判据是字面量 False，不引用任何被测常量。
+    """
+    fields = {
+        "message_type": message_type,
+        "requires_confirmation": False,
+        "severity": "low",
+        "recipient": "candidate-42",
+        "body": _LABELLED_BODY,
+        "confirmed_by": "shao-peishen",
+    }
+    if bad_kind == "absent":
+        del fields[field_name]
+    elif bad_kind == "none":
+        fields[field_name] = None
+    else:
+        fields[field_name] = ""
+
+    decision = compute_outbound_gate(_Message(**fields), lambda: True)
+
+    assert decision.allowed is False
+
+
+def test_unregistered_message_type_is_blocked_with_its_own_reason():
+    decision = compute_outbound_gate(
+        _valid_message(message_type="offer_letter"), lambda: True
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "未登记的消息类型"
+
+
+@pytest.mark.parametrize("flag", [None, "", "false", "true", 0, 1, "False"])
+def test_non_boolean_confirmation_flag_is_unknown_and_blocked(flag):
+    """
+    ⚠️ 严格 `is False` / `is True` 判定，不用真值性。
+    字符串 "false" 的真值性是 True，"0" 也是 True——用 if flag: 写这条
+    规则，一个字符串开关就把 fail-closed 变成了 fail-open。
+    整数 0/1 同理：它们不是布尔，就是未知。
+    """
+    decision = compute_outbound_gate(
+        _valid_message(requires_confirmation=flag), lambda: True
+    )
+
+    assert decision.allowed is False
+
+
+def test_confirmation_flag_true_and_unknown_have_different_reasons():
+    """
+    "消息自称需要确认"与"这个标志读不出来"是两回事：前者是消息作者的
+    显式意图，后者是消息畸形。6.5 按拦截原因统计时两者必须分得开。
+    """
+    explicit = compute_outbound_gate(
+        _valid_message(requires_confirmation=True), lambda: True
+    )
+    unknown = compute_outbound_gate(
+        _valid_message(requires_confirmation=None), lambda: True
+    )
+
+    assert explicit.allowed is False
+    assert unknown.allowed is False
+    assert explicit.reason != unknown.reason
+
+
+@pytest.mark.parametrize("severity", [None, "", "  ", "critical", "LOW", "低", 3])
+def test_unknown_severity_is_blocked(severity):
+    """词表外的取值一律未知。大小写不同也算未知——不做归一化。"""
+    decision = compute_outbound_gate(_valid_message(severity=severity), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "风险等级缺失或未登记"
+
+
+def test_top_severity_is_blocked_with_its_own_reason():
+    decision = compute_outbound_gate(_valid_message(severity="high"), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "风险等级为最高级"
+
+
+def test_missing_ai_label_is_blocked():
+    """《AI 生成合成内容标识办法》：拒信/邀约缺标识按拦截处理（tasks 4.4）。"""
+    decision = compute_outbound_gate(
+        _valid_message(body="很遗憾，本次未能与您继续推进。"), lambda: True
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "缺少 AI 生成标识"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "AI 生成：本文案由系统自动生成。",  # 缺【】书名号，不是那句标识
+        "【AI生成】本文案由系统基于岗位画像自动生成，生成时间 2026-08-28。",  # 少一个空格
+        "【AI 生成】",  # 只有标记头，没有那句话
+        b"\xe3\x80\x90AI",  # 根本不是 str
+    ],
+)
+def test_near_miss_labels_do_not_count_as_labelled(body):
+    """
+    近似但不相同的标识不算数。判据是 jd_agent 那句模板的不变前缀全量匹配
+    （见 plan 的「需 Shao Peishen 拍板」D-1，当前取最严的一侧）。
+    """
+    decision = compute_outbound_gate(_valid_message(body=body), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "缺少 AI 生成标识"

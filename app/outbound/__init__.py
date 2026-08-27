@@ -8,3 +8,7 @@
 这道闸存在的理由：`effect_deliver_message` 在本变更之前是**无条件投递**，
 合规红线「AI 只做排序推荐，不做自动淘汰」全靠调用方自觉。
 """
+
+from app.outbound.gate import GateDecision, compute_outbound_gate
+
+__all__ = ["GateDecision", "compute_outbound_gate"]
