@@ -144,7 +144,14 @@ U1 在 `tasks.md:20` 建立了「1.x 落地偏离登记」这个体例，把偏�
 - **(b) 让 `SqliteSink.write` 对不支持的事件类型抛异常**而不是返回 False。方向更严，但会改一条已合并单元的对外行为，且要改 `test_non_analysis_events_have_no_body_in_this_sink`。
 - **(c) 返回值升格成三态枚举**（`WROTE` / `ALREADY` / `NOT_MINE`）。最清楚，改动面最大，且 U3 尚未接线，现在改比 U5 之后改便宜。
 
-**⚠️ 需 Shao Peishen 拍板。** 我的倾向是 **(a)**——U2 已合并，改一个已交付单元的对外契约需要理由，而"调用点自己知道事件类型"这件事在 U5 里是天然成立的；但如果 U6 的对账断言要区分这两种 False，(c) 就变成必要的。**这条判断依赖 U6 6.4 的断言形状，而 6.4 尚未展开，所以我给不出确定性结论，只给倾向。**
+**✅ 2026-08-28 已拍板：取 (a)——不动 U2，由 U5 的调用点按 `event.event_type` 自行分辨。**
+U2 的对外契约保持不变，`tests/test_audit_sinks_sqlite.py:155` 与 `:207` 两条断言原样保留。
+**这条要抄进 U5 的 plan 的 Global Constraints**：`recorder.record()` 返回 `False` 时，
+⛔ 不得推断原因——调用点自己知道正在写的是什么 `event_type`，非 `ai_analysis` 的事件
+本来就没有 `analysis_run` 真身，`False` 是预期结果而不是异常。
+若 U6 的 6.4 对账断言最终需要区分这两种 `False`，那时再按下面的 (c) 重开决定。
+
+（决策前的分析原样保留：）我的倾向是 **(a)**——U2 已合并，改一个已交付单元的对外契约需要理由，而"调用点自己知道事件类型"这件事在 U5 里是天然成立的；但如果 U6 的对账断言要区分这两种 False，(c) 就变成必要的。**这条判断依赖 U6 6.4 的断言形状，而 6.4 尚未展开，所以我给不出确定性结论，只给倾向。**
 
 ---
 
@@ -184,6 +191,8 @@ U1 在 `tasks.md:20` 建立了「1.x 落地偏离登记」这个体例，把偏�
 - Consumes: 本报告 §三 的四条差异表；U1 的体例见 `tasks.md:20` 起的「1.x 落地偏离登记」
 - Produces: `tasks.md` 中一个 `### 2.x 落地偏离登记（U2 实施，2026-08-27）` 小节，供 U3/U5/U6 的 plan 作者引用
 
+> 该小节末尾的「⚠️ 遗留」一段现在有结论了（2026-08-28 取 (a)），Step 3 的登记文本已按结论写。
+
 - [ ] **Step 1: 确认另一条 session 已收工**
 
 ```bash
@@ -220,9 +229,10 @@ grep -n "^- \[x\] 2\.9\|^## 3\." openspec/changes/ai-audit-trail-and-outbound-ga
 | 3 | 2.2 未写 `write` 的返回类型 | `AuditSink.write` 返回 `bool`；`SqliteSink` 对非 `ai_analysis` 事件返回 `False` 而不造表 | 主键冲突短路需要一个调用方与对账都观察得到的信号。外发事件的真身是 `pending_approval`（U5 写），补录事件只存在于镜像链上。`test_non_analysis_events_have_no_body_in_this_sink`（参数化 OUTBOUND_BLOCKED / BACKFILL） |
 | 4 | 计划正文 Task 2 把 `criterion_score` 的 INSERT 写在 try/except **之外** | 挪进主键短路的**同一个 try 块**（`app/audit/sinks.py:118-170`） | review round 1 Important：CHECK 失败发生在 try 之外时，把 except 写宽成 `except sqlite3.IntegrityError: return False` 那条守护**依然全绿**——测试咬不住它声称守护的回归。挪进来后窄化判据 `_is_analysis_run_pk_conflict` 才同时罩住两条语句。可观察行为不变。`test_empty_evidence_ref_is_not_swallowed`（commit `f6eb9b2`） |
 
-**⚠️ 遗留、需 Shao Peishen 拍板（U5 接线前解决）**：`record()` 返回 `False` 承载两种不同含义——
-「这条 run 已经写过」（主键短路，`tests/test_audit_sinks_sqlite.py:155`）与「这类事件在这个 sink
-里没有真身」（`:207`）。U5 的调用点分辨不出这两者。三个选项与倾向见核对报告 §五 残留 B。
+**⚠️ 已拍板（2026-08-28，Shao Peishen）**：`record()` 返回 `False` 承载两种含义——「这条 run
+已经写过」（主键短路，`tests/test_audit_sinks_sqlite.py:155`）与「这类事件在这个 sink 里没有
+真身」（`:207`）。**结论：不动 U2**，由 U5 的调用点按 `event.event_type` 自行分辨（调用点本来
+就知道自己在写什么类型）。⛔ U5 不得从 `False` 反推原因。分析见核对报告 §五 残留 B。
 ```
 
 - [ ] **Step 4: 机器核对——四条判据里的测试名必须都真实存在**
