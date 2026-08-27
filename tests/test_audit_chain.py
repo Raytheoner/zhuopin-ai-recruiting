@@ -266,11 +266,50 @@ def test_line_one_may_omit_prev_hash(chain_path):
     assert sink.verify_chain().ok is True
 
 
-def test_non_json_line_is_reported_as_a_break(chain_path):
+def test_line_one_prev_hash_value_is_not_validated(chain_path):
+    """
+    design D3 第 1 条 / sinks.py:358-360：第 1 行的 prev_hash **取值不校验**——
+    它没有前驱，拿什么和它比？硬要求第 1 行等于 GENESIS_PREV_HASH，会把"接管
+    一份既有文件"变成永久断链的误报。这里把第 1 行的 prev_hash 改成一个任意
+    的合法 64 位十六进制串（既不是 GENESIS_PREV_HASH 也不是"缺字段"），校验
+    仍必须通过。
+
+    ⚠️ 只写一行：改第 1 行的 prev_hash 会改变第 1 行的落盘字节，若文件还有
+    第 2 行，第 2 行原本存的 prev_hash（对应改动前的第 1 行字节）就会连带
+    对不上——那测的是"改了第 1 行内容导致第 2 行断链"，不是本测试要锁的
+    "第 1 行的 prev_hash 取值本身不被校验"。单行文件才能把这两件事分开。
+    """
+    sink = JsonlChainSink(chain_path)
+    sink.write(_event(1))
+
+    objects = _objects(chain_path)
+    objects[0]["prev_hash"] = "ab" * 32  # 任意合法十六进制串，非哨兵值、非缺失
+    _rewrite(chain_path, objects)
+
+    result = sink.verify_chain()
+    assert result.ok is True
+    assert result.total == 1
+
+
+@pytest.mark.parametrize(
+    "corrupt_line",
+    [
+        pytest.param(b"not json at all", id="not-json"),
+        pytest.param(b"null", id="json-null"),
+        pytest.param(b"42", id="json-scalar-int"),
+    ],
+)
+def test_non_json_line_is_reported_as_a_break(chain_path, corrupt_line):
+    """
+    合法 JSON 但非对象的行（null / 数字 / 字符串 / 数组）不能让校验器抛出
+    未处理异常——json.loads 对这些不报错，"prev_hash" not in record 对标量
+    会是 TypeError 而不是成员测试。攻击者只需 append 一行 "null\\n" 就能让
+    verify_chain() 整个崩溃，而不是按契约返回一个报告了断链的结果。
+    """
     sink = JsonlChainSink(chain_path)
     sink.write(_event(1))
     with open(chain_path, "ab") as handle:
-        handle.write(b"not json at all\n")
+        handle.write(corrupt_line + b"\n")
 
     result = sink.verify_chain()
     assert result.ok is False

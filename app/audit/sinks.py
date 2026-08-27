@@ -376,6 +376,21 @@ class JsonlChainSink:
                     error=f"第 {index} 行不是合法的 UTF-8 JSON: {exc}",
                 )
 
+            if not isinstance(record, dict):
+                # json.loads 对合法但非对象的 JSON（标量 42/null/true、数组、
+                # 字符串）不会抛异常——"prev_hash" not in record 对标量会是
+                # TypeError 而不是成员测试。攻击者只需 append 一行 "null\n"
+                # 就能让校验器整个抛出未处理异常，而不是按契约返回一个断链
+                # 结果。ChainVerification.error 字段存在的意义就是让损坏输入
+                # 变成"被报告的一次断链"，而不是一个异常，处理权不该被交给
+                # 上游某个恰好包住这里的 except。
+                return ChainVerification(
+                    ok=False,
+                    total=len(lines),
+                    broken_at=index,
+                    error=f"第 {index} 行不是 JSON 对象",
+                )
+
             if "prev_hash" not in record:
                 if index > 1:
                     return ChainVerification(
