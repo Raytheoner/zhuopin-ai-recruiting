@@ -145,3 +145,120 @@ def test_asked_questions_column_defaults_to_empty_list_on_legacy_rows(tmp_path):
         "SELECT asked_questions FROM job_profile WHERE id='old-job-v1'"
     ).fetchone()
     assert json.loads(row[0]) == []
+
+
+# ── ai-audit-trail-and-outbound-gate · U1 的回归守护 ──────────────────────
+
+
+_AUDIT_TABLES = ("analysis_run", "criterion_score", "pending_approval")
+
+
+def _seed_effect_log_and_outbox(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+        "VALUES ('old-job:effect_persist_draft:1', 'old-job', 'effect_persist_draft', '1', "
+        "datetime('now'))"
+    )
+    conn.execute(
+        "INSERT INTO outbox (thread_id, message_type, payload_json) "
+        "VALUES ('old-job', 'profile_card', '{\"body\": \"确认卡片\"}')"
+    )
+    conn.commit()
+
+
+def test_audit_tables_are_created_on_a_legacy_db(tmp_path):
+    """.51 的老库拿到三张新表，走的是 CREATE TABLE IF NOT EXISTS，无数据迁移。"""
+    conn = _legacy_db(tmp_path)
+
+    init_schema(conn)
+
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert set(_AUDIT_TABLES) <= tables
+
+
+def test_existing_tables_and_rows_are_untouched_by_audit_schema(tmp_path):
+    """
+    U1 的第二条硬约束的守护：既有表一行不改、一列不加。effect_log 与 outbox
+    的列集合与行数在 init_schema 前后必须完全相同。
+    """
+    conn = _legacy_db(tmp_path)
+    init_schema(conn)  # 老库先补齐到今天的形态
+    _seed_effect_log_and_outbox(conn)
+
+    before = {
+        "effect_log_columns": _columns(conn, "effect_log"),
+        "outbox_columns": _columns(conn, "outbox"),
+        "effect_log_rows": conn.execute("SELECT count(*) FROM effect_log").fetchone()[0],
+        "outbox_rows": conn.execute("SELECT count(*) FROM outbox").fetchone()[0],
+        "job_rows": conn.execute("SELECT count(*) FROM job").fetchone()[0],
+        "job_profile_columns": _columns(conn, "job_profile"),
+    }
+
+    init_schema(conn)
+
+    after = {
+        "effect_log_columns": _columns(conn, "effect_log"),
+        "outbox_columns": _columns(conn, "outbox"),
+        "effect_log_rows": conn.execute("SELECT count(*) FROM effect_log").fetchone()[0],
+        "outbox_rows": conn.execute("SELECT count(*) FROM outbox").fetchone()[0],
+        "job_rows": conn.execute("SELECT count(*) FROM job").fetchone()[0],
+        "job_profile_columns": _columns(conn, "job_profile"),
+    }
+    assert before == after
+
+
+def test_init_schema_stays_idempotent_with_audit_tables(tmp_path):
+    """重跑三次不报错——UNIQUE INDEX 与 CHECK 都必须带 IF NOT EXISTS 的幂等性。"""
+    conn = _legacy_db(tmp_path)
+
+    init_schema(conn)
+    init_schema(conn)
+    init_schema(conn)
+
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert set(_AUDIT_TABLES) <= tables
+
+
+def test_audit_tables_never_enter_the_add_column_path(tmp_path):
+    """
+    U1 的第二条硬约束本身：三张全新表不走 _ADDED_COLUMNS。加列路径只服务
+    "老库缺列"，把新表塞进去会让 apply_column_migrations 对着一张不存在的表
+    执行 ALTER TABLE。
+    """
+    assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {"job_profile"}
+
+
+def test_add_column_path_is_a_noop_after_audit_schema(tmp_path):
+    """三张新表建好之后，加列路径依然一列都不加。"""
+    conn = _legacy_db(tmp_path)
+    init_schema(conn)
+
+    assert apply_column_migrations(conn) == []
+
+
+def test_outbox_and_effect_log_columns_are_pinned(tmp_path):
+    """
+    加固：上面 test_existing_tables_and_rows_are_untouched_by_audit_schema
+    跑两次 init_schema 比较前后，测不出"表在本测试里第一次被创建时就已经
+    带了新列"这类错法——CREATE TABLE IF NOT EXISTS 对已存在的表是彻底
+    no-op，两次都在同一个（已经变异的）起点上比较，天然测不出创建时机的
+    问题。这里直接在全新库上钉住 effect_log / outbox 的列集合：任何人往
+    SCHEMA 里这两张已有表的定义加列，都会在这里现形。
+    """
+    conn = get_connection(str(tmp_path / "fresh.db"))
+    init_schema(conn)
+
+    assert _columns(conn, "effect_log") == {
+        "effect_key",
+        "thread_id",
+        "node_name",
+        "business_key",
+        "applied_at",
+    }
+    assert _columns(conn, "outbox") == {
+        "id",
+        "thread_id",
+        "message_type",
+        "payload_json",
+        "created_at",
+    }
