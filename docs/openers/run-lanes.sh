@@ -107,7 +107,8 @@ read -r -d '' HEADER <<'EOF' || true
 ② 并发协议。本仓库此刻可能有别的泳道在并行跑：
    - 只 git add 本 opener 明确列出的路径。⛔ 禁止 git add -A / git add . / git commit -a
    - git status 里出现别人的改动是正常的，不要停下、不要问、不要顺手提交
-   - commit 前先 git pull --rebase origin main；push 被拒就再 pull --rebase 重试，最多 3 次
+   - ⛔ 不要在 commit 前 pull（并发下必被别人的未提交改动挡住）。顺序：add 明确路径 → commit → push；
+     push 被拒才 git pull --rebase --autostash origin main 再重试，最多 3 次
    - 报 .git/index.lock 已存在，等 5 秒重试最多 5 次，⛔ 绝不删除该锁（另一个 session 正在用）
 
 ③ 环境不可达时"留步"，不许假装闭合。凡需 .51 服务器访问、需要低峰窗口、或依赖尚未就绪的

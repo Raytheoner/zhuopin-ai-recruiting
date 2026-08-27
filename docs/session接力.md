@@ -1,27 +1,51 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-08-19（Cowork 业务线）
+> 最后更新：2026-08-27（Cowork 业务线）
 
 ---
 
 ## 开场词（复制即用）
 
 ```
+HR业务线-接力0827B
 读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 恢复上下文，然后按【下一步】继续。
 ```
 
+> 🧪 **首行是一次待验证的实验，不是已确立的规则（2026-08-27）**
+>
+> **CC 侧已根治**：调 `mcp__ccd_session_mgmt__set_session_title`，实测生效。
+> **Cowork 侧没有那个工具**，名字怎么来的**尚未在本项目实测过**——
+> 企业AI转型侧的正本说「取自开场词首行、语义在前编号在后」，但那份自己也标注
+> 「来源是回忆＋交叉印证，非正本，若找到正本以正本为准」。
+>
+> 本项目侧边栏现有七条（`AI招聘智能体系统`／`Human Resource documentation updates`／
+> `Remote work briefing slides`…）**全部无编号，且中英混杂**——英文那几条几乎肯定是
+> 摘要生成的，说明 Cowork 至少在某些情况下也走摘要。
+>
+> **⇒ 这一行就是实验本身。** 下次用本开场词开 Cowork session，看侧边栏显示什么：
+>
+> | 侧边栏显示 | 结论 | 下一步 |
+> |---|---|---|
+> | `HR业务线-接力0827B` 原样 | ✅ 取首行，正本说法在本项目成立 | 落成规则，写进 kickoff skill |
+> | 被截断（如 `HR业务线-接力`） | 取首行但有长度限制 | 记下实际截断位置再定短名长度 |
+> | 变成一句摘要 | ❌ Cowork 也走摘要，首行无效 | 另找路径，⛔ 不要再改首行格式硬试 |
+>
+> ⚠️ **在看到结果之前，不要把这一行的格式写成规则**——这正是 CC 侧连栽三次的那个坑
+> （「首句会被沿用」「长度超限吃编号」「摘要碰巧保留编号」三条假说全部被实测推翻）。
+> **编号每次转场时随本文档一并更新**（`MMDD` + 当日序号）。
+
 ---
 
-## 一、状态快照（2026-08-19）
+## 一、状态快照（2026-08-27）
 
 | 项 | 现状 |
 |---|---|
-| main | `4c010a5` — 单元 A、C 已合并；**单元 B 做到一半卡在分支上未合并** |
-| 测试 | **176**（本地，单元 C 后）；Windows CI 实证基线 124 → 单元 A 后未再跑 CI |
-| 生产 | `.51:8095`，`/hr/recruit-agent`，结构化日志版已上线（08-19 21:24 发版） |
-| 已归档变更包 | `2026-08-18-fix-sqlite-transaction-ownership`、`2026-08-19-server-runtime-logging` |
-| 活跃变更包 | `m1-job-profile-intake`、`m1-intake-quality-fixes`（15/69，剩 54 项拆成 B–G 六单元）、`ai-audit-trail-and-outbound-gate`（0/53） |
+| main | `7e088cb` — 单元 A/B/C/D/E 与 audit U1 全部已合并 |
+| 测试 | **222 passed**（pytest 实测。⚠️ 别用 `grep -c "def test_"`，那个数是 221，参数化/类内方法对不上） |
+| 生产 | `.51:8095`，`/hr/recruit-agent`，结构化日志版已上线（08-19 发版） |
+| 活跃变更包 | `m1-intake-quality-fixes` **49/69**（第 3/4/5/6 章全勾，剩第 7 章 F、第 8 章 G）<br>`ai-audit-trail-and-outbound-gate` **6/53**（第 1 章 U1 全勾，剩 U2–U7）<br>`m1-job-profile-intake` 33/71（08-26 已按现实重写 WBS，四类归档） |
+| 待提交 | ⚠️ 工作区有 6 改 1 新（本轮 Cowork 产出），见【二、下一步】 |
 
 **M1 demo 已有 3 位业务经理试用过**（pilot 08-16~08-18）。`m1-intake-quality-fixes`
 整个变更包就是为修 pilot 暴露的问题而立。
@@ -30,39 +54,35 @@
 
 ## 二、下一步
 
-**OP-0819-L 已完成**（`17542f9` 落 `delivery-units.md`），**三个决策 Shao Peishen 已于 08-19 全部拍板**：
+### ① 先提交本轮 Cowork 产出（工作区 6 改 1 新，全是规则真源与执行器）
 
-| 决策 | 结论 |
-|---|---|
-| Coverage Gap「整轮失败记耗时」 | **路 B 窄化 spec** —— spec 已改，归档阻塞已解除，对 B 零影响 |
-| F（第 7 章）排位 | **最后**，接受编造率 20 场样本时钟晚开始一轮 |
-| D / E 先后 | **D 先**（5.5 自动成立，不写平行标记逻辑） |
+```
+.claude/skills/kickoff/SKILL.md      会话命名节按正本重写；pull 顺序更正
+.claude/skills/lane-dispatch/        🆕 新 skill：说「开始泳道看护」即触发的四步流程
+CLAUDE.md                            set_session_title 硬规则；pull --autostash；lane-dispatch 指针
+docs/openers/OP-0820-全量编排.md      第四批 0827B/0827C；13 处 pull 顺序更正
+docs/openers/run-lanes.sh            链式接续 + 自动摘标注 + 锁预检 + BUDGET-HIT
+docs/session接力.md                  本文件
+scripts/hooks/check-opener-header.py 判据②：CC 块缺 set_session_title 即 exit 2
+```
 
-**执行顺序定稿**：`B ∥ C → D → E → F → G`
+⚠️ `.git/index.lock` 是 Cowork VM 的 bash 建的、VM 删不掉，**CC 那边提交前先 `rm -f .git/index.lock`**。
 
-**下一步 = B 与 C 各出一份 `spec-to-plan`**（CC / 新开 session / main / ❌ worktree）。
-两份可并行：B 全在后端、C 只碰 `index.html`，触碰区零重叠。
-**前置**：先在 CC 提交本轮 Cowork 的文档改动（见下）。
+### ② 然后发第四批泳道（两条，可真并行）
 
-**Opener 全文**：`docs/openers/OP-0820-全量编排.md` —— 唯一权威清单，9 条 + 1 条手工项，
-含编排总图与并行判据。每条自包含，任何新 session 拿到都能独立执行。
-（`OP-0820-A_单元BC开工.md` 已废弃，只剩一行指针）
+| 泳道 | 编号 | 做什么 | 触碰区 |
+|---|---|---|---|
+| 溯源 | `0827B` | 单元 F 开工（第 7 章·字段溯源与编造率度量） | `intake_agent.py`/`nodes.py`/`state.py`（worktree 内） |
+| 审计 | `0827C` | audit U2 开工（`app/audit` 模块） | **全新目录，与整个仓库零文件重叠** |
 
-### 本轮 Cowork 已改、待 CC 提交的文件
+```bash
+cd /Users/paulshao/Projects/HumanResource
+bash docs/openers/run-lanes.sh --dry-run              # 预期 2 泳道 2 条，各 44 行
+bash docs/openers/run-lanes.sh --chain --full-auto --yes
+```
 
-- `specs/intake-turn-observability/spec.md` —— 窄化那句 SHALL，新增「整轮失败不留痕」Scenario
-- `design.md` —— Coverage Gap 销号，归档阻塞解除
-- `delivery-units.md` —— 三个决策回填，§3.2/§4/§6 改为已决状态
-- `tasks.md` —— 纠正第 4、6、7 章头部的并行性说法（原说法按触碰文件判据不成立）
-- `docs/session接力.md`（本文件）
-- `.claude/skills/run-build/SKILL.md` —— 上一轮就未提交的改动
-
-### 开工时仍要在 plan 阶段定的（技术方案，不必找 Shao Peishen）
-
-- **B**：已问台账落哪儿——新列（`init_schema` 幂等加列，决策 10）vs `profile_json` 下划线内部键（决策 8）
-- **B**：`derive_question_id` 校验 `field` 属于 `JobProfile.model_fields`，野 field 按无 field 降级 + 打点
-  （单元 A 终审 minor，落在 B 而非 E：3.9 让 `question_id` 第一次参与判定，野 field 会让每轮都被判成有产出）
-- **C**：点选提交必须走「文本原样拼进回复、不改 API 契约」，否则 B ∥ C 的并行立刻失效
+看护用编排文件顶部的 `[Mac]0826Z-泳道批次看护`。**首次跑 run-build 建议先不加 `--chain`**，
+拿到耗时与用量样本再开链式。
 
 ---
 
@@ -72,11 +92,12 @@
 |---|---|---|
 | 1 | ~~`intake-turn-observability` 的「重试全部失败时记录累计耗时」~~ | **✅ 已关闭 08-19**：走窄化路 B，spec 已改，归档阻塞解除 |
 | 2 | 阶段 C 门户导航 | 需 Paul 在 Win 笔记本上改门户 HTML。板块名「HR·招聘智能体」，外链跳 `http://192.168.100.51:8095/hr/recruit-agent/` |
-| 3 | `.51` 整机重启验证（07 文档 P1 第 5 条） | 需低峰窗口，会中断另外 5 个服务 |
-| 4 | `deploy-server.ps1` 的 ACL 段从未执行过 | 08-19 发版时日志目录是应用自己 mkdir 的，那段 `Set-Acl` 没跑；CI 也不跑 PowerShell |
+| 3 | `.51` 整机重启验证 | **阻断已清、只差窗口**。⚠️ 爆炸半径订正为**另外 7 个服务**（含门户网关本体）；`CBS RebootPending=True` + 85 天未重启，停机时长不可按常规估。推荐窗口 08-22 周六 08:00 CST。opener＝编排文件 `[Mac] 0820-9R` |
+| 4 | ~~`deploy-server.ps1` 的 ACL 段~~ | **✅ 已核实 08-26**（`2d5eaf0`），06 清单 1.1 一并落地 |
 | 5 | 决策代理人 | `CLAUDE.md` 里框架已建，人选待 Shao Peishen 指定 |
-| 6 | 06 清单剩余 11 条 🟢 | 见 `06-企业AI转型资产借鉴清单.md` |
-| 7 | 两个 prunable worktree | 下次进 CC 跑一次 `git worktree prune` |
+| 6 | 06 清单剩余 6 条 🟢 | 工具链四条已落地（`f4f2c8f`）。剩下的：3.3 企微 webhook（无挂载点）、7.1/7.4 合规条款（应进 audit 包的 spec）、9.1/9.2/9.3 沟通线 |
+| 7 | ~~两个 prunable worktree~~ | **✅ 已清 08-27** |
+| 8 | 🧪 **Cowork session 命名实验** | 开场词首行已改为 `HR业务线-接力0827B`。下次开 session 看侧边栏显示什么，三种结果三种处置，见本文顶部实验表。⚠️ 结果出来前不落规则 |
 
 ---
 
@@ -92,12 +113,35 @@
   这条验证成立的是「没有泄漏」，**不是「脱敏被证明有效」**。详见
   `docs/findings/2026-08-13-sqlite-事务归属冲突.md` §8.3.1。
 
+**—— 以下为 2026-08-27 本轮新增 ——**
+
+- 🔴 **CC 的 session 名只有一条路：显式调 `mcp__ccd_session_mgmt__set_session_title`**
+  （`session_id` 传字面量 `"self"`）。标题行**不会**自动变成 session 名，自动带上编号的
+  概率是**零**——此前侧边栏里那些带号的全是 Shao Peishen 手工补的。已上 hook 判据②机器守。
+  **已在跑的 session 可补救**，对它说同一句话即可，不必重开。
+- 🔴 **三条关于 session 名的假说已被实测推翻，别再提出来**：「首句会被沿用」「长度超限吃掉
+  编号」（32 字符实测完整保留）「摘要模型碰巧保留编号」。**判据：一个假说写成规则之前，
+  先问有没有一个 5 分钟就能做的实验能推翻它。**
+- 🔴 **`git pull --rebase` 不能放在 commit 前**：并发下别的泳道有未提交改动是常态，
+  实测直接 `error: cannot pull with rebase: You have unstaged changes`。
+  正确顺序＝`add 明确路径 → commit → push`，**push 被拒才** `pull --rebase --autostash`。
+- **`--max-budget-usd` 在 Max 订阅下不是钱闸**：那个美元数是 Claude Code 按标准价目**本地
+  折算**的估值，用量已包含在订阅里，提高它不产生额外收费（查证 code.claude.com/docs/en/costs）。
+  真花钱的只有 usage credits（claude.ai → Settings → Usage 单独开的开关）。
+  **真正的天花板是 5 小时滚动 + 每周用量窗口**——并行两条 run-build 用量翻倍，
+  开跑前看 `/usage` 比看美元数有意义。已把默认从 8 提到 25。
+- **Cowork 的 bash 会在 `.git/` 留下删不掉的 `index.lock`**（VM 对 `.git/` 只能写不能删）。
+  跑过 `git status` 之后 CC 那边提交前要先 `rm -f .git/index.lock`。
+  `run-lanes.sh` 已加开跑前锁预检（`exit 14`）——孤儿锁不会自己消失，带锁开跑会让**所有泳道全灭**
+  （实证 `lanes-20260826-231550` 五条全败于同一把锁）。
+
 ---
 
 ## 五、绕不开的约束（每次都要记得）
 
-- **给 Paul 的每条指令必须声明四项**：界面 / Session / 分支 / Worktree，缺一不可，
-  没有「小任务可省略」的例外。判据表见 `CLAUDE.md`。
+- **给 Paul 的每条指令，代码块头两行固定**：`[Mac]MMDDX-<主题短名>` + 【设置】单行（五项用 ｜ 分隔）。
+  **CC 的 opener 第 3 行必须调 `set_session_title`**。`MMDD` 要实跑 `TZ=Asia/Shanghai date +%m%d` 取
+  ——本机在 EDT，比中国晚 12 小时，照本机日期编会集体差一天且不报错。判据表见 `CLAUDE.md`。
 - **Opener 必须是完整可整块复制的**，不要让他拼接片段。
 - **一次给 ≥2 个 opener 时，必须说明次序与能否并行**（判据＝触碰区是否重叠）。
 - **「企业AI转型」已于 2026-08-26 迁出 OneDrive**，本地路径已作废。
@@ -110,10 +154,15 @@
 
 ---
 
-## 六、本轮学到的两条（已固化进 skill，此处只留指针）
+## 六、已固化进 skill 的判据（此处只留指针）
 
 1. **计划里的任务标题必须是三级 `### Task N:`**——二级会让 `scripts/task-brief`
    静默返回空。已写进 `.claude/skills/spec-to-plan/SKILL.md` 自查清单。
 2. **合并后要单独验一次 `git rev-list --count main..<分支>` 是否为 0**——
    `finishing-a-development-branch` 被跳过时毫无症状，唯一表现是 main 上什么都没有。
    已写进 `.claude/skills/run-build/SKILL.md` 收口段。
+3. **`git rev-list --count main..<分支>` 非 0 时先别下结论**——main 被 rebase 过时它会假阳性。
+   再跑 `git cherry -v main <分支>`：全 `-` 是内容已在 main（删掉陈旧分支即可），有 `+` 才是真没合。
+   实证：单元 C 与 `worktree-delivery-unit-e-run-build` 都撞过。已写进 `run-build/SKILL.md`。
+4. **说「开始泳道看护」即触发 `lane-dispatch` skill**——扫待办 → 判触碰区分泳道 → 写 opener
+   进编排 → dry-run 核对 → 出看护 opener 与发车命令。其中「判触碰区」是最容易错也最值钱的一步。
