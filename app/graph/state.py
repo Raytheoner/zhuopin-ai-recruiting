@@ -48,7 +48,13 @@ class IntakeState(TypedDict, total=False):
 
     is_complete: bool
     is_job_related: bool
+    # 系统按字段表推导的未指定字段（tasks 6.1，真源）。
     unspecified_fields: list[str]
+
+    # 模型自称的未指定字段（tasks 6.2，对照）。与上面那个键刻意分成两个键：
+    # 混用一个键名就迟早会有人把对照值当真源用，而那个 bug 的表现是"警示块里
+    # 少列了一个字段"——没人会注意到。
+    model_claimed_unspecified_fields: list[str]
 
     # 本轮是否有产出，由 compute_intake_turn 判定、effect_persist_draft 落进
     # job_profile.is_productive。

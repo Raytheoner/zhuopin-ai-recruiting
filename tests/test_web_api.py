@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
+from app.schemas.job_profile import field_labels
+from app.storage.db import get_connection
 from app.web.server import create_app
 
 
@@ -637,3 +639,31 @@ def test_total_round_cap_ends_the_conversation(tmp_path):
         body = client.post(f"/api/jobs/{job_id}/reply", json={"message": "嗯"}).json()
 
     assert body["message"]["type"] == "confirmation_prompt"
+
+
+def test_confirmation_prompt_payload_carries_chinese_labels(tmp_path):
+    """
+    tasks 6.5：API 返回未指定字段时同时返回中文名，两个列表同序等长。
+    前端只渲染中文名（spec：界面上不出现内部英文字段标识）。
+    """
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+                "unspecified_fields": [],
+            }
+        )
+    ]
+    client = make_app(tmp_path, responses)
+
+    payload = client.post("/api/jobs", json={"message": "招一个做驱动的"}).json()["message"]
+
+    assert payload["type"] == "confirmation_prompt"
+    fields = payload["payload"]["unspecified_fields"]
+    labels = payload["payload"]["unspecified_field_labels"]
+    assert fields, "画像只填了 job_title，不该一个缺口都没有"
+    assert len(labels) == len(fields)
+    assert labels == field_labels(fields)
+    assert all(not label.isascii() for label in labels), "中文名里混进了英文标识"

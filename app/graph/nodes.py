@@ -62,6 +62,7 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         "is_complete": result.is_complete,
         "round_count": round_count + 1,
         "unspecified_fields": result.unspecified_fields,
+        "model_claimed_unspecified_fields": result.model_claimed_unspecified_fields,
         # 零产出轮判定与本轮台账增量，由 effect_persist_draft 与画像草案写在
         # 同一条 INSERT 里。
         "is_productive": result.is_productive,
@@ -100,25 +101,35 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     它们和画像草案是同一轮的三份事实，分开写就会出现"这一轮的画像在、这一轮
     问过什么不在"——而追问预算正是按这两列取数的。
 
-    derived_unspecified_fields / ungrounded_fields / llm_response_model 这三列
-    仍然**不写值**，靠列默认值成立（第 6、7 章各自接上）。
+    2026-08-27（第 6 章 tasks 6.2/6.5）：derived_unspecified_fields 开始写值——
+    系统推导的那份进这一列（真源），模型自称的那份留在 unspecified_fields
+    （对照）。⛔ 两列不许写同一个值，否则 8.1 的回放对比失去对照组。
+    ungrounded_fields / llm_response_model 两列仍然不写值（第 7 章接上）。
     """
     profile_json = json.dumps(state.get("profile_patch_accumulated", {}), ensure_ascii=False)
-    unspecified_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
+    # 两列分工见 app/storage/db.py 的建表注释：derived_* 是系统推导的真源，
+    # 裸 unspecified_fields 是模型自称的对照。⛔ 不许两列写同一个值——那会让
+    # 8.1 的"修复前 vs 修复后"对比失去对照组。
+    derived_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
+    model_claimed_json = json.dumps(
+        state.get("model_claimed_unspecified_fields", []), ensure_ascii=False
+    )
     version = int(business_key) + 1
     asked_questions_json = json.dumps(state.get("asked_questions", []), ensure_ascii=False)
 
     conn.execute(
         "INSERT INTO job_profile "
         "(id, job_id, version, status, profile_json, unspecified_fields, "
+        "derived_unspecified_fields, "
         "turn_started_at, llm_latency_ms, is_productive, asked_questions) "
-        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?, ?, ?, ?)",
         (
             f"{thread_id}-v{version}",
             thread_id,
             version,
             profile_json,
-            unspecified_json,
+            model_claimed_json,
+            derived_json,
             state.get("turn_started_at"),
             state.get("llm_latency_ms"),
             # 默认 True：判定没接上时按"有产出"算，与列默认值和历史行一致。

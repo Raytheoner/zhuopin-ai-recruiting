@@ -593,3 +593,54 @@ def test_persist_records_off_topic_turn_as_not_productive_but_asks_guidance(tmp_
     ledger = json.loads(row[1])
     assert len(ledger) == 1
     assert ledger[0]["text"]  # 引导语文本真的进了台账，不是空列表
+
+
+# --- 推导值与模型自称值分两列落库（tasks 6.2 / 6.5） -------------------------
+
+
+def test_persist_draft_splits_derived_and_model_claimed_into_two_columns(tmp_path):
+    """
+    tasks 6.2/6.5：推导值进 derived_unspecified_fields（真源），模型自称值留在
+    unspecified_fields（对照）。⛔ 两列同值等于毁掉 8.1 回放对比的对照组。
+    """
+    conn = get_connection(str(tmp_path / "t.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', 't', 'drafting')")
+
+    effect_persist_draft(
+        conn,
+        thread_id="j1",
+        business_key="0",
+        state={
+            "profile_patch_accumulated": {"job_title": "嵌入式软件工程师"},
+            "unspecified_fields": ["toolchain", "mcu_family"],
+            "model_claimed_unspecified_fields": ["functional_safety"],
+            "history": [],
+        },
+    )
+
+    row = conn.execute(
+        "SELECT derived_unspecified_fields, unspecified_fields FROM job_profile WHERE job_id='j1'"
+    ).fetchone()
+
+    assert json.loads(row[0]) == ["toolchain", "mcu_family"]
+    assert json.loads(row[1]) == ["functional_safety"]
+
+
+def test_persist_draft_tolerates_state_without_model_claimed_key(tmp_path):
+    """重放/老 checkpoint 里没有这个新键时按空列表处理，不能 KeyError。"""
+    conn = get_connection(str(tmp_path / "t.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j2', 't', 'drafting')")
+
+    effect_persist_draft(
+        conn,
+        thread_id="j2",
+        business_key="0",
+        state={"profile_patch_accumulated": {}, "unspecified_fields": [], "history": []},
+    )
+
+    row = conn.execute(
+        "SELECT unspecified_fields FROM job_profile WHERE job_id='j2'"
+    ).fetchone()
+    assert json.loads(row[0]) == []
