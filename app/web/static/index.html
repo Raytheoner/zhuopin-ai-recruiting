@@ -25,6 +25,11 @@
   textarea { width: 100%; box-sizing: border-box; padding: 8px; }
   button { margin-top: 8px; padding: 8px 16px; cursor: pointer; }
   #jd-output { white-space: pre-wrap; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-top: 16px; display: none; }
+  .gap-warning { background: #f8d7da; border: 2px solid #dc3545; color: #58151c; padding: 14px 16px; border-radius: 8px; margin: 16px 0 8px; }
+  .gap-warning h3 { margin: 0 0 8px; font-size: 15px; }
+  .gap-warning ul { margin: 0 0 10px; padding-left: 20px; }
+  .gap-warning .consequence { font-weight: 600; margin-bottom: 12px; }
+  .gap-warning button { margin: 0 8px 0 0; }
 </style>
 </head>
 <body>
@@ -34,6 +39,7 @@
   <div class="chat" id="chat"></div>
   <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
   <button id="send-btn">发送</button>
+  <div id="gap-warning" class="gap-warning" style="display:none;"></div>
   <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
 
   <div id="jd-output"></div>
@@ -138,6 +144,66 @@
       return block;
     }
 
+    // 确认入口上方的缺口警示（tasks 6.6/6.7/6.8）。
+    // ⛔ 只渲染中文名。历史 confirmation_prompt 行（.51 上 2026-08-25 之前写的）
+    // 没有 unspecified_field_labels 这个键，这时渲染条数而不是字段名——绝不回退
+    // 去渲染英文 snake_case，那正是本章要修的故障现象。
+    const GAP_CONSEQUENCE = "留空的话，这些要求不会出现在生成的 JD 里。";
+
+    function renderGapWarning(fields, labels) {
+      const box = document.getElementById("gap-warning");
+      const confirmBtn = document.getElementById("confirm-btn");
+      box.textContent = "";
+
+      if (!fields || fields.length === 0) {
+        // 无缺口不打扰（spec Scenario：无缺口时不出现缺口警示区块）。
+        box.style.display = "none";
+        confirmBtn.style.display = "inline-block";
+        return;
+      }
+
+      const title = document.createElement("h3");
+      title.textContent = "确认之前请先看一下：还有 " + fields.length + " 项没有确定";
+      box.appendChild(title);
+
+      if (labels && labels.length === fields.length) {
+        const list = document.createElement("ul");
+        labels.forEach((label) => {
+          const item = document.createElement("li");
+          item.textContent = label;
+          list.appendChild(item);
+        });
+        box.appendChild(list);
+      }
+
+      const consequence = document.createElement("div");
+      consequence.className = "consequence";
+      consequence.textContent = GAP_CONSEQUENCE;
+      box.appendChild(consequence);
+
+      // 两个动作都要显式点，没有默认动作、没有预选（合规红线：AI 不代替人做决定）。
+      const backBtn = document.createElement("button");
+      backBtn.textContent = "回去补答";
+      backBtn.addEventListener("click", () => {
+        // 6.8：回到可继续作答的状态。已采集内容留在服务端，前端只需把入口交还
+        // 给输入框——用户下一条回复照常走 POST /reply。
+        box.style.display = "none";
+        confirmBtn.style.display = "none";
+        appendTurn("assistant", "好的，请直接补充上面这几项，我接着记。");
+        document.getElementById("input").focus();
+      });
+      box.appendChild(backBtn);
+
+      const anywayBtn = document.createElement("button");
+      anywayBtn.textContent = "知道有缺口，仍然确认";
+      anywayBtn.addEventListener("click", () => doConfirm(true));
+      box.appendChild(anywayBtn);
+
+      box.style.display = "block";
+      // 有缺口时主确认按钮不出现：UI 层就没有"不做选择直接确认"这条路可走。
+      confirmBtn.style.display = "none";
+    }
+
     function renderMessage(message) {
       if (message.type === "question") {
         const questions = message.payload.questions || [];
@@ -159,14 +225,13 @@
           activeQuestions = turn;
         }
         document.getElementById("confirm-btn").style.display = "none";
+        document.getElementById("gap-warning").style.display = "none";
       } else if (message.type === "confirmation_prompt") {
-        const unspecified = message.payload.unspecified_fields || [];
-        let text = "画像已收集完整，请确认。";
-        if (unspecified.length > 0) {
-          text += "\n以下字段未指定：" + unspecified.join("、");
-        }
-        appendTurn("assistant", text);
-        document.getElementById("confirm-btn").style.display = "inline-block";
+        appendTurn("assistant", "画像已收集完整，请确认。");
+        renderGapWarning(
+          message.payload.unspecified_fields || [],
+          message.payload.unspecified_field_labels || []
+        );
       }
     }
 
@@ -239,8 +304,17 @@
       renderMessage(data.message);
     });
 
-    document.getElementById("confirm-btn").addEventListener("click", async () => {
-      const resp = await fetch(`api/jobs/${jobId}/confirm`, { method: "POST" });
+    async function doConfirm(acknowledged) {
+      // 无缺口时发的仍然是不带 body 的 POST，与改动前逐字一致——6.10 要求
+      // "无缺口时确认流程与今天完全一致，不多一步点击"。
+      const init = acknowledged
+        ? {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ acknowledged_gaps: true }),
+          }
+        : { method: "POST" };
+      const resp = await fetch(`api/jobs/${jobId}/confirm`, init);
       const data = await resp.json();
       // 确认这一步可能因为画像字段不合规被拒（422，例如模型把 headcount 写成
       // "两个人"），也可能因为还没到可确认状态被拒（409）。不处理的话下面会把
@@ -250,6 +324,11 @@
         let reason = "确认失败，请稍后重试。";
         if (typeof detail === "string") {
           reason = detail;
+        } else if (detail && detail.gaps) {
+          // 409 的缺口回执同样只显示中文名。
+          reason = [detail.message]
+            .concat(detail.gaps.map((gap) => gap.label))
+            .join("；");
         } else if (detail) {
           const fields = (detail.errors || []).map(
             (e) => `${e.field}: ${e.reason}（当前值 ${e.got}）`
@@ -259,13 +338,16 @@
         appendTurn("assistant", "⚠️ " + reason);
         return;
       }
+      document.getElementById("gap-warning").style.display = "none";
       const output = document.getElementById("jd-output");
       output.style.display = "block";
       output.textContent = data.jd_text;
       if (data.needs_manual) {
         appendTurn("assistant", "⚠️ JD 多次触发歧视性表述检测，已转人工处理，请核对下方内容。");
       }
-    });
+    }
+
+    document.getElementById("confirm-btn").addEventListener("click", () => doConfirm(false));
   </script>
 </body>
 </html>
