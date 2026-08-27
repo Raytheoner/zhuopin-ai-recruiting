@@ -65,15 +65,15 @@
 
 交付单元：留痕模块可独立测试，此时**尚未接线**，现有行为完全不变。
 
-- [ ] 2.1 `events.py`：`DecisionEvent` dataclass，字段按 D2 的招聘领域定义（`application_id` / `job_id` / `criterion_key` / `rubric_version` / `evidence_ref` 等为一等字段，不放自由字典）；`to_dict()` 剔除空 `error` 字段
-- [ ] 2.2 `sinks.py` 之一：`AuditSink` Protocol（`write` / `read_all`）+ `SqliteSink`，写 `analysis_run` 与 `criterion_score`。**副作用/幂等**：`SqliteSink.write` 不自行 `commit`，由调用方事务统一提交（与 `effect_persist_draft` 同一约定）；`analysis_run.id` 由调用方以 `{thread_id}:{node}:{input_hash}` 生成，主键冲突即视为已写入，短路返回
-- [ ] 2.3 `sinks.py` 之二：`JsonlChainSink` 写入侧——append 一行 JSON 并嵌 `prev_hash`；进程内按文件路径共享互斥锁；上一条哈希游标按路径共享（类级字典），缓存缺失时**从磁盘末行重算**而非当 genesis
-- [ ] 2.4 `sinks.py` 之三：`JsonlChainSink.verify_chain()`——对磁盘**原始字节**重算 SHA-256；第 2 行起缺 `prev_hash` 判断链；返回 `ok` / `total` / `broken_at` / `error`
-- [ ] 2.5 测试 `verify_chain()` 的四个攻击场景：完整链通过、中间行被改、中间行被删、**删光全部 `prev_hash` 字段后重写**（必须在第 2 行判断链，这条是平台侧修过的绕过）
-- [ ] 2.6 测试 `verify_chain()` 的序列化鲁棒性：含中文、换行转义、非 ASCII 的记录不误报断链（校验不做 JSON 重排序）
-- [ ] 2.7 测试并发写入：多线程并发 append 同一文件，行不穿插且事后 `verify_chain()` 通过；两个指向同一文件的 sink 实例交替写不断链
-- [ ] 2.8 `recorder.py`：`AuditRecorder`，`record()` 按 D1 顺序**先 SQLite 后 JSONL**；SQLite 写失败即抛异常（调用方不吞，评分视为不可用）；提供 `query_by(**filters)` 与 `verify_integrity()`
-- [ ] 2.9 测试双写故障语义：JSONL append 抛错时 SQLite 记录仍在且异常可见；对账能检出差集；补齐以链尾 `type=backfill` 事件形式追加（不插回原位）
+- [x] 2.1 `events.py`：`DecisionEvent` dataclass，字段按 D2 的招聘领域定义（`application_id` / `job_id` / `criterion_key` / `rubric_version` / `evidence_ref` 等为一等字段，不放自由字典）；`to_dict()` 剔除空 `error` 字段
+- [x] 2.2 `sinks.py` 之一：`AuditSink` Protocol（`write` / `read_all`）+ `SqliteSink`，写 `analysis_run` 与 `criterion_score`。**副作用/幂等**：`SqliteSink.write` 不自行 `commit`，由调用方事务统一提交（与 `effect_persist_draft` 同一约定）；`analysis_run.id` 由调用方以 `{thread_id}:{node}:{input_hash}` 生成，主键冲突即视为已写入，短路返回
+- [x] 2.3 `sinks.py` 之二：`JsonlChainSink` 写入侧——append 一行 JSON 并嵌 `prev_hash`；进程内按文件路径共享互斥锁；上一条哈希游标按路径共享（类级字典），缓存缺失时**从磁盘末行重算**而非当 genesis
+- [x] 2.4 `sinks.py` 之三：`JsonlChainSink.verify_chain()`——对磁盘**原始字节**重算 SHA-256；第 2 行起缺 `prev_hash` 判断链；返回 `ok` / `total` / `broken_at` / `error`
+- [x] 2.5 测试 `verify_chain()` 的四个攻击场景：完整链通过、中间行被改、中间行被删、**删光全部 `prev_hash` 字段后重写**（必须在第 2 行判断链，这条是平台侧修过的绕过）
+- [x] 2.6 测试 `verify_chain()` 的序列化鲁棒性：含中文、换行转义、非 ASCII 的记录不误报断链（校验不做 JSON 重排序）
+- [x] 2.7 测试并发写入：多线程并发 append 同一文件，行不穿插且事后 `verify_chain()` 通过；两个指向同一文件的 sink 实例交替写不断链
+- [x] 2.8 `recorder.py`：`AuditRecorder`，`record()` 按 D1 顺序**先 SQLite 后 JSONL**；SQLite 写失败即抛异常（调用方不吞，评分视为不可用）；提供 `query_by(**filters)` 与 `verify_integrity()`
+- [x] 2.9 测试双写故障语义：JSONL append 抛错时 SQLite 记录仍在且异常可见；对账能检出差集；补齐以链尾 `type=backfill` 事件形式追加（不插回原位）
 
 ## 3. 留痕接线：网关钩子 + 生产装配 + 评分项白名单
 
