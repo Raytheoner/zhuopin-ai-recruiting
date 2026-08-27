@@ -16,6 +16,7 @@ from app.audit.events import (
     CriterionScore,
     DecisionEvent,
 )
+from app.audit.sinks import AuditSink, SqliteSink
 
 __all__ = [
     "AI_ANALYSIS",
@@ -25,4 +26,6 @@ __all__ = [
     "OUTBOUND_DELIVERED",
     "CriterionScore",
     "DecisionEvent",
+    "AuditSink",
+    "SqliteSink",
 ]
