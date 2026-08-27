@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.schemas.job_profile import SYSTEM_MANAGED_FIELDS, JobProfile
 
@@ -177,6 +177,94 @@ class IntakeQuestion:
             allow_free_text=bool(payload.get("allow_free_text", True)),
             is_reask=bool(payload.get("is_reask", False)),
         )
+
+
+# 一个子问题最多重问几次，是**策略**，放在 app/agents/intake_agent.py 的
+# MAX_REASKS 里与 MAX_ROUNDS / MAX_TOTAL_ROUNDS 并排。本模块只算**事实**
+# （问了几轮、答没答），不做"够不够、要不要停"的判断——事实与策略分开，
+# 才能在不动台账的前提下调上限。
+
+
+@dataclass(frozen=True)
+class QuestionLedgerEntry:
+    """
+    已问台账里的一条：这个子问题被问过几轮、第一次/最后一次在哪一轮、答了没有。
+
+    frozen=True 与 IntakeQuestion 同理：台账会被判定层、渲染层、测试同时读到，
+    可变对象会让"谁改了它"变成一个要排查的问题。
+    """
+
+    question_id: str
+    field: str | None
+    ask_count: int
+    first_asked_round: int
+    last_asked_round: int
+    is_answered: bool
+
+    @property
+    def reask_count(self) -> int:
+        """重问次数 = 问过的轮数 − 1（第一次问不算重问）。"""
+        return max(self.ask_count - 1, 0)
+
+
+def build_question_ledger(
+    asked_question_rounds: list[list[dict]],
+    *,
+    answered_fields: frozenset[str] | set[str],
+) -> dict[str, QuestionLedgerEntry]:
+    """
+    按轮的问题台账 → `question_id → QuestionLedgerEntry` 的纯推导（tasks 5.1）。
+
+    **不新增任何存储。** 两个入参都来自已经落库的事实：
+    - `asked_question_rounds`：`job_profile.asked_questions` 按 version 升序的
+      每一行（单元 B 与画像草案写在同一条 INSERT 里），外层一项 = 一轮
+    - `answered_fields`：业务字段表 − `derive_unspecified_fields(画像现值)`，
+      由调用方算好传入（见 `app/agents/intake_agent.py` 的 `_answered_fields`）
+
+    为什么"答没答"要由调用方传进来而不是这里自己算：那份判据是单元 D 的
+    `derive_unspecified_fields()`，它住在 `intake_agent`，而 `intake_agent`
+    已经 import 了本模块——本模块反向 import 会成环。更要紧的是口径：E 的
+    "这个子问题答没答"与 D 的"这个字段进不进缺口警示"**必须是同一个函数的
+    两面**，5.5 的「重问超限 → 目标字段计入未指定字段」才会自动成立，不需要
+    第二套标记逻辑。
+
+    `is_answered` 按 `question_id` 判，不按 payload 里的 `field` 判：
+    `derive_question_id` 对野 field（模型拼错、幻觉字段名）会降级成
+    `free:<hash>`，那时 payload 里的 `field` 仍是那个野名字。用 id 判就天然
+    不会把一个不存在的字段名和真实字段表对上。
+
+    返回值的键序 = 各 question_id **首次**被问到的顺序，因此
+    `list(build_question_ledger(...))` 就是"此前问过的 question_id 并集"、
+    且顺序稳定——同一份台账重放必然得到逐位相同的结果（工程铁律 1 要求节点
+    从头重跑不产生差异）。
+    """
+    answered = frozenset(answered_fields)
+    ledger: dict[str, QuestionLedgerEntry] = {}
+    for round_index, payloads in enumerate(asked_question_rounds or []):
+        for payload in payloads or []:
+            question = IntakeQuestion.from_payload(
+                {"text": payload} if isinstance(payload, str) else payload
+            )
+            question_id = question.question_id
+            existing = ledger.get(question_id)
+            if existing is None:
+                ledger[question_id] = QuestionLedgerEntry(
+                    question_id=question_id,
+                    field=question.field if question_id == question.field else None,
+                    ask_count=1,
+                    first_asked_round=round_index,
+                    last_asked_round=round_index,
+                    is_answered=question_id in answered,
+                )
+            elif existing.last_asked_round != round_index:
+                # 同一轮内撞 id 只算问了一次：历史行没有 _to_intake_questions
+                # 的同轮去重保护，一行脏数据不该让某个子问题凭空多一次重问。
+                ledger[question_id] = replace(
+                    existing,
+                    ask_count=existing.ask_count + 1,
+                    last_asked_round=round_index,
+                )
+    return ledger
 
 
 def render_questions_text(questions: list[IntakeQuestion]) -> str:

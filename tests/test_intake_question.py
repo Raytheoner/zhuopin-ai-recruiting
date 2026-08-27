@@ -1,5 +1,9 @@
+import pytest
+
 from app.agents.intake_question import (
     IntakeQuestion,
+    QuestionLedgerEntry,
+    build_question_ledger,
     derive_question_id,
     normalize_question_payload,
     render_questions_text,
@@ -253,3 +257,159 @@ def test_render_questions_text_includes_options_with_ai_disclosure():
 def test_render_questions_text_omits_options_line_when_empty():
     questions = [IntakeQuestion(text="具体车型与量产时间是？", question_id="free:x")]
     assert render_questions_text(questions) == "具体车型与量产时间是？"
+
+
+def test_empty_ledger_for_a_job_that_has_never_asked_anything():
+    assert build_question_ledger([], answered_fields=frozenset()) == {}
+    assert build_question_ledger([[]], answered_fields=frozenset()) == {}
+
+
+def test_ledger_counts_one_ask_per_round_the_question_appeared_in():
+    """同一个 question_id 在第 0、2 轮各问过一次 = 问了 2 次、重问 1 次。"""
+    rounds = [
+        [{"text": "功能安全等级？", "field": "functional_safety"}],
+        [{"text": "招几个人？", "field": "headcount"}],
+        [{"text": "ASIL 这块到底要不要？", "field": "functional_safety"}],
+    ]
+
+    ledger = build_question_ledger(rounds, answered_fields=frozenset({"headcount"}))
+
+    fs = ledger["functional_safety"]
+    assert fs.ask_count == 2
+    assert fs.reask_count == 1
+    assert fs.first_asked_round == 0
+    assert fs.last_asked_round == 2
+    assert fs.is_answered is False
+    assert ledger["headcount"].ask_count == 1
+    assert ledger["headcount"].reask_count == 0
+    assert ledger["headcount"].is_answered is True
+
+
+def test_partially_answered_round_marks_only_the_answered_subquestion():
+    """spec Scenario「部分回答」：问了两个，只答了一个，另一个保持已问未答。
+
+    这正是 2494103e 第 3-4 轮的形状（IATF 16949 答了、ISO 26262 没答）。
+    """
+    rounds = [
+        [
+            {"text": "是否要求熟悉 IATF 16949？", "field": "core_skills"},
+            {"text": "是否要求熟悉 ISO 26262？", "field": "functional_safety"},
+        ]
+    ]
+
+    ledger = build_question_ledger(rounds, answered_fields=frozenset({"core_skills"}))
+
+    assert ledger["core_skills"].is_answered is True
+    assert ledger["functional_safety"].is_answered is False
+
+
+def test_idle_round_never_flips_anything_to_answered():
+    """spec Scenario「空转轮不改变已答状态」。
+
+    空转轮的定义是"本轮未产出任何字段"，也就是 answered_fields 相对上一轮
+    一个都没多。台账只从 answered_fields 读"答没答"，所以这条不是靠一段
+    "如果是空转轮就……"的分支成立的，而是**结构上不可能违反**：没有新字段
+    进来，就没有任何 entry 会翻成已答。
+    """
+    rounds = [
+        [{"text": "功能安全等级？", "field": "functional_safety"}],
+        [{"text": "ASIL 这块要不要？", "field": "functional_safety"}],
+    ]
+    answered = frozenset()  # 两轮都没产出任何字段
+
+    ledger = build_question_ledger(rounds, answered_fields=answered)
+
+    assert ledger["functional_safety"].is_answered is False
+    assert ledger["functional_safety"].ask_count == 2
+
+
+def test_free_text_question_is_never_marked_answered():
+    """没有 field 的问题拿到的是 free:<hash> id，它不对应任何画像字段，
+    因此永远判不出"已答"。这是 derive_question_id 已写明的降级代价：
+    重问追踪只对拿得到 field 的问题成立。"""
+    rounds = [[{"text": "具体车型与量产时间是怎么安排的？"}]]
+
+    ledger = build_question_ledger(rounds, answered_fields=frozenset({"sop_projects"}))
+
+    (entry,) = ledger.values()
+    assert entry.question_id.startswith("free:")
+    assert entry.field is None
+    assert entry.is_answered is False
+
+
+def test_first_asked_round_is_the_round_a_question_first_appears_in_not_always_zero():
+    """一个子问题若不是从第 0 轮就开始问，first_asked_round 必须记它真正
+    第一次出现的那一轮，不能被硬编码成 0。"""
+    rounds = [
+        [{"text": "招几个人？", "field": "headcount"}],
+        [{"text": "要求几年经验？", "field": "experience_years"}],
+    ]
+
+    ledger = build_question_ledger(rounds, answered_fields=frozenset())
+
+    assert ledger["experience_years"].first_asked_round == 1
+    assert ledger["experience_years"].last_asked_round == 1
+
+
+def test_ledger_entry_field_is_none_when_question_id_degrades_for_unknown_field():
+    """payload 里的 field 是野字段（不在 QUESTION_TARGET_FIELDS）时，
+    derive_question_id 会降级成 free:<hash>，但 IntakeQuestion.from_payload
+    原样保留那个野 field 名。台账的 entry.field 必须跟着 question_id 走、
+    不能把这个不存在的字段名当成真实字段记下来——否则「是否已答」会拿一个
+    野名字去和真实字段表对，产生假阳性。"""
+    rounds = [[{"text": "这是个模型幻觉出来的问题", "field": "totally_made_up_field"}]]
+
+    ledger = build_question_ledger(rounds, answered_fields=frozenset())
+
+    (entry,) = ledger.values()
+    assert entry.question_id.startswith("free:")
+    assert entry.field is None
+
+
+def test_duplicate_ids_inside_one_round_count_as_one_ask():
+    """同一轮内撞 id 只能算问了一次。
+
+    今天 _to_intake_questions 会在同一轮内去重，走不到这条路径；但历史行
+    （.51 上 2026-08-19 之前写的）不受那个去重保护，台账必须自己扛住，
+    否则一行脏数据就能让某个子问题凭空多出一次"重问"、提前触顶。
+    """
+    rounds = [
+        [
+            {"text": "招几个人？", "field": "headcount"},
+            {"text": "这次计划招几位？", "field": "headcount"},
+        ]
+    ]
+
+    ledger = build_question_ledger(rounds, answered_fields=frozenset())
+
+    assert ledger["headcount"].ask_count == 1
+
+
+def test_legacy_bare_string_rows_do_not_crash_the_ledger():
+    """.51 现网 2026-08-18 之前的 outbox/台账行里 questions 是裸字符串数组。
+    台账走 IntakeQuestion.from_payload 的同一条归一化路径，历史行照样能算。"""
+    rounds = [["功能安全等级（ASIL）上有什么要求？"]]
+
+    ledger = build_question_ledger(rounds, answered_fields=frozenset())
+
+    (entry,) = ledger.values()
+    assert entry.question_id.startswith("free:")
+    assert entry.ask_count == 1
+
+
+def test_ledger_entry_is_frozen():
+    """台账条目会被多处读到，可变对象会让"谁改了它"变成一个要排查的问题
+    ——与 IntakeQuestion 用 frozen=True 是同一条理由。"""
+    import dataclasses
+
+    entry = QuestionLedgerEntry(
+        question_id="headcount",
+        field="headcount",
+        ask_count=1,
+        first_asked_round=0,
+        last_asked_round=0,
+        is_answered=False,
+    )
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        entry.ask_count = 2
