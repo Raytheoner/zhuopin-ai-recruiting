@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 from app.agents.field_grounding import (
     FieldSource,
     is_user_turn,
@@ -14,6 +17,27 @@ HISTORY = [
     {"role": "assistant", "content": "需要熟悉 AUTOSAR 吗？"},
     {"role": "user", "content": "需要熟悉 AUTOSAR CP，量产项目至少两个"},
 ]
+
+# 只读探针：定位仓库根用 __file__ 而不是 Path("app/…") 相对路径——后者依赖
+# pytest 的当前工作目录，换个目录起 pytest 就会读错文件（tests/test_static_frontend.py
+# 的写法依赖 CWD==仓库根，这里刻意不复用那个假设，改用更稳的 __file__ 定位）。
+# 这段只读取，不修改 index.html——修改它会违反本单元"业务可见性为零"的约束。
+_INDEX_HTML_PATH = Path(__file__).resolve().parent.parent / "app" / "web" / "static" / "index.html"
+_INDEX_HTML = _INDEX_HTML_PATH.read_text(encoding="utf-8")
+
+# 抓出 collectSelections() 的函数体，而不是在全文件里裸搜分隔符——避免其它
+# 无关代码里偶然出现同样的标点导致假阴性（测试该红时没红）。
+_COLLECT_SELECTIONS_RE = re.compile(r"function collectSelections\(\)\s*\{(.*?)\n {4}\}", re.DOTALL)
+
+
+def _collect_selections_body() -> str:
+    match = _COLLECT_SELECTIONS_RE.search(_INDEX_HTML)
+    assert match, (
+        "index.html 里找不到 collectSelections() 函数——点选拼接逻辑可能被"
+        "重命名、移动或删除了，tasks 7.4(b)『点选天然命中子串判定』的核实"
+        "结论需要重新核对，不要绕过这条断言。"
+    )
+    return match.group(1)
 
 
 def test_user_turns_skips_assistant():
@@ -191,9 +215,12 @@ def test_selected_option_is_grounded_without_a_special_case():
     逐字出现在该轮用户原话里**，7.3 的子串判定天然命中——不需要任何
     "点选例外"分支。
 
-    **这个测试将来若失败，说明前端的拼接格式变了、(b) 重新变成真问题。
-    那是一次设计对话（要不要给 ReplyRequest 加回 selected_options），
-    不是一个可以删掉的测试。**
+    这条测试本身用的是手工复刻的字面量，不读取 index.html，所以它**不能**
+    单独充当"前端格式漂移探测器"——那份工作交给下面的
+    test_collect_selections_format_still_matches_the_fixture，它会真的去读
+    index.html。这两条测试要放在一起看：前者证明"这种格式下判定会通过"，
+    后者证明"index.html 里现在确实还是这种格式"。任何一条红了都值得停下来，
+    重新判断 7.4(b) 是否还成立——不是可以删掉的测试。
     """
     # 逐字复刻 collectSelections() 的输出形态：问题原文 + "：" + 档位、顿号分隔
     history = [
@@ -225,3 +252,39 @@ def test_free_text_mixed_with_selection_still_grounds():
         "toolchain": {"value": ["CAPL"], "source_quote": "会 CAPL 脚本", "source_turn": 1},
     }
     assert verify_field_grounding(patch, history) == []
+
+
+def test_collect_selections_format_still_matches_the_fixture():
+    """
+    review 修复（Important 1）：上面两条测试的 history 都是手工复刻的字面量，
+    不读取 index.html，所以它们对"前端拼接格式真的漂移了"这件事完全不知情。
+    这条测试是唯一真正读 index.html 的一条——只读、不修改，diff 里不会
+    出现 app/web/static/index.html。
+
+    锁的是 collectSelections() 函数体里三个要素的**组合**，而不是整行字面量
+    或单个标点：
+    - `block.dataset.qtext`：拼接里仍然带着问题原文（不是只发送档位 ID），
+      这正是"点选文本会落进用户原话"这条结论成立的前提；
+    - `"："`：问题原文与档位之间的分隔符；
+    - `picked.join("、")`：档位仍然以字符串 join 的方式拼进同一行文本，
+      而不是被序列化成结构化数据（比如 JSON.stringify(picked)）。
+
+    只锁标点（太松）会漏掉"改成结构化 ID"这类真正让 (b) 重新成立的漂移；
+    锁整行字面量（太紧）会被无关的换行/空格/变量名重排等格式化改动误伤。
+    三者组合命中的是"点选内容是否仍以可被子串搜到的文本形式，混进用户
+    原话"这一件事——这正是本 Task 的核实结论所依赖的事实。
+
+    这条测试将来若失败，说明 collectSelections() 的拼接方式变了，
+    tasks 7.4(b) 需要重新判断是否要给 API 加回 selected_options
+    ——不是可以删掉的测试。
+    """
+    body = _collect_selections_body()
+    assert "block.dataset.qtext" in body, (
+        "collectSelections() 不再把问题原文拼进去了——点选内容可能只剩档位 ID，"
+        "7.4(b)『点选文本天然落进用户原话』的前提已经不成立。"
+    )
+    assert '"："' in body, "问题原文与档位之间的分隔符变了，需要重新核对 7.4(b)。"
+    assert 'picked.join("、")' in body, (
+        "档位不再以字符串 join 的形式拼接（可能改成了结构化数据），"
+        "子串判定天然命中的假设需要重新核对。"
+    )
