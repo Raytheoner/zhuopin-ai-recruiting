@@ -10,12 +10,56 @@
 
 交付单元：`db.py` 的 `SCHEMA` 追加三张表，既有表一行不改。合并后现有 81 个测试必须全绿（本章不改任何行为）。
 
-- [ ] 1.1 建表 `analysis_run`：`id` / `application_id` / `job_id` / `configured_model` / `response_model` / `system_fingerprint`（可空）/ `prompt_version` / `temperature` / `input_hash` / `rubric_snapshot`（JSON）/ `raw_response` / `token_usage`（JSON）/ `latency_ms` / `created_at`。表注释写明「审计资产，禁止用作训练/调优输入」及其理由
-- [ ] 1.2 建表 `criterion_score`：`id` / `analysis_run_id`（外键）/ `criterion_key` / `score` / `evidence_ref` / `created_at`；加 `CHECK (evidence_ref IS NOT NULL AND trim(evidence_ref) != '')`（铁律 4 由存储层强制，不靠应用层）
-- [ ] 1.3 建表 `pending_approval`：`id` / `thread_id` / `message_type` / `recipient` / `payload_json` / `blocked_reason` / `status`（`pending`/`approved`/`abandoned`，加 `CHECK` 限值）/ `confirmed_by`（可空）/ `enqueued_at` / `resolved_at`（可空）；`content_hash` 加唯一索引（重复入队防线，见 5.3）
-- [ ] 1.4 加索引：`analysis_run(application_id)`、`criterion_score(analysis_run_id)`、`pending_approval(status)`
-- [ ] 1.5 测试：`CHECK` 约束生效——直接执行 `INSERT` 写空 `evidence_ref` 被数据库拒绝（绕过应用层同样被拒）；`status` 写非法值被拒；重复 `content_hash` 被唯一索引拒
-- [ ] 1.6 测试：`init_schema()` 对既有库幂等重跑不报错；`effect_log` 与 `outbox` 的结构与行数不受影响
+- [x] 1.1 建表 `analysis_run`：`id` / `application_id` / `job_id` / `configured_model` / `response_model` / `system_fingerprint`（可空）/ `prompt_version` / `temperature` / `input_hash` / `rubric_snapshot`（JSON）/ `raw_response` / `token_usage`（JSON）/ `latency_ms` / `created_at`。表注释写明「审计资产，禁止用作训练/调优输入」及其理由
+- [x] 1.2 建表 `criterion_score`：`id` / `analysis_run_id`（外键）/ `criterion_key` / `score` / `evidence_ref` / `created_at`；加 `CHECK (evidence_ref IS NOT NULL AND trim(evidence_ref) != '')`（铁律 4 由存储层强制，不靠应用层）
+- [x] 1.3 建表 `pending_approval`：`id` / `thread_id` / `message_type` / `recipient` / `payload_json` / `blocked_reason` / `status`（`pending`/`approved`/`abandoned`，加 `CHECK` 限值）/ `confirmed_by`（可空）/ `enqueued_at` / `resolved_at`（可空）；`content_hash` 加唯一索引（重复入队防线，见 5.3）
+- [x] 1.4 加索引：`analysis_run(application_id)`、`criterion_score(analysis_run_id)`、`pending_approval(status)`
+- [x] 1.5 测试：`CHECK` 约束生效——直接执行 `INSERT` 写空 `evidence_ref` 被数据库拒绝（绕过应用层同样被拒）；`status` 写非法值被拒；重复 `content_hash` 被唯一索引拒
+- [x] 1.6 测试：`init_schema()` 对既有库幂等重跑不报错；`effect_log` 与 `outbox` 的结构与行数不受影响
+
+### 1.x 落地偏离登记（U1 实施，2026-08-27，final review 通过）
+
+本章按 `docs/superpowers/plans/2026-08-26-ai-audit-trail-unitU1-schema-and-config.md` 实施，落地时相对本文件字面有五条偏离。**前四条方向都是"更严"或"对齐下游粒度"，第五条是修计划自己的代码缺陷。** 分支实测 253 → 320 passed。
+
+| # | 本文件字面 | 实际落地 | 判据（哪条测试咬住它） |
+|---|---|---|---|
+| 1 | 1.2 的 `trim(evidence_ref)` | `trim(evidence_ref, ' ' \|\| char(9) \|\| char(10) \|\| char(13))` | SQLite 单参 `trim()` **只剥空格**，一个纯制表符的 `evidence_ref` 会通过字面版 `CHECK`，铁律 4 就有静默缺口。`test_criterion_score_rejects_blank_evidence_at_storage_layer[tab/newline/mixed-whitespace]` |
+| 2 | 1.3 的 `content_hash` 单列唯一索引 | `(thread_id, content_hash)` 两列唯一索引 | 与 5.3 幂等键 `{thread_id}:effect_enqueue_pending_approval:{content_hash}` 同粒度。单列全局唯一会让两个不同 thread 的同内容草稿在入队时撞 `IntegrityError`，把"拦下来排队"变成异常穿透。`test_pending_approval_allows_same_content_in_different_threads` |
+| 3 | 1.3 未写 `message_type` / `recipient` 可空性 | 两列均可空 | 草稿被拦下的常见原因**正是**这两个字段缺失。设成 NOT NULL 会把"拦下一条畸形消息"变成 `IntegrityError`，异常穿透到调用方后一个 `except` 就是 fail-open。`test_pending_approval_accepts_malformed_draft_with_unknown_type_and_recipient` |
+| 4 | `delivery-units.md` §4 约定 1 说加**两个**配置键 | 加了**三个**（多一个 `candidate_outbound_switch_file`） | 只有环境变量的话，`.51` 上改开关仍需重启进程，§3.5（三）"允许热改、不重启生效"在生产里等于零。约定的目的（U3/U4 只读不写 `config.py`）未被破坏 |
+| 5 | **计划正文 Task 4 Step 3 给出的 `is_candidate_outbound_enabled()` 代码** | 见下方专条 | —— |
+
+#### 偏离 5：外发总开关 fail-closed 加固（合规红线，需 Shao Peishen 追认）
+
+**原计划代码为什么不成立。** 计划 Task 4 Step 3 的实现先调 `get_settings()`、再读开关文件。审查阶段实测出三个 **fail-open** 路径——异常从闸门里逃逸出去，调用方任何一个 `except Exception` 兜底就变成"放行"：
+
+1. `CANDIDATE_OUTBOUND_ENABLED` 取值 pydantic 无法解析成 `bool`（`""`、拼错的 `"ture"`）→ `get_settings()` 抛 `ValidationError`。**且此时开关文件哪怕写着 `false` 也拦不住**，因为异常发生在读文件之前——热改这道闸形同虚设。
+2. `LLM_MODEL=latest` → `validate_model_version()` 抛 `ValueError`。**一个跟外发毫无关系的配置错误，把外发闸门一起带走。**
+3. `Path.exists()` 对 ENOTDIR / ELOOP（某级路径段是普通文件、符号链接自环）同样返回 `False`，于是**结构损坏的开关文件路径被当成"没配"**，降级去读环境变量。实测：`.env` 写 `true` 时返回 `True`。计划里 `exists()` vs `is_file()` 那条注释只堵住了"目录占位"一种。
+
+这与计划自己声明的约束直接冲突——「任何一层读不出明确的'开'，结果都是 `False`：未知即拦截……出错的方向只能是更保守的那一侧」。**冲突时以真值为准，不迁就计划正文。**
+
+**改成了什么。**
+- `_read_switch_file()` 取代 `Path.exists()`：只有 `FileNotFoundError`（确实没这个文件）才返回 `None` 并降级去看环境变量；其余 `OSError` / `UnicodeDecodeError` / `ValueError` 一律抛内部哨兵 `_SwitchFileBroken` → 判关。**"没配"与"配坏了"必须分开**，`exists()` 的布尔值做不到这个区分。
+- `get_settings()` 构造失败 → 立刻返回 `False`，连开关文件都不看。配置坏了就是全拦。
+- `is_candidate_outbound_enabled()` 变成一层 `try/except Exception: return False` 的薄壳，包住私有的 `_evaluate_candidate_outbound_switch()`。**契约由结构保证，不靠枚举异常类型**——第一轮枚举了 `OSError`/`UnicodeDecodeError`，第二轮仍被 NUL 字节路径抛的裸 `ValueError` 逃出去（`dotenv` 不像 `os.environ` 那样拒绝 NUL；`.51` 上 PowerShell 写的 UTF-16 `.env` 解码后就会带 NUL）。枚举法已经失败两次。
+
+**没有改变的东西**（拍板结论原样保留）：代码默认 `False`；优先级 开关文件 > 环境变量 > 基线值；每次调用求值、无 `@lru_cache`；`get_settings()` 自身的 `@lru_cache` 保留。
+
+**判据。** 两条 Critical 各有专属回归测试钉住，均经变异验证会单独变红：
+
+| 失效场景 | 钉住它的测试 |
+|---|---|
+| 垃圾值 `CANDIDATE_OUTBOUND_ENABLED`（`""` / `"ture"`） | `test_empty_env_value_is_closed_not_an_exception`、`test_typo_env_value_is_closed_not_an_exception` |
+| 无关配置错误 `LLM_MODEL=latest` | `test_unrelated_config_error_does_not_break_gate` |
+| 路径结构损坏（ENOTDIR / ELOOP） | `test_switch_path_with_file_as_parent_component_is_closed`、`test_switch_path_self_referencing_symlink_is_closed` |
+| NUL 字节路径抛裸 `ValueError` | `test_read_switch_file_classifies_nul_byte_as_broken_not_bare_value_error` |
+| 任何未枚举的异常类型 | `test_unenumerated_exception_type_still_closes_the_gate` |
+| 没配（ENOENT）被误判成配坏了 | `test_absent_switch_file_still_falls_through_to_env_var` |
+
+**默认值必须参与求值**（上一轮单元 D 的教训：合规默认值被改成 `True` 却无人发现）。把 `candidate_outbound_enabled: bool = False` 改成 `True` 后，`test_candidate_outbound_is_closed_by_default`、`test_switch_file_removal_falls_back_to_baseline`、`test_env_var_is_read_every_call_not_cached_at_startup` 三条变红——两次结构重排之后都复验过，基线分支没有被短路绕过。
+
+**⚠️ 遗留、需 Shao Peishen 拍板（U5 接线前必须解决）**：`_read_switch_file()` 不剥 UTF-8 BOM，也不认 UTF-16。`.51` 是 Windows，PowerShell 的 `Out-File` / `>` 默认写 UTF-16LE，记事本的"UTF-8"带 BOM——**运维照着文档写一个 `true` 进去，开关不会打开，而且不报错**。方向是 fail-closed（拦住了），所以不阻塞 U1 合并，但那条热改通道在真机上等于打不开。两个选项：(a) 改 `_read_switch_file()` 剥 BOM + 尝试 UTF-16 解码；(b) 不动代码，在 U7 的运维文档里规定必须用 `[System.IO.File]::WriteAllText($p,'true')` 写。**(a) 是在合规开关上放松，属不可代项，未经他本人同意没有就地实施。**
 
 ## 2. `app/audit`：事件、双 sink、统一入口
 
