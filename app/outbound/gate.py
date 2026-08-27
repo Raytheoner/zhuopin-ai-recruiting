@@ -240,43 +240,54 @@ def _decide(
         return blocked(REASON_UNREGISTERED_TYPE)
 
     # ② 严格布尔。⛔ 不用真值性：字符串 "false" 的真值性是 True。
+    #    ⚠️ 读不出布尔 = 消息畸形 = 终局拦截；读得出的 True 是"已知高风险"，
+    #    走第 ⑥ 条由人清关。两者的差别就是"能不能被签字清掉"。
     flag = raw["requires_confirmation"]
     if flag is not True and flag is not False:
         return blocked(REASON_CONFIRMATION_FLAG_UNKNOWN)
 
-    # ③ 消息自称需要确认。
-    if flag is True:
-        return blocked(REASON_CONFIRMATION_REQUIRED)
+    # ⚠️ 这里**没有**「flag is True 即拦」这一条了（D-6 取 (b)，2026-08-28
+    #    Shao Peishen 拍板）。自称需确认与最高级是**已知的高风险**，按 spec
+    #    「高风险消息 SHALL 仅在携带 confirmed_by 时才被放行外发」，它们由
+    #    第一道闸的人来清关，见第 ⑥ 条。改成终局拦截会让 queue.approve()
+    #    带着 confirmed_by 重走门禁仍被拦——待审批队列里的信件永远发不出去。
 
-    # ④ 风险等级必须是词表里的字符串。不做大小写归一化、不 strip——
+    # ③ 风险等级必须是词表里的字符串。不做大小写归一化、不 strip——
     #    归一化就是在猜作者的意图，而未知即拦截不允许猜。
     severity = raw["severity"]
     if severity not in KNOWN_SEVERITIES:
         return blocked(REASON_SEVERITY_UNKNOWN)
 
-    # ⑤ 最高级一律拦。
-    if severity == MAX_SEVERITY:
-        return blocked(REASON_SEVERITY_MAX)
-
-    # ⑥ AI 生成标识（tasks 4.4，复用 jd_agent 的模板）。
+    # ④ AI 生成标识（tasks 4.4，复用 jd_agent 的模板）。
     if not evidence["ai_label_present"]:
         return blocked(REASON_MISSING_AI_LABEL)
 
-    # ⑦ 收件对象必须是一个非空字符串（2026-08-28 拍板新增，见常量处注释）。
+    # ⑤ 收件对象必须是一个非空字符串（2026-08-28 拍板新增，见常量处注释）。
     #    ⛔ 非字符串同样判未知：门禁不猜"这个结构里哪个键是收件人"，
-    #    拍平成字符串是 U5 适配器的活。放在两道闸之前——它是消息自身的
-    #    畸形，与"等待人工确认"是两回事，6.5 统计时要分得开。
+    #    拍平成字符串是 U5 适配器的活。
     recipient = raw["recipient"]
     if not isinstance(recipient, str) or not recipient.strip():
         return blocked(REASON_RECIPIENT_UNKNOWN)
 
-    # ⑧ 第一道闸：人工确认。spec「人工确认才放行」——确认人标识为空的
+    # ── 以上五条是**消息畸形**：读不出它是什么，⛔ 人也不能清关。
+    #    签字的前提是知道自己在签什么；允许 confirmed_by 清掉畸形，人工确认
+    #    就成了"随便谁点一下就能发任何东西"的橡皮图章。
+    #    以下是两道闸，处理的是**已知**的高风险。
+
+    # ⑥ 第一道闸：人工确认。spec「人工确认才放行」——确认人标识为空的
     #    高风险消息 MUST 被拦截。空白串不是人。
+    #    ⚠️ 没有确认人时，原因要说清**为什么是高风险**，不一律折成
+    #    「等待人工确认」——U5 观察期与 U6 的 6.5 靠这个分布做判断（同 D-3）。
     confirmed_by = raw["confirmed_by"]
     if not isinstance(confirmed_by, str) or not confirmed_by.strip():
+        if flag is True:
+            return blocked(REASON_CONFIRMATION_REQUIRED)
+        if severity == MAX_SEVERITY:
+            return blocked(REASON_SEVERITY_MAX)
         return blocked(REASON_AWAITING_CONFIRMATION)
 
-    # ⑨ 第二道闸：外发总开关。只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
+    # ⑦ 第二道闸：外发总开关。只有**恰好是 True** 才算开。
+    #    ⚠️ 两道闸**串联**：人签了字，总开关关着照样不发。⛔ 不用真值性：字符串 "false" 的真值性
     #    是 True，一个字符串开关就能把闸门打开。与 U1 的 _as_switch()
     #    在配置那一侧的口径一致——未知即关。
     if raw["_switch"] is not True:

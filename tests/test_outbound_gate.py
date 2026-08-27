@@ -291,21 +291,25 @@ def test_non_boolean_confirmation_flag_is_unknown_and_blocked(flag):
     assert decision.allowed is False
 
 
-def test_confirmation_flag_true_and_unknown_have_different_reasons():
+def test_confirmation_flag_true_and_unknown_are_not_the_same_kind_of_block():
     """
-    "消息自称需要确认"与"这个标志读不出来"是两回事：前者是消息作者的
-    显式意图，后者是消息畸形。6.5 按拦截原因统计时两者必须分得开。
+    "消息自称需要确认"与"这个标志读不出来"是两回事，D-6 取 (b) 之后这个
+    区别变成了**能不能被人清关**：
+
+    - 自称需确认 = **已知的**高风险 → 带 confirmed_by 可放行
+    - 标志读不出来 = 消息**畸形** → 终局拦截，人也清不掉（不知道它是什么，
+      就没人能替它签字）
     """
-    explicit = compute_outbound_gate(
+    explicit_with_confirmer = compute_outbound_gate(
         _valid_message(requires_confirmation=True), lambda: True
     )
-    unknown = compute_outbound_gate(
+    unknown_with_confirmer = compute_outbound_gate(
         _valid_message(requires_confirmation=None), lambda: True
     )
 
-    assert explicit.allowed is False
-    assert unknown.allowed is False
-    assert explicit.reason != unknown.reason
+    assert explicit_with_confirmer.allowed is True
+    assert unknown_with_confirmer.allowed is False
+    assert unknown_with_confirmer.reason == "确认标志缺失或取值未知"
 
 
 @pytest.mark.parametrize("severity", [None, "", "  ", "critical", "LOW", "低", 3])
@@ -317,8 +321,11 @@ def test_unknown_severity_is_blocked(severity):
     assert decision.reason == "风险等级缺失或未登记"
 
 
-def test_top_severity_is_blocked_with_its_own_reason():
-    decision = compute_outbound_gate(_valid_message(severity="high"), lambda: True)
+def test_top_severity_without_a_confirmer_is_blocked_with_its_own_reason():
+    """最高级 = 已知的高风险：没人签字就拦，且原因单列（6.5 要统计它）。"""
+    decision = compute_outbound_gate(
+        _valid_message(severity="high", confirmed_by=None), lambda: True
+    )
 
     assert decision.allowed is False
     assert decision.reason == "风险等级为最高级"
@@ -838,40 +845,85 @@ def test_a_genuinely_absent_attribute_is_still_reported_as_absent():
     assert decision.absent_fields == ("recipient",)
 
 
-def test_confirmed_by_cannot_clear_a_self_declared_or_top_severity_block_pending_d6():
+def test_confirmed_by_clears_a_known_high_risk_block_per_d6_option_b():
     """
-    ⚠️ **口径锁定用例 —— 未决问题 D-6，见 plan。⛔ 实施者不得自行改动。**
+    ⚠️ **口径锁定用例。批准人：Shao Peishen｜时间：2026-08-28｜事项：D-6 取 (b)。**
 
-    当前行为（按 tasks 4.6/4.7 字面）：`requires_confirmation=True` 与
-    `severity` 最高级是**终局拦截**，带上 confirmed_by 也清不掉。
+    spec 的模型：fail-closed 条件把消息**分级**，`confirmed_by` 是**清关**。
+    「高风险消息 SHALL 仅在携带 confirmed_by 时才被放行外发」+ Scenario
+    「人工放行」明写草稿带确认人重走门禁、两道闸都过即外发。
 
-    但 spec 的另外两条读起来是相反的：
-    - 「门禁覆盖范围」：拒信与邀约「这两类 MUST 一律判为高风险」
-    - 「人工确认才放行」：「高风险消息 SHALL 仅在携带 confirmed_by 时才被
-      放行外发」，且 Scenario「人工放行」写明放行后草稿重走门禁、两道闸
-      都过就被外发
-
-    两边合起来推出的模型是：fail-closed 六条是**风险分级的输入**，
-    confirmed_by 是**清关**。按那个模型，高风险 + confirmed_by 应当放行。
-
-    这条差别对 U5 是硬后果：若 U5 的适配器照 spec 把候选人信件标成
-    severity 最高级或 requires_confirmation=True，那么 `queue.approve()`
-    带着 confirmed_by 重走门禁**仍然会被拦**，待审批队列里的东西永远发不
-    出去——整个人工放行路径失效。
-
-    ⛔ 本 session 不改这条：让 confirmed_by 能清掉这两条是**放松闸门**，
-    属 CLAUDE.md 决策代理表的不可代项（候选人对外通道）。2026-08-28 的
-    「一律取最保险一侧」是对当时列出的五项而言，不构成改写放行路径的授权。
+    取 (b) 之前这两条是终局拦截，`queue.approve()` 带着 confirmed_by 重走
+    门禁仍被拦——待审批队列里的候选人信件永远发不出去，人工放行路径整体
+    失效。这正是本变更包立项要建的能力。
     """
     self_declared = compute_outbound_gate(
         _valid_message(requires_confirmation=True), lambda: True
     )
     top_severity = compute_outbound_gate(_valid_message(severity="high"), lambda: True)
 
-    assert self_declared.allowed is False
-    assert self_declared.reason == "消息自称需要人工确认"
-    assert self_declared.evidence["confirmed_by"] == "shao-peishen"
+    assert self_declared.allowed is True
+    assert top_severity.allowed is True
 
-    assert top_severity.allowed is False
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"message_type": "offer_letter"},
+        {"requires_confirmation": None},
+        {"severity": "critical"},
+        {"body": "没有标识的正文"},
+        {"recipient": ""},
+    ],
+)
+def test_confirmed_by_cannot_clear_a_malformed_message(malformed):
+    """
+    ⭐ **(b) 的另一半，比放行那一半更重要**：可清关的只有「已知的高风险」
+    两条。消息**畸形**的五条——未登记类型、标志读不出、等级读不出、缺
+    AI 标识、收件人读不出——依旧终局，**人也清不掉**。
+
+    理由：签字的前提是知道自己在签什么。一条读不出风险等级的消息，没有人
+    能对它做出有意义的确认；允许 confirmed_by 清掉畸形，等于把人工确认
+    变成"随便谁点一下就能发任何东西"的橡皮图章。
+    """
+    decision = compute_outbound_gate(_valid_message(**malformed), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.evidence["confirmed_by"] == "shao-peishen"
+
+
+def test_a_plain_letter_without_a_confirmer_reports_exactly_the_spec_wording():
+    """
+    spec Scenario「未带确认人的高风险消息」逐字：拦截原因为「等待人工确认」。
+    这条喂的就是那个场景的输入——一封没有自称需确认、等级也不是最高级的
+    普通拒信，缺的只有确认人。
+    """
+    decision = compute_outbound_gate(_valid_message(confirmed_by=None), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "等待人工确认"
+
+
+def test_the_reason_says_why_it_was_high_risk_when_there_is_no_confirmer():
+    """
+    没有确认人时，原因仍要说清**为什么是高风险**，而不是一律折成
+    「等待人工确认」——U5 合并后的观察期与 U6 的 6.5 都靠这个分布做判断
+    （与 D-3 同一条理由）。证据里也留着触发字段的原始取值。
+    """
+    self_declared = compute_outbound_gate(
+        _valid_message(requires_confirmation=True, confirmed_by=None), lambda: True
+    )
+    top_severity = compute_outbound_gate(
+        _valid_message(severity="high", confirmed_by=None), lambda: True
+    )
+
+    assert self_declared.reason == "消息自称需要人工确认"
     assert top_severity.reason == "风险等级为最高级"
-    assert top_severity.evidence["confirmed_by"] == "shao-peishen"
+
+
+def test_a_cleared_high_risk_message_is_still_stopped_by_the_master_switch():
+    """两道闸是**串联**的：人签了字，总开关关着照样不发（spec 4.8 不变）。"""
+    decision = compute_outbound_gate(_valid_message(severity="high"), lambda: False)
+
+    assert decision.allowed is False
+    assert decision.reason == "外发总开关关闭"
