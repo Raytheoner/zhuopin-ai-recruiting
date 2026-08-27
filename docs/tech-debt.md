@@ -40,6 +40,11 @@ Task 5 的分离口径 SQL）改指 `analysis_run`。
 ⛔ **删列本身改的是 `.51` 现网库的表结构，属生产决定，需 Shao Peishen 拍板后
 另开变更包**（`delivery-units.md` §2.U3 逐字：「U3 的范围**不含删列**」）。
 
+**现状（2026-08-28，U3 留痕接线已合并）**：`RecorderAuditHook` 已接到
+`app/main.py:_gateway_factory()`，`analysis_run` 开始有真实数据；但 intake 路径
+尚未传 `audit_context`，那些行的 `job_id` / `application_id` 全为 `NULL`——
+**上面第 ① 步仍未完成，债未到期**。两列继续照写，时序口径以 `job_profile` 为准。
+
 **不还的后果**：两套时序数据长期并存、互相矛盾，而没人知道该信哪一份。
 
 **为什么当时要欠**：本批 P0/P1 的修复必须能被验证（"兜底档位是否真的减少了
