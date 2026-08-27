@@ -1854,8 +1854,12 @@ def test_replay_2494103e_iatf_and_iso26262_sequence():
       第 4 轮系统把 ISO 26262 拆出来重问，措辞不同、话题相同。2026-08-11 上线
       的逐字重复检测（_repeats_earlier_assistant_turn）按定义抓不到——原文本来
       就不一样。"
-    - `docs/m1-demo-pilot-feedback.md`：该会话自身的两条原子性不变式都是绿的，
-      没有丢消息，所以"用户体感重复"确实来自换措辞重问，而不是投递丢失。
+    - `docs/m1-demo-pilot-feedback.md`：该会话自身的两条原子性不变式都是绿的、
+      **没有查到**丢消息——同一份文档同时写明"绿是弱证据，不是证明"（两边恰好
+      一起失败时那一轮会整体消失、计数仍然相等，数据上不可见），其净结论把换
+      措辞重问称为"**最可能的**解释"、把投递丢失从"唯一解释"里排除而不是排除
+      掉它本身。所以本用例的立场是：换措辞重问是"用户体感重复"最可能的成因，
+      投递丢失那一层另由 fix-sqlite-transaction-ownership 处理，两者不互斥。
 
     **本用例的边界（如实写在这里，不要在别处宣称更强的结论）**：它回放的是
     那次事故的**形状**（打包提问 → 部分回答 → 换措辞重问），不是生产库里逐
@@ -1890,6 +1894,11 @@ def test_replay_2494103e_iatf_and_iso26262_sequence():
 
     # 第 4 轮：用户只答了 IATF 16949。系统换措辞重问 ISO 26262——question_id
     # 必须与首问一致（换措辞不改 id），且必须带重问标注。
+    #
+    # 这一轮的模型输出刻意把**两条都**换措辞再抛一遍（这正是 proposal 第 7 行
+    # 描述的"跟别的问题捆在一起重新问"）：只抛未答的那一条，"已答的不打重问
+    # 标记"就无从谈起——那条断言会因为候选里根本没有它而恒真，看着有覆盖、
+    # 其实一个字节都没验（2026-08-27 review 判定为空洞断言）。
     asked_after_round3 = [[], [], [q.to_payload() for q in round3.asked_questions]]
     accumulated_after_round3 = {
         **accumulated,
@@ -1901,7 +1910,8 @@ def test_replay_2494103e_iatf_and_iso26262_sequence():
                 {
                     "is_job_related": True,
                     "questions": [
-                        {"text": "功能安全 ISO 26262 这块有硬性要求吗？", "field": "functional_safety"}
+                        {"text": "16949 那边还有别的硬性要求吗？", "field": "core_skills"},
+                        {"text": "功能安全 ISO 26262 这块有硬性要求吗？", "field": "functional_safety"},
                     ],
                     "profile_patch": {},
                 }
@@ -1913,21 +1923,36 @@ def test_replay_2494103e_iatf_and_iso26262_sequence():
         asked_question_rounds=asked_after_round3,
     )
 
-    (reasked,) = round4.questions
+    by_id = {q.question_id: q for q in round4.questions}
+    assert list(by_id) == ["core_skills", "functional_safety"]
+
+    reasked = by_id["functional_safety"]
     assert reasked.question_id == "functional_safety"  # 换措辞不改 id
     assert reasked.is_reask is True                     # 重问带标注
-    assert "（这个你刚才没答）" in round4.questions_text
-    # 已答的那一条没有被重问：用户答过 IATF 之后系统不再问它
-    assert "core_skills" not in [q.question_id for q in round4.questions]
+
+    # 已答的那一条**不打**重问标记：用户答过 IATF 之后再问它是**递进提问**
+    # （决定 4 / tasks 5.7 明确保住的那条路），给它挂上"这个你刚才没答"是对
+    # 用户撒谎。注意它照常下发、不被摘除——"已答"只影响标记与上限，不影响下发。
+    assert by_id["core_skills"].is_reask is False
+    # 整轮文本里"这个你刚才没答"只能出现一次，就挂在真正没答的那一条上
+    assert round4.questions_text.count("（这个你刚才没答）") == 1
+    assert "（这个你刚才没答）功能安全 ISO 26262 这块有硬性要求吗？" in round4.questions_text
     # 这一轮既没有新画像内容也没有新 question_id → 不吃有产出轮预算
     assert round4.is_productive is False
 
 
 def test_replay_2494103e_stops_reasking_iso26262_after_the_cap():
     """
-    tasks 5.5 在真实序列上的收口：ISO 26262 问到第 3 轮仍无回答，第 4 次
-    不再问；它的目标字段由单元 D 的 derive_unspecified_fields 自然列进未指定
-    ——E 这边没有、也不该有任何一行"标记为超限未答"的代码。
+    tasks 5.5 在 `2494103e` 那条序列上的收口：ISO 26262 问到第 3 轮仍无回答，
+    第 4 次不再问；它的目标字段由单元 D 的 derive_unspecified_fields 自然列进
+    未指定——E 这边没有、也不该有任何一行"标记为超限未答"的代码。
+
+    **前置事实的出处与本用例的边界**与上一条用例
+    （`test_replay_2494103e_iatf_and_iso26262_sequence`）逐字相同，不再复述：
+    回放的是那次事故的**形状**，不是生产库里逐字节的原始 turn 文本，`.51` 的
+    conversation 原文不在取数范围内。另外"问满 3 轮"这一段本身**不在**已记载
+    的事实里——proposal 只记到第 4 轮的换措辞重问；把它续到上限是**按 5.5 的
+    规则外推的假设序列**，用来验规则，不作为对那次会话的事实主张。
 
     台账的轮数写成字面量 3、而不是 `[[…]] * MAX_ASKS_PER_QUESTION`：跟着常量
     一起长的话，常量被改大时构造的台账也跟着变长，"第 4 次不再问"这条断言会
@@ -1984,15 +2009,17 @@ def test_verbatim_repeat_detection_still_guards_jobs_with_an_empty_ledger():
     tasks 5.8 的结论（保留逐字防线）在测试里的形态。
 
     `.51` 现网的既有 job（`delivery-units.md` §5 约定 4 记作 15 个）在第 8 章
-    8.3 升级到单元 B 的新列之后，`asked_questions` 全是列默认值 `'[]'`——加列
-    时按约定**不回填历史行**（同条约定；本机 demo 库的加列演练实测 22 行全部
-    拿到默认台账，见 `docs/findings/2026-08-26-unitB-已问台账列加列演练.md`
-    结论 3）。这些会话继续对话时台账恒为空，一个重问标记都不会打、重问上限
-    一次都不会触发，兜住"模型 temperature=0 下原样重放上一轮"的**只有**
-    _repeats_earlier_assistant_turn。
+    8.3/8.4 升级到单元 B 的新列之后，历史行的 `asked_questions` 全是列默认值
+    `'[]'`——加列时按约定**不回填历史行**（同条约定；本机 demo 库的加列演练
+    实测 22 行全部拿到默认台账，见
+    `docs/findings/2026-08-26-unitB-已问台账列加列演练.md` 结论 3）。于是
+    **升级前问过的那些子问题在台账里一个都看不见**：续聊的第一轮台账整个为空
+    （下面构造的正是这一轮），此后也只看得见升级后新写的那几行。模型把升级前
+    问过的问题原样再抛一次时，重问标记打不出来、重问上限也触发不了，兜得住的
+    **只有** _repeats_earlier_assistant_turn。
 
-    这条用例红了就说明有人把那道防线删了，而删除的症状只在台账为空的 job 上
-    出现——本地新建的测试库每一轮都有台账，日常测试根本走不到。
+    这条用例红了就说明有人把那道防线删了，而删除的症状只在台账看不见历史轮次
+    的 job 上出现——本地新建的测试库每一轮都有台账，日常测试根本走不到。
     """
     text = "具体车型与量产时间是怎么安排的？"
     result = _turn(
