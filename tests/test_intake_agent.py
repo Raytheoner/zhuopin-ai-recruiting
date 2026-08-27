@@ -1570,8 +1570,15 @@ def test_reask_stops_after_the_cap_and_the_field_lands_in_unspecified():
 
     上限取 2（问 1 次 + 重问 2 次 = 出现在 3 轮里）。第 4 次再问就必须被摘掉。
     “计入未指定字段”这一半**不是这里写的一段标记逻辑**——字段没值，单元 D 的
-    derive_unspecified_fields 自然把它列进去。本条用例直接拿 D 的函数断言这一点，
-    正是为了钉死“E 不许写第二套标记”（delivery-units.md §2.D）。
+    derive_unspecified_fields 自然把它列进去，本轮的 unspecified_fields 也就是
+    它算出来的那一份，正是为了钉死“E 不许写第二套标记”（delivery-units.md §2.D）。
+
+    ⚠️ 断言必须落在 `result.unspecified_fields` 上，**不能**在这里另外调一次
+    `derive_unspecified_fields(accumulated)`：后者算的是本用例自己搓的那个
+    fixture dict，与 `result` 毫无关系——把 run_intake_turn 的 unspecified_fields
+    改成恒空、甚至把摘除与未指定推导之间的接线整个剪断，那种写法都照样绿
+    （2026-08-27 whole-branch review 判定为同义反复断言）。5.5 是本分支的头号
+    主张，也是“不新增任何存储”的全部理由，它必须被本轮的**输出**观测到。
     """
     assert MAX_REASKS == 2
     assert MAX_ASKS_PER_QUESTION == 3
@@ -1596,7 +1603,7 @@ def test_reask_stops_after_the_cap_and_the_field_lands_in_unspecified():
     )
 
     assert [q.question_id for q in result.questions] == []
-    assert "functional_safety" in derive_unspecified_fields(accumulated)
+    assert "functional_safety" in result.unspecified_fields
 
 
 def test_progressive_questions_on_an_answered_field_are_not_cut_off_early():
@@ -1857,9 +1864,12 @@ def test_replay_2494103e_iatf_and_iso26262_sequence():
     - `docs/m1-demo-pilot-feedback.md`：该会话自身的两条原子性不变式都是绿的、
       **没有查到**丢消息——同一份文档同时写明"绿是弱证据，不是证明"（两边恰好
       一起失败时那一轮会整体消失、计数仍然相等，数据上不可见），其净结论把换
-      措辞重问称为"**最可能的**解释"、把投递丢失从"唯一解释"里排除而不是排除
-      掉它本身。所以本用例的立场是：换措辞重问是"用户体感重复"最可能的成因，
-      投递丢失那一层另由 fix-sqlite-transaction-ownership 处理，两者不互斥。
+      措辞重问称为"**最可能的**解释"，同时明确"'这是追问策略的固有代价'这句话
+      **不能再当成唯一解释**"——被从"唯一解释"里除名的是**追问策略**这一边，
+      理由恰恰是投递丢失这条替代解释仍然活着（已证实存在一个会产生完全相同
+      表象的基础设施故障）。所以本用例的立场是：换措辞重问是"用户体感重复"
+      最可能的成因，投递丢失那一层另由 fix-sqlite-transaction-ownership 处理，
+      两者不互斥。
 
     **本用例的边界（如实写在这里，不要在别处宣称更强的结论）**：它回放的是
     那次事故的**形状**（打包提问 → 部分回答 → 换措辞重问），不是生产库里逐
@@ -1988,7 +1998,10 @@ def test_replay_2494103e_stops_reasking_iso26262_after_the_cap():
 
     assert result.questions == []
     assert result.is_productive is False
-    assert "functional_safety" in derive_unspecified_fields(accumulated)
+    # 观测点是**本轮的输出**，不是拿 accumulated 再调一次 derive_unspecified_fields
+    # ——后者只证明单元 D 的纯函数会列出这个字段，与本轮跑没跑通毫无关系
+    # （2026-08-27 whole-branch review：同义反复断言）。
+    assert "functional_safety" in result.unspecified_fields
 
     # 上限**之下**（只问过 2 轮）照常重问，只是带标注：摘除是"到上限才发生"，
     # 不是"问过就摘"。没有这一半，把上限改小到 1 次就问也能让上面三条全绿。

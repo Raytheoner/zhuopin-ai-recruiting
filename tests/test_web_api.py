@@ -1019,6 +1019,88 @@ def test_reask_is_marked_end_to_end_from_the_persisted_ledger(tmp_path):
     assert "（这个你刚才没答）" in body["message"]["payload"]["questions_text"]
 
 
+def test_reask_cap_turns_the_field_into_a_gap_end_to_end(tmp_path):
+    """
+    端到端收口 tasks 5.5：同一个子问题连问 3 轮（问 1 次 + 重问 MAX_REASKS(2) 次）
+    仍无回答，第 4 次不再问；这一轮的问题被摘空 → is_complete → 会话进确认，
+    而那个字段就出现在确认消息自己携带的缺口清单里。
+
+    为什么必须有这一条：5.5 是本分支的头号主张，也是"台账不新增任何存储"的
+    全部理由（Global Constraints 决定 1/2）——「重问超限 → 目标字段计入未指定」
+    在此之前只在 agent 层被观测。这里让它穿过真实栈跑一遍：
+    job_profile.asked_questions 落库 → _run_turn 读回 → 台账推导 → 摘除 →
+    derive_unspecified_fields → effect_deliver_message 的 confirmation_prompt
+    payload。中间任何一段接线断掉，这条都会红。
+
+    ⛔ 断言落在**响应自己带的** unspecified_fields 上，不在测试里另调一次
+    derive_unspecified_fields —— 后者只会证明单元 D 的纯函数好用，与本次会话
+    有没有真的把字段交出去无关（2026-08-27 whole-branch review 的同义反复断言）。
+
+    这里没有、也不该有任何"标记为超限未答"的字段：字段之所以进缺口清单，纯粹
+    是因为它**没有值**。合规红线要求摘掉一个子问题不得顺手替业务经理填上默认值，
+    下面那条"画像里没有 functional_safety"的断言就是这条红线的观测点。
+    """
+    ask_functional_safety = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": "功能安全等级（ASIL）上有什么要求？", "field": "functional_safety"}],
+            "profile_patch": {},
+        }
+    )
+    reask_1 = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": "ASIL 这块到底要不要？", "field": "functional_safety"}],
+            "profile_patch": {},
+        }
+    )
+    reask_2 = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": "功能安全的事还得确认一下，有要求吗？", "field": "functional_safety"}],
+            "profile_patch": {},
+        }
+    )
+    # 第 4 轮模型仍然想问同一件事——被系统按上限摘掉，模型想不想问不作数。
+    reask_over_cap = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": "26262 那边最后确认一下？", "field": "functional_safety"}],
+            "profile_patch": {},
+        }
+    )
+    client = make_app(
+        tmp_path, [ask_functional_safety, reask_1, reask_2, reask_over_cap]
+    )
+
+    job_id = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()["job_id"]
+    for reply in ("先说别的吧", "这个我还没想好", "回头再说"):
+        body = client.post(f"/api/jobs/{job_id}/reply", json={"message": reply}).json()
+
+    message = body["message"]
+    assert message["type"] == "confirmation_prompt", (
+        "第 4 次仍在追问同一个子问题——重问上限没有在真实栈上生效"
+    )
+    assert "functional_safety" in message["payload"]["unspecified_fields"], (
+        "被摘掉的子问题的目标字段没有进确认消息的缺口清单——"
+        "「重问超限转未指定」这条接线断了"
+    )
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    try:
+        accumulated = json.loads(
+            conn.execute(
+                "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()[0]
+        )
+    finally:
+        conn.close()
+    assert "functional_safety" not in accumulated, (
+        "停止追问之后系统替业务经理把字段填上了——违反合规红线"
+    )
+
+
 def test_asked_question_rounds_are_accumulated_oldest_first(tmp_path):
     """
     变异检查补的守卫：`_run_turn` 读 `job_profile.asked_questions` 的既有查询按
@@ -1090,25 +1172,31 @@ def test_asked_question_rounds_are_accumulated_oldest_first(tmp_path):
     client.post(f"/api/jobs/{job_id}/reply", json={"message": "先这样吧"})
     client.post(f"/api/jobs/{job_id}/reply", json={"message": "你决定吧"})
 
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    # try/finally 把连接关掉：部署目标是 Windows（部署约束 4），那里没关的
+    # sqlite 句柄会让 pytest 清理 tmp_path 时删不掉文件、失败在别的用例上。
+    # 断言放在 finally 之后，断言失败也不会漏掉 close。
     conn = get_connection(str(tmp_path / "web.db"))
-    accumulated = json.loads(
-        conn.execute(
-            "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
-            (job_id,),
-        ).fetchone()[0]
-    )
+    try:
+        accumulated = json.loads(
+            conn.execute(
+                "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()[0]
+        )
+        checkpointer = SqliteSaver(conn)
+        checkpoint = checkpointer.get_tuple(
+            {"configurable": {"thread_id": job_id}}
+        ).checkpoint
+        asked_question_rounds = checkpoint["channel_values"]["asked_question_rounds"]
+    finally:
+        conn.close()
+
     assert "mcu_family" not in accumulated, (
         "候选档位被写进了画像——说明 previous_questions 比对的不是最近一轮，"
         "很可能是 asked_questions 查询的 ORDER BY 被改动或倒序了"
     )
-
-    from langgraph.checkpoint.sqlite import SqliteSaver
-
-    checkpointer = SqliteSaver(conn)
-    checkpoint = checkpointer.get_tuple(
-        {"configurable": {"thread_id": job_id}}
-    ).checkpoint
-    asked_question_rounds = checkpoint["channel_values"]["asked_question_rounds"]
     assert [round_[0]["question_id"] for round_ in asked_question_rounds] == [
         "functional_safety",
         "mcu_family",

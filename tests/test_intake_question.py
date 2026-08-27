@@ -386,8 +386,22 @@ def test_duplicate_ids_inside_one_round_count_as_one_ask():
 
 
 def test_legacy_bare_string_rows_do_not_crash_the_ledger():
-    """.51 现网 2026-08-18 之前的 outbox/台账行里 questions 是裸字符串数组。
-    台账走 IntakeQuestion.from_payload 的同一条归一化路径，历史行照样能算。"""
+    """.51 现网 2026-08-18 之前的 **outbox 行**里 questions 是裸字符串数组
+    （`app/web/server.py` 的 `_response_payload` 说明的就是这一条路径）。
+    台账走 IntakeQuestion.from_payload 的同一条归一化路径，这类形状照样能算。
+
+    ⚠️ 口径要写准：**台账行里从来没有过裸字符串**。`asked_questions` 这一列是
+    单元 B 新加的（`app/storage/db.py` 的 `_ADDED_COLUMNS`，`TEXT NOT NULL
+    DEFAULT '[]'`），加列演练实测全部 22 行历史数据拿到的都是 `'[]'`
+    （`docs/findings/2026-08-26-unitB-已问台账列加列演练.md` 结论 3），既没有
+    回填、也不可能存在旧形状。所以本条用例守的是 build_question_ledger 的
+    **防御性容错，而不是一条现网真的走得到的路径**。
+
+    这个区分不是措辞洁癖：`app/web/server.py` 的 `_run_turn` 在遍历
+    `asked_questions` 时直接调 `payload.get("question_id")`，裸字符串到了那里
+    会当场 AttributeError。台账这边能扛住，不代表整条取数路径能扛住——把这里
+    的容错当成"裸字符串是支持的形状"来依赖，就会依赖出一个不存在的保证。
+    """
     rounds = [["功能安全等级（ASIL）上有什么要求？"]]
 
     ledger = build_question_ledger(rounds, answered_fields=frozenset())

@@ -41,6 +41,26 @@ QUESTION_TARGET_FIELDS: frozenset[str] = frozenset(JobProfile.model_fields) - SY
 # 作用。节点被重跑时会对同一次真实事件重复调用，计数器无法区分"重跑"
 # 与"首次执行"，于是重复计数。8.1 回放读到的降级比例因此是**降级次数
 # 的上界，不是精确的一次性事件计数**。
+#
+# ⚠️ 2026-08-27（交付单元 E 合并前）补：上面那段只说了节点重跑，而重跑
+# **已经不是主要项**了。build_question_ledger() 会对**每一轮历史里的每一条
+# 问题** 调一次 IntakeQuestion.from_payload，而 from_payload 一律丢弃传入的
+# question_id、重新走 derive_question_id 重派生（那一步是刻意的，见
+# from_payload 的注释，⛔ 不要为了这个计数器去改它）。于是**每一轮都会把
+# 整部问题史重新数一遍**：实测 6 轮历史 × 每轮 3 条 + 本轮 1 次真实派生 →
+# question_id_metrics() 报 total=19，而这一轮真实发生的派生事件只有 1 次。
+#
+# 两条后果，第二条比第一条严重：
+# 1. 量级：R 轮会话累计 O(q·R²/2) 而不是 O(q·R)，绝对值整体虚高。
+# 2. **权重**：第 i 轮问出的问题会被数 (R−i) 遍，越早的轮次被重复计得越多。
+#    因此 null_field / unknown_field 的**比例**也会被"降级发生在早轮还是晚轮"
+#    带偏——不是被一个常数放大，是被轮次位置加权。
+#
+# ⛔ 因此第 8 章 8.1 回放**不得**跨单元 E 直接比较 total / null_field /
+# unknown_field 的原始计数，**也不得**直接比较它们的比例：单元 E 之前与之后
+# 的数字不同源。要读比例，得先有一个"回放派生不计数"的 derive_question_id
+# 变体（例如给它一个 record_metrics=False 的入口，只给台账推导用）——那是
+# 单元 G 的事，明确不在 E 的范围内。本处只改注释，计数行为一个字节不动。
 _METRICS_LOCK = threading.Lock()
 _metrics_counter: Counter = Counter()
 
