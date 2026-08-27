@@ -468,10 +468,20 @@ def test_meta_latency_accumulates_across_retries(monkeypatch):
     assert meta.latency_ms == pytest.approx(3750.0)
 
 
-def test_audit_hook_still_records_per_attempt_with_unchanged_signature(monkeypatch):
+def test_audit_hook_records_one_row_per_attempt(monkeypatch):
     """
-    时序改走返回值而不是 hook：AuditHook 的签名与"每次尝试记一条"的语义都不动
-    （design.md 决策 9——ai-audit-trail-and-outbound-gate 正基于现签名设计）。
+    "每次尝试记一条"的语义不变（design.md 决策 9 的这一半仍然成立）；**签名在 U3
+    扩了三个参数**（temperature / attempt / audit_context），所以本测试从
+    ..._with_unchanged_signature 改名——名字里写着"签名不动"而签名已经动了，
+    比没有测试更误导。
+
+    理由见 openspec 变更包 ai-audit-trail-and-outbound-gate tasks 3.1 与
+    docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU3-recorder-wiring.md
+    的偏离登记 1：analysis_run.temperature 是 NOT NULL 而旧签名没有它；
+    多次尝试的 input_hash 相同，没有 attempt 会撞主键被静默丢掉。
+
+    ⛔ 不要删下面那条精确的 key 集合断言——它是"有人偷偷再加一个参数"的唯一
+    自动判据。
     """
     from app.llm import gateway as gateway_module
 
@@ -511,10 +521,13 @@ def test_audit_hook_still_records_per_attempt_with_unchanged_signature(monkeypat
         "response_model",
         "system_fingerprint",
         "prompt_version",
+        "temperature",
         "input_hash",
         "raw_response",
         "token_usage",
         "latency_ms",
+        "attempt",
+        "audit_context",
     }
 
 
@@ -538,3 +551,148 @@ def test_extract_structured_still_returns_bare_model():
 
     assert parsed.a == 1
     assert not isinstance(parsed, tuple)
+
+
+# ── U3：AuditHook 扩参与网关透传（tasks 3.1）────────────────────────────
+
+
+def test_audit_context_reaches_the_hook_as_the_very_same_object():
+    """
+    design D6：网关**原样透传**，不解释内容。断言的是对象同一性（is），不是相等
+    ——相等允许网关中途把它拷一份、顺手改几个键再传下去，同一性不允许。
+    """
+    client = FakeOpenAIClient([json.dumps({"x": 1, "y": 2})])
+    seen = []
+
+    class RecordingHook:
+        def record(self, **kwargs):
+            seen.append(kwargs)
+
+    context = {"thread_id": "job-1", "node": "compute_intake_turn"}
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        client=client,
+        audit_hook=RecordingHook(),
+    )
+
+    gateway.extract_structured(
+        system_prompt="sys", user_prompt="user", schema=Point, audit_context=context
+    )
+
+    assert seen[0]["audit_context"] is context
+
+
+def test_gateway_never_reads_inside_audit_context():
+    """
+    ⭐ "不解释内容"的机械判据。喂一个"一被读就炸"的 context：网关只要写了
+    audit_context.get("job_id") / ["thread_id"] / **audit_context 之类的一行，
+    这条立刻变红。没有它，"原样透传"只是一句注释。
+    """
+
+    class Explosive(dict):
+        def __getitem__(self, key):
+            raise AssertionError(f"网关读了 audit_context[{key!r}]——它不该解释内容")
+
+        def get(self, *args, **kwargs):
+            raise AssertionError("网关调了 audit_context.get()——它不该解释内容")
+
+        def keys(self):
+            raise AssertionError("网关展开了 **audit_context——它不该解释内容")
+
+    client = FakeOpenAIClient([json.dumps({"x": 1, "y": 2})])
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        client=client,
+    )
+
+    result = gateway.extract_structured(
+        system_prompt="sys", user_prompt="user", schema=Point, audit_context=Explosive()
+    )
+
+    assert result.x == 1
+
+
+def test_recorded_temperature_is_the_temperature_actually_sent():
+    """
+    铁律 3 要求 temperature 进留痕，铁律 5 要求它是 0。这条同时钉两件事：
+
+    1. 记下来的值 == 真正发出去的值（比对两侧，不是各自跟字面量比）——
+       只跟字面量比的话，有人把发送侧改成 0.7、把记录侧也改成 0.7，两条断言
+       一起改完照样全绿，而留痕就开始撒谎了。
+    2. 这个值是 0（铁律 5 的字面要求）。
+    """
+    client = FakeOpenAIClient([json.dumps({"x": 1, "y": 2})])
+    seen = []
+
+    class RecordingHook:
+        def record(self, **kwargs):
+            seen.append(kwargs)
+
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        client=client,
+        audit_hook=RecordingHook(),
+    )
+
+    gateway.extract_structured(system_prompt="sys", user_prompt="user", schema=Point)
+
+    sent = client.chat.completions.calls[0]["temperature"]
+    assert seen[0]["temperature"] == sent
+    assert sent == 0
+
+
+def test_attempt_number_is_one_based_and_increments_per_retry():
+    """
+    attempt 存在的唯一理由：analysis_run.id 要靠它区分同一次 extract_structured
+    里的多次尝试。两次尝试的 input_hash 完全相同，没有 attempt 就会撞主键，
+    U2 的短路逻辑会把第 2 次尝试当成"已写过"静默丢掉（sinks.py:156-168）。
+    """
+    seen = []
+
+    class RecordingHook:
+        def record(self, **kwargs):
+            seen.append(kwargs)
+
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        audit_hook=RecordingHook(),
+        client=FakeOpenAIClient(["这不是 JSON", json.dumps({"x": 1, "y": 2})]),
+    )
+
+    gateway.extract_structured(system_prompt="sys", user_prompt="user", schema=Point)
+
+    assert [call["attempt"] for call in seen] == [1, 2]
+
+
+def test_call_sites_that_pass_no_audit_context_still_work():
+    """tasks 3.1 逐字：现有调用点不传也能跑。jd_agent 与 compare_models.py 就是这种。"""
+    seen = []
+
+    class RecordingHook:
+        def record(self, **kwargs):
+            seen.append(kwargs)
+
+    gateway = LLMGateway(
+        api_key="k",
+        base_url="https://example.com",
+        model="deepseek-chat-241226",
+        supports_json_schema=False,
+        audit_hook=RecordingHook(),
+        client=FakeOpenAIClient([json.dumps({"x": 1, "y": 2})]),
+    )
+
+    gateway.extract_structured(system_prompt="sys", user_prompt="user", schema=Point)
+
+    assert seen[0]["audit_context"] is None

@@ -112,6 +112,16 @@ def _has_free_form_object(node: Any) -> bool:
 
 
 class AuditHook(Protocol):
+    """
+    一次 LLM 调用的留痕落点。**每次尝试各调一次**——重试的每一次都是一次真实的、
+    花了钱的 API 调用，都要留痕。
+
+    ⚠️ 网关只负责把参数交出去，⛔ 不解释 `audit_context` 的内容：业务语义
+    （application_id / job_id / rubric 快照）由适配层理解，网关继续对业务无知
+    （design.md D6）。守护见 `tests/test_llm_gateway.py`
+    `test_gateway_never_reads_inside_audit_context`。
+    """
+
     def record(
         self,
         *,
@@ -119,18 +129,24 @@ class AuditHook(Protocol):
         response_model: str | None,
         system_fingerprint: str | None,
         prompt_version: str,
+        temperature: float,
         input_hash: str,
-        raw_response: str,
+        raw_response: str | None,
         token_usage: dict[str, Any],
         latency_ms: float,
+        attempt: int,
+        audit_context: dict[str, Any] | None = None,
     ) -> None: ...
 
 
 class NoopAuditHook:
     """
-    默认审计钩子：只打日志，不落库。
-    完整的 analysis_run 持久化是技术债（见计划开头 技术债），
-    这里保留可插拔的调用点，接线时只需替换这一个实现。
+    ⚠️ **测试专用**（design.md D6）。生产装配处注入的是 `RecorderAuditHook`
+    （见 `app/main.py`）——注入点只有一处，回滚 = 换回一行。
+
+    留着它的理由：`LLMGateway` 的单元测试与 `scripts/compare_models.py` 不需要
+    一个真实的数据库连接。⛔ 不要在生产路径上用它：它只 `logger.debug`，
+    工程铁律 3 在它身上一条都不成立。
     """
 
     def record(self, **kwargs: Any) -> None:
@@ -158,6 +174,12 @@ class LLMCallMeta:
 
 
 class LLMGateway:
+    # 铁律 5：temperature 恒为 0。发给 API 的值与记进留痕的值必须是**同一个**
+    # 来源——写成两处字面量，改了一处忘了另一处，留痕就开始撒谎且没人发现。
+    # 守护：test_recorded_temperature_is_the_temperature_actually_sent 比对的是
+    # "真正发出去的" 与 "记下来的" 两侧，不是各自跟字面量比。
+    TEMPERATURE = 0
+
     def __init__(
         self,
         *,
@@ -185,6 +207,7 @@ class LLMGateway:
         user_prompt: str,
         schema: type[T],
         prompt_version: str = "v1",
+        audit_context: dict[str, Any] | None = None,
     ) -> T:
         """原签名保留：不关心时序的调用方（jd_agent、scripts/compare_models.py）继续用这个。"""
         parsed, _meta = self.extract_structured_with_meta(
@@ -192,6 +215,7 @@ class LLMGateway:
             user_prompt=user_prompt,
             schema=schema,
             prompt_version=prompt_version,
+            audit_context=audit_context,
         )
         return parsed
 
@@ -202,6 +226,7 @@ class LLMGateway:
         user_prompt: str,
         schema: type[T],
         prompt_version: str = "v1",
+        audit_context: dict[str, Any] | None = None,
     ) -> tuple[T, LLMCallMeta]:
         input_hash = hashlib.sha256(
             f"{system_prompt}\n{user_prompt}".encode("utf-8")
@@ -247,10 +272,17 @@ class LLMGateway:
                 response_model=response_model,
                 system_fingerprint=system_fingerprint,
                 prompt_version=prompt_version,
+                temperature=self.TEMPERATURE,
                 input_hash=input_hash,
                 raw_response=raw_content,
                 token_usage=token_usage,
                 latency_ms=latency_ms,
+                # 每次尝试各记一条，attempt 让它们在 analysis_run.id 上区分得开：
+                # 同一次 extract_structured 的多次尝试 input_hash 完全相同，不带
+                # attempt 就会互撞，第 2 次起会被主键短路当成"已写过"静默丢掉。
+                attempt=attempt_index + 1,
+                # ⛔ 原样透传，不读、不拷、不改（design.md D6）。
+                audit_context=audit_context,
             )
 
             try:
@@ -319,7 +351,7 @@ class LLMGateway:
 
         return self._client.chat.completions.create(
             model=self._model,
-            temperature=0,
+            temperature=self.TEMPERATURE,
             messages=messages,
             response_format=response_format,
         )
