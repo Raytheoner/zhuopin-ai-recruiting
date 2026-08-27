@@ -644,3 +644,44 @@ def test_persist_draft_tolerates_state_without_model_claimed_key(tmp_path):
         "SELECT unspecified_fields FROM job_profile WHERE job_id='j2'"
     ).fetchone()
     assert json.loads(row[0]) == []
+
+
+def test_confirm_profile_persists_acknowledgement_in_the_same_write(tmp_path):
+    """
+    变异检查补的守卫（铁律 1）：知情留痕必须由 effect_confirm_profile 自己连同
+    status='approved' 一起落库。
+
+    只从 HTTP 层断言"留痕最后查得到"是不够的——后面的 effect_generate_and_persist_jd
+    会用 {**profile_dict, "_jd_text": ...} 整体重写 profile_json，把留痕又带回来。
+    于是把这条 UPDATE 里的 profile_json 写入整个删掉，端到端用例依然全绿，而真实
+    故障是：JD 生成失败时画像已 approved、留痕却丢了——正是铁律 1 要杜绝的
+    "业务写与幂等/留痕不同生共死"。
+    """
+    conn = get_connection(str(tmp_path / "t.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j3', 't', 'drafting')")
+    conn.execute(
+        "INSERT INTO job_profile (id, job_id, version, status, profile_json) "
+        "VALUES ('j3-v1', 'j3', 1, 'drafting', ?)",
+        (json.dumps({"job_title": "嵌入式软件工程师"}, ensure_ascii=False),),
+    )
+
+    effect_confirm_profile(
+        conn,
+        thread_id="j3",
+        business_key="1",
+        profile_dict={
+            "job_title": "嵌入式软件工程师",
+            "_gap_acknowledgement": {"acknowledged": True, "had_gaps": True},
+        },
+    )
+
+    status, profile_json = conn.execute(
+        "SELECT status, profile_json FROM job_profile WHERE job_id='j3' AND version=1"
+    ).fetchone()
+
+    assert status == "approved"
+    persisted = json.loads(profile_json)
+    assert persisted["_gap_acknowledgement"]["acknowledged"] is True, (
+        "留痕没有跟 status='approved' 一起落库——JD 生成失败时就会丢"
+    )

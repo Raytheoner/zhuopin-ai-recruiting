@@ -132,7 +132,11 @@ def test_reply_and_confirm_then_generate_jd(tmp_path):
     reply_resp = client.post(f"/api/jobs/{job_id}/reply", json={"message": "AUTOSAR CP"})
     assert reply_resp.json()["message"]["type"] == "confirmation_prompt"
 
-    confirm_resp = client.post(f"/api/jobs/{job_id}/confirm")
+    # tasks 6.7 起：这份画像有未指定字段，不带知情标记会被 409 挡住。
+    # 本用例验的不是缺口门禁，所以显式带上标记走到它原本要验的那一步。
+    confirm_resp = client.post(
+        f"/api/jobs/{job_id}/confirm", json={"acknowledged_gaps": True}
+    )
     assert confirm_resp.status_code == 200
     jd_text = confirm_resp.json()["jd_text"]
     assert "AI 生成" in jd_text
@@ -262,13 +266,15 @@ def test_confirm_retry_does_not_regenerate_jd(tmp_path):
     assert create_resp.json()["message"]["type"] == "confirmation_prompt"
     assert scripted_client.chat.completions.call_count == 1
 
-    first = client.post(f"/api/jobs/{job_id}/confirm")
+    # tasks 6.7 起：这份画像有未指定字段，不带知情标记会被 409 挡住。
+    # 本用例验的不是缺口门禁，所以显式带上标记走到它原本要验的那一步。
+    first = client.post(f"/api/jobs/{job_id}/confirm", json={"acknowledged_gaps": True})
     assert first.status_code == 200
     first_jd = first.json()["jd_text"]
     assert scripted_client.chat.completions.call_count == 2
 
     # 模拟客户端重试：同一个 job 再 confirm 一次。
-    second = client.post(f"/api/jobs/{job_id}/confirm")
+    second = client.post(f"/api/jobs/{job_id}/confirm", json={"acknowledged_gaps": True})
     assert second.status_code == 200
     assert second.json()["jd_text"] == first_jd
     assert second.json()["needs_manual"] is False
@@ -403,7 +409,11 @@ def test_confirm_returns_422_when_llm_patch_violates_schema(tmp_path):
     job_id = create_resp.json()["job_id"]
     assert create_resp.json()["message"]["type"] == "confirmation_prompt"
 
-    confirm_resp = client.post(f"/api/jobs/{job_id}/confirm")
+    # tasks 6.7 起：这份画像有未指定字段，不带知情标记会被 409 挡住。
+    # 本用例验的不是缺口门禁，所以显式带上标记走到它原本要验的那一步。
+    confirm_resp = client.post(
+        f"/api/jobs/{job_id}/confirm", json={"acknowledged_gaps": True}
+    )
 
     assert confirm_resp.status_code == 422, (
         f"畸形 profile_patch 应该被转成 422，实际是 {confirm_resp.status_code}"
@@ -667,3 +677,189 @@ def test_confirmation_prompt_payload_carries_chinese_labels(tmp_path):
     assert len(labels) == len(fields)
     assert labels == field_labels(fields)
     assert all(not label.isascii() for label in labels), "中文名里混进了英文标识"
+
+
+# --- 带缺口确认必须显式知情（tasks 6.7 / 6.8 / 6.9 / 6.10） ------------------
+
+
+def _make_client_at_confirmation(tmp_path):
+    """跑到"可确认"状态，且画像里故意留着缺口（只填了 job_title）。"""
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+                "unspecified_fields": [],
+            }
+        ),
+        json.dumps({"body": "负责 ECU 底层驱动开发与调试"}),
+    ]
+    client = make_app(tmp_path, responses)
+    job_id = client.post("/api/jobs", json={"message": "招一个做驱动的"}).json()["job_id"]
+    return client, job_id
+
+
+def test_confirm_without_acknowledgement_is_rejected_with_409(tmp_path):
+    """spec Scenario: 未做选择不放行。"""
+    client, job_id = _make_client_at_confirmation(tmp_path)
+
+    resp = client.post(f"/api/jobs/{job_id}/confirm")
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["gaps"], "409 必须附上未指定字段"
+    assert all(gap["label"] and not gap["label"].isascii() for gap in detail["gaps"])
+    assert {gap["field"] for gap in detail["gaps"]} >= {"toolchain", "mcu_family"}
+
+
+def test_confirm_with_explicit_acknowledgement_succeeds_and_is_recorded(tmp_path):
+    """spec Scenario: 知情确认被记录 —— 确认完成，且事后可从库里查回。"""
+    client, job_id = _make_client_at_confirmation(tmp_path)
+
+    resp = client.post(f"/api/jobs/{job_id}/confirm", json={"acknowledged_gaps": True})
+
+    assert resp.status_code == 200
+    assert resp.json()["jd_text"]
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    profile_json = conn.execute(
+        "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()[0]
+    record = json.loads(profile_json)["_gap_acknowledgement"]
+
+    assert record["acknowledged"] is True
+    assert record["had_gaps"] is True
+    assert "toolchain" in record["fields"]
+    assert record["labels"] == field_labels(record["fields"])
+    assert record["at"]
+
+
+def test_gap_acknowledgement_survives_jd_generation(tmp_path):
+    """
+    effect_generate_and_persist_jd 会用 {**profile_dict, "_jd_text": ...} 整体覆盖
+    profile_json。传给它的如果是确认前那份 dict，知情留痕会在 JD 生成的那一刻被
+    静默抹掉——事后查不到、也没有任何报错。这条测试就是盯这个。
+    """
+    client, job_id = _make_client_at_confirmation(tmp_path)
+    client.post(f"/api/jobs/{job_id}/confirm", json={"acknowledged_gaps": True})
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    persisted = json.loads(
+        conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()[0]
+    )
+
+    assert persisted["_jd_text"], "JD 没落库，前置条件不成立"
+    assert persisted["_gap_acknowledgement"]["acknowledged"] is True
+
+
+def test_confirm_without_gaps_needs_no_body_and_no_extra_click(tmp_path):
+    """
+    6.10：无缺口时确认流程与今天完全一致。请求体可以整个省略，不多一步点击。
+    """
+    full_profile = {
+        "job_title": "嵌入式软件工程师",
+        "department": "研发部",
+        "headcount": 2,
+        "education_requirement": "本科及以上",
+        "experience_years": "3-5年",
+        "core_skills": [{"name": "C", "required": True}],
+        "project_experience_requirement": "有量产项目",
+        "soft_skill_keywords": ["沟通"],
+        "autosar_experience": ["CP"],
+        "functional_safety": "ASIL-B",
+        "mcu_family": ["TC3xx"],
+        "diag_stack": ["UDS"],
+        "sop_projects": [
+            {"vehicle_model": "X1", "role": "开发", "is_mass_production": True}
+        ],
+        "toolchain": ["CANoe"],
+    }
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [],
+                "profile_patch": full_profile,
+                "unspecified_fields": [],
+            }
+        ),
+        json.dumps({"body": "负责 ECU 底层驱动开发与调试"}),
+    ]
+    client = make_app(tmp_path, responses)
+    job_id = client.post("/api/jobs", json={"message": "招一个做驱动的"}).json()["job_id"]
+
+    resp = client.post(f"/api/jobs/{job_id}/confirm")
+
+    assert resp.status_code == 200
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    record = json.loads(
+        conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()[0]
+    )["_gap_acknowledgement"]
+    assert record["had_gaps"] is False
+    assert record["fields"] == []
+
+
+def test_going_back_to_answer_keeps_collected_content(tmp_path):
+    """
+    spec Scenario: 选择"回去补答" —— 会话回到可继续作答的状态，已采集内容保留。
+    "回去补答"在后端就是"不确认、继续 POST /reply"，因此这里验证的是：确认提示
+    之后再回一轮，之前采集的字段一个都没丢。
+    """
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+                "unspecified_fields": [],
+            }
+        ),
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [],
+                "profile_patch": {"toolchain": ["CANoe"]},
+                "unspecified_fields": [],
+            }
+        ),
+    ]
+    client = make_app(tmp_path, responses)
+    job_id = client.post("/api/jobs", json={"message": "招一个做驱动的"}).json()["job_id"]
+
+    client.post(f"/api/jobs/{job_id}/reply", json={"message": "工具链用 CANoe"})
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    accumulated = json.loads(
+        conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()[0]
+    )
+    assert accumulated["job_title"] == "嵌入式软件工程师"  # 补答没有把已采集内容冲掉
+    assert accumulated["toolchain"] == ["CANoe"]
+
+
+def test_empty_confirm_body_is_still_not_acknowledged(tmp_path):
+    """
+    变异检查补的守卫：只测"不带 body 时 409"是不够的——那条走的是 req is None
+    这一支，`acknowledged_gaps` 的**默认值根本没被求值**。把默认值改成 True
+    （合规红线上最危险的那个改动：系统替业务经理声明"我知道有缺口"）时，全部
+    既有用例照样绿。
+
+    这里发一个 `{}` 空 body，逼默认值真的参与判定。
+    """
+    client, job_id = _make_client_at_confirmation(tmp_path)
+
+    resp = client.post(f"/api/jobs/{job_id}/confirm", json={})
+
+    assert resp.status_code == 409, "acknowledged_gaps 的默认值不是 false —— 系统替人做了知情声明"
+    assert resp.json()["detail"]["gaps"]

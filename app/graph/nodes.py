@@ -169,11 +169,16 @@ def effect_confirm_profile(
 
     不在这里 conn.commit() —— 理由同 effect_persist_draft：写入与 effect_log
     记录必须由 idempotent_effect 装饰器在同一个事务里一次性提交。
+
+    2026-08-27（tasks 6.9）：profile_dict 这个入参此前只是收下不用，现在承载知情
+    确认留痕（`_gap_acknowledgement`）。留痕与 status='approved' 必须落在同一条
+    事务里（铁律 1）——分开写会出现"画像已确认但查不到确认时是否知情"，而这正是
+    spec「使事后可以查明确认时业务经理是否知情」要杜绝的状态。
     """
     conn.execute(
-        "UPDATE job_profile SET status = 'approved' "
+        "UPDATE job_profile SET status = 'approved', profile_json = ? "
         "WHERE job_id = ? AND version = (SELECT MAX(version) FROM job_profile WHERE job_id = ?)",
-        (thread_id, thread_id),
+        (json.dumps(profile_dict, ensure_ascii=False), thread_id, thread_id),
     )
     conn.execute("UPDATE job SET status = 'approved' WHERE id = ?", (thread_id,))
 

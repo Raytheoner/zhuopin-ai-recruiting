@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
+from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
@@ -21,7 +22,7 @@ from app.observability.middleware import (
     RequestIdMiddleware,
     unhandled_exception_handler,
 )
-from app.schemas.job_profile import JobProfile
+from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -34,6 +35,12 @@ class CreateJobRequest(BaseModel):
 
 class ReplyRequest(BaseModel):
     message: str
+
+
+class ConfirmRequest(BaseModel):
+    # 缺省 false = 未知情 = 不放行。⛔ 绝不能缺省 true：那等于系统替业务经理
+    # 做了"我知道有缺口"这个声明（合规红线：人工确认节点必须是真的人在确认）。
+    acknowledged_gaps: bool = False
 
 
 def _render_index(root_path: str) -> str:
@@ -168,7 +175,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         return {"job_id": job_id, "message": message}
 
     @router.post("/api/jobs/{job_id}/confirm")
-    def confirm(job_id: str):
+    def confirm(job_id: str, req: ConfirmRequest | None = None):
         row = conn.execute(
             "SELECT profile_json, status FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
             (job_id,),
@@ -181,6 +188,35 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             raise HTTPException(status_code=409, detail="画像还在追问中，未到可确认状态")
 
         profile_dict = json.loads(row[0])
+
+        # tasks 6.7：缺口在确认这一刻现算，不读 state、不读上一轮写下的列。
+        # 确认是一次独立、可重试的 HTTP 动作；依赖某一轮 state 的残留会让
+        # "重试一次结论就变了"。
+        gaps = derive_unspecified_fields(profile_dict)
+        acknowledged = bool(req and req.acknowledged_gaps)
+        if gaps and not acknowledged:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "这份画像还有未指定的内容，确认前请先选择：回去补答，或知道有缺口仍然确认",
+                    "gaps": [{"field": name, "label": field_label(name)} for name in gaps],
+                },
+            )
+
+        # tasks 6.9：知情留痕（design.md 决策 8，写 profile_json 的下划线内部键，
+        # 不新建表）。无论有没有缺口都写一条——"确认时没有缺口"本身也是事后要能
+        # 查到的事实，缺了它就分不清"当时没缺口"和"这条记录漏写了"。
+        profile_dict = {
+            **profile_dict,
+            "_gap_acknowledgement": {
+                "acknowledged": acknowledged,
+                "had_gaps": bool(gaps),
+                "fields": gaps,
+                "labels": field_labels(gaps),
+                "at": sqlite_utc_now(),
+            },
+        }
+
         version = conn.execute(
             "SELECT MAX(version) FROM job_profile WHERE job_id=?", (job_id,)
         ).fetchone()[0]
