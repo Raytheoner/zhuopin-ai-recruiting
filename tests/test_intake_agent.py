@@ -1,8 +1,16 @@
 import json
+import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from app.agents.intake_agent import SYSTEM_PROMPT, run_intake_turn
+from app.agents import intake_agent
+from app.agents.intake_agent import (
+    SYSTEM_PROMPT,
+    derive_unspecified_fields,
+    run_intake_turn,
+)
 from app.llm.gateway import LLMGateway
+from app.schemas.job_profile import JobProfile
 
 
 @dataclass
@@ -1132,7 +1140,16 @@ def test_total_round_cap_forces_wrap_up_even_with_no_productive_rounds():
 
     assert result.questions == []
     assert result.is_complete is True
-    assert result.unspecified_fields == ["toolchain"]
+    # tasks 6.2 起 unspecified_fields 的语义换人：从"模型说的"变成"系统按字段表
+    # 推导的"。这一轮画像是空的，因此推导给出**全部业务字段**，不再等于模型那份
+    # 单元素列表。模型自称的那份原样留在对照字段里，仍然可断言。
+    # ⛔ 不许为了让这条老断言原样通过而给 derive_unspecified_fields 加 if give_up
+    # 分支——那等于把刚修好的漏报又装回去。
+    assert "toolchain" in result.unspecified_fields
+    assert set(result.unspecified_fields) == set(JobProfile.model_fields) - {
+        "unspecified_fields"
+    }
+    assert result.model_claimed_unspecified_fields == ["toolchain"]
 
 
 def test_productive_round_limit_still_wraps_up():
@@ -1158,3 +1175,292 @@ def test_productive_round_limit_still_wraps_up():
 
     assert result.questions == []
     assert result.is_complete is True
+
+
+# --- .51 真实回放基准（tasks 6.3） -----------------------------------------
+
+_REPLAY_PATH = Path(__file__).parent / "fixtures" / "pilot-replay-profiles.json"
+
+
+def _replay(prefix: str) -> dict:
+    """读取 .51 真实会话画像快照。取数出处见文件里的 _provenance 段。"""
+    return json.loads(_REPLAY_PATH.read_text(encoding="utf-8"))["sessions"][prefix]
+
+
+def test_replay_fixture_carries_provenance_and_no_dialogue_text():
+    """
+    这份基准的价值全部来自"它是真的"。没有出处的快照与手写的假数据无法区分，
+    半年后没人说得清它是从哪来的——那时 6.3 就退化成"用自己编的答案验证自己
+    写的推导"。同时守住脱敏边界：只允许画像字段进仓库，对话原文与人名不进。
+    """
+    raw = _REPLAY_PATH.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+
+    provenance = payload["_provenance"]
+    assert "192.168.100.51" in provenance["source"]
+    assert provenance["captured_at"]
+    assert "job_profile" in provenance["table"]
+
+    assert set(payload["sessions"]) == {"a478499c", "19b6ec6d"}
+    for prefix, session in payload["sessions"].items():
+        assert session["job_id"].startswith(prefix)
+        assert isinstance(session["profile_json"], dict)
+        assert isinstance(session["model_unspecified_fields"], list)
+
+    # 对话原文与人名一律不得进仓库
+    assert "history_json" not in raw
+    assert "姚祖怡" not in raw
+
+
+# --- derive_unspecified_fields：未指定字段的唯一真源（tasks 6.1 / 6.3） -------
+
+
+def test_derive_lists_every_business_field_for_empty_profile():
+    """空画像 = 所有业务字段都未指定；系统管理字段不算业务字段。"""
+    derived = derive_unspecified_fields({})
+
+    assert "unspecified_fields" not in derived
+    assert set(derived) == set(JobProfile.model_fields) - {"unspecified_fields"}
+
+
+def test_answered_field_does_not_enter_unspecified():
+    """spec Scenario: 已答字段不进未指定。"""
+    derived = derive_unspecified_fields({"functional_safety": "ASIL-B"})
+
+    assert "functional_safety" not in derived
+
+
+def test_unanswered_field_is_never_missed():
+    """spec Scenario: 未答字段不被遗漏。空容器、None、空白串、占位符都算未答。"""
+    derived = derive_unspecified_fields(
+        {
+            "toolchain": [],
+            "mcu_family": None,
+            "project_experience_requirement": "   ",
+            "department": "未指定",
+            "job_title": "底层软件开发工程师",
+        }
+    )
+
+    assert "toolchain" in derived
+    assert "mcu_family" in derived
+    assert "project_experience_requirement" in derived
+    assert "department" in derived
+    assert "job_title" not in derived
+
+
+def test_derivation_is_stable_across_repeated_calls():
+    """spec Scenario: 推导结果稳定。顺序也必须稳定——下游要直接渲染这个列表。"""
+    accumulated = {
+        "job_title": "嵌入式软件工程师",
+        "toolchain": ["CANoe"],
+        "core_skills": [],
+    }
+
+    first = derive_unspecified_fields(accumulated)
+    second = derive_unspecified_fields(dict(accumulated))
+
+    assert first == second
+    assert first == sorted(first, key=list(JobProfile.model_fields).index)
+
+
+def test_internal_underscore_keys_are_ignored():
+    """profile_json 里混着 _jd_text / _gap_acknowledgement 这类内部键，
+    它们不在字段表里，既不该被当成已答字段，也不该被列进未指定。"""
+    derived = derive_unspecified_fields(
+        {"_jd_text": "岗位职责……", "_gap_acknowledgement": {}}
+    )
+
+    assert "_jd_text" not in derived
+    assert "_gap_acknowledgement" not in derived
+    assert "job_title" in derived
+
+
+def test_derive_catches_what_the_model_underreported_in_a478499c():
+    """
+    真实回放反证（tasks 6.3 的第一半）：`a478499c` 强制收尾时，模型给的
+    unspecified_fields 是**空数组**——它宣称这份画像什么都不缺。系统推导必须给出
+    非空结果，否则本章等于什么都没修。
+    """
+    session = _replay("a478499c")
+
+    assert session["model_unspecified_fields"] == [], (
+        "前置事实变了：这个会话模型当时给的不再是空数组。停下报告，不要改这条断言去迁就"
+    )
+
+    derived = derive_unspecified_fields(session["profile_json"])
+
+    assert derived, "模型说没缺口，系统推导也说没缺口——漏报没有被修掉"
+    # 这份画像真实缺的就是这几项，逐个钉住，避免"非空即过"退化成弱断言
+    assert {"core_skills", "functional_safety", "mcu_family", "sop_projects"} <= set(
+        derived
+    )
+
+
+def test_derive_lists_every_field_the_model_flagged_in_19b6ec6d():
+    """
+    真实回放（tasks 6.3 的第二半）。
+
+    ⚠️ **与 plan / design.md 决策 6 的举证不符，已如实按真值写。** 那两份文档称
+    `19b6ec6d` 里模型把用户**已经答过**的 functional_safety / sop_projects 列进了
+    未指定（"虚报"）。核对 `.51` 真值后不成立：这两个字段在该会话**全部 6 个版本
+    里都是 None**，用户从未答过——模型列它们是**对的**，不是虚报。
+
+    因此本用例断言真值形态：模型标出的 5 个字段确实一个都没答，系统推导必须
+    **全部列出**，一个都不许漏。
+
+    ⛔ 不要把这条改回"断言 functional_safety / sop_projects 不在结果里"——那会
+    强迫推导漏掉两个真实缺口，与 6.1（不再漏报）直接矛盾。6.3 的措辞需要决策人
+    裁决，未裁决前 `tasks.md` 6.3 保持未勾。
+    """
+    session = _replay("19b6ec6d")
+    profile = session["profile_json"]
+    flagged = session["model_unspecified_fields"]
+
+    # 前置事实：模型标出的这几项，在最终画像里确实一个值都没有
+    assert flagged, "前置事实变了：模型当时并没有标出任何未指定字段。停下报告"
+    for name in flagged:
+        assert not profile.get(name), (
+            f"前置事实变了：{name} 在最终画像里有值了，模型这次才算虚报。停下报告"
+        )
+
+    derived = derive_unspecified_fields(profile)
+
+    assert set(flagged) <= set(derived), (
+        "系统推导漏掉了模型都发现了的真实缺口——比不修还糟"
+    )
+
+
+# --- 模型自称值降级为对照 + loggable_summary 首个生产上岗点（tasks 6.2） ------
+
+
+def test_model_claimed_unspecified_never_becomes_the_result():
+    """
+    tasks 6.2：模型自称的未指定字段不再进结果。这里模型虚报 functional_safety
+    （用户本轮刚答了 ASIL-B），推导结果必须不含它；模型那份原样保留在对照字段里。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {"functional_safety": "ASIL-B"},
+                    "unspecified_fields": ["functional_safety", "sop_projects"],
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "要 ASIL-B"}],
+        round_count=1,
+        profile_patch_accumulated={"job_title": "底层软件开发工程师"},
+    )
+
+    assert "functional_safety" not in result.unspecified_fields
+    assert "toolchain" in result.unspecified_fields  # 真的没答的字段照样列出来
+    assert result.model_claimed_unspecified_fields == [
+        "functional_safety",
+        "sop_projects",
+    ]
+
+
+def test_derivation_uses_the_patch_that_actually_gets_persisted():
+    """
+    ⚠️ 与计划正文的一处偏差，故意的：计划写的是用 `parsed.profile_patch` 推导，
+    但真正落库的是经 `_drop_unchosen_candidate_values` 摘掉未选中候选档位之后的
+    `profile_patch`。用 parsed 那份推导，会把"模型塞进来、但用户没选"的候选值
+    当成已答字段——**漏报当场回来**，而且只在模糊回复那条路径上漏，最难发现。
+
+    这里让用户给一句模糊回复、模型顺手塞一个候选 mcu_family：落库的画像里这个
+    字段会被摘掉，因此推导必须仍然把它列为未指定。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        {
+                            "text": "MCU 平台族倾向哪一类？",
+                            "field": "mcu_family",
+                            "options": ["英飞凌 TC3xx", "恩智浦 S32K"],
+                        }
+                    ],
+                    "profile_patch": {"mcu_family": ["英飞凌 TC3xx"]},
+                    "unspecified_fields": [],
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(
+        gateway,
+        history=[
+            {"role": "assistant", "content": "MCU 平台族倾向哪一类？"},
+            {"role": "user", "content": "这个我不太了解"},
+        ],
+        round_count=1,
+        profile_patch_accumulated={"job_title": "底层软件开发工程师"},
+        previous_questions=[
+            IntakeQuestion(
+                text="MCU 平台族倾向哪一类？",
+                question_id="mcu_family",
+                field="mcu_family",
+                options=("英飞凌 TC3xx", "恩智浦 S32K"),
+            )
+        ],
+    )
+
+    assert "mcu_family" not in result.profile_patch, "前置事实变了：候选值没有被摘掉"
+    assert "mcu_family" in result.unspecified_fields, (
+        "推导读的是 parsed.profile_patch 而不是真正落库的那份——未选中的候选值被当成已答"
+    )
+
+
+def test_unspecified_comparison_log_goes_through_loggable_summary(monkeypatch, caplog):
+    """
+    delivery-units.md §3.3 的验收要求：断言这条日志路径**确实调用了**
+    loggable_summary()。只断言"日志里没泄漏"是不够的——没有调用点时"0 命中"
+    同时兼容"脱敏有效"和"脱敏根本没上岗"两种解释（findings §8.3.1 更正段）。
+    """
+    calls = []
+    real = intake_agent.loggable_summary
+
+    def spy(obj, **kwargs):
+        calls.append((dict(obj), kwargs))
+        return real(obj, **kwargs)
+
+    monkeypatch.setattr(intake_agent, "loggable_summary", spy)
+
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {"job_title": "底层软件开发工程师"},
+                    "unspecified_fields": ["toolchain", "根本不存在的字段"],
+                }
+            )
+        ]
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="app.agents.intake_agent"):
+        run_intake_turn(
+            gateway, history=[{"role": "user", "content": "招人"}], round_count=1
+        )
+
+    # 1) 确实调用了，而且是带 known_fields 的那种调用（键名本身也要过滤，
+    #    因为模型可能幻觉出一个不存在的字段名）
+    assert len(calls) == 2, "推导结果与模型自称各要过一次脱敏，一次都不能省"
+    assert all("known_fields" in kwargs for _obj, kwargs in calls)
+
+    # 2) 落到日志里的是摘要形态，不是业务对象本体
+    text = caplog.text
+    assert "field_count" in text and "unknown_field_count" in text
+    assert "底层软件开发工程师" not in text
+    # 3) 模型幻觉出的字段名只贡献计数，不贡献名字
+    assert "根本不存在的字段" not in text

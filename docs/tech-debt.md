@@ -21,3 +21,15 @@ Task 5 的分离口径 SQL）改指 `analysis_run`。
 **为什么当时要欠**：本批 P0/P1 的修复必须能被验证（"兜底档位是否真的减少了
 空转轮、有没有把单轮延迟拖长"）。`ai-audit-trail-and-outbound-gate` 范围大得多
 且尚未排期，等它意味着本批的效果只能靠感觉判断（design.md 决策 9）。
+
+## TD-2 · `job_profile.unspecified_fields` 与 `JobProfile.unspecified_fields` 已降级为对照
+
+**欠的是什么**：`job_profile.unspecified_fields` 这一列与 `JobProfile.unspecified_fields`
+这个 pydantic 字段。2026-08-27（`m1-intake-quality-fixes` 第 6 章）起，真源是
+`derived_unspecified_fields` 列，这两处只保留"模型自称了什么"的对照价值。
+
+**触发条件**：第 8 章 8.7 的编造率/漏报率数字算完并写进 `docs/` 之后，对照数据的
+使命就结束了，届时删列 + 删字段。
+
+**不还的后果**：两个同名不同义的载体长期并存，下一个改这块代码的人有一半概率
+读错真源——而读错的表现是"警示块少列了一个字段"，没有任何报错。

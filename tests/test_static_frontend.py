@@ -229,3 +229,87 @@ def test_served_html_under_root_path_keeps_option_rendering():
         # 本单元没有新增 fetch 调用点，既有的两个仍然是相对路径
         assert "api/jobs" in html
         assert '"/api/jobs' not in html
+
+
+# --- 确认入口上方的缺口警示（tasks 6.6 / 6.7 前端 / 6.8） --------------------
+
+
+def test_gap_warning_block_sits_above_confirm_and_renders_chinese_only():
+    """
+    tasks 6.6（弱断言，本仓库无 JS 测试运行器，真实验收在手工路径）。
+    锁的是三件"被人顺手改回去就没有任何其它信号"的事：
+      1) 警示块的 DOM 位置在确认按钮之前
+      2) 渲染源是中文名那个键，不是英文标识那个键
+      3) 后果说明这句话还在
+    """
+    assert 'id="gap-warning"' in INDEX_HTML
+    assert INDEX_HTML.index('id="gap-warning"') < INDEX_HTML.index('id="confirm-btn"')
+
+    assert "unspecified_field_labels" in INDEX_HTML
+    # 英文标识只允许用于判空/计数，不允许出现在任何写进 DOM 的位置。
+    # ⚠️ 计划正文里这条断言写的是 "不会出现在 JD"，与它自己给的文案
+    # "……不会出现在生成的 JD 里。" 对不上（少了"生成的"）。改成钉住整句：
+    # 断言更强，也不会被一句"改了措辞"悄悄绕过。
+    assert "留空的话，这些要求不会出现在生成的 JD 里。" in INDEX_HTML
+
+
+def test_gap_warning_offers_both_choices_and_never_preselects():
+    """
+    tasks 6.7 + 合规红线（AI 不做决定）：两个动作都在，且都不是默认动作。
+    """
+    assert "回去补答" in INDEX_HTML
+    assert "仍然确认" in INDEX_HTML
+    # 只有"仍然确认"这条路径才带 acknowledged_gaps: true
+    assert "acknowledged_gaps" in INDEX_HTML
+    assert "acknowledged_gaps: false" not in INDEX_HTML
+
+
+def test_confirm_without_gaps_still_posts_without_body():
+    """
+    6.10「无缺口时确认流程与今天完全一致（不多一步点击）」的前端一半：
+    没有缺口时发出去的仍然是不带 body 的 POST。
+    """
+    assert 'method: "POST" }' in INDEX_HTML
+
+
+def test_english_field_identifiers_never_reach_the_dom():
+    """
+    本章要修的故障现象就是"业务经理看到英文 snake_case"。改动前那段
+    `unspecified.join("、")` 正是把英文标识直接拼进气泡文本的元凶——删掉它之后，
+    没有任何测试会因为有人把它加回来而变红。这条补上那个缺口。
+    """
+    assert 'unspecified.join' not in _WITHOUT_LINE_COMMENTS
+    assert '以下字段未指定' not in INDEX_HTML
+
+
+def test_gap_warning_never_falls_back_to_english_identifiers():
+    """
+    硬规则：历史 confirmation_prompt 行（`.51` 上本章上线前写的）没有
+    unspecified_field_labels 这个键，这时只许渲染**条数**，⛔ 绝不回退去渲染
+    英文 snake_case——那正是本章要修的故障现象。
+
+    变异检查暴露的缺口：把 `labels = labels.length ? labels : fields` 塞进
+    renderGapWarning，上面那几条字符串断言全部照样绿。这里改成机械判据——
+    在 renderGapWarning 函数体内，`fields` 这个英文列表**只允许出现在判空与
+    计数位置**（`!fields`、`fields.length`），一旦被当成可渲染的值使用就失败。
+    """
+    body = re.search(
+        r"function renderGapWarning\(fields, labels\) \{(.*?)\n    \}\n",
+        INDEX_HTML,
+        re.DOTALL,
+    )
+    assert body, "renderGapWarning 不见了或签名被改了"
+    code = "\n".join(
+        line.split("//", 1)[0] for line in body.group(1).splitlines()
+    )
+
+    # 允许的只剩 `!fields`（判空）与 `fields.length`（计数）两处用法
+    illegal = [
+        m
+        for m in re.finditer(r"(?<![\w.])fields(?!\s*\.\s*length)", code)
+        if code[max(0, m.start() - 1) : m.start()] != "!"
+    ]
+    assert not illegal, (
+        "renderGapWarning 里把英文字段标识 fields 当成可渲染值用了——"
+        f"命中 {len(illegal)} 处，只允许 !fields / fields.length"
+    )

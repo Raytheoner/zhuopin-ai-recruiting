@@ -80,16 +80,18 @@
 
 > **并行性更正（2026-08-19，`delivery-units.md` §3.1）**：原写「可与第 3-5 章并行」**不成立**。本章要改 `intake_agent.py` / `graph/nodes.py` / `web/server.py` / `index.html`，与第 3、4、5 章四个文件全线重叠。按「触碰文件重叠即须串行」判据，本章＝交付单元 **D**，排在 B∥C 之后、E 之前。
 
-- [ ] 6.1 纯函数 `derive_unspecified_fields(accumulated: dict) -> list[str]`：遍历 `JobProfile.model_json_schema()` 属性（排除 `_SYSTEM_MANAGED_FIELDS`），值缺失 / 为 `None` / 为空容器 / 等于占位符（"未指定"）即列为未指定。同一输入必须每次得到相同结果
-- [ ] 6.2 **停止透传** `parsed.unspecified_fields`（`app/agents/intake_agent.py:233`）。模型输出降级为 debug 日志对照，不进结果
+- [x] 6.1 纯函数 `derive_unspecified_fields(accumulated: dict) -> list[str]`：遍历 `JobProfile.model_json_schema()` 属性（排除 `_SYSTEM_MANAGED_FIELDS`），值缺失 / 为 `None` / 为空容器 / 等于占位符（"未指定"）即列为未指定。同一输入必须每次得到相同结果
+- [x] 6.2 **停止透传** `parsed.unspecified_fields`（`app/agents/intake_agent.py:233`）。模型输出降级为 debug 日志对照，不进结果
 - [ ] 6.3 测试（真实数据反证）：用 `a478499c` 收尾时的已累积画像断言推导结果**不为空**（模型当时给的是空数组，漏报）；用 `19b6ec6d` 的断言 `functional_safety` / `sop_projects` **不在**结果里（模型当时虚报了用户已答的字段）
-- [ ] 6.4 `field → 中文名` 映射放在 `app/schemas/job_profile.py`，紧邻字段定义（**不放前端**，design.md 决策 7）；补一条完整性测试：`JobProfile` 每个字段都必须有中文名，加字段漏改即失败
-- [ ] 6.5 API 返回未指定字段时同时返回中文名
-- [ ] 6.6 前端：确认按钮**上方**渲染视觉显著的警示块（不是对话流里的一行小字），列中文字段名，说明"留空则这些要求不会出现在 JD 里"；无未指定字段时不出现
-- [ ] 6.7 知情确认：`POST /api/jobs/{job_id}/confirm` 请求体加 `acknowledged_gaps: bool`；有未指定字段而该标记为 false 时返回 409 并附未指定字段（含中文名）。前端提供"回去补答"与"知道有缺口，仍然确认"两个动作
-- [ ] 6.8 "回去补答"使会话回到可继续作答状态，已采集内容保留
-- [ ] 6.9 知情确认留痕：确认时的未指定字段列表 + 知情标记写进 `job_profile.profile_json` 的下划线前缀内部键（与 `_jd_text` 同一位置，**不新建表**，design.md 决策 8）
-- [ ] 6.10 测试：未做知情选择不放行（409）；无缺口时确认流程与今天完全一致（不多一步点击）；知情确认后可从库里查回"确认时业务经理知道缺哪些字段"
+      ⏳ **保持未勾，等 Shao Peishen 裁决（2026-08-27 登记）。** 前半（`a478499c` 漏报）已按真值落成测试并通过。**后半与 `.51` 真值不符**：`19b6ec6d` 的 `functional_safety` / `sop_projects` 在**全部 6 个版本里都是 `None`**，用户从未答过——模型把它们列进未指定是**对的**，不是虚报。照本条字面写「断言这两个字段不在结果里」，会强迫 `derive_unspecified_fields` 漏掉两个真实缺口，**与 6.1 直接矛盾**。
+      现状：已按真值写了 `test_derive_lists_every_field_the_model_flagged_in_19b6ec6d`（断言模型标出的 5 项系统一个都不许漏）。⛔ 未裁决前不得勾上本条，也不得把测试改回字面形态。`design.md` 决策 6 的「虚报」举证需要一并订正
+- [x] 6.4 `field → 中文名` 映射放在 `app/schemas/job_profile.py`，紧邻字段定义（**不放前端**，design.md 决策 7）；补一条完整性测试：`JobProfile` 每个字段都必须有中文名，加字段漏改即失败
+- [x] 6.5 API 返回未指定字段时同时返回中文名
+- [x] 6.6 前端：确认按钮**上方**渲染视觉显著的警示块（不是对话流里的一行小字），列中文字段名，说明"留空则这些要求不会出现在 JD 里"；无未指定字段时不出现
+- [x] 6.7 知情确认：`POST /api/jobs/{job_id}/confirm` 请求体加 `acknowledged_gaps: bool`；有未指定字段而该标记为 false 时返回 409 并附未指定字段（含中文名）。前端提供"回去补答"与"知道有缺口，仍然确认"两个动作
+- [x] 6.8 "回去补答"使会话回到可继续作答状态，已采集内容保留
+- [x] 6.9 知情确认留痕：确认时的未指定字段列表 + 知情标记写进 `job_profile.profile_json` 的下划线前缀内部键（与 `_jd_text` 同一位置，**不新建表**，design.md 决策 8）
+- [x] 6.10 测试：未做知情选择不放行（409）；无缺口时确认流程与今天完全一致（不多一步点击）；知情确认后可从库里查回"确认时业务经理知道缺哪些字段"
 
 ## 7. 字段溯源与编造率度量（只观测不拦截）
 

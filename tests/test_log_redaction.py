@@ -318,3 +318,35 @@ def test_loggable_summary_handles_low_content_field_count_without_crashing():
     summary1 = loggable_summary(single_content)
     assert summary1["content_digest"] is None
     assert "唯一内容字段" not in json.dumps(summary1, ensure_ascii=False)
+
+
+def test_unspecified_comparison_log_does_not_trip_the_bypass_filter():
+    """
+    主防线上岗的另一半证据：这条日志经过 RedactionFilter 时必须**零命中**。
+    命中意味着主防线被绕过（RedactionFilter 只是探测性的兜底），那时它会额外
+    打一条 WARNING —— 那条 WARNING 存在本身就是故障信号，不是"脱敏起作用了"。
+    """
+    from app.observability.redaction import RedactionFilter, loggable_summary
+    from app.schemas.job_profile import JobProfile
+
+    known = frozenset(JobProfile.model_fields)
+    accumulated = {
+        "job_title": "底层软件开发工程师",
+        "functional_safety": "ASIL-B",
+        "toolchain": [],
+    }
+    rendered = "未指定字段对照（tasks 6.2）：系统推导 %s；模型自称 %s" % (
+        loggable_summary({"toolchain": accumulated["toolchain"]}, known_fields=known),
+        loggable_summary(
+            {k: accumulated.get(k) for k in ("functional_safety", "sop_projects")},
+            known_fields=known,
+        ),
+    )
+
+    record = logging.LogRecord(
+        "app.agents.intake_agent", logging.DEBUG, __file__, 1, rendered, (), None
+    )
+    assert RedactionFilter().filter(record) is True
+    assert getattr(record, "redacted_fields", 0) == 0
+    assert "底层软件开发工程师" not in record.getMessage()
+    assert "ASIL-B" not in record.getMessage()

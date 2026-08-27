@@ -62,6 +62,7 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         "is_complete": result.is_complete,
         "round_count": round_count + 1,
         "unspecified_fields": result.unspecified_fields,
+        "model_claimed_unspecified_fields": result.model_claimed_unspecified_fields,
         # 零产出轮判定与本轮台账增量，由 effect_persist_draft 与画像草案写在
         # 同一条 INSERT 里。
         "is_productive": result.is_productive,
@@ -100,25 +101,35 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     它们和画像草案是同一轮的三份事实，分开写就会出现"这一轮的画像在、这一轮
     问过什么不在"——而追问预算正是按这两列取数的。
 
-    derived_unspecified_fields / ungrounded_fields / llm_response_model 这三列
-    仍然**不写值**，靠列默认值成立（第 6、7 章各自接上）。
+    2026-08-27（第 6 章 tasks 6.2/6.5）：derived_unspecified_fields 开始写值——
+    系统推导的那份进这一列（真源），模型自称的那份留在 unspecified_fields
+    （对照）。⛔ 两列不许写同一个值，否则 8.1 的回放对比失去对照组。
+    ungrounded_fields / llm_response_model 两列仍然不写值（第 7 章接上）。
     """
     profile_json = json.dumps(state.get("profile_patch_accumulated", {}), ensure_ascii=False)
-    unspecified_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
+    # 两列分工见 app/storage/db.py 的建表注释：derived_* 是系统推导的真源，
+    # 裸 unspecified_fields 是模型自称的对照。⛔ 不许两列写同一个值——那会让
+    # 8.1 的"修复前 vs 修复后"对比失去对照组。
+    derived_json = json.dumps(state.get("unspecified_fields", []), ensure_ascii=False)
+    model_claimed_json = json.dumps(
+        state.get("model_claimed_unspecified_fields", []), ensure_ascii=False
+    )
     version = int(business_key) + 1
     asked_questions_json = json.dumps(state.get("asked_questions", []), ensure_ascii=False)
 
     conn.execute(
         "INSERT INTO job_profile "
         "(id, job_id, version, status, profile_json, unspecified_fields, "
+        "derived_unspecified_fields, "
         "turn_started_at, llm_latency_ms, is_productive, asked_questions) "
-        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?, ?, ?, ?)",
         (
             f"{thread_id}-v{version}",
             thread_id,
             version,
             profile_json,
-            unspecified_json,
+            model_claimed_json,
+            derived_json,
             state.get("turn_started_at"),
             state.get("llm_latency_ms"),
             # 默认 True：判定没接上时按"有产出"算，与列默认值和历史行一致。
@@ -158,11 +169,16 @@ def effect_confirm_profile(
 
     不在这里 conn.commit() —— 理由同 effect_persist_draft：写入与 effect_log
     记录必须由 idempotent_effect 装饰器在同一个事务里一次性提交。
+
+    2026-08-27（tasks 6.9）：profile_dict 这个入参此前只是收下不用，现在承载知情
+    确认留痕（`_gap_acknowledgement`）。留痕与 status='approved' 必须落在同一条
+    事务里（铁律 1）——分开写会出现"画像已确认但查不到确认时是否知情"，而这正是
+    spec「使事后可以查明确认时业务经理是否知情」要杜绝的状态。
     """
     conn.execute(
-        "UPDATE job_profile SET status = 'approved' "
+        "UPDATE job_profile SET status = 'approved', profile_json = ? "
         "WHERE job_id = ? AND version = (SELECT MAX(version) FROM job_profile WHERE job_id = ?)",
-        (thread_id, thread_id),
+        (json.dumps(profile_dict, ensure_ascii=False), thread_id, thread_id),
     )
     conn.execute("UPDATE job SET status = 'approved' WHERE id = ?", (thread_id,))
 

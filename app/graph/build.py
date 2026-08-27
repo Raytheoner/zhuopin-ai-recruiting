@@ -59,10 +59,18 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
         from app.channels.base import OutboundMessage
 
         if state.get("is_complete"):
+            # tasks 6.5：英文标识与中文名同时下发，同序等长。前端只渲染中文名。
+            # 加一个新键而不是改 unspecified_fields 的类型：.51 上的历史
+            # confirmation_prompt 行存的是字符串数组，GET /api/jobs/{id} 会把它们
+            # 原样读回新前端，改类型会让历史行当场崩。
+            from app.schemas.job_profile import field_labels
+
+            unspecified = state.get("unspecified_fields", [])
             payload = {
                 "type": "confirmation_prompt",
                 "profile_patch_accumulated": state.get("profile_patch_accumulated", {}),
-                "unspecified_fields": state.get("unspecified_fields", []),
+                "unspecified_fields": unspecified,
+                "unspecified_field_labels": field_labels(unspecified),
             }
             message = OutboundMessage(type="confirmation_prompt", payload=payload)
         else:
