@@ -82,9 +82,10 @@
 
 - [x] 6.1 纯函数 `derive_unspecified_fields(accumulated: dict) -> list[str]`：遍历 `JobProfile.model_json_schema()` 属性（排除 `_SYSTEM_MANAGED_FIELDS`），值缺失 / 为 `None` / 为空容器 / 等于占位符（"未指定"）即列为未指定。同一输入必须每次得到相同结果
 - [x] 6.2 **停止透传** `parsed.unspecified_fields`（`app/agents/intake_agent.py:233`）。模型输出降级为 debug 日志对照，不进结果
-- [ ] 6.3 测试（真实数据反证）：用 `a478499c` 收尾时的已累积画像断言推导结果**不为空**（模型当时给的是空数组，漏报）；用 `19b6ec6d` 的断言 `functional_safety` / `sop_projects` **不在**结果里（模型当时虚报了用户已答的字段）
-      ⏳ **保持未勾，等 Shao Peishen 裁决（2026-08-27 登记）。** 前半（`a478499c` 漏报）已按真值落成测试并通过。**后半与 `.51` 真值不符**：`19b6ec6d` 的 `functional_safety` / `sop_projects` 在**全部 6 个版本里都是 `None`**，用户从未答过——模型把它们列进未指定是**对的**，不是虚报。照本条字面写「断言这两个字段不在结果里」，会强迫 `derive_unspecified_fields` 漏掉两个真实缺口，**与 6.1 直接矛盾**。
-      现状：已按真值写了 `test_derive_lists_every_field_the_model_flagged_in_19b6ec6d`（断言模型标出的 5 项系统一个都不许漏）。⛔ 未裁决前不得勾上本条，也不得把测试改回字面形态。`design.md` 决策 6 的「虚报」举证需要一并订正
+- [x] 6.3 测试（真实数据反证，**2026-08-27 按 `.51` 真值订正后重述**）：用 `a478499c` 收尾时的已累积画像断言推导结果**不为空**（模型当时给的是空数组，漏报）；用 `19b6ec6d` 断言模型当时标出的 5 个字段（`headcount` / `functional_safety` / `soft_skill_keywords` / `toolchain` / `sop_projects`）**全部出现在**推导结果里——这一场模型判对了，系统推导一个都不许漏
+      ~~原文：用 `19b6ec6d` 的断言 `functional_safety` / `sop_projects` **不在**结果里（模型当时虚报了用户已答的字段）~~
+      ⚠️ **原文的「虚报」举证与真值不符，2026-08-27 Shao Peishen 拍板订正。** 核对 `.51` 真值：`19b6ec6d` 的 `functional_safety` / `sop_projects` 在**全部 6 个版本里都是 `None`**，用户从未答过——模型把它们列进未指定是**正确行为**，不是虚报。按原文写「断言这两个字段不在结果里」会强迫 `derive_unspecified_fields` 漏掉两个真实缺口，**与 6.1 直接矛盾**。
+      落地：`tests/test_intake_agent.py::test_derive_catches_what_the_model_underreported_in_a478499c`（前半）与 `::test_derive_lists_every_field_the_model_flagged_in_19b6ec6d`（后半）。取数出处见 `tests/fixtures/pilot-replay-profiles.json` 的 `_provenance` 段。`design.md` 决策 6 的同一处举证已一并订正
 - [x] 6.4 `field → 中文名` 映射放在 `app/schemas/job_profile.py`，紧邻字段定义（**不放前端**，design.md 决策 7）；补一条完整性测试：`JobProfile` 每个字段都必须有中文名，加字段漏改即失败
 - [x] 6.5 API 返回未指定字段时同时返回中文名
 - [x] 6.6 前端：确认按钮**上方**渲染视觉显著的警示块（不是对话流里的一行小字），列中文字段名，说明"留空则这些要求不会出现在 JD 里"；无未指定字段时不出现

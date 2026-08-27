@@ -74,7 +74,13 @@
 
 **选择**：新增纯函数 `derive_unspecified_fields(accumulated: dict) -> list[str]`，遍历 `JobProfile.model_json_schema()` 的属性（排除 `_SYSTEM_MANAGED_FIELDS`），把值缺失、为 `None`、为空容器、或等于占位符（"未指定"）的字段列为未指定。`parsed.unspecified_fields` 不再进入结果，只在 debug 日志里保留作对照。
 
-**为什么必须换掉**：真实数据两个方向都错过——`a478499c` 强制收尾时模型给的是**空数组**（漏报），`19b6ec6d` 却把用户已经答过的 `functional_safety` / `sop_projects` 列了进去（虚报）。一个既会漏报又会虚报的列表，比没有更糟：它让人以为"系统说没问题"。
+**为什么必须换掉**：真实数据上模型会**漏报**——`a478499c` 强制收尾时它给的是**空数组**，而那份画像有一半字段是空的。一个会漏报的列表比没有更糟：它让人以为"系统说没问题"。
+
+> ~~原文：真实数据两个方向都错过——`a478499c` 强制收尾时模型给的是**空数组**（漏报），`19b6ec6d` 却把用户已经答过的 `functional_safety` / `sop_projects` 列了进去（虚报）。一个既会漏报又会虚报的列表，比没有更糟。~~
+>
+> ⚠️ **2026-08-27 按 `.51` 真值订正（Shao Peishen 拍板）。** 上面划掉的「虚报」举证**不成立**：`19b6ec6d` 的 `functional_safety` / `sop_projects` 在**全部 6 个版本里都是 `None`**，用户从未答过。模型把它们列进未指定是**正确行为**。那一场模型标出的 5 个字段（`headcount` / `functional_safety` / `soft_skill_keywords` / `toolchain` / `sop_projects`）与系统推导完全一致——它是一个**判对了**的样本，不是反例。
+>
+> 这不改变本决策的结论：**只凭漏报一条就足以换掉模型输出**。改变的是举证强度——本包只有一个方向的真实反例，不是两个。取数出处见 `tests/fixtures/pilot-replay-profiles.json` 的 `_provenance` 段；`tasks.md` 6.3 已按同一口径重述。
 
 **代价**：`derive_*` 只能看出"字段有没有值"，看不出"值是不是敷衍"（如 `experience_years="不限"`）。可接受——本变更的目标是不再漏报，不是判断质量。
 
