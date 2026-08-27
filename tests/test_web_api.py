@@ -576,39 +576,30 @@ def test_asked_questions_ledger_accumulates_across_turns(tmp_path):
     assert ledger == ["headcount", "toolchain"]
 
 
-def _idle_turn(n: int) -> str:
+#  4 个真实字段的池子（够 MAX_TOTAL_ROUNDS=8 用）。⚠️ 一轮最多只能问出
+# MAX_QUESTIONS_PER_ROUND（3）个新问题（见 app/agents/intake_agent.py 的
+# `capped_questions = ...[:MAX_QUESTIONS_PER_ROUND]`）——4 个字段报到不完
+# 一轮，必须分两轮，这也是下面 `_rotation_setup_turns` 要处理的事。
+_ROTATING_IDLE_FIELDS = ["toolchain", "functional_safety", "mcu_family", "diag_stack"]
+
+
+def _rotating_idle_turn(n: int, fields: list[str] = _ROTATING_IDLE_FIELDS) -> str:
     """
-    一轮空转：画像一字不变，问的还是同一个 question_id（field=toolchain），
-    只是换了措辞。
-
-    **必须换措辞**，不能逐字重复：`_repeats_earlier_assistant_turn` 会把逐字
-    重复直接判成 stuck 并当场收尾，那一轮根本走不到预算判定。换措辞重问正是
-    pilot 里真实发生的形态（采购岗 16949/26262，见 docs/m1-demo-pilot-feedback.md
-    的调查第 2 条），也是这一章要处理的那种空转。该检测本身的去留归 5.8，
-    本单元不动它。
-    """
-    return json.dumps(
-        {
-            "is_job_related": True,
-            "questions": [{"text": f"工具链方面还有别的要求吗？（第 {n} 次问）", "field": "toolchain"}],
-            "profile_patch": {"job_title": "嵌入式工程师"},
-        }
-    )
-
-
-_ROTATING_IDLE_FIELDS = ["toolchain", "functional_safety", "mcu_family"]
-
-
-def _rotating_idle_turn(n: int) -> str:
-    """
-    一轮空转，但在三个"已问过、都未答"的字段间轮换重问，而不是死磕同一个
+    一轮空转，但在几个"已问过、都未答"的字段间轮换重问，而不是死磕同一个
     field。tasks 5.4 的重问上限（MAX_ASKS_PER_QUESTION）与本测试要验证的
-    MAX_ROUNDS 预算是两条独立的限制——本单元（E）把按轮台账真正接线之后，
-    连续 5 次死磕同一个未答字段会先撞上重问上限而提前进入确认（这正是
-    `test_dropping_an_exhausted_reask_does_not_make_the_turn_productive` 钉住的
-    行为），根本走不到 MAX_ROUNDS 判定，所以换成轮换测试它本来要测的那条。
+    MAX_ROUNDS / MAX_TOTAL_ROUNDS 预算是两条独立的限制——本单元（E）把按轮
+    台账真正接线之后，连续死磕同一个未答字段会先撞上重问上限而提前进入确认
+    （这正是 `test_dropping_an_exhausted_reask_does_not_make_the_turn_productive`
+    钉住的行为），根本走不到轮次预算判定，所以换成轮换测试它本来要测的那条
+    （这也是本函数取代了原来那个死磕 `toolchain` 的 `_idle_turn` 的原因）。
+
+    **每轮必须换措辞**，不能逐字重复：`_repeats_earlier_assistant_turn` 会把
+    逐字重复直接判成 stuck 并当场收尾，那一轮根本走不到预算判定。换措辞重问
+    正是 pilot 里真实发生的形态（采购岗 16949/26262，见
+    docs/m1-demo-pilot-feedback.md 的调查第 2 条），也是这一章要处理的那种
+    空转。该检测本身的去留归 5.8，本单元不动它。
     """
-    field = _ROTATING_IDLE_FIELDS[n % len(_ROTATING_IDLE_FIELDS)]
+    field = fields[n % len(fields)]
     return json.dumps(
         {
             "is_job_related": True,
@@ -618,25 +609,91 @@ def _rotating_idle_turn(n: int) -> str:
     )
 
 
+def _rotation_setup_turn(batch: list[str]) -> str:
+    """一次性把 `batch`（长度不超过 MAX_QUESTIONS_PER_ROUND）里的字段全问出来，
+    给 `_rotating_idle_turn` 的轮换"报到"用。"""
+    return json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": f"{field} 上有什么要求？", "field": field} for field in batch],
+            "profile_patch": {"job_title": "嵌入式工程师"},
+        }
+    )
+
+
+def _rotation_setup_turns(fields: list[str]) -> list[str]:
+    """
+    把 `fields` 按 MAX_QUESTIONS_PER_ROUND 切成几批、逐轮报到——一轮塞不下
+    就得分几轮，见上面 `_ROTATING_IDLE_FIELDS` 的注释。返回值第一项即
+    POST /api/jobs 的首轮响应，其余项是紧跟其后的"报到轮"回复。
+    """
+    from app.agents.intake_agent import MAX_QUESTIONS_PER_ROUND
+
+    batches = [
+        fields[i : i + MAX_QUESTIONS_PER_ROUND] for i in range(0, len(fields), MAX_QUESTIONS_PER_ROUND)
+    ]
+    return [_rotation_setup_turn(batch) for batch in batches]
+
+
+def _assert_rotation_survives(round_count: int, fields: list[str]) -> None:
+    """
+    review Critical：轮换字段数与 MAX_REASKS 之间的耦合曾经是"改代码的人自己
+    心算、算错了也不会有任何提示"——`_ROTATING_IDLE_FIELDS` 只有 3 个字段时
+    对 `MAX_ROUNDS=5` 恰好零余量够用，换到 `MAX_TOTAL_ROUNDS=8` 就不够：某个
+    字段会在跑到 `MAX_TOTAL_ROUNDS` 之前先被重问上限摘掉，测试从"测轮次
+    预算"悄悄变成"测重问上限"——两条路径殊途同归都是转入确认流程，光看
+    `body["message"]["type"] == "confirmation_prompt"` 这一个断言完全看不出
+    区别，这正是本测试组两条用例都曾经踩过的坑。
+
+    字段报到本身还要吃掉 `ceil(len(fields) / MAX_QUESTIONS_PER_ROUND) - 1`
+    轮"报到轮"（一轮最多报到 MAX_QUESTIONS_PER_ROUND 个新字段），报到轮不
+    参与轮换，因此真正用于轮换、可能撞上重问上限的轮数是
+    `round_count - 报到轮数`。N 个字段轮换这些轮次，摊得最挤的那个字段
+    恰好问 `ceil(轮换轮数 / N)` 次；这个数只要不超过 MAX_REASKS（重问不含
+    首问的剩余额度），就不会撞上重问上限。`ceil(a/b) <= c  <=>  a <= b*c`
+    （a、b、c 为正整数），所以判据等价于 `轮换轮数 <= 字段数 * MAX_REASKS`。
+    """
+    from app.agents.intake_agent import MAX_QUESTIONS_PER_ROUND, MAX_REASKS
+
+    field_count = len(fields)
+    setup_rounds = -(-field_count // MAX_QUESTIONS_PER_ROUND)  # ceil
+    extra_setup_rounds = setup_rounds - 1  # 首轮本来就占 round_count 的一份额度
+    rotation_rounds = round_count - extra_setup_rounds
+    max_supported_rotation_rounds = field_count * MAX_REASKS
+    assert rotation_rounds >= 0, (
+        f"字段报到需要 {setup_rounds} 轮（每轮最多报 {MAX_QUESTIONS_PER_ROUND} "
+        f"个新字段，共 {field_count} 个字段），但这里总共只打算跑 {round_count} "
+        "轮——报都报不完，轮换根本没机会开始"
+    )
+    assert rotation_rounds <= max_supported_rotation_rounds, (
+        f"{field_count} 个字段报到要吃掉 {extra_setup_rounds} 轮，剩下 "
+        f"{rotation_rounds} 轮用于轮换；每个字段除了首问最多还能扛 "
+        f"MAX_REASKS={MAX_REASKS} 次重问，{field_count} 个字段轮换合计最多撑 "
+        f"{max_supported_rotation_rounds} 轮，撑不住这 {rotation_rounds} 轮——"
+        "请给 fields 加几个真实字段名，否则这条测试会在跑到 "
+        "MAX_ROUNDS/MAX_TOTAL_ROUNDS 之前先撞上重问上限，从测轮次预算悄悄"
+        "变成测重问上限（这正是 review Critical 抓到的那个坑）"
+    )
+
+
 def test_idle_rounds_do_not_consume_the_followup_budget(tmp_path):
     """
     spec「空转轮不计入预算」的端到端证据：连跑 5 轮空转（总轮数已到 MAX_ROUNDS
     以上），对话仍然停在追问状态，业务经理没有因为空转而失去有效追问机会。
     """
-    from app.agents.intake_agent import MAX_ROUNDS
+    from app.agents.intake_agent import MAX_QUESTIONS_PER_ROUND, MAX_ROUNDS
 
-    first = json.dumps(
-        {
-            "is_job_related": True,
-            "questions": [
-                {"text": "工具链上有什么要求？", "field": "toolchain"},
-                {"text": "功能安全等级上有什么要求？", "field": "functional_safety"},
-                {"text": "MCU 家族上有什么要求？", "field": "mcu_family"},
-            ],
-            "profile_patch": {"job_title": "嵌入式工程师"},
-        }
+    # 只用 3 个字段（不用池子里的第 4 个 diag_stack）：MAX_QUESTIONS_PER_ROUND=3
+    # 意味着 3 个字段一轮就能报到完，不需要额外的"报到轮"——这条测试要断言
+    # `productive == 1`（只有第一轮真的有产出），额外的报到轮会引入第二个
+    # "问出新 question_id" 的产出轮，把这条断言带崩。
+    fields = _ROTATING_IDLE_FIELDS[:MAX_QUESTIONS_PER_ROUND]
+    _assert_rotation_survives(MAX_ROUNDS, fields)
+
+    (first,) = _rotation_setup_turns(fields)
+    client = make_app(
+        tmp_path, [first] + [_rotating_idle_turn(n, fields) for n in range(MAX_ROUNDS)]
     )
-    client = make_app(tmp_path, [first] + [_rotating_idle_turn(n) for n in range(MAX_ROUNDS)])
 
     body = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()
     job_id = body["job_id"]
@@ -657,17 +714,40 @@ def test_idle_rounds_do_not_consume_the_followup_budget(tmp_path):
 
 
 def test_total_round_cap_ends_the_conversation(tmp_path):
-    """spec「总轮次硬上限兜底」：空转到 MAX_TOTAL_ROUNDS 就进确认流程。"""
+    """
+    spec「总轮次硬上限兜底」：空转到 MAX_TOTAL_ROUNDS 就进确认流程。
+
+    review Critical：这条测试原来用 `_idle_turn`（死磕同一个未答字段
+    `toolchain`）模拟空转，台账真正接线后，`toolchain` 在第 4 轮（1 次首问 +
+    2 次重问后已达 `MAX_ASKS_PER_QUESTION`）就被重问上限摘掉、`questions`
+    变空、当场转入确认——根本没跑到 `MAX_TOTAL_ROUNDS`（8）。这条测试唯一的
+    断言只看终态是不是 `confirmation_prompt`，重问上限摘干净questions 同样会
+    让终态变成 `confirmation_prompt`，所以它长期"误判过关"：只要终态巧合
+    对上，谁把 `MAX_TOTAL_ROUNDS` 调成任何值这条测试都不会变红——`docstring`
+    里"空转到 MAX_TOTAL_ROUNDS 就进确认流程"这句话因此从未被真正验证过。
+
+    改成跟它的姊妹测试（`test_idle_rounds_do_not_consume_the_followup_budget`）
+    一样，在几个"已问过、都未答"的字段间轮换重问，撑过重问上限、让空转真正
+    靠满 `MAX_TOTAL_ROUNDS` 轮次预算才收尾——这样 `MAX_TOTAL_ROUNDS` 的值才
+    真正参与了"什么时候进确认"这件事，而不是被重问上限抢跑。
+
+    这里要用满 `_ROTATING_IDLE_FIELDS` 全部 4 个字段（3 个不够撑 8 轮），
+    4 个字段一轮报不完（MAX_QUESTIONS_PER_ROUND=3），所以第 2 轮是"报到轮"
+    （补报第 4 个字段 diag_stack），从第 3 轮起才真正轮换。报到轮本身也会
+    问出新 question_id，因此这条测试不断言 `is_productive` 的总数——它跟
+    `test_idle_rounds_do_not_consume_the_followup_budget` 分工不同：那条测
+    "空转不吃 MAX_ROUNDS 预算"（要求 productive 精确等于 1），这条测
+    "MAX_TOTAL_ROUNDS 真的兜底"（只要求总轮数吃满 MAX_TOTAL_ROUNDS+1）。
+    """
     from app.agents.intake_agent import MAX_TOTAL_ROUNDS
 
-    first = json.dumps(
-        {
-            "is_job_related": True,
-            "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
-            "profile_patch": {"job_title": "嵌入式工程师"},
-        }
-    )
-    client = make_app(tmp_path, [first] + [_idle_turn(n) for n in range(MAX_TOTAL_ROUNDS)])
+    fields = _ROTATING_IDLE_FIELDS
+    _assert_rotation_survives(MAX_TOTAL_ROUNDS, fields)
+
+    first, *extra_setup_turns = _rotation_setup_turns(fields)
+    rotation_round_count = MAX_TOTAL_ROUNDS - len(extra_setup_turns)
+    rotation_turns = [_rotating_idle_turn(n, fields) for n in range(rotation_round_count)]
+    client = make_app(tmp_path, [first, *extra_setup_turns, *rotation_turns])
 
     body = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()
     job_id = body["job_id"]
@@ -675,6 +755,18 @@ def test_total_round_cap_ends_the_conversation(tmp_path):
         body = client.post(f"/api/jobs/{job_id}/reply", json={"message": "嗯"}).json()
 
     assert body["message"]["type"] == "confirmation_prompt"
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "web.db"))
+    total = conn.execute(
+        "SELECT COUNT(*) FROM job_profile WHERE job_id=?", (job_id,)
+    ).fetchone()[0]
+    assert total == MAX_TOTAL_ROUNDS + 1, (
+        "轮次总数与 MAX_TOTAL_ROUNDS+1 对不上——如果提前转确认的是重问上限"
+        "而不是 MAX_TOTAL_ROUNDS，总轮数会比这个值小"
+    )
+    conn.close()
 
 
 def test_confirmation_prompt_payload_carries_chinese_labels(tmp_path):
@@ -942,6 +1034,18 @@ def test_asked_question_rounds_are_accumulated_oldest_first(tmp_path):
     第 5 轮用户回"你决定吧"（模糊回复）、模型把第 4 轮的候选项直接抄进
     profile_patch——必须被摘掉，因为 (b)(c) 判据要比对的是**最近一轮**
     （第 4 轮）的候选项，不是第 3 轮的。
+
+    review 指出：上面这条候选档位断言其实只验证了 `previous_questions`（同一
+    循环里另一个独立变量，取的是"最后遍历到的那一行"）的顺序，没有验证
+    `asked_question_rounds` 本身——如果谁在 `_run_turn` 里查询仍按 ASC 读出、
+    但在放进 state 之前对这个列表调一次 `.reverse()`，`previous_questions`
+    不受影响（它在循环内部已经赋值完毕），候选档位断言会继续通过，但台账本身
+    已经倒了。`asked_question_rounds` 不经过任何 API 响应字段，摘不到它就没法
+    在 HTTP 层断言；这里改为直接读 LangGraph 的 checkpoint（`SqliteSaver`，
+    `tests/test_transaction_ownership.py` 已有先例），拿到本轮真正喂给
+    `compute_intake_turn` 的那份 `asked_question_rounds`，逐轮核对顺序——
+    这是比派生的 `first_asked_round` 更直接的观测点：直接顺序错了，
+    `first_asked_round` 必然跟着错，反之不然。
     """
     responses = [
         json.dumps(
@@ -996,4 +1100,20 @@ def test_asked_question_rounds_are_accumulated_oldest_first(tmp_path):
     assert "mcu_family" not in accumulated, (
         "候选档位被写进了画像——说明 previous_questions 比对的不是最近一轮，"
         "很可能是 asked_questions 查询的 ORDER BY 被改动或倒序了"
+    )
+
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    checkpointer = SqliteSaver(conn)
+    checkpoint = checkpointer.get_tuple(
+        {"configurable": {"thread_id": job_id}}
+    ).checkpoint
+    asked_question_rounds = checkpoint["channel_values"]["asked_question_rounds"]
+    assert [round_[0]["question_id"] for round_ in asked_question_rounds] == [
+        "functional_safety",
+        "mcu_family",
+    ], (
+        "asked_question_rounds 没有按第 1 轮、第 2 轮的真实顺序累积——"
+        "第 5 章台账的 first_asked_round 全靠这个顺序推导，顺序错了不会报错，"
+        "只会让重问次数与首问轮次悄悄算错"
     )
