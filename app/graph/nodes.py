@@ -35,6 +35,9 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         productive_round_count=state.get("productive_round_count", round_count),
         asked_question_ids_before=list(state.get("asked_question_ids_before", [])),
         previous_questions=previous_questions,
+        # 第 5 章的已问台账（重问标注与重问上限）由它推导。compute_* 是纯函数，
+        # 不自己查库——这份数据由 app/web/server.py 的 _run_turn 放进 state。
+        asked_question_rounds=list(state.get("asked_question_rounds", [])),
     )
 
     accumulated = {**accumulated_before, **result.profile_patch}

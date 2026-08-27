@@ -685,3 +685,72 @@ def test_confirm_profile_persists_acknowledgement_in_the_same_write(tmp_path):
     assert persisted["_gap_acknowledgement"]["acknowledged"] is True, (
         "留痕没有跟 status='approved' 一起落库——JD 生成失败时就会丢"
     )
+
+
+def test_compute_passes_the_per_round_ledger_through_to_the_agent(tmp_path):
+    """
+    compute_intake_turn 是 compute_* 节点：只透传，不查库（工程铁律 2）。
+    按轮台账由 _run_turn 查出来放进 state，这里断言它真的到达了 agent——
+    没到达的话重问标注会静默失效（不报错、不失败，只是从来不打标记）。
+    """
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "ASIL 到底要不要？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "再说说"}],
+            "round_count": 1,
+            "productive_round_count": 1,
+            "profile_patch_accumulated": {"job_title": "嵌入式软件工程师"},
+            "asked_question_ids_before": ["functional_safety"],
+            "previous_questions": [],
+            "asked_question_rounds": [
+                [{"text": "功能安全等级（ASIL）上有什么要求？", "field": "functional_safety"}]
+            ],
+        },
+        gateway=gateway,
+    )
+
+    (question,) = state["pending_questions"]
+    assert question["is_reask"] is True
+
+
+def test_compute_still_works_without_the_per_round_ledger_key(tmp_path):
+    """老调用方（没放这个键）行为与今天逐字一致，不打重问标记。"""
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "功能安全等级？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ]
+    )
+
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "再说说"}],
+            "round_count": 1,
+            "productive_round_count": 1,
+            "profile_patch_accumulated": {},
+            "asked_question_ids_before": ["functional_safety"],
+            "previous_questions": [],
+        },
+        gateway=gateway,
+    )
+
+    (question,) = state["pending_questions"]
+    assert question["is_reask"] is False

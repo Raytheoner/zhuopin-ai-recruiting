@@ -40,6 +40,16 @@ class IntakeState(TypedDict, total=False):
     # "候选档位不得代替用户做决定"要知道上一轮给过哪些档位。
     previous_questions: list[dict]
 
+    # 每一轮问出的问题（`IntakeQuestion.to_payload()` 的列表），外层一项 = 一轮，
+    # 按 version 升序。由 _run_turn 从 job_profile.asked_questions 读出，与
+    # asked_question_ids_before 同源——后者是它拍平后的并集。
+    #
+    # 第 5 章的已问台账（问了几轮 / 答没答 / 重问几次）全部由它 + 画像现值
+    # **推导**，不在 state 或库里另存一份状态：多存一份就多一个会漂移的真源，
+    # 而漂移没有任何症状（不报错、不失败，只是重问次数悄悄算错）。这与本文件
+    # 开头"真源是数据库、checkpoint 只是执行过程快照"是同一条理由。
+    asked_question_rounds: list[list[dict]]
+
     # 每项是 IntakeQuestion.to_payload() 的结果（纯 dict），不是 IntakeQuestion
     # 实例：state 会被 SqliteSaver 序列化进 checkpoint，纯 dict 的往返语义是
     # 确定的，dataclass 则依赖序列化器实现细节——"重放后类型变了"是只在恢复

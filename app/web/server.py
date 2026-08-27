@@ -121,10 +121,14 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         ).fetchall()
         asked_question_ids_before: list[str] = []
         previous_questions: list[dict] = []
+        asked_question_rounds: list[list[dict]] = []
         for (raw,) in asked_rows:
             # 历史行（.51 上 2026-08-19 之前写的）这一列是默认值 '[]'；老库补列
             # 时也拿到 '[]'。两条路径都不需要回填。
             payloads = json.loads(raw or "[]")
+            # 按轮保留一份：第 5 章的重问台账要知道"这个子问题出现在几轮里"，
+            # 拍平后的并集算不出次数。空轮也要占一项，轮次下标才对得上。
+            asked_question_rounds.append(payloads)
             previous_questions = payloads
             for payload in payloads:
                 question_id = payload.get("question_id")
@@ -149,6 +153,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "profile_patch_accumulated": accumulated,
             "asked_question_ids_before": asked_question_ids_before,
             "previous_questions": previous_questions,
+            "asked_question_rounds": asked_question_rounds,
             "turn_started_at": turn_started_at,
         }
         graph.invoke(state, config={"configurable": {"thread_id": job_id}})

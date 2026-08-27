@@ -596,6 +596,28 @@ def _idle_turn(n: int) -> str:
     )
 
 
+_ROTATING_IDLE_FIELDS = ["toolchain", "functional_safety", "mcu_family"]
+
+
+def _rotating_idle_turn(n: int) -> str:
+    """
+    一轮空转，但在三个"已问过、都未答"的字段间轮换重问，而不是死磕同一个
+    field。tasks 5.4 的重问上限（MAX_ASKS_PER_QUESTION）与本测试要验证的
+    MAX_ROUNDS 预算是两条独立的限制——本单元（E）把按轮台账真正接线之后，
+    连续 5 次死磕同一个未答字段会先撞上重问上限而提前进入确认（这正是
+    `test_dropping_an_exhausted_reask_does_not_make_the_turn_productive` 钉住的
+    行为），根本走不到 MAX_ROUNDS 判定，所以换成轮换测试它本来要测的那条。
+    """
+    field = _ROTATING_IDLE_FIELDS[n % len(_ROTATING_IDLE_FIELDS)]
+    return json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [{"text": f"{field} 方面还有别的要求吗？（第 {n} 次问）", "field": field}],
+            "profile_patch": {"job_title": "嵌入式工程师"},
+        }
+    )
+
+
 def test_idle_rounds_do_not_consume_the_followup_budget(tmp_path):
     """
     spec「空转轮不计入预算」的端到端证据：连跑 5 轮空转（总轮数已到 MAX_ROUNDS
@@ -606,11 +628,15 @@ def test_idle_rounds_do_not_consume_the_followup_budget(tmp_path):
     first = json.dumps(
         {
             "is_job_related": True,
-            "questions": [{"text": "工具链上有什么要求？", "field": "toolchain"}],
+            "questions": [
+                {"text": "工具链上有什么要求？", "field": "toolchain"},
+                {"text": "功能安全等级上有什么要求？", "field": "functional_safety"},
+                {"text": "MCU 家族上有什么要求？", "field": "mcu_family"},
+            ],
             "profile_patch": {"job_title": "嵌入式工程师"},
         }
     )
-    client = make_app(tmp_path, [first] + [_idle_turn(n) for n in range(MAX_ROUNDS)])
+    client = make_app(tmp_path, [first] + [_rotating_idle_turn(n) for n in range(MAX_ROUNDS)])
 
     body = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()
     job_id = body["job_id"]
@@ -863,3 +889,111 @@ def test_empty_confirm_body_is_still_not_acknowledged(tmp_path):
 
     assert resp.status_code == 409, "acknowledged_gaps 的默认值不是 false —— 系统替人做了知情声明"
     assert resp.json()["detail"]["gaps"]
+
+
+def test_reask_is_marked_end_to_end_from_the_persisted_ledger(tmp_path):
+    """
+    端到端：第 1 轮问功能安全、用户答别的，第 2 轮再问同一个子问题，
+    API 响应里那条问题必须带 is_reask=true。
+
+    这条用例走的是真实取数路径（job_profile.asked_questions → _run_turn →
+    state → agent → payload），它是"台账真源随画像落库"（tasks 5.1）唯一
+    的端到端证明——前面几条都是拿手搓的 state 喂进去的。
+    """
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "功能安全等级（ASIL）上有什么要求？", "field": "functional_safety"}],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+            }
+        ),
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "ASIL 这块到底要不要？", "field": "functional_safety"}],
+                "profile_patch": {"headcount": 2},
+            }
+        ),
+    ]
+    client = make_app(tmp_path, responses)
+
+    job_id = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()["job_id"]
+    body = client.post(f"/api/jobs/{job_id}/reply", json={"message": "招 2 个"}).json()
+
+    (question,) = body["message"]["payload"]["questions"]
+    assert question["question_id"] == "functional_safety"
+    assert question["is_reask"] is True
+    assert "（这个你刚才没答）" in body["message"]["payload"]["questions_text"]
+
+
+def test_asked_question_rounds_are_accumulated_oldest_first(tmp_path):
+    """
+    变异检查补的守卫：`_run_turn` 读 `job_profile.asked_questions` 的既有查询按
+    `ORDER BY version ASC` 排序（第 3 轮开工前，最近一次改动是 tasks 5.1 接线）。
+    is_reask/超限摘除只看 question_id 有没有出现过、问过几次——这两个判据对轮次
+    顺序不敏感（求并集、求和），所以把这个查询悄悄倒成 DESC，is_reask 的用例
+    照样绿，问题在别处冒头：同一个循环里 `previous_questions` 取的是"最后一次
+    遍历到的那一行"，顺序一倒就变成"最早一轮"，"候选档位不得代替用户做决定"
+    （合规红线）的判据会去比对错误的那一轮候选项，导致本该被摘掉的 AI 代答
+    悄悄写进画像——不报错、不失败，只是画像里多了一个用户没答应过的值。
+
+    第 3 轮问功能安全（给了候选项），第 4 轮改问别的字段（同样给了候选项），
+    第 5 轮用户回"你决定吧"（模糊回复）、模型把第 4 轮的候选项直接抄进
+    profile_patch——必须被摘掉，因为 (b)(c) 判据要比对的是**最近一轮**
+    （第 4 轮）的候选项，不是第 3 轮的。
+    """
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [
+                    {
+                        "text": "要哪个 ASIL 等级？",
+                        "field": "functional_safety",
+                        "options": ["ASIL-B", "ASIL-D", "无要求"],
+                    }
+                ],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+            }
+        ),
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [
+                    {
+                        "text": "MCU 家族上有什么要求？",
+                        "field": "mcu_family",
+                        "options": ["英飞凌 Aurix", "TI Hercules"],
+                    }
+                ],
+                "profile_patch": {},
+            }
+        ),
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [],
+                # 模型把第 4 轮（MCU 家族）给出的候选项直接抄进 patch——
+                # 用户回的是"你决定吧"，没有自己打出"英飞凌 Aurix"。
+                "profile_patch": {"mcu_family": "英飞凌 Aurix"},
+            }
+        ),
+    ]
+    client = make_app(tmp_path, responses)
+
+    job_id = client.post("/api/jobs", json={"message": "要个嵌入式工程师"}).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/reply", json={"message": "先这样吧"})
+    client.post(f"/api/jobs/{job_id}/reply", json={"message": "你决定吧"})
+
+    conn = get_connection(str(tmp_path / "web.db"))
+    accumulated = json.loads(
+        conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()[0]
+    )
+    assert "mcu_family" not in accumulated, (
+        "候选档位被写进了画像——说明 previous_questions 比对的不是最近一轮，"
+        "很可能是 asked_questions 查询的 ORDER BY 被改动或倒序了"
+    )
