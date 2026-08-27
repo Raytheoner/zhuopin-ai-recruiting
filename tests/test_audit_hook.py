@@ -112,9 +112,52 @@ def test_unknown_audit_context_key_is_rejected(hook):
     "方便排查"的 resume_text 会一路流进 JSONL 镜像。
 
     ⛔ 抛而不是忽略：忽略等于静默丢数据，写错的人永远不知道自己的 job_id 没进库。
+
+    ⚠️ **但抛在留痕写完之后**（review round 2）：那次 API 调用已经付过钱、已经
+    发生了，抛在写之前会让它一条记录都不剩——正是 spec 禁止的方向。所以下面
+    同时断言"抛了"**和**"留痕还在"，两条缺一不可。
     """
     with pytest.raises(UnknownAuditContextKey, match="resume_text"):
         _call(hook, audit_context={"thread_id": "job-1", "resume_text": "张三，男，1990"})
+
+
+def test_a_rejected_context_key_still_leaves_a_trail_without_leaking_its_value(
+    hook, conn, chain_path
+):
+    """
+    ⭐ 上一条的另一半。未登记的键被丢掉、调用照样留痕，且 error 里**只记键名、
+    不记值**——未登记的键正是"可能藏着简历原文"的那些，把值写进 error 等于从
+    另一个口子放它进留痕。
+    """
+    with pytest.raises(UnknownAuditContextKey):
+        _call(
+            hook,
+            audit_context={"thread_id": "job-1", "resume_text": "张三·MARKER-9c1e·某某大学"},
+        )
+
+    row = _rows(conn)[0]
+    assert row["id"].startswith("llm:")  # 只有 thread_id 没有 node → 走随机 id 分支
+    mirrored = json.loads(chain_path.read_text(encoding="utf-8").splitlines()[0])
+    assert "resume_text" in mirrored["error"]  # 键名记下来了
+    assert "MARKER-9c1e" not in json.dumps(mirrored, ensure_ascii=False)  # 值没进去
+    assert "MARKER-9c1e" not in json.dumps(_rows(conn), ensure_ascii=False, default=str)
+
+
+def test_mirror_line_carries_the_call_timestamp(hook, conn, chain_path):
+    """
+    ⭐ 镜像是**防篡改的那一份独立证据**（SQLite 行可被 UPDATE，append-only 文件
+    的攻击面小得多）。留 created_at=None 让数据库的 datetime('now') 去填的话，
+    只有 SQLite 那侧有时刻，镜像里是 "created_at": null——一份说不出"这次调用
+    发生在什么时候"的证据基本不成立，而 reconcile() 只比 id、发现不了
+    （2026-08-28 review round 2）。
+
+    顺带钉住两侧记的是**同一个**时刻：不是两次各自取 now()。
+    """
+    _call(hook)
+
+    mirrored = json.loads(chain_path.read_text(encoding="utf-8").splitlines()[0])
+    assert mirrored["created_at"]  # 不是 None、不是空串
+    assert mirrored["created_at"] == _rows(conn)[0]["created_at"]
 
 
 def test_missing_system_fingerprint_is_stored_as_null_and_does_not_raise(hook, conn):

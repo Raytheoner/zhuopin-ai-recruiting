@@ -62,6 +62,16 @@ def test_one_scoring_call_lands_every_reproducibility_field(wired):
     tasks 3.5 / spec「一次评分调用完成」：留痕包含配置侧模型标识、响应返回的模型
     标识、部署指纹、prompt 版本、temperature、输入哈希、rubric 快照、原始响应、
     调用时刻——工程铁律 3 的逐项兑现。
+
+    ⚠️ **本条测的是"通道通"，不是"生产里真有这些值"**（review round 2 提醒）。
+    U3 的范围不含把 audit_context 接到业务侧（要改 app/graph/nodes.py 与
+    app/agents/intake_agent.py，超出 delivery-units.md:24 给本单元的文件边界），
+    所以今天生产里的三个调用点——intake_agent.py:972、jd_agent.py:69、
+    scripts/compare_models.py:115——**一个都不传 audit_context**，真实写进
+    analysis_run 的行 application_id / job_id / thread_id 全是 NULL、id 走随机
+    分支。下面 job_id == "job-7" 之所以成立，是因为本测试自己传了。
+    ⛔ 不要把这条读成"留痕可按业务标识检索已经兑现"——那要等接业务侧的那个单元，
+    登记在 docs/tech-debt.md TD-1 的现状行里。
     """
     conn, _chain_path, hook = wired
     client = FakeOpenAIClient(
