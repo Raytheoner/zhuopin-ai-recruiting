@@ -15,6 +15,11 @@ from app.agents.ecu_knowledge import (
     fallback_options_for_field,
     match_ambiguous_terms,
 )
+from app.agents.field_grounding import (
+    is_user_turn,
+    split_patch_sources,
+    verify_field_grounding,
+)
 from app.agents.intake_question import (
     IntakeQuestion,
     QuestionLedgerEntry,
@@ -215,7 +220,8 @@ SYSTEM_PROMPT = (
     "并把本轮能确定的字段整理进 profile_patch。"
     "如果不是用人需求，questions 里放一句引导语，is_job_related=false，profile_patch 为空对象。\n"
     "\n"
-    "【profile_patch 字段规范】键必须取自下面这份岗位画像字段表，值必须符合对应类型；"
+    "【profile_patch 字段规范】键必须取自下面这份岗位画像字段表，"
+    "值写在下面【字段来源】说明的 value 里、必须符合对应类型；"
     "枚举字段必须原样使用列出的取值（不要改大小写、不要把连字符换成空格）；"
     "拿不准的字段宁可不写，也不要编造或改写。\n"
     f"{PROFILE_FIELD_GUIDE}\n"
@@ -248,6 +254,24 @@ SYSTEM_PROMPT = (
     "没有可枚举档位的问题（如「具体车型与量产时间」）留空数组\n"
     "- allow_free_text（选填，布尔）：是否允许用户自由文本作答，默认 true\n"
     "不要输出 question_id，那个由系统按 field 派生；你自己编的 id 会被丢弃。\n"
+    "\n"
+    "【字段来源 · 本轮起强制】profile_patch 的值不再是裸值，而是一个对象：\n"
+    "- value：字段的值，规范同上（枚举原样、类型正确）\n"
+    "- source_quote：**逐字**取自业务经理某一轮原话的片段，用来证明这个值有出处\n"
+    "- source_turn：该片段所在的用户轮次编号，就是【对话历史】里 user#N 的那个 N（从 1 开始）\n"
+    "正例：业务经理在 user#2 说「需要熟悉 AUTOSAR CP，量产项目至少两个」→\n"
+    '  {"autosar_experience": {"value": ["CP"], "source_quote": "熟悉 AUTOSAR CP", "source_turn": 2}}\n'
+    "  片段逐字来自 user#2；value 是它的规范化形式，这是允许的——被检查的是引用的真实性，"
+    "不是值与引用的字面相等。\n"
+    "反例一（复述自己上一轮的问题）：\n"
+    '  {"mcu_family": {"value": ["TriCore"], "source_quote": "请问用的是哪一系列 MCU？", "source_turn": 2}}\n'
+    "  这句是 assistant 说的。**只有 user#N 才是来源**，你自己问过的话不是。\n"
+    "反例二（拼接不存在的句子）：业务经理从没提过 MCU，却写\n"
+    '  {"mcu_family": {"value": ["ARM Cortex-M"], "source_quote": "我们用 ARM Cortex-M", "source_turn": 1}}\n'
+    "  这句话在 user#1 里根本不存在。\n"
+    "指不出逐字出处的字段，宁可不写进 profile_patch。确实要写又给不出引用时，"
+    "source_quote 与 source_turn 留 null——系统会把它记为未溯源，这不会中断采集；"
+    "但**编造一段引用比留 null 严重得多**。\n"
     "\n"
     "输出 JSON，字段：is_job_related(bool), questions(上述问题对象的数组), "
     "profile_patch(object), unspecified_fields(string[], 可选)。"
@@ -508,12 +532,31 @@ def _render_followup_line(spec: FollowupSpec) -> str:
     return "".join(parts)
 
 
+def _render_transcript(history: list[dict]) -> str:
+    """
+    渲染给模型看的对话历史，**给用户轮次编号**。
+
+    编号是 source_turn 的唯一口径：模型报"这段引用来自 user#2"，
+    field_grounding.verify_field_grounding 就按 user_turns(history)[1] 去核。
+    两边共用 field_grounding.is_user_turn 这一个谓词，不各写各的判断——
+    错位一格的表现是"引用对得上却被判未溯源"，从错误信息里看不出成因。
+    """
+    lines = []
+    user_index = 0
+    for turn in history:
+        content = turn.get("content", "")
+        if is_user_turn(turn):
+            user_index += 1
+            lines.append(f"user#{user_index}: {content}")
+        else:
+            lines.append(f"{turn.get('role')}: {content}")
+    return "\n".join(lines)
+
+
 def _build_user_prompt(
     history: list[dict], profile_patch_accumulated: dict, followups: list[FollowupSpec]
 ) -> str:
-    transcript = "\n".join(
-        f"{turn.get('role', 'user')}: {turn.get('content', '')}" for turn in history
-    )
+    transcript = _render_transcript(history)
     sections = [f"【对话历史】\n{transcript or '（空）'}"]
 
     if profile_patch_accumulated:
@@ -926,9 +969,12 @@ def run_intake_turn(
         # SYSTEM_PROMPT 改了就必须升版本：input_hash 与 prompt_version 是
         # "这条结果是哪一版提示词产出的"的唯一依据（铁律 5 的可解释性要求）。
         # intake-v3 → intake-v4：本轮改了 SYSTEM_PROMPT 的「回答模糊/不知道时
-        # 怎么办」段（补反问场景与"系统会强制补 options"的说明）。提示词改了
-        # 就必须升版本，否则 input_hash 与历史记录对不上（铁律 5）。
-        prompt_version="intake-v4",
+        # 怎么办」段（补反问场景与"系统会强制补 options"的说明）。
+        # intake-v4 → intake-v5：单元 F（tasks 7.2）新增【字段来源】段，
+        # 要求 profile_patch 每个值带 source_quote/source_turn，且对话历史
+        # 改为给用户轮次编号（user#N）。提示词改了就必须升版本，否则
+        # input_hash 与历史记录对不上（铁律 5）。
+        prompt_version="intake-v5",
     )
 
     if not parsed.is_job_related:

@@ -4,10 +4,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.agents import intake_agent
+from app.agents.field_grounding import user_turns
 from app.agents.intake_agent import (
     MAX_ASKS_PER_QUESTION,
     MAX_REASKS,
     SYSTEM_PROMPT,
+    _build_user_prompt,
     derive_unspecified_fields,
     run_intake_turn,
 )
@@ -958,7 +960,7 @@ def test_misjudged_vague_reply_does_not_clear_extracted_fields():
 
 
 def test_prompt_version_is_intake_v4():
-    """铁律 5：SYSTEM_PROMPT 改了就必须升版本。"""
+    """铁律 5：SYSTEM_PROMPT 改了就必须升版本。v4→v5 由单元 F 的 7.2 触发（见下方 test_prompt_version_is_v5）。"""
     gateway = make_gateway(
         [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})]
     )
@@ -972,7 +974,7 @@ def test_prompt_version_is_intake_v4():
     gateway.extract_structured_with_meta = _spy
     run_intake_turn(gateway, history=[{"role": "user", "content": "要个工程师"}], round_count=0)
 
-    assert captured["prompt_version"] == "intake-v4"
+    assert captured["prompt_version"] == "intake-v5"
 
 
 # ---------------------------------------------------------------------------
@@ -2058,3 +2060,53 @@ def test_verbatim_repeat_detection_still_guards_jobs_with_an_empty_ledger():
 
     assert result.questions == []      # 逐字重复 → stuck → 当场收尾
     assert result.is_complete is True
+
+
+# ---------------------------------------------------------------------------
+# 交付单元 F（tasks 7.2）：SYSTEM_PROMPT 要求逐字来源 + 用户轮次编号 + intake-v5
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_version_is_v5():
+    """
+    铁律 5：SYSTEM_PROMPT 改了就必须升版本，否则 input_hash 与历史评分对不上。
+    v4 是单元 B 占用的，F 是 v5，**不要重号**（delivery-units.md §5 约定 3）。
+    """
+    gateway = make_gateway([json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})])
+    run_intake_turn(gateway, history=[{"role": "user", "content": "要招人"}], round_count=0)
+    assert gateway._client.chat.completions.calls  # 确实调过模型
+    # prompt_version 不进请求体，只进 AuditHook；这里直接对着源码常量断言。
+    import app.agents.intake_agent as mod
+    import inspect
+
+    assert 'prompt_version="intake-v5"' in inspect.getsource(mod.run_intake_turn)
+
+
+def test_system_prompt_demands_verbatim_source():
+    """7.2：来源要求 + 正例 + 反例都必须在提示词里。"""
+    assert "source_quote" in SYSTEM_PROMPT
+    assert "source_turn" in SYSTEM_PROMPT
+    assert "user#" in SYSTEM_PROMPT
+    assert "逐字" in SYSTEM_PROMPT
+    assert "正例" in SYSTEM_PROMPT
+    assert "反例" in SYSTEM_PROMPT
+
+
+def test_transcript_numbers_user_turns_consistently_with_verifier():
+    """
+    prompt 里的 user#N 编号必须与 field_grounding.user_turns 的下标严格对齐。
+    这是本单元最容易静默错的地方：错位一格的表现是"引用对得上却判未溯源"，
+    从错误信息里完全看不出成因。所以这里不测"格式好看"，测的是**两边同源**。
+    """
+    history = [
+        {"role": "user", "content": "第一句"},
+        {"role": "assistant", "content": "助手插一句"},
+        {"role": "user", "content": "第二句"},
+        {"content": "没有 role 的一句"},
+    ]
+    prompt = _build_user_prompt(history, {}, [])
+    for index, text in enumerate(user_turns(history), start=1):
+        assert f"user#{index}: {text}" in prompt
+    assert "assistant: 助手插一句" in prompt
+    # 助手轮次不占编号：三条用户原话，编号只到 3
+    assert "user#4" not in prompt
