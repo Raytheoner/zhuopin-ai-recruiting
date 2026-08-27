@@ -173,16 +173,47 @@ def test_no_effect_function_appends_jsonl():
     assert offenders == []
 
 
-def test_effect_mirror_detector_actually_detects():
-    """⭐ 阳性对照，理由同上。"""
-    offending = (
-        "@idempotent_effect('effect_x')\n"
-        "def effect_x(conn, *, thread_id, business_key, event):\n"
-        "    recorder.record(conn, event)\n"
-        "    recorder.mirror(event)\n"
-    )
-
-    assert _effect_functions_touching_the_mirror(offending) == ["effect_x:mirror"]
+@pytest.mark.parametrize(
+    "offending,expected",
+    [
+        pytest.param(
+            (
+                "@idempotent_effect('effect_x')\n"
+                "def effect_x(conn, *, thread_id, business_key, event):\n"
+                "    recorder.record(conn, event)\n"
+                "    recorder.mirror(event)\n"
+            ),
+            ["effect_x:mirror"],
+            id="mirror_call",
+        ),
+        pytest.param(
+            (
+                "@idempotent_effect('effect_x')\n"
+                "def effect_x(conn, *, thread_id, business_key, event):\n"
+                "    recorder.record(conn, event)\n"
+                "    recorder.backfill(event)\n"
+            ),
+            ["effect_x:backfill"],
+            id="backfill_call",
+        ),
+        pytest.param(
+            (
+                "def effect_x(conn, *, thread_id, business_key, event):\n"
+                "    sink = JsonlChainSink(path)\n"
+                "    sink.write(event)\n"
+            ),
+            ["effect_x:JsonlChainSink"],
+            id="jsonl_chain_sink_name",
+        ),
+    ],
+)
+def test_effect_mirror_detector_actually_detects(offending, expected):
+    """
+    ⭐ 阳性对照，理由同上。三个分支各一条用例——`.mirror(`、`.backfill(`、裸引用
+    `JsonlChainSink` 这个名字——因为它们是检查函数里三条独立的命中路径，任何一条
+    单独回归（比如漏掉 backfill 分支）都不会被另外两条盖住。
+    """
+    assert _effect_functions_touching_the_mirror(offending) == expected
 
 
 # ── 事务归属（铁律 1）────────────────────────────────────────────────────
@@ -241,18 +272,15 @@ def test_verify_integrity_delegates_to_the_mirror(conn, chain_path):
     assert result.total == 2
 
 
-@pytest.mark.parametrize("module", ["events", "sinks", "recorder"])
-def test_audit_module_imports_no_config_or_graph(module):
+def _modules_importing_config_or_graph(source: str) -> list[str]:
     """
-    铁律 2 的落点：app/audit 是被 L4 调用的存储适配层，自己不决定何时被调用。
-    import app.config 会让审计路径在启动时绑死配置、并让 U3 的注入点不再是唯一
-    一处；import app.graph 是反向依赖。路径与连接一律由调用方传入。
+    扫真正的 import 语句（`ast.Import` 与 `ast.ImportFrom` 两种节点都要覆盖），
+    返回命中 `app.config` / `app.graph` 前缀的模块名列表。
 
-    ⚠️ 用 AST 扫真正的 import 语句，**不要**用 `"app.config" not in source` 这种
-    子串扫描——写明这条规则的 docstring 里就含 "app.config" 四个字，子串版会被
-    自己的注释绊倒（2026-08-26 提取验证实测，见文末「提取验证记录」）。
+    ⚠️ **不要**用 `"app.config" not in source` 这种子串扫描——写明这条规则的
+    docstring 里就含 "app.config" 四个字，子串版会被自己的注释绊倒
+    （2026-08-26 提取验证实测）。
     """
-    source = (APP_ROOT / "audit" / f"{module}.py").read_text(encoding="utf-8")
     imported: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -260,4 +288,35 @@ def test_audit_module_imports_no_config_or_graph(module):
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
 
-    assert not [name for name in imported if name.startswith(("app.config", "app.graph"))]
+    return [name for name in imported if name.startswith(("app.config", "app.graph"))]
+
+
+@pytest.mark.parametrize("module", ["events", "sinks", "recorder"])
+def test_audit_module_imports_no_config_or_graph(module):
+    """
+    铁律 2 的落点：app/audit 是被 L4 调用的存储适配层，自己不决定何时被调用。
+    import app.config 会让审计路径在启动时绑死配置、并让 U3 的注入点不再是唯一
+    一处；import app.graph 是反向依赖。路径与连接一律由调用方传入。
+    """
+    source = (APP_ROOT / "audit" / f"{module}.py").read_text(encoding="utf-8")
+
+    assert _modules_importing_config_or_graph(source) == []
+
+
+@pytest.mark.parametrize(
+    "offending,expected",
+    [
+        pytest.param("import app.config\n", ["app.config"], id="plain_import"),
+        pytest.param(
+            "from app.graph import build_graph\n", ["app.graph"], id="from_import"
+        ),
+    ],
+)
+def test_import_detector_actually_detects(offending, expected):
+    """
+    ⭐ 阳性对照。没有它，上一条在"检查函数漏掉 ast.ImportFrom / 把 startswith
+    退化成精确匹配"时同样是绿的——那不是验证，是巧合。两条用例分别覆盖
+    `ast.Import`（`import app.config`）与 `ast.ImportFrom`（`from app.graph
+    import x`），因为它们是检查函数里两条独立的分支，一条回归不会被另一条盖住。
+    """
+    assert _modules_importing_config_or_graph(offending) == expected
