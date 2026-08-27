@@ -178,3 +178,50 @@ def test_normalized_value_with_verbatim_quote_is_grounded():
         }
     }
     assert verify_field_grounding(patch, history) == []
+
+
+def test_selected_option_is_grounded_without_a_special_case():
+    """
+    tasks 7.4(b) 的核实结论，钉成测试。
+
+    单元 C 的 collectSelections()（app/web/static/index.html:271）把点选拼成
+    `问题原文：档位A、档位B` 一行、与自由文本合并成一条 message 提交给既有的
+    POST /reply（API 契约未变，见 tests/test_static_frontend.py 的
+    test_reply_api_contract_has_no_selected_options）。于是**被选中的档位文本
+    逐字出现在该轮用户原话里**，7.3 的子串判定天然命中——不需要任何
+    "点选例外"分支。
+
+    **这个测试将来若失败，说明前端的拼接格式变了、(b) 重新变成真问题。
+    那是一次设计对话（要不要给 ReplyRequest 加回 selected_options），
+    不是一个可以删掉的测试。**
+    """
+    # 逐字复刻 collectSelections() 的输出形态：问题原文 + "：" + 档位、顿号分隔
+    history = [
+        {"role": "user", "content": "要招个做 ECU 的"},
+        {"role": "assistant", "content": "是否有功能安全等级要求？"},
+        {
+            "role": "user",
+            "content": "是否有功能安全等级要求？：ASIL-D\n量产项目要求几个？：2 个及以上",
+        },
+    ]
+    patch = {
+        "functional_safety": {"value": "ASIL-D", "source_quote": "ASIL-D", "source_turn": 2},
+        "project_experience_requirement": {
+            "value": "2 个及以上量产项目",
+            "source_quote": "2 个及以上",
+            "source_turn": 2,
+        },
+    }
+    assert verify_field_grounding(patch, history) == []
+
+
+def test_free_text_mixed_with_selection_still_grounds():
+    """点选 + 自由文本混合提交（单元 C 支持的第三条路径）同样天然命中。"""
+    history = [
+        {"role": "user", "content": "MCU 用哪个系列？：Infineon TriCore\n另外要会 CAPL 脚本"}
+    ]
+    patch = {
+        "mcu_family": {"value": ["TriCore"], "source_quote": "Infineon TriCore", "source_turn": 1},
+        "toolchain": {"value": ["CAPL"], "source_quote": "会 CAPL 脚本", "source_turn": 1},
+    }
+    assert verify_field_grounding(patch, history) == []
