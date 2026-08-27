@@ -65,14 +65,18 @@
 
 对应 `intake-question-tracking` 的「已问未答的判定」「重问必须显式标注」「重问次数上限」。设计依据：design.md 决策 2。依赖第 2 章。
 
-- [ ] 5.1 `IntakeState` 增加已问子问题台账（`question_id` → 已问轮次 / 是否已答 / 重问次数）；真源随画像落库，不只活在 checkpoint（对齐 `app/graph/state.py` 既有约定）
-- [ ] 5.2 已答判定：用户回复后判定本轮覆盖了哪些已问 `question_id`；未覆盖的保持"已问未答"
-- [ ] 5.3 空转轮的状态处理：整轮无字段产出时，本轮之前已问的子问题**全部保持已问未答**，不得被标记为已答
-- [ ] 5.4 重问时置 `is_reask=true`，渲染层加显式重问提示（"这个你刚才没答"一类）；重问条目与新问题在界面上可区分，**不得混编成看起来是新问题的一句话**
-- [ ] 5.5 重问次数上限取 2（问 1 次 + 重问 2 次）；超限即停止追问该子问题并把目标字段计入未指定字段，不再消耗追问轮次
-- [ ] 5.6 测试（真实回放）：用 `2494103e` 第 3-4 轮的 IATF 16949 / ISO 26262 序列，断言 ISO 26262 被判为已问未答、重问时带重问标注、且 `question_id` 与首问一致（换措辞不改 id）
-- [ ] 5.7 测试：`question_id = field` 撞 id 的递进提问（"要不要 26262" → "要哪个 ASIL"）在上限 2 之内不会被过早掐断（design.md 风险表第 3 条）
-- [ ] 5.8 `_repeats_earlier_assistant_turn` 与新机制的关系交代清楚：保留作为最后一道逐字防线，还是由 `question_id` 追踪取代——在实现里给出结论并写进注释
+- [x] 5.1 `IntakeState` 增加已问子问题台账（`question_id` → 已问轮次 / 是否已答 / 重问次数）；真源随画像落库，不只活在 checkpoint（对齐 `app/graph/state.py` 既有约定）
+- [x] 5.2 已答判定：用户回复后判定本轮覆盖了哪些已问 `question_id`；未覆盖的保持"已问未答"
+- [x] 5.3 空转轮的状态处理：整轮无字段产出时，本轮之前已问的子问题**全部保持已问未答**，不得被标记为已答
+- [x] 5.4 重问时置 `is_reask=true`，渲染层加显式重问提示（"这个你刚才没答"一类）；重问条目与新问题在界面上可区分，**不得混编成看起来是新问题的一句话**
+- [x] 5.5 重问次数上限取 2（问 1 次 + 重问 2 次）；超限即停止追问该子问题并把目标字段计入未指定字段，不再消耗追问轮次
+      ⚠️ **实施偏离交付计划的逐字代码，2026-08-27 Shao Peishen 拍板批准。** 计划给交付单元 E Task 2 的逐字代码把"超限"谓词（`not entry.is_answered and entry.ask_count >= MAX_ASKS_PER_QUESTION`）写了**两遍**——一处在 `_apply_question_ledger` 的摘除分支、一处在 `run_intake_turn` 算兜底合成要跳过的 `exhausted` 集合。Task 2 review 判为 Important：两处只改一处就会漂移，而漂移**没有任何症状**——兜底合成挑中一个"它以为还能问、摘除侧认为已超限"的字段，合成出来的问题被当场摘掉，本轮 `questions` 变空，**用户收到一个空气泡**，不抛异常、不失败、没有任何既有断言会红。
+      落地：抽成 `app/agents/intake_agent.py::_is_exhausted(entry)`，行为逐字节等价，**未改动任何计划规定的常量与函数签名**（`MAX_REASKS` / `MAX_ASKS_PER_QUESTION` / `run_intake_turn` 入参一字未动）。commit `93cefeb`。
+- [x] 5.6 测试（真实回放）：用 `2494103e` 第 3-4 轮的 IATF 16949 / ISO 26262 序列，断言 ISO 26262 被判为已问未答、重问时带重问标注、且 `question_id` 与首问一致（换措辞不改 id）
+      ℹ️ 取数边界：回放重建的是那次事故的**形状**（打包提问 → 部分回答 → 换措辞重问），前置事实取自本仓库已逐字记载的 `proposal.md` 第 7 行与 `docs/m1-demo-pilot-feedback.md`，**没有也不去 `.51` 取 `conversation` 原文**（合规红线「模型全部走境内」段、单元 D 的取数范围）。它不是逐字节的生产 turn 重放，出处与局限逐字写在两条用例的 docstring 里。
+- [x] 5.7 测试：`question_id = field` 撞 id 的递进提问（"要不要 26262" → "要哪个 ASIL"）在上限 2 之内不会被过早掐断（design.md 风险表第 3 条）
+- [x] 5.8 `_repeats_earlier_assistant_turn` 与新机制的关系交代清楚：保留作为最后一道逐字防线，还是由 `question_id` 追踪取代——在实现里给出结论并写进注释
+      结论：**保留，职责收窄为兜底**（三条理由逐字写进该函数 docstring）。台账为空的 job（历史行不回填，§5 约定 4）上它是唯一防线，由 `tests/test_intake_agent.py::test_verbatim_repeat_detection_still_guards_jobs_with_an_empty_ledger` 钉住。
 
 ## 6. 未指定字段推导与确认前警示
 

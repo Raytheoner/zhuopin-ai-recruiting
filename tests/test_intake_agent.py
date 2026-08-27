@@ -1841,3 +1841,180 @@ def test_a_field_without_a_value_is_never_counted_as_answered():
 
     # 字段整个缺席也是"没值"的一种，同样不能算已答
     assert "functional_safety" not in intake_agent._answered_fields({})
+
+
+def test_replay_2494103e_iatf_and_iso26262_sequence():
+    """
+    tasks 5.6 · 真实回放：`2494103e`（采购岗）第 3-4 轮的 IATF 16949 /
+    ISO 26262 序列。
+
+    **前置事实的出处**（本仓库内已逐字记载，不需要也不去 .51 取对话原文）：
+    - `openspec/changes/m1-intake-quality-fixes/proposal.md` 第 7 行：
+      "第 3 轮把「IATF 16949 / ISO 26262」打包成一个问题串，用户只答了前者；
+      第 4 轮系统把 ISO 26262 拆出来重问，措辞不同、话题相同。2026-08-11 上线
+      的逐字重复检测（_repeats_earlier_assistant_turn）按定义抓不到——原文本来
+      就不一样。"
+    - `docs/m1-demo-pilot-feedback.md`：该会话自身的两条原子性不变式都是绿的，
+      没有丢消息，所以"用户体感重复"确实来自换措辞重问，而不是投递丢失。
+
+    **本用例的边界（如实写在这里，不要在别处宣称更强的结论）**：它回放的是
+    那次事故的**形状**（打包提问 → 部分回答 → 换措辞重问），不是生产库里逐
+    字节的原始 turn 文本——`.51` 的 conversation 原文不在取数范围内（单元 D
+    的 Global Constraints）。它证明的是"这个形状现在会被正确追踪"，不是"这
+    段字节序列被原样重放过"。
+    """
+    accumulated = {"job_title": "采购工程师", "department": "采购部"}
+
+    # 第 3 轮：SYSTEM_PROMPT 的拆分规则要求两个议题拆成两条（spec Scenario
+    # 「多个议题必须拆分」）。这一轮两条都是新问题，都不带重问标记。
+    round3 = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        {"text": "是否要求熟悉 IATF 16949？", "field": "core_skills"},
+                        {"text": "是否要求熟悉 ISO 26262？", "field": "functional_safety"},
+                    ],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=2,
+        productive_round_count=2,
+        profile_patch_accumulated=accumulated,
+        asked_question_rounds=[[], []],
+    )
+    assert [q.question_id for q in round3.questions] == ["core_skills", "functional_safety"]
+    assert [q.is_reask for q in round3.questions] == [False, False]
+
+    # 第 4 轮：用户只答了 IATF 16949。系统换措辞重问 ISO 26262——question_id
+    # 必须与首问一致（换措辞不改 id），且必须带重问标注。
+    asked_after_round3 = [[], [], [q.to_payload() for q in round3.asked_questions]]
+    accumulated_after_round3 = {
+        **accumulated,
+        "core_skills": [{"name": "IATF 16949", "required": True}],
+    }
+    round4 = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [
+                        {"text": "功能安全 ISO 26262 这块有硬性要求吗？", "field": "functional_safety"}
+                    ],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=3,
+        productive_round_count=3,
+        profile_patch_accumulated=accumulated_after_round3,
+        asked_question_rounds=asked_after_round3,
+    )
+
+    (reasked,) = round4.questions
+    assert reasked.question_id == "functional_safety"  # 换措辞不改 id
+    assert reasked.is_reask is True                     # 重问带标注
+    assert "（这个你刚才没答）" in round4.questions_text
+    # 已答的那一条没有被重问：用户答过 IATF 之后系统不再问它
+    assert "core_skills" not in [q.question_id for q in round4.questions]
+    # 这一轮既没有新画像内容也没有新 question_id → 不吃有产出轮预算
+    assert round4.is_productive is False
+
+
+def test_replay_2494103e_stops_reasking_iso26262_after_the_cap():
+    """
+    tasks 5.5 在真实序列上的收口：ISO 26262 问到第 3 轮仍无回答，第 4 次
+    不再问；它的目标字段由单元 D 的 derive_unspecified_fields 自然列进未指定
+    ——E 这边没有、也不该有任何一行"标记为超限未答"的代码。
+
+    台账的轮数写成字面量 3、而不是 `[[…]] * MAX_ASKS_PER_QUESTION`：跟着常量
+    一起长的话，常量被改大时构造的台账也跟着变长，"第 4 次不再问"这条断言会
+    自己放宽到"第 5 次不再问"仍然绿——变异实测过，把
+    `MAX_ASKS_PER_QUESTION` 改成 `2 + MAX_REASKS` 时原写法一声不吭。绝对口径
+    （问 1 次 + 重问 2 次 = 出现在 3 轮里）在下面那行单独钉住。
+    """
+    assert MAX_ASKS_PER_QUESTION == 3  # 问 1 次 + 重问 MAX_REASKS(2) 次
+
+    accumulated = {
+        "job_title": "采购工程师",
+        "department": "采购部",
+        "core_skills": [{"name": "IATF 16949", "required": True}],
+    }
+    asked = [[_q("是否要求熟悉 ISO 26262？", "functional_safety")]] * 3
+    reask_response = json.dumps(
+        {
+            "is_job_related": True,
+            "questions": [
+                {"text": "26262 的事还得确认一下，有要求吗？", "field": "functional_safety"}
+            ],
+            "profile_patch": {},
+        }
+    )
+
+    result = _turn(
+        [reask_response],
+        round_count=3,
+        productive_round_count=2,
+        profile_patch_accumulated=accumulated,
+        asked_question_rounds=asked,
+    )
+
+    assert result.questions == []
+    assert result.is_productive is False
+    assert "functional_safety" in derive_unspecified_fields(accumulated)
+
+    # 上限**之下**（只问过 2 轮）照常重问，只是带标注：摘除是"到上限才发生"，
+    # 不是"问过就摘"。没有这一半，把上限改小到 1 次就问也能让上面三条全绿。
+    within_cap = _turn(
+        [reask_response],
+        round_count=2,
+        productive_round_count=2,
+        profile_patch_accumulated=accumulated,
+        asked_question_rounds=asked[:2],
+    )
+
+    assert [q.question_id for q in within_cap.questions] == ["functional_safety"]
+    assert within_cap.questions[0].is_reask is True
+
+
+def test_verbatim_repeat_detection_still_guards_jobs_with_an_empty_ledger():
+    """
+    tasks 5.8 的结论（保留逐字防线）在测试里的形态。
+
+    `.51` 现网的既有 job（`delivery-units.md` §5 约定 4 记作 15 个）在第 8 章
+    8.3 升级到单元 B 的新列之后，`asked_questions` 全是列默认值 `'[]'`——加列
+    时按约定**不回填历史行**（同条约定；本机 demo 库的加列演练实测 22 行全部
+    拿到默认台账，见 `docs/findings/2026-08-26-unitB-已问台账列加列演练.md`
+    结论 3）。这些会话继续对话时台账恒为空，一个重问标记都不会打、重问上限
+    一次都不会触发，兜住"模型 temperature=0 下原样重放上一轮"的**只有**
+    _repeats_earlier_assistant_turn。
+
+    这条用例红了就说明有人把那道防线删了，而删除的症状只在台账为空的 job 上
+    出现——本地新建的测试库每一轮都有台账，日常测试根本走不到。
+    """
+    text = "具体车型与量产时间是怎么安排的？"
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": text}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        history=[
+            {"role": "user", "content": "要个嵌入式工程师"},
+            {"role": "assistant", "content": text},
+            {"role": "user", "content": "嗯"},
+        ],
+        round_count=1,
+        productive_round_count=1,
+        # 历史行的形态：有这一轮，但那一列是 '[]'
+        asked_question_rounds=[[]],
+    )
+
+    assert result.questions == []      # 逐字重复 → stuck → 当场收尾
+    assert result.is_complete is True
