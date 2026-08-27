@@ -1711,7 +1711,12 @@ def test_off_topic_guidance_is_never_dropped_by_the_reask_cap():
     没有这条保护，连说 3 句离题的话之后引导语会被当成“问到第 4 次的子问题”
     摘掉，用户拿到一个空气泡——比不改还糟。
     """
-    guidance_round = [[_q("没听懂是不是用人需求，可以试试：'要招一个做XX的工程师'")]]
+    # 逐字取常量而不是抄一份字面量：引导语没有 field，question_id 走文本哈希
+    # （free:<hash>），文本差一个字 id 就不撞、引导语根本进不了台账，这条用例
+    # 会变成"永远通过但什么也没保护"。
+    from app.agents.intake_agent import _GUIDANCE_TEXT
+
+    guidance_round = [[_q(_GUIDANCE_TEXT)]]
 
     result = _turn(
         [json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}})],
@@ -1817,8 +1822,22 @@ def test_a_field_without_a_value_is_never_counted_as_answered():
     就一定不算已答**，所以超限过滤永远不会去碰一个"已答"的字段，两处口径不会
     打架。这条把该前提钉住：判据一旦分叉，重问上限就会开始掐断本该继续递进的
     已答字段（tasks 5.7 要保住的正是那条路）。
+
+    取值矩阵刻意比 `_has_value` 今天的那条元组宽：只遍历 `(None, "", [], {}, ())`
+    的话，`_has_value` 哪天多收一个成员（`0` 是最现实的那个——`_is_unspecified_value`
+    把标量 0 判为**已指定**）本条用例根本不会去算那个值，前提塌了它照样绿。
+    这里断言的是**蕴含**而非等价：`not _has_value(v) ⟹ v 不算已答`；一个"有值"的
+    取值不受本条约束，所以矩阵可以放心加料。
     """
-    for value in (None, "", [], {}, ()):
-        merged = {"functional_safety": value}
-        assert not intake_agent._has_value(merged["functional_safety"])
-        assert "functional_safety" not in intake_agent._answered_fields(merged)
+    values = (None, "", "  ", "未指定", "ASIL-B", [], (), {}, set(), ["CAN-FD"], {"a": 1},
+              0, 1, 0.0, 3.5, False, True)
+
+    for value in values:
+        if intake_agent._has_value(value):
+            continue  # 有值的取值不在本蕴含式的约束范围内
+        assert "functional_safety" not in intake_agent._answered_fields(
+            {"functional_safety": value}
+        ), f"{value!r} 没值却被算成已答，超限过滤与兜底合成的口径已经分叉"
+
+    # 字段整个缺席也是"没值"的一种，同样不能算已答
+    assert "functional_safety" not in intake_agent._answered_fields({})

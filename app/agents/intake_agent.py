@@ -559,6 +559,30 @@ def _answered_fields(accumulated: dict) -> frozenset[str]:
     )
 
 
+def _is_exhausted(entry: QuestionLedgerEntry) -> bool:
+    """
+    这个子问题是否已经问满重问上限、且**仍然没答**（global-constraints
+    「关键设计决定 4」的摘除判据）。
+
+    **超限判据只此一处，不许在别处再写一遍。** 它有两个调用点，两者必须永远
+    同口径：
+      - `_apply_question_ledger`：决定这一轮把哪个子问题摘掉、不再问
+      - `run_intake_turn` 的 `exhausted` 集合：决定合成兜底问题时跳过哪些字段
+
+    两处一旦漂移（比如只在一处把 `>=` 改成 `>`、或只在一处调上限），故障长这样：
+    兜底合成挑中一个"它以为还能问、摘除侧却认为已超限"的字段，合成出来的问题
+    被 `_apply_question_ledger` 当场摘掉，本轮 `questions` 变空——**用户收到一个
+    空气泡**。不抛异常、不失败、除了那一条窄用例之外没有任何断言会红，正是
+    2026-08-27 变异检查 M11 暴露出来的那个故障。收拢成一个谓词就是为了让它
+    没法再分叉。
+
+    ⛔ 已答字段上的递进提问（撞 id，"要不要 ISO 26262" → "要哪个 ASIL 等级"）
+    不受上限约束，所以 `not entry.is_answered` 是判据的一部分，不是冗余
+    （design.md 决策 2、tasks 5.7）。
+    """
+    return not entry.is_answered and entry.ask_count >= MAX_ASKS_PER_QUESTION
+
+
 def _apply_question_ledger(
     questions: list[IntakeQuestion], ledger: dict[str, QuestionLedgerEntry]
 ) -> tuple[list[IntakeQuestion], list[str]]:
@@ -575,7 +599,9 @@ def _apply_question_ledger(
       2. 已答（字段有值）→ **递进提问**，不打重问标记（打了就是对用户撒谎：
          他刚才明明答了），也不受重问上限约束（design.md 决策 2 接受的撞 id
          近似，见 tasks 5.7）
-      3. 未答且已问满 MAX_ASKS_PER_QUESTION 轮 → 摘掉，不再问；否则打 is_reask
+      3. `_is_exhausted`（未答且已问满 MAX_ASKS_PER_QUESTION 轮）→ 摘掉，
+         不再问；否则打 is_reask。判据本身不写在这里，见 `_is_exhausted`
+         的 docstring：它是超限的唯一定义，另一个调用点在 `run_intake_turn`
 
     ⛔ 这里只摘问题，不碰 profile_patch、不填任何字段值。停止追问不等于
     系统可以替业务经理把这个字段定下来（合规红线「AI 不做自动淘汰/不替人决定」）。
@@ -587,7 +613,7 @@ def _apply_question_ledger(
         if entry is None or entry.is_answered:
             kept.append(question)
             continue
-        if entry.ask_count >= MAX_ASKS_PER_QUESTION:
+        if _is_exhausted(entry):
             dropped.append(question.question_id)
             continue
         kept.append(replace(question, is_reask=True))
@@ -915,10 +941,10 @@ def run_intake_turn(
     # 不再另用一份 asked_question_ids_before——同一个事实两份来源就有漂移空间。
     # 没传按轮台账的调用方仍走老入参，行为与今天逐字一致。
     asked_before = list(ledger) if asked_rounds else list(asked_question_ids_before or [])
+    # 超限判据取自 _is_exhausted，与 _apply_question_ledger 的摘除口径同源：
+    # 两处分头写就会漂移，漂移的症状是用户收到空气泡（见该函数 docstring）。
     exhausted = frozenset(
-        question_id
-        for question_id, entry in ledger.items()
-        if not entry.is_answered and entry.ask_count >= MAX_ASKS_PER_QUESTION
+        question_id for question_id, entry in ledger.items() if _is_exhausted(entry)
     )
 
     # ③ 轮次预算。两个口径任一命中即收尾：有产出轮吃满 MAX_ROUNDS，或总轮数
