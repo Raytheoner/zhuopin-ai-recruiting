@@ -1660,7 +1660,7 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 | fail-closed：风险等级缺失/未知 | Task 3 `test_unknown_severity_is_blocked` |
 | fail-closed：风险等级最高级 | Task 3 `test_top_severity_is_blocked_with_its_own_reason` |
 | fail-closed：缺 AI 生成标识 | Task 3 `test_missing_ai_label_is_blocked` + `test_near_miss_labels_do_not_count_as_labelled` |
-| fail-closed：收件对象缺失/为空（**第七条，spec 之外**） | `test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling` + `test_absent_recipient_attribute_is_blocked_too`。2026-08-28 拍板新增，spec 待同步 |
+| fail-closed：收件对象缺失/为空（**第七条**） | `test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling` + `test_absent_recipient_attribute_is_blocked_too`。2026-08-28 拍板新增，spec 同日已补 |
 | fail-closed：属性根本不存在 | Task 3 `test_a_bare_object_with_no_attributes_at_all_is_blocked`（**主防线**） |
 | 门禁判定自身抛错 → 拦截 | Task 5 `test_exception_inside_the_gate_is_treated_as_a_block_not_a_leak` + `test_an_exception_type_nobody_enumerated_still_closes_the_gate` |
 | 人工确认才放行 | Task 4 `test_missing_or_blank_confirmer_is_blocked_awaiting_confirmation` |
@@ -1685,7 +1685,7 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 | 4 | delivery-units §2.U4 只写了 `tests/test_outbound_gate.py` | 拆成行为面 + 结构面两个文件 | **可读性**。结构面读源码解析 AST，与行为用例不共享 fixture 也不共享失败信号 |
 | 5 | spec 未规定判定顺序 | 六条 fail-closed 先判，两道闸最后判 | **口径**，见 D-3。总开关先判会在 U5 的观察期内把其余五条原因全部盖住 |
 | 6 | spec「留痕记录判定所依据的各字段原始取值」 | `body` 不进 evidence，改记 `ai_label_present` 布尔 | **更保守**。拒信正文是候选人可识别内容；正文指纹由 U5 的 `content_hash` 承担 |
-| 7 | spec 的六条拦截条件不含 recipient | **新增第七条拦截规则**：收件对象非空字符串才放行 | **更严**。2026-08-28 Shao Peishen 拍板取最保险一侧（见上节 D-2）。⚠️ 代码七条 / spec 六条，spec 待补 |
+| 7 | spec 原本的六条拦截条件不含 recipient | **新增第七条拦截规则**：收件对象非空字符串才放行 | **更严**。2026-08-28 Shao Peishen 拍板取最保险一侧（见上节 D-2）。✅ spec 已同步补第七条，`validate --strict` 通过，代码与 spec 一致 |
 | 8 | tasks 4.4「复用 `AI_LABEL_TEMPLATE`」未规定匹配强度 | 取模板 `{generated_at}` 之前的**不变前缀全量匹配** | **最严的一侧**，见 D-1。有逐字 pin 测试 |
 
 ---
@@ -1713,7 +1713,7 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 - 新原因 `REASON_RECIPIENT_UNKNOWN = "收件对象缺失或为空"`，已进 `ALL_BLOCK_REASONS`
 - 判据：非字符串收件人（dict / list）同样判未知——门禁不猜「这个结构里哪个键是收件人」，拍平成字符串是 U5 适配器的活
 - 回归测试：`test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling`（6 种未知取值参数化）、`test_absent_recipient_attribute_is_blocked_too`；Task 3 的笛卡尔积 `field_name` 维也把 `recipient` 加了进来（2×4×3=24 条）
-- ⚠️ **遗留：`specs/outbound-approval-gate/spec.md` 与代码已不一致。** spec 的「fail-closed 判定语义」把拦截条件逐条列成**六条**，代码现在有**七条**。方向是更严（spec 是代码的子集，不存在「代码比 spec 松」这种危险），所以不阻塞合并；但 U6 的断言与 U7 的运维文档都读 spec，**建议在归档本变更包前把第七条补进 spec 的 ADDED Requirements**。本 session 未改 spec 文件——改一份已批准的 spec 属另一类动作，等一次明确指示
+- ✅ **spec 已同步（2026-08-28）**：`specs/outbound-approval-gate/spec.md` 的「fail-closed 判定语义」已补第七条条件、改写「仅当……才判为低风险」那句、新增 `Scenario: 收件对象未知`，并在原文里注明这一条是当日追加、方向更严、门禁不负责从渠道对象推断收件人。`openspec validate ai-audit-trail-and-outbound-gate --strict` 通过。代码与 spec 现在都是七条
 
 
 ## 完成判据（`tasks.md` 第 4 章的 checkbox 在这些全部成立后才勾）
@@ -1721,5 +1721,5 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 1. 五个 Task 全部完成，三次变异验证都如期变红并已撤销
 2. 全量测试全绿，且 `app/config.py` / `app/graph/nodes.py` / `requirements.txt` / `pyproject.toml` 的 diff 为空
 3. `compute_outbound_gate` 在 `app/outbound/` 之外零调用方
-4. ✅ 五项口径已于 2026-08-28 全部拍板（一律取最保险一侧），D-2 已改码并补测；⚠️ 唯一遗留是 `specs/outbound-approval-gate/spec.md` 的第七条待补
+4. ✅ 五项口径已于 2026-08-28 全部拍板（一律取最保险一侧），D-2 已改码并补测，`specs/outbound-approval-gate/spec.md` 的第七条同日补齐、`openspec validate --strict` 通过
 5. final review 通过后，由**当时持有 `tasks.md` 写锁的那条 session**回勾第 4 章的 9 个 checkbox 并搬运偏离登记——⛔ 本单元自己不改 `tasks.md`
