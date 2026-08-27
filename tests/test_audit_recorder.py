@@ -272,6 +272,127 @@ def test_verify_integrity_delegates_to_the_mirror(conn, chain_path):
     assert result.total == 2
 
 
+# ── 双写故障语义（tasks 2.9 / design D1）─────────────────────────────────
+
+
+class ExplodingMirror:
+    """append 必炸的镜像 sink，用来构造"真身写成了、镜像没写成"这一侧的偏差。"""
+
+    def write(self, event):
+        raise OSError("磁盘满")
+
+    def read_all(self):
+        return []
+
+
+def test_mirror_failure_leaves_the_sqlite_row_intact_and_raises(conn, tmp_path):
+    """
+    design D1 的崩溃窗口：两者之间失败 → SQLite 有、JSONL 缺行。这是**可接受的
+    偏差方向**（真身完整、镜像缺证据），但失败本身必须可见，不能吞。
+    """
+    recorder = AuditRecorder(SqliteSink(conn), ExplodingMirror())
+    recorder.record(conn, _event(id="run-a"))
+    conn.commit()
+
+    with pytest.raises(OSError):
+        recorder.mirror(_event(id="run-a"))
+
+    assert conn.execute("SELECT count(*) FROM analysis_run").fetchone()[0] == 1
+
+
+def test_reconcile_detects_a_missing_mirror_line(conn, chain_path):
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    recorder.record(conn, _event(id="run-a"))
+    recorder.record(conn, _event(id="run-b"))
+    conn.commit()
+    recorder.mirror(_event(id="run-a"))  # run-b 的镜像没写成
+
+    result = recorder.reconcile()
+    assert result.missing_in_mirror == frozenset({"run-b"})
+    assert result.ok is False
+
+
+def test_reconcile_detects_a_row_missing_from_the_store(conn, chain_path):
+    """
+    反方向：镜像里有、真身里没有。这是 design D1 明令**更糟**的一侧（审计查不到
+    记录），对账必须能指出来而不是只看单向差集。
+    """
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    recorder.mirror(_event(id="ghost"))
+
+    result = recorder.reconcile()
+    assert result.missing_in_store == frozenset({"ghost"})
+    assert result.ok is False
+
+
+def test_reconcile_is_clean_when_both_sides_match(conn, chain_path):
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    for run_id in ("run-a", "run-b"):
+        recorder.record(conn, _event(id=run_id))
+    conn.commit()
+    for run_id in ("run-a", "run-b"):
+        recorder.mirror(_event(id=run_id))
+
+    result = recorder.reconcile()
+    assert result.ok is True
+    assert result.missing_in_mirror == frozenset()
+
+
+def test_backfill_appends_at_the_tail_not_in_place(conn, chain_path):
+    """
+    design D1：JSONL 缺行**不允许事后插回原位**——插回必然断链。补齐方式是在链尾
+    append 一条 type=backfill 的补录事件，指向缺失的 analysis_run.id，形成
+    "缺过、什么时候补的"的显式记录。这比伪造一条看起来正常的历史行诚实。
+    """
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    recorder.record(conn, _event(id="run-a"))
+    recorder.record(conn, _event(id="run-b"))
+    conn.commit()
+    recorder.mirror(_event(id="run-a"))
+
+    assert recorder.backfill("run-b", reason="镜像 append 时磁盘满") is True
+
+    records = JsonlChainSink(chain_path).read_all()
+    assert [record["event_type"] for record in records] == ["ai_analysis", "backfill"]
+    assert records[-1]["backfill_of"] == "run-b"
+    assert records[-1]["error"] == "镜像 append 时磁盘满"
+
+
+def test_backfill_keeps_the_chain_verifiable(conn, chain_path):
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    recorder.mirror(_event(id="run-a"))
+    recorder.backfill("run-b", reason="镜像缺行")
+
+    assert recorder.verify_integrity().ok is True
+
+
+def test_backfilled_id_moves_out_of_unexplained_missing(conn, chain_path):
+    """
+    补录之后差集**仍然非空**（镜像里确实没有 run-b 的原始行，这是事实，不该被
+    抹掉），但它不再是"未解释的缺失"。U6 的断言按 unexplained_missing 取数。
+    """
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    recorder.record(conn, _event(id="run-a"))
+    recorder.record(conn, _event(id="run-b"))
+    conn.commit()
+    recorder.mirror(_event(id="run-a"))
+    recorder.backfill("run-b", reason="镜像缺行")
+
+    result = recorder.reconcile()
+    assert result.missing_in_mirror == frozenset({"run-b"})
+    assert result.backfilled == frozenset({"run-b"})
+    assert result.unexplained_missing == frozenset()
+    assert result.ok is True
+
+
+def test_backfill_writes_nothing_to_sqlite(conn, chain_path):
+    """补录是镜像侧的事实。往真身里插一行"补录"会污染 analysis_run 的语义。"""
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    recorder.backfill("run-x", reason="镜像缺行")
+
+    assert conn.execute("SELECT count(*) FROM analysis_run").fetchone()[0] == 0
+
+
 def _modules_importing_config_or_graph(source: str) -> list[str]:
     """
     扫真正的 import 语句（`ast.Import` 与 `ast.ImportFrom` 两种节点都要覆盖），

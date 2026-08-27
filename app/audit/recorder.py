@@ -112,3 +112,52 @@ class AuditRecorder:
         后者是 `reconcile()`。两者不可互相替代（`delivery-units.md` §3.4）。
         """
         return self._mirror.verify_chain()
+
+    # ── 对账与补录（design D1 的检出与补齐手段）──────────────────────────
+
+    def reconcile(self) -> Reconciliation:
+        """
+        跨介质对账：按 `analysis_run.id` 比对两侧记录集合，差集非空即报告。
+
+        ⚠️ 与 `verify_integrity()` 是两条不同的断言，**不可互相替代**：
+        `verify_chain()` 只证明"链自身没被改"，`reconcile()` 才回答"该留的痕都
+        留了没有"（`delivery-units.md` §3.4 / §2.U6）。
+
+        只比对 `ai_analysis` 类事件：外发事件的 SQLite 真身是 `pending_approval`
+        （U5 的 queue.py 写），不在 `analysis_run` 里，拿它对账会把每一条外发留痕
+        都算成"真身缺失"。
+        """
+        store_ids = {record["id"] for record in self._store.read_all()}
+
+        mirror_ids: set[str] = set()
+        backfilled: set[str] = set()
+        for record in self._mirror.read_all():
+            event_type = record.get("event_type")
+            if event_type == AI_ANALYSIS:
+                mirror_ids.add(record["id"])
+            elif event_type == BACKFILL and record.get("backfill_of"):
+                backfilled.add(record["backfill_of"])
+
+        return Reconciliation(
+            missing_in_mirror=frozenset(store_ids - mirror_ids),
+            missing_in_store=frozenset(mirror_ids - store_ids),
+            backfilled=frozenset(backfilled),
+        )
+
+    def backfill(self, missing_id: str, *, reason: str) -> bool:
+        """
+        补齐一条镜像缺行：在**链尾** append 一条 `type=backfill` 事件。
+
+        ⛔ 不插回原位——插回必然断链（design D1）。留下"缺过、什么时候补的"这条
+        显式记录，比伪造一条看起来正常的历史行诚实。
+
+        补录**只写镜像**：往 `analysis_run` 里插一行"补录"会污染真身的语义。
+        """
+        return self._mirror.write(
+            DecisionEvent(
+                id=f"backfill:{missing_id}",
+                event_type=BACKFILL,
+                backfill_of=missing_id,
+                error=reason,
+            )
+        )
