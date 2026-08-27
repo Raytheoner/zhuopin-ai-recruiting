@@ -262,3 +262,54 @@ def test_outbox_and_effect_log_columns_are_pinned(tmp_path):
         "payload_json",
         "created_at",
     }
+
+
+def test_job_columns_are_pinned(tmp_path):
+    """
+    U1 的第二条硬约束点名的四张表——effect_log / outbox / job / job_profile
+    ——之前只有 effect_log / outbox 拿到了上面那条钉列守护，job 被漏掉了：
+    fix round 0 复盘时用 `bogus TEXT` 塞进 SCHEMA 里 job 的 CREATE TABLE 跑
+    全量 319 个测试，居然全绿——因为 `_legacy_db` 夹具里的 job 是硬编码的
+    历史 DDL（_LEGACY_JOB_DDL），从不读 SCHEMA，没有任何测试在一个"从
+    SCHEMA 新建"的库上校验过 job 的列集合。job 和 effect_log / outbox 一样
+    是 U1 明令不得触碰的既有表，理应享受同等力度的钉列保护。
+    """
+    conn = get_connection(str(tmp_path / "fresh.db"))
+    init_schema(conn)
+
+    assert _columns(conn, "job") == {
+        "id",
+        "title",
+        "department",
+        "status",
+        "created_at",
+    }
+
+
+# job_profile 特意不进上面那种"钉死列集合"的守护名单，是权衡后的决定，不是
+# 遗漏：另一个并行推进的交付单元（M1，intake 追问质量）眼下正在频繁往
+# job_profile 加真实列（本文件里 _LEGACY_JOB_PROFILE_DDL 上方那段历史注释、
+# 以及 SCHEMA 里 job_profile CREATE TABLE 从 is_productive 到 asked_questions
+# 那一长串,都是这条活跃演进线留下的）。job_profile 本身就有一条官方认可的
+# 加列机制（SCHEMA 的 CREATE TABLE 服务新库、_ADDED_COLUMNS 服务老库），钉
+# 死全列集合会让这条机制的每一次正常使用都需要同步改测试，纯粹制造合并
+# 摩擦而不是拦事故。
+#
+# 明确写下会漏掉什么：如果有人往 job_profile **同时**做两件事——① 在 SCHEMA
+# 的 job_profile CREATE TABLE 里加一列、② 在 _ADDED_COLUMNS 里加同名同类型
+# 的一条——本文件里现有的 test_fresh_and_migrated_schemas_have_identical_columns
+# 不会报警：fresh 库从 CREATE TABLE 里带到这一列，migrated 库从 _ADDED_COLUMNS
+# 的 ALTER 路径带到同一列，两边最终列集合仍然相等,判定"无漂移"。也就是本
+# 文件顶部原始 finding 点名的那句话——"a column added to both sides
+# identically" 测不出来。
+#
+# 接受这个残留风险的理由：这种"两边同步加同一列"的操作序列，跟 M1 每次给
+# job_profile 添加合法新列时**必须**做的操作,在结构上完全没有区别——两者都
+# 是"CREATE TABLE 加一列 + _ADDED_COLUMNS 加一条同名条目"。要让测试拦下这
+# 个 mutation,就必须先能分辨"这是一次蓄意的破坏性改动"还是"这是 M1 今天
+# 刚合并的合法新字段",而这两者从 schema 层面看是同一个操作。真正会破坏
+# 既有数据的改法——只改一边（只加 CREATE TABLE 不加 _ADDED_COLUMNS，或反
+# 过来）——已经被 test_fresh_and_migrated_schemas_have_identical_columns 挡
+# 住了（fresh 与 migrated 的列集合会不相等,直接判红）。剩下的这个真正的
+# 单点风险是"新列语义写错但两边都同步改了"，这属于代码评审要抓的问题，不
+# 是这批回归测试的职责范围。
