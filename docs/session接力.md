@@ -100,8 +100,10 @@
   没有「小任务可省略」的例外。判据表见 `CLAUDE.md`。
 - **Opener 必须是完整可整块复制的**，不要让他拼接片段。
 - **一次给 ≥2 个 opener 时，必须说明次序与能否并行**（判据＝触碰区是否重叠）。
-- **`~/Library/CloudStorage/OneDrive-Personal/Projects/企业AI转型/`**：可完全读取借鉴，
-  **绝不得修改、删除或 lock**。
+- **「企业AI转型」已于 2026-08-26 迁出 OneDrive**，本地路径已作废。
+  唯一入口＝GitHub 公开仓库 `Raytheoner/zhuopin-ai-transformation`，**分支 master**，
+  用 WebFetch 读 `raw.githubusercontent.com/.../master/<路径>`（中文路径要 percent-encode）。
+  没有本地副本 → **grep 不了，引用必须给文件级 URL**。
 - **git 相关只能在 CC**——Cowork 的 bash 在隔离 VM 里，对 `.git/` 只能写不能删。
 - **跨界面看不到对方会话**：`list_sessions` 只列 Cowork 会话，CC tab 的永远看不到。
   查 CC 干了什么走文件系统（git log / `.claude/handoff/*.log`）。

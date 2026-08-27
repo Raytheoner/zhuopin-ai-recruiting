@@ -81,5 +81,15 @@ Python · LangGraph ≥1.0.10 + Postgres Checkpointer · Postgres + pgvector · 
 
 ## 相关但无关的项目
 
-`OneDrive-Personal/Projects/企业AI转型/` 是另一个独立项目，由另一台机器维护。
-**本项目任何人、任何工具都不得读写该目录**——跨端同步写入会造成冲突与覆盖。
+「企业AI转型」是同一体系的上级项目——**本项目本来就是它的部门模块之一**，只是移到 Mac 端开发，
+发布同样汇合到 `.51` 服务器。
+
+**2026-08-26 起它已迁出 OneDrive，本地路径作废。** 唯一入口是 GitHub 公开仓库：
+
+```
+https://github.com/Raytheoner/zhuopin-ai-transformation    分支 master（不是 main）
+raw: https://raw.githubusercontent.com/Raytheoner/zhuopin-ai-transformation/master/<路径>
+```
+
+**只读参考，不 clone 进来、不跨仓库引用。** 引入方式是「读取参考 + 在本仓库自建实现」——
+两个仓库独立演进，共享的是做法不是代码。
