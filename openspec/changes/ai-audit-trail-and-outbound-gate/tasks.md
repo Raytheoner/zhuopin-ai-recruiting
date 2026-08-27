@@ -21,6 +21,11 @@
 
 本章按 `docs/superpowers/plans/2026-08-26-ai-audit-trail-unitU1-schema-and-config.md` 实施，落地时相对本文件字面有五条偏离。**前四条方向都是"更严"或"对齐下游粒度"，第五条是修计划自己的代码缺陷。** 分支实测 253 → 320 passed。
 
+> **审批状态：2026-08-27 Shao Peishen 口头追认全部五条，纸面手续线下补办。**
+> 记此一笔是为了不把口头追认误记成已完成正式签署——**手续未补齐前，本条按"已口头批准、待补书面"对待**。
+> 依据 `CLAUDE.md`「决策代理」的留痕要求：代批/追认当次即须写明批准人、时间、事项。
+> 批准人：Shao Peishen（本项目唯一决策人）｜时间：2026-08-27｜事项：本节偏离 1–5 全部。
+
 | # | 本文件字面 | 实际落地 | 判据（哪条测试咬住它） |
 |---|---|---|---|
 | 1 | 1.2 的 `trim(evidence_ref)` | `trim(evidence_ref, ' ' \|\| char(9) \|\| char(10) \|\| char(13))` | SQLite 单参 `trim()` **只剥空格**，一个纯制表符的 `evidence_ref` 会通过字面版 `CHECK`，铁律 4 就有静默缺口。`test_criterion_score_rejects_blank_evidence_at_storage_layer[tab/newline/mixed-whitespace]` |
@@ -59,7 +64,27 @@
 
 **默认值必须参与求值**（上一轮单元 D 的教训：合规默认值被改成 `True` 却无人发现）。把 `candidate_outbound_enabled: bool = False` 改成 `True` 后，`test_candidate_outbound_is_closed_by_default`、`test_switch_file_removal_falls_back_to_baseline`、`test_env_var_is_read_every_call_not_cached_at_startup` 三条变红——两次结构重排之后都复验过，基线分支没有被短路绕过。
 
-**⚠️ 遗留、需 Shao Peishen 拍板（U5 接线前必须解决）**：`_read_switch_file()` 不剥 UTF-8 BOM，也不认 UTF-16。`.51` 是 Windows，PowerShell 的 `Out-File` / `>` 默认写 UTF-16LE，记事本的"UTF-8"带 BOM——**运维照着文档写一个 `true` 进去，开关不会打开，而且不报错**。方向是 fail-closed（拦住了），所以不阻塞 U1 合并，但那条热改通道在真机上等于打不开。两个选项：(a) 改 `_read_switch_file()` 剥 BOM + 尝试 UTF-16 解码；(b) 不动代码，在 U7 的运维文档里规定必须用 `[System.IO.File]::WriteAllText($p,'true')` 写。**(a) 是在合规开关上放松，属不可代项，未经他本人同意没有就地实施。**
+#### 遗留一：开关文件的编码写法 → ✅ **已拍板（2026-08-27 Shao Peishen），取方案 (b)，由 U7 承接**
+
+**现象。** `_read_switch_file()` 不剥 UTF-8 BOM，也不认 UTF-16。`.51` 是 Windows，PowerShell 的 `Out-File` / `>` 默认写 **UTF-16LE**，记事本的"UTF-8"**带 BOM**——两种写法下文件内容都不会被识别成 `true`。**后果：运维照着文档写一个 `true` 进去，开关不会打开，而且不报错。** 方向是 fail-closed（拦住了，没有放行），所以不阻塞 U1 合并；但那条热改通道在真机上等于打不开。
+
+**结论：取 (b) —— `_read_switch_file()` 保持原样、不改代码，改为把运维写法规定死。** 被否掉的 (a)（改代码剥 BOM + 尝试 UTF-16 解码）属**在合规开关上放松**，是 `CLAUDE.md` 决策代理表的不可代项；他本人选择不放松代码。
+
+**规定的写法（唯一允许）：**
+
+```powershell
+[System.IO.File]::WriteAllText($path, 'true')
+```
+
+**⛔ 禁止使用**：PowerShell 的 `Out-File`、`>`、`>>`（默认 UTF-16LE）；记事本的"UTF-8"另存（带 BOM）。用错写法的症状是**开关静默不生效、且无任何报错**——排查时人会先怀疑代码而不是怀疑文件编码，这正是必须写进运维文档的理由。
+
+**承接单元：U7 的 7.3**（该条已就地加注）。⚠️ **U5 接线前必须确认 7.3 已落地**，否则总开关在生产上不具备可操作性。
+
+#### 遗留二：开关文件路径按进程 CWD 解析 → 留给 U5 落地时定（未裁决）
+
+`Settings.candidate_outbound_switch_file` 的默认值 `data/candidate_outbound.switch` 是**相对路径，按进程工作目录解析**，与 `db_path` 同一约定。`.51` 由 Windows 计划任务拉起，**若计划任务的工作目录与预期不符，热改通道会静默失效**（读不到文件 → 降级到环境变量/基线值 → fail-closed，不报错）。
+
+2026-08-27 Shao Peishen 未单独裁决此条，按 U1 执行时的判断**留给 U5 接线时定**：届时要么在部署脚本里锁定工作目录，要么改用绝对路径配置。属 `.51` 生产运维事实，不是 U1 的代码缺陷，U1 不就地处理。
 
 ## 2. `app/audit`：事件、双 sink、统一入口
 
@@ -134,6 +159,7 @@
 - [ ] 7.1 CI 检查：`app/` 下禁止出现 `from zhuopin_platform` / `import zhuopin_platform`；禁止 `sys.path` 指向 OneDrive 路径的注入
 - [ ] 7.2 CI 检查：`requirements.txt` 与 `pyproject.toml` 不含 `zhuopin_platform`；本变更的依赖文件 diff 必须为空
 - [ ] 7.3 `docs/` 增一页说明留痕与门禁的运维口径：JSONL 路径与备份、链校验怎么手动跑、`CANDIDATE_OUTBOUND_ENABLED` 的开关流程与「不提供一键放行全部」的理由
+  - **⚠️ U1 发现、U7 承接（2026-08-27 Shao Peishen 拍板取方案 (b)，见第 1 章「遗留一」）：本页必须写入开关文件的编码约束。** 规定唯一允许的写法是 `[System.IO.File]::WriteAllText($path, 'true')`；**⛔ 禁止** PowerShell 的 `Out-File` / `>` / `>>`（默认 UTF-16LE）与记事本的"UTF-8"另存（带 BOM）。`_read_switch_file()` 不剥 BOM、不认 UTF-16，用错写法的症状是**开关静默不生效且不报错**（方向 fail-closed，拦住了但打不开）。他明确选择不改代码——改代码剥 BOM 属「在合规开关上放松」，是不可代项。**U5 接线前必须确认本条已落地**，否则总开关在 `.51` 上不具备可操作性
 - [ ] 7.4 `06-企业AI转型资产借鉴清单.md` 追加本次借鉴记录：借的四条做法、自建的对应模块、**明确未引入依赖未拷贝代码**
 - [ ] 7.5 技术债登记：`operator_id` 现阶段不可信（鉴权空壳）；企微 OAuth SSO 待两侧共同决定，是 M2 处理真实简历前的阻塞项之一（另一半留痕已由本变更完成）
 - [ ] 7.6 技术债登记：JSONL 写入侧仅进程内锁，假设单进程部署；M2 迁 Postgres 时需重新处理并发写与 JSONL 的关系
