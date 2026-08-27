@@ -86,9 +86,19 @@ def _read_switch_file(switch_file: Path) -> str | None:
 
     其余任何读取失败——路径结构损坏（ENOTDIR：某个上级路径段本身是个普通
     文件）、符号链接自环（ELOOP）、权限、目录占位（IsADirectoryError）、
-    编码坏（UnicodeDecodeError）——一律抛 `_SwitchFileBroken`。这些是
-    "配置坏了"，不是"没配"，必须直接判定为关，**不能**降级去看环境变量：
-    一个结构损坏的开关文件路径不该让 `.51` 的 `.env` 说开就开。
+    编码坏（UnicodeDecodeError）、路径本身带 NUL 字节（`ValueError:
+    embedded null byte`，round 2 发现：Windows 上 PowerShell 用 UTF-16
+    写 `.env`，被当 UTF-8 解出来的字符串会带 NUL，dotenv 原样传下来，
+    `Path()`/`read_text()` 一碰 NUL 就抛 `ValueError`，且它不是
+    `OSError` 也不是 `UnicodeDecodeError` 的子类，round 1 的 except 元组
+    接不住）——一律抛 `_SwitchFileBroken`。这些是"配置坏了"，不是
+    "没配"，必须直接判定为关，**不能**降级去看环境变量：一个结构损坏的
+    开关文件路径不该让 `.51` 的 `.env` 说开就开。
+
+    `ValueError` 和 `UnicodeDecodeError` 两个都显式列出：后者本来就是
+    前者的子类、单列 `ValueError` 已经够用，但保留 `UnicodeDecodeError`
+    是为了让"编码坏"这个具体成因在代码里可读，不必翻文档才知道这条路
+    在防什么。
 
     用 `read_text()`（内部就是 `open()`）而不是 `Path.exists()` 判断是否
     存在——`exists()` 对 ENOTDIR/ELOOP 这类结构性错误同样返回 `False`，
@@ -98,7 +108,7 @@ def _read_switch_file(switch_file: Path) -> str | None:
         return switch_file.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise _SwitchFileBroken from exc
 
 
@@ -117,6 +127,27 @@ def is_candidate_outbound_enabled() -> bool:
        被更上游的兜底变成放行"更保守，也是「未知即拦截」在异常这个维度上
        唯一自洽的读法。
 
+    round 1 靠在内部逐层挂 `try/except` 枚举具体异常类型（`OSError`、
+    `UnicodeDecodeError`）来兑现"不抛异常"，round 2 发现 NUL 字节路径
+    抛的是二者都不是的 `ValueError`，照样逃了出去——枚举挂一漏万，枚举
+    本身就是会失手的方法。所以这里额外加一层**结构性**兜底：整个函数体
+    委托给 `_evaluate_candidate_outbound_switch()`，本函数只做一件事——
+    不管里面抛出什么类型（哪怕是内部枚举完全没预料到的新类型），一律
+    在这一层截停，返回 `False`。之后任何人往内部再加一段没包线的新
+    异常来源，也不需要专门再补一轮修复。
+    """
+    try:
+        return _evaluate_candidate_outbound_switch()
+    except Exception:
+        return False
+
+
+def _evaluate_candidate_outbound_switch() -> bool:
+    """
+    实际取值逻辑，可能抛出异常——调用方 `is_candidate_outbound_enabled()`
+    统一兜底捕获。内部这几个 `try/except` 不是为了"不抛异常"（外层已经
+    兜底），而是为了在各自的分支上选对下一步該去哪一层取值，语义更清楚。
+
     取值优先级（前者存在即短路）：
 
     1. 开关文件 `Settings.candidate_outbound_switch_file`——热改通道，改文件
@@ -126,8 +157,8 @@ def is_candidate_outbound_enabled() -> bool:
     3. `Settings.candidate_outbound_enabled` 基线值，默认 False
 
     任何一层读不出明确的"开"，结果都是 False：未知即拦截。文件读失败
-    （权限、目录占位、路径结构损坏、编码坏）同样返回 False——出错的方向
-    只能是更保守的那一侧。
+    （权限、目录占位、路径结构损坏、编码坏、路径带 NUL 字节）同样返回
+    False——出错的方向只能是更保守的那一侧。
     """
     try:
         settings = get_settings()

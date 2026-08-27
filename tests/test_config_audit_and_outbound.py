@@ -1,8 +1,12 @@
 import pytest
 
+from pathlib import Path
+
 from app.config import (
     Settings,
     _as_switch,
+    _read_switch_file,
+    _SwitchFileBroken,
     get_settings,
     is_candidate_outbound_enabled,
 )
@@ -271,3 +275,77 @@ def test_absent_switch_file_still_falls_through_to_env_var(switch_path, monkeypa
     monkeypatch.setenv("CANDIDATE_OUTBOUND_ENABLED", "true")
 
     assert is_candidate_outbound_enabled() is True
+
+
+# ── round 2 fix-round 补测：NUL 字节路径 + 结构性兜底 ──────────────────
+#
+# 复审发现的 Residual Critical：开关文件路径里带 NUL 字节时，
+# `Path.read_text()` 抛的是 `ValueError: embedded null byte`——既不是
+# `OSError` 也不是 `UnicodeDecodeError`，round 1 在 `_read_switch_file`
+# 里挂的 `except (OSError, UnicodeDecodeError)` 接不住，异常直接冒出
+# `is_candidate_outbound_enabled()`。可达性并非零：`os.environ` 本身会
+# 拒绝写入带 NUL 的值，但 `python-dotenv` 解析 `.env` 文件时会原样把 NUL
+# 传下去；`.51` 上如果有人用 PowerShell 以 UTF-16 编码写了 `.env`，按
+# UTF-8 解出来的字符串里就会带 NUL——上游一旦有 `except Exception`，这个
+# 逃逸就从"抛异常"变成"总开关静默放行"，正是 round 0/1 一直在堵的
+# fail-open 形状。
+
+
+def test_read_switch_file_classifies_nul_byte_as_broken_not_bare_value_error():
+    """
+    单元级別的靶向测试：直接测 `_read_switch_file`，而不是经过
+    `is_candidate_outbound_enabled()`。原因是那道门外层还有一个结构性
+    `try/except Exception` 兜底——如果只在门那一层断言"返回 False、不
+    抛异常"，那么就算把 `_read_switch_file` 里的 `ValueError` 从 except
+    元组里删掉，裸的 `ValueError` 照样会被外层结构性兜底接住、一样返回
+    False，这条测试就会变成"删了具体修复也测不出来"的哑测试。这里直接
+    断言 `_read_switch_file` 把 NUL 字节路径分类成 `_SwitchFileBroken`
+    （"配置损坏"），而不是任由一个没被归类的裸 `ValueError` 逃出这个
+    函数——这样"具体修复"和"结构性兜底"两层各自都有测试真正在咬。
+    """
+    switch_file = Path("candidate_outbound\x00.switch")
+
+    with pytest.raises(_SwitchFileBroken):
+        _read_switch_file(switch_file)
+
+
+def test_nul_byte_switch_path_is_closed_and_does_not_raise(monkeypatch):
+    """
+    NUL 字节回归测试：开关文件路径本身含 NUL 字节 → `Path.read_text()`
+    抛 `ValueError`（非 `OSError`/`UnicodeDecodeError`）→ 必须被
+    `_read_switch_file` 的 except 元组接住、判定为"配置损坏"，即便环境
+    变量明确写着 "true"，总开关也必须返回 False，且全程不能抛出任何异常。
+    """
+    broken_settings = Settings(
+        candidate_outbound_switch_file="candidate_outbound\x00.switch",
+        candidate_outbound_enabled=False,
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: broken_settings)
+    monkeypatch.setenv("CANDIDATE_OUTBOUND_ENABLED", "true")
+
+    assert is_candidate_outbound_enabled() is False
+
+
+class _Boom(Exception):
+    """测试专用：故意选一个任何现有 except 子句都没有枚举过的异常类型，
+    验证结构性兜底不依赖于"猜中了具体是哪种异常"。"""
+
+
+def test_unenumerated_exception_type_still_closes_the_gate(switch_path, monkeypatch):
+    """
+    结构性契约测试：这是让 round 3 不必存在的测试。round 1 枚举了
+    `OSError`/`UnicodeDecodeError`，NUL 字节的 `ValueError` 照样逃逸；
+    如果这次又靠"再枚举一个类型"来修，下一个没被枚举到的类型迟早还会
+    逃逸。这里故意让内部抛出一个全新的、任何 except 子句都不认识的
+    `_Boom` 类型，验证 `is_candidate_outbound_enabled()` 外层的结构性
+    `try/except Exception` 稳稳接住它——不管以后内部还会冒出什么新的
+    异常类型，这道门都不需要再打补丁。
+    """
+    switch_path.write_text("true", encoding="utf-8")
+
+    def _boom(_raw):
+        raise _Boom("模拟一个没有被任何 except 子句枚举过的异常类型")
+
+    monkeypatch.setattr("app.config._as_switch", _boom)
+
+    assert is_candidate_outbound_enabled() is False
