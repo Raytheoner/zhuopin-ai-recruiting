@@ -10,8 +10,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sqlite3
+import threading
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from app.audit.events import AI_ANALYSIS, EVENT_TYPES, DecisionEvent
@@ -233,3 +238,104 @@ class SqliteSink:
 def _is_analysis_run_pk_conflict(exc: sqlite3.IntegrityError) -> bool:
     message = str(exc)
     return "UNIQUE constraint failed" in message and "analysis_run.id" in message
+
+
+# 第一行的 prev_hash 哨兵。它是**写入侧的约定**，不是可校验的主张——第 1 行
+# 没有前驱，拿什么和它比？verify_chain() 因此不校验第 1 行的取值，只校验
+# 「第 2 行起必须有这个字段」（spec：仅第 1 条记录可豁免，向前兼容既有文件）。
+GENESIS_PREV_HASH = "0" * 64
+
+
+@dataclass(frozen=True)
+class ChainVerification:
+    ok: bool
+    total: int
+    broken_at: int | None = None
+    error: str | None = None
+    tail_hash: str | None = None
+
+
+class JsonlChainSink:
+    """
+    留痕的防篡改镜像：append-only JSONL，每行嵌上一行**落盘字节**的 SHA-256。
+
+    ⚠️ 只做**进程内**互斥（design Non-Goals：不做跨进程写锁）。当前部署形态是
+    单个 Windows 计划任务拉起的单进程，假设成立；多进程部署会断链。M2 迁
+    Postgres 时由数据库承担并发写，JSONL 若仍保留需改为单写入者或按进程分文件。
+    技术债登记是 U7 的 7.6。
+
+    锁与游标都是**类级、按解析后的绝对路径共享**：两个指向同一文件的实例必须
+    用同一把锁、同一个游标，否则交替写就会断链。
+    """
+
+    _REGISTRY_LOCK = threading.Lock()
+    _LOCKS: dict[str, threading.Lock] = {}
+    _CURSORS: dict[str, str] = {}
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        # 按解析后的绝对路径做身份：按传进来的字符串做身份的话，
+        # "data/x.jsonl" 与 "/abs/data/x.jsonl" 会拿到两把不同的锁，
+        # 写的却是同一个文件——互斥失效且不报错。
+        self._key = str(self.path.resolve())
+
+    # ── 写 ──────────────────────────────────────────────────────────────
+
+    def write(self, event: DecisionEvent) -> bool:
+        return self._append(event.to_dict())
+
+    def _append(self, payload: dict[str, Any]) -> bool:
+        with self._lock_for(self._key):
+            prev = self._CURSORS.get(self._key)
+            if prev is None:
+                # ⛔ 不当 genesis：游标缺失（进程重启、新实例）时必须从磁盘末行
+                # 重算，否则重启后第一行的 prev_hash 会是 64 个 0，链从那行起
+                # 永久断裂，而且**写入时不报错**（tasks 2.3）。
+                prev = self._tail_digest() or GENESIS_PREV_HASH
+
+            body = dict(payload)
+            body["prev_hash"] = prev
+            # sort_keys 让同一份内容的字节可复现；ensure_ascii=False 让中文按
+            # UTF-8 原样落盘（链算的是字节，中文不需要转义成 \uXXXX）。
+            # json.dumps 会把真实换行转义成 "\\n" 两个字符，所以一条记录永远
+            # 占且只占一行——这是"按 b'\\n' 切行"成立的前提。
+            line = json.dumps(
+                body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # ⚠️ 必须二进制。文本模式在 Windows 上会把 "\n" 翻成 \r\n 落盘，
+            # 链在 Mac 上全绿、推到 .51 上整条报断（部署约束 4）。
+            with open(self.path, "ab") as handle:
+                handle.write(line + b"\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            self._CURSORS[self._key] = hashlib.sha256(line).hexdigest()
+        return True
+
+    @classmethod
+    def _lock_for(cls, key: str) -> threading.Lock:
+        # 注册表本身要加锁：setdefault(key, threading.Lock()) 会让两个并发线程
+        # 各造一把 Lock、只有一把胜出，败者拿着自己那把去 append——互斥当场失效。
+        with cls._REGISTRY_LOCK:
+            lock = cls._LOCKS.get(key)
+            if lock is None:
+                lock = cls._LOCKS[key] = threading.Lock()
+            return lock
+
+    def _tail_digest(self) -> str | None:
+        for line in reversed(self._raw_lines()):
+            return hashlib.sha256(line).hexdigest()
+        return None
+
+    def _raw_lines(self) -> list[bytes]:
+        if not self.path.exists():
+            return []
+        with open(self.path, "rb") as handle:
+            return [line for line in handle.read().split(b"\n") if line.strip()]
+
+    # ── 读 ──────────────────────────────────────────────────────────────
+
+    def read_all(self) -> list[dict[str, Any]]:
+        return [json.loads(line.decode("utf-8")) for line in self._raw_lines()]

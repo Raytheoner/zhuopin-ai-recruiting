@@ -16,7 +16,13 @@ from app.audit.events import (
     CriterionScore,
     DecisionEvent,
 )
-from app.audit.sinks import AuditSink, SqliteSink
+from app.audit.sinks import (
+    AuditSink,
+    ChainVerification,
+    GENESIS_PREV_HASH,
+    JsonlChainSink,
+    SqliteSink,
+)
 
 __all__ = [
     "AI_ANALYSIS",
@@ -27,5 +33,8 @@ __all__ = [
     "CriterionScore",
     "DecisionEvent",
     "AuditSink",
+    "ChainVerification",
+    "GENESIS_PREV_HASH",
+    "JsonlChainSink",
     "SqliteSink",
 ]
