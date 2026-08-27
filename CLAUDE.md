@@ -21,11 +21,11 @@
 ```
 
 - **两行都在代码块内部**，不在外面——他复制整块时 CC 那边要能看到自己是谁、跑在哪
-- **标题行就是侧边栏的 session 名**（`[Mac]` 标执行机、Win 端用 `[Win]`；`-` 是 id 与主题的唯一分隔符，id 内不含 `-`）。⛔ 不写 `OP-` 前缀、不写 `CC ·`、不用空格分隔——理由与实证见 skill「编号与抬头」
+- **标题行是给复制进去的那个 session 看的**（`[Mac]` 标执行机、`-` 是 id 与主题的唯一分隔符）。⛔ 不写 `OP-` 前缀、不写 `CC ·`、不用空格分隔
+- 🔴 **CC 的 opener 第 3 行必须调 `set_session_title`**，否则侧边栏丢编号——标题行**不会**自动变成 session 名。照抄：`开工第一件事：调 mcp__ccd_session_mgmt__set_session_title（session_id 传字面量 "self"），标题：[Mac]MMDDX-<主题短名>`。Cowork 侧无此工具、名字取自开场词首行（语义前、编号后）。已上 hook 判据②，见 skill「会话命名」
 - **MMDD 必须实跑 `TZ=Asia/Shanghai date +%m%d` 取**：本机在 EDT，比中国晚 12 小时，照本机日期编会集体差一天且不报错
 - **worktree 后面的括号写理由**，五项一个都不能少、**用 ｜ 分隔写成一行**
-- **CC 与 Cowork 两端同等适用。**「这只是中途一条命令，不算 Opener」**不是豁免**——判据是"这段会不会被复制到另一个界面去"（实证：2026-08-26 近期会话全部丢号）
-- **脚本起 session 必须 `claude -n "[Mac]MMDDX-<主题短名>"`**；即兴让他敲的一句话也要给编号。判据见 `.claude/skills/kickoff/SKILL.md`「会话命名」
+- **CC 与 Cowork 两端同等适用。**「这只是中途一条命令，不算 Opener」**不是豁免**——判据是"这段会不会被复制到另一个界面去"；脚本起 session 用 `claude -n "[Mac]MMDDX-…"`
 - CC 侧有 `Stop` hook 机器校验，旧格式 `【OP-…】` 仍放行不追改，见 `scripts/hooks/check-opener-header.py`
 
 固定判据：
@@ -59,7 +59,7 @@
 
 1. **只 `git add` 本条明确列出的路径。** ⛔ 禁止 `git add -A` / `git add .` / `git commit -a`——这是并行成立的唯一前提
 2. `git status` 里出现别人的改动是正常的，不要停下、不要问、不要顺手提交
-3. push 被拒 → `git pull --rebase origin main` 后重试，最多 3 次
+3. push 被拒 → `git pull --rebase --autostash origin main` 后重试，最多 3 次。⛔ 不要在 commit 前 pull——并发下别人的未提交改动会挡住 rebase（实测 `error: cannot pull with rebase`），`--autostash` 才能带着它们跑完
 4. 报 `.git/index.lock` 已存在 → 等 5 秒重试最多 5 次，⛔ **默认绝不删除该锁**（另一个 session 正在用，删了会毁掉它的提交）。
    **唯一例外——孤儿锁，下面三项同时成立才可删**：① 文件 0 字节；② mtime 距今 > 10 分钟；③ `pgrep -x git` 查无 git 进程（⛔ 不要用 `-f`，`DigitalGoodsApi` 之类会误报），且 `.git` 下无任何 git 进程的**写** FD（只读 FD 不算）。少一项都按"别人在用"处理
    ⚠️ 判据 ③ 对 **VM 里的 git 是盲的**（VM 内进程不进宿主机 `ps`）：持锁方是 Cowork／虚拟机时，须额外确认该 VM 进程已失去监管（`PPID = 1`）。成因、现场证据与该缺口见 `docs/findings/2026-08-26-index-lock-孤儿锁判据.md`
@@ -121,6 +121,8 @@ openspec-archive-change  →  specs 折进 openspec/specs/           ← 活文�
 ```
 
 `env-ready` 用于环境自检。`spec-to-plan` 与 `run-build` 是本项目自定义 skill（`.claude/skills/`），已封装接缝规则与 Global Constraints 注入。
+
+**并发编排走 `lane-dispatch` skill**：说「开始泳道看护」即触发——扫待办 → 判触碰区分泳道 → 写 opener 进 `docs/openers/OP-0820-全量编排.md` → dry-run 核对 → 出看护 opener 与发车命令。执行器是 `docs/openers/run-lanes.sh`。
 
 **规则真源在 `.claude/skills/`，不在 `.claude/commands/`。** commands 是遗留格式、只在终端生效，本项目下只留了一行入口文件。改规则改 skill。
 
