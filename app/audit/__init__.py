@@ -21,6 +21,11 @@ from app.audit.events import (
     CriterionScore,
     DecisionEvent,
 )
+from app.audit.hook import (
+    ALLOWED_CONTEXT_KEYS,
+    RecorderAuditHook,
+    UnknownAuditContextKey,
+)
 from app.audit.recorder import AuditRecorder, Reconciliation, TransactionOwnershipError
 from app.audit.sinks import (
     AuditSink,
@@ -41,6 +46,9 @@ __all__ = [
     "OUTBOUND_DELIVERED",
     "CriterionScore",
     "DecisionEvent",
+    "ALLOWED_CONTEXT_KEYS",
+    "RecorderAuditHook",
+    "UnknownAuditContextKey",
     "AuditRecorder",
     "Reconciliation",
     "TransactionOwnershipError",
