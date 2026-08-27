@@ -54,6 +54,11 @@ REASON_CONFIRMATION_REQUIRED = "消息自称需要人工确认"
 REASON_SEVERITY_UNKNOWN = "风险等级缺失或未登记"
 REASON_SEVERITY_MAX = "风险等级为最高级"
 REASON_MISSING_AI_LABEL = "缺少 AI 生成标识"
+# 第七条。⚠️ spec 的 fail-closed 条件清单只列了六条，recipient 不在其中；
+# 本条是 2026-08-28 Shao Peishen 拍板「五项口径一律取最保险一侧」的产物。
+# 方向是更严（拦得更多），不放松任何闸门。specs/outbound-approval-gate
+# 需同步补这一条，见 plan 的 D-2 记录。
+REASON_RECIPIENT_UNKNOWN = "收件对象缺失或为空"
 REASON_AWAITING_CONFIRMATION = "等待人工确认"
 REASON_OUTBOUND_DISABLED = "外发总开关关闭"
 REASON_SWITCH_NOT_CALLABLE = "外发总开关未以 callable 形式传入"
@@ -68,6 +73,7 @@ ALL_BLOCK_REASONS: frozenset[str] = frozenset(
         REASON_SEVERITY_UNKNOWN,
         REASON_SEVERITY_MAX,
         REASON_MISSING_AI_LABEL,
+        REASON_RECIPIENT_UNKNOWN,
         REASON_AWAITING_CONFIRMATION,
         REASON_OUTBOUND_DISABLED,
         REASON_SWITCH_NOT_CALLABLE,
@@ -220,18 +226,26 @@ def _evaluate_outbound_gate(
     if not evidence["ai_label_present"]:
         return blocked(REASON_MISSING_AI_LABEL)
 
-    # ⑦ 第一道闸：人工确认。spec「人工确认才放行」——确认人标识为空的
+    # ⑦ 收件对象必须是一个非空字符串（2026-08-28 拍板新增，见常量处注释）。
+    #    ⛔ 非字符串同样判未知：门禁不猜"这个结构里哪个键是收件人"，
+    #    拍平成字符串是 U5 适配器的活。放在两道闸之前——它是消息自身的
+    #    畸形，与"等待人工确认"是两回事，6.5 统计时要分得开。
+    recipient = raw["recipient"]
+    if not isinstance(recipient, str) or not recipient.strip():
+        return blocked(REASON_RECIPIENT_UNKNOWN)
+
+    # ⑧ 第一道闸：人工确认。spec「人工确认才放行」——确认人标识为空的
     #    高风险消息 MUST 被拦截。空白串不是人。
     confirmed_by = raw["confirmed_by"]
     if not isinstance(confirmed_by, str) or not confirmed_by.strip():
         return blocked(REASON_AWAITING_CONFIRMATION)
 
-    # ⑧ 第二道闸：外发总开关。⛔ 必须是 callable——传进来一个 bool 说明
+    # ⑨ 第二道闸：外发总开关。⛔ 必须是 callable——传进来一个 bool 说明
     #    调用方已经把它缓存成值了，那正是 spec 禁止的"启动时缓存一次"。
     if not callable(outbound_enabled):
         return blocked(REASON_SWITCH_NOT_CALLABLE)
 
-    # ⑨ 只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
+    # ⑩ 只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
     #    是 True，一个字符串开关就能把闸门打开。与 U1 的 _as_switch()
     #    在配置那一侧的口径一致——未知即关。
     if raw["_switch"] is not True:

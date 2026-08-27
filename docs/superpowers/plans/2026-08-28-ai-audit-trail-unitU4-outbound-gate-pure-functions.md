@@ -67,7 +67,7 @@
 **不可代**（无论多紧急一律挂起等本人）：合规红线七条的任何变更或单次例外；**候选人对外通道的开关：一次性邀请链接发放、拒信/邀约对外发送**；……
 **代理人未指定期间的默认**：「可代」项同样一律挂起等本人。留空不等于谁都可以。
 
-> **本单元与这条的关系**：本 plan 末尾「## 需 Shao Peishen 拍板」列了 5 项，其中 **D-1 / D-2 / D-3 属合规口径**。计划正文对这三项各自**先按最保守的一侧落地并写明假设**，每一项都配一条名字里带 `_pending_decision` 的测试——改口径时红的是那一条，改动面是一行。**⛔ 实施者不得自行改这三项的口径。**
+> **本单元与这条的关系**：本 plan 末尾「## 五项口径 —— ✅ 已拍板」记录了 D-1 至 D-5 的结论。**2026-08-28 Shao Peishen 拍板：一律取最保险一侧**，D-2 因此从「只进证据」改成第七条拦截规则，其余四项保持原样。**⛔ 实施者不得自行改动这五项的口径**，改判须再走一次拍板并当次留痕。
 
 ### ⛔ 本单元明确不碰的东西（并发红线，2026-08-28 同期在跑的其他 session）
 
@@ -717,7 +717,9 @@ def test_a_bare_object_with_no_attributes_at_all_is_blocked():
 
 
 @pytest.mark.parametrize("message_type", sorted(REGISTERED_MESSAGE_TYPES))
-@pytest.mark.parametrize("field_name", ["requires_confirmation", "severity", "body"])
+@pytest.mark.parametrize(
+    "field_name", ["requires_confirmation", "severity", "recipient", "body"]
+)
 @pytest.mark.parametrize("bad_kind", ["absent", "none", "empty"])
 def test_registered_types_are_blocked_for_every_unknown_field_value(
     message_type, field_name, bad_kind
@@ -868,6 +870,8 @@ REASON_CONFIRMATION_REQUIRED = "消息自称需要人工确认"
 REASON_SEVERITY_UNKNOWN = "风险等级缺失或未登记"
 REASON_SEVERITY_MAX = "风险等级为最高级"
 REASON_MISSING_AI_LABEL = "缺少 AI 生成标识"
+# 第七条，2026-08-28 拍板新增（spec 的六条之外，方向更严）
+REASON_RECIPIENT_UNKNOWN = "收件对象缺失或为空"
 ```
 
 判定主体（替换 Task 2 里那个占位的 `compute_outbound_gate`）：
@@ -1230,6 +1234,7 @@ def test_all_block_reasons_is_the_closed_set_u6_will_group_by():
             "风险等级缺失或未登记",
             "风险等级为最高级",
             "缺少 AI 生成标识",
+            "收件对象缺失或为空",
             "等待人工确认",
             "外发总开关关闭",
             "外发总开关未以 callable 形式传入",
@@ -1262,6 +1267,7 @@ ALL_BLOCK_REASONS: frozenset[str] = frozenset(
         REASON_SEVERITY_UNKNOWN,
         REASON_SEVERITY_MAX,
         REASON_MISSING_AI_LABEL,
+        REASON_RECIPIENT_UNKNOWN,
         REASON_AWAITING_CONFIRMATION,
         REASON_OUTBOUND_DISABLED,
         REASON_SWITCH_NOT_CALLABLE,
@@ -1273,18 +1279,24 @@ ALL_BLOCK_REASONS: frozenset[str] = frozenset(
 `_evaluate_outbound_gate` 尾部（替换 Task 3 的 `return GateDecision(allowed=True, ...)`）：
 
 ```python
-    # ⑦ 第一道闸：人工确认。spec「人工确认才放行」——确认人标识为空的
+    # ⑦ 收件对象必须是一个非空字符串（2026-08-28 拍板新增第七条，见
+    #    「## 五项口径 —— ✅ 已拍板」D-2）。⛔ 非字符串同样判未知。
+    recipient = raw["recipient"]
+    if not isinstance(recipient, str) or not recipient.strip():
+        return blocked(REASON_RECIPIENT_UNKNOWN)
+
+    # ⑧ 第一道闸：人工确认。spec「人工确认才放行」——确认人标识为空的
     #    高风险消息 MUST 被拦截。空白串不是人。
     confirmed_by = raw["confirmed_by"]
     if not isinstance(confirmed_by, str) or not confirmed_by.strip():
         return blocked(REASON_AWAITING_CONFIRMATION)
 
-    # ⑧ 第二道闸：外发总开关。⛔ 必须是 callable——传进来一个 bool 说明
+    # ⑨ 第二道闸：外发总开关。⛔ 必须是 callable——传进来一个 bool 说明
     #    调用方已经把它缓存成值了，那正是 spec 禁止的"启动时缓存一次"。
     if not callable(outbound_enabled):
         return blocked(REASON_SWITCH_NOT_CALLABLE)
 
-    # ⑨ 只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
+    # ⑩ 只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
     #    是 True，一个字符串开关就能把闸门打开。与 U1 的 _as_switch()
     #    在配置那一侧的口径一致——未知即关。
     if raw["_switch"] is not True:
@@ -1432,22 +1444,40 @@ def test_judging_writes_nothing_to_disk(tmp_path, monkeypatch):
     assert {p.name for p in tmp_path.iterdir()} == before
 
 
-def test_blank_recipient_is_evidence_only_not_a_block_rule_pending_decision():
+@pytest.mark.parametrize(
+    "recipient", ["", "   ", None, 0, ["candidate-42"], {"open_id": "ou_x"}]
+)
+def test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling(recipient):
     """
-    ⚠️ **口径锁定用例，见 plan 的「需 Shao Peishen 拍板」D-2。**
+    ⚠️ **口径锁定用例。批准人：Shao Peishen｜时间：2026-08-28｜事项：D-2
+    取最保险一侧。** 见本 plan 的「## 五项口径 —— ✅ 已拍板」。
 
-    spec「fail-closed 判定语义」把拦截条件逐条列成六条，recipient 不在其中；
-    「才判为低风险」的四个条件里也没有它。所以本实现按 spec 字面办：
-    recipient 只进证据、不参与判定。
-
-    这条用例把当前口径钉住——若 Shao Peishen 改判"空 recipient 也拦"，
-    红的就是这一条，改动面是 _evaluate_outbound_gate 里加一条规则 + 改这
-    条断言。⛔ 实施者不得自行改动。
+    spec 的 fail-closed 条件清单只列了六条，recipient 不在其中；本单元最初
+    按 spec 字面落成"只进证据、不参与判定"，2026-08-28 拍板改为**第七条**
+    拦截规则：收件对象读不出一个非空字符串就是未知，未知即拦截。
+    非字符串（dict / list）同样判未知——门禁不猜"这个结构里哪个键是收件人"。
     """
-    decision = compute_outbound_gate(_valid_message(recipient=""), lambda: True)
+    decision = compute_outbound_gate(_valid_message(recipient=recipient), lambda: True)
 
-    assert decision.allowed is True
-    assert decision.evidence["recipient"] == ""
+    assert decision.allowed is False
+    assert decision.reason == "收件对象缺失或为空"
+
+
+def test_absent_recipient_attribute_is_blocked_too():
+    """「属性根本不存在」这一态：与空串走同一条拦截路径。"""
+    fields = {
+        "message_type": "rejection_letter",
+        "requires_confirmation": False,
+        "severity": "low",
+        "body": _LABELLED_BODY,
+        "confirmed_by": "shao-peishen",
+    }
+
+    decision = compute_outbound_gate(_Message(**fields), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "收件对象缺失或为空"
+    assert decision.absent_fields == ("recipient",)
 ```
 
 - [ ] **Step 2: 写失败测试（结构面）**
@@ -1614,7 +1644,7 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 - [ ] `git grep -n "zhuopin_platform" -- app/ tests/` **零命中**（本包三条硬边界之一）
 - [ ] 全量 `./venv/bin/python -m pytest -q` 全绿
 - [ ] 三次变异验证都跑过且都如期变红（Task 3 Step 5、Task 4 Step 5、Task 5 Step 5）
-- [ ] 三条 `_pending_decision` / 口径锁定用例都在且都绿：`test_blank_recipient_is_evidence_only_not_a_block_rule_pending_decision`、`test_near_miss_labels_do_not_count_as_labelled`、`test_awaiting_confirmation_wins_over_switch_off_so_the_observation_window_stays_readable`
+- [ ] 三条口径锁定用例都在且都绿：`test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling`、`test_near_miss_labels_do_not_count_as_labelled`、`test_awaiting_confirmation_wins_over_switch_off_so_the_observation_window_stays_readable`
 
 ---
 
@@ -1630,6 +1660,7 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 | fail-closed：风险等级缺失/未知 | Task 3 `test_unknown_severity_is_blocked` |
 | fail-closed：风险等级最高级 | Task 3 `test_top_severity_is_blocked_with_its_own_reason` |
 | fail-closed：缺 AI 生成标识 | Task 3 `test_missing_ai_label_is_blocked` + `test_near_miss_labels_do_not_count_as_labelled` |
+| fail-closed：收件对象缺失/为空（**第七条，spec 之外**） | `test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling` + `test_absent_recipient_attribute_is_blocked_too`。2026-08-28 拍板新增，spec 待同步 |
 | fail-closed：属性根本不存在 | Task 3 `test_a_bare_object_with_no_attributes_at_all_is_blocked`（**主防线**） |
 | 门禁判定自身抛错 → 拦截 | Task 5 `test_exception_inside_the_gate_is_treated_as_a_block_not_a_leak` + `test_an_exception_type_nobody_enumerated_still_closes_the_gate` |
 | 人工确认才放行 | Task 4 `test_missing_or_blank_confirmer_is_blocked_awaiting_confirmation` |
@@ -1654,51 +1685,41 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 | 4 | delivery-units §2.U4 只写了 `tests/test_outbound_gate.py` | 拆成行为面 + 结构面两个文件 | **可读性**。结构面读源码解析 AST，与行为用例不共享 fixture 也不共享失败信号 |
 | 5 | spec 未规定判定顺序 | 六条 fail-closed 先判，两道闸最后判 | **口径**，见 D-3。总开关先判会在 U5 的观察期内把其余五条原因全部盖住 |
 | 6 | spec「留痕记录判定所依据的各字段原始取值」 | `body` 不进 evidence，改记 `ai_label_present` 布尔 | **更保守**。拒信正文是候选人可识别内容；正文指纹由 U5 的 `content_hash` 承担 |
-| 7 | spec 的六条拦截条件不含 recipient | recipient 只进证据、不参与判定 | **按 spec 字面**，见 D-2。有 `_pending_decision` 用例钉住当前口径 |
+| 7 | spec 的六条拦截条件不含 recipient | **新增第七条拦截规则**：收件对象非空字符串才放行 | **更严**。2026-08-28 Shao Peishen 拍板取最保险一侧（见上节 D-2）。⚠️ 代码七条 / spec 六条，spec 待补 |
 | 8 | tasks 4.4「复用 `AI_LABEL_TEMPLATE`」未规定匹配强度 | 取模板 `{generated_at}` 之前的**不变前缀全量匹配** | **最严的一侧**，见 D-1。有逐字 pin 测试 |
 
 ---
 
-## 需 Shao Peishen 拍板（⛔ 实施者不得自行改动，列选项不自拍）
+## 五项口径 —— ✅ 已拍板（2026-08-28 Shao Peishen）
 
-> 每一项都已按**最保守的一侧**落地并配了锁定用例，所以 U4 不被这几项阻塞；改判时改动面都是一行实现 + 一条断言。
+> **批准人：Shao Peishen（本项目唯一决策人）｜时间：2026-08-28｜事项：本节 D-1 至 D-5 全部**
+> **依据：本人指示「五项拍板都按最保险落地确认」。** 留痕格式按 `CLAUDE.md`「决策代理」的要求。
+> 其中 D-2 改变了已落地的行为，当次即改代码并补了回归测试；其余四项**当前落地本身就是最保险的一侧**，不改一行。
 
-**D-1（合规口径 · AI 生成标识判定强度）** —— 《AI 生成合成内容标识办法》2025-09-01 施行
+| 项 | 结论 | 是否改动代码 |
+|---|---|---|
+| **D-1** AI 标识判定强度 | **(a) 保持**：匹配 `AI_LABEL_TEMPLATE` 中 `{generated_at}` 之前的完整不变前缀。三个选项里最严的一侧 | 否 |
+| **D-2** 空 `recipient` 是否拦截 | **(b) 改判**：新增**第七条** fail-closed 规则，收件对象读不出非空字符串即拦截；非字符串（dict/list）同样判未知 | **是** |
+| **D-3** 拦截原因归属顺序 | **(a) 保持**：消息自身的畸形先判，两道闸最后判。见下方说明——「最保险」在这一项上不构成区分 | 否 |
+| **D-4** 风险等级词表 | **(a) 保持** `("low","medium","high")`，最高级 `"high"`，实际过闸的只有 low / medium。**加 `critical` 反而更松**（`"high"` 会变成非最高级而放行），三档才是更严的一侧 | 否 |
+| **D-5** 只接受 callable | **保持并追认**：传 bool 判拦截。把 §3.5 硬约束 1「禁止读成常量」从约定变成类型上做不到 | 否 |
 
-- **(a) 当前落地**：匹配 `AI_LABEL_TEMPLATE` 中 `{generated_at}` 之前的完整前缀 `"【AI 生成】本文案由系统基于岗位画像自动生成，生成时间 "`。最严。代价：这句话是给 **JD 文案**写的，用在拒信上语义别扭（"基于岗位画像自动生成"一封拒信），M2 写拒信生成器时必须照抄这句话才能过闸
-- **(b)** 只匹配法规要求的标记头 `"【AI 生成】"`，正文措辞由各消息类型自定。宽松，但"标识齐备"的判据变弱
-- **(c)** 按 `message_type` 各自登记一份模板（拒信一份、邀约一份），门禁按类型取对应模板匹配。最贴合业务，但要新增一张登记表，且新增消息类型时多一处必须同步的地方
-- 锁定用例：`test_near_miss_labels_do_not_count_as_labelled`、`test_ai_label_prefix_is_pinned_verbatim`
+**D-3 为什么「最保险」不构成区分（必须写明，否则这条追认是空的）**：两个选项下**放行/拦截的行为完全一致**——总开关关着时消息一律拦，先判后判都拦。差别只在留痕里记哪一条 `reason`。所以这一项没有「更安全的一侧」可选，判据只能是可观测性：总开关若先判，U5 合并后那段「全关」的观察期里每一条拦截留痕的 `reason` 都是同一句话，把其余六条真正的畸形消息全部盖住，design 迁移计划第 4 步「观察拦截留痕是否符合预期」当场失去意义。按此保持 (a)。
+锁定用例：`test_awaiting_confirmation_wins_over_switch_off_so_the_observation_window_stays_readable`。
 
-**D-2（合规口径 · 空 recipient 是否拦截）**
+**D-2 落地细节与遗留**：
 
-- **(a) 当前落地**：不拦。spec「fail-closed 判定语义」把拦截条件**逐条列成六条**，recipient 不在其中；"才判为低风险"的四个条件里也没有它。按已批准的 spec 字面办
-- **(b)** 加第七条规则：recipient 缺失/空白 → 拦截。方向更保守（一封没有收件人的拒信本来也发不出去），但**超出了 spec 已批准的条件清单**，属于在合规判定上自行加规则
-- 锁定用例：`test_blank_recipient_is_evidence_only_not_a_block_rule_pending_decision`
+- 规则位置：排在六条之后、两道闸之前（编号 ⑦）。它是**消息自身的畸形**，与「等待人工确认」是两回事，6.5 按原因统计时必须分得开
+- 新原因 `REASON_RECIPIENT_UNKNOWN = "收件对象缺失或为空"`，已进 `ALL_BLOCK_REASONS`
+- 判据：非字符串收件人（dict / list）同样判未知——门禁不猜「这个结构里哪个键是收件人」，拍平成字符串是 U5 适配器的活
+- 回归测试：`test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling`（6 种未知取值参数化）、`test_absent_recipient_attribute_is_blocked_too`；Task 3 的笛卡尔积 `field_name` 维也把 `recipient` 加了进来（2×4×3=24 条）
+- ⚠️ **遗留：`specs/outbound-approval-gate/spec.md` 与代码已不一致。** spec 的「fail-closed 判定语义」把拦截条件逐条列成**六条**，代码现在有**七条**。方向是更严（spec 是代码的子集，不存在「代码比 spec 松」这种危险），所以不阻塞合并；但 U6 的断言与 U7 的运维文档都读 spec，**建议在归档本变更包前把第七条补进 spec 的 ADDED Requirements**。本 session 未改 spec 文件——改一份已批准的 spec 属另一类动作，等一次明确指示
 
-**D-3（口径 · 拦截原因的归属顺序）** —— 影响 U5 观察期与 U6 的 6.5 统计
-
-- **(a) 当前落地**：六条 fail-closed 先判，`confirmed_by` 次之，总开关最后。于是 U5 合并后那段"总开关全关"的观察期里，拦截留痕仍能读出真实原因分布
-- **(b)** 总开关最先判。好处是"闸关着"这个事实在留痕里绝不会被别的原因掩盖；代价是观察期内所有拦截的 reason 都是同一句话，design 迁移计划第 4 步"观察拦截留痕是否符合预期"读不出东西
-- 两个选项下**放行行为完全一致**（都拦），差别只在留痕里记哪一条原因
-- 锁定用例：`test_awaiting_confirmation_wins_over_switch_off_so_the_observation_window_stays_readable`
-
-**D-4（技术 · 风险等级词表）** —— tasks/spec 都只说"最高级"，没给词表
-
-- **(a) 当前落地**：`("low", "medium", "high")`，最高级 `"high"`，于是实际能过闸的只有 low / medium。不做大小写归一化、不 strip
-- **(b)** 换成中文词表（`("低", "中", "高")`）或四档（加 `"critical"`）
-- 影响面：这是 U5 适配器构造消息时必须遵守的词表，定晚了 U5 要返工
-
-**D-5（追认 · 偏离 2）** —— `outbound_enabled` 从"支持传 callable"收紧成"只接受 callable"
-
-- 方向是更严（把"启动时缓存一次"从约定变成做不到），但确实与 tasks 4.5 的字面表述不同，按 U1 的先例（`tasks.md`「1.x 落地偏离登记」）需要一次显式追认
-
----
 
 ## 完成判据（`tasks.md` 第 4 章的 checkbox 在这些全部成立后才勾）
 
 1. 五个 Task 全部完成，三次变异验证都如期变红并已撤销
 2. 全量测试全绿，且 `app/config.py` / `app/graph/nodes.py` / `requirements.txt` / `pyproject.toml` 的 diff 为空
 3. `compute_outbound_gate` 在 `app/outbound/` 之外零调用方
-4. 上面「需 Shao Peishen 拍板」五项已给出答复（或经他确认可按当前保守落地先合并、改判另开一笔）
+4. ✅ 五项口径已于 2026-08-28 全部拍板（一律取最保险一侧），D-2 已改码并补测；⚠️ 唯一遗留是 `specs/outbound-approval-gate/spec.md` 的第七条待补
 5. final review 通过后，由**当时持有 `tasks.md` 写锁的那条 session**回勾第 4 章的 9 个 checkbox 并搬运偏离登记——⛔ 本单元自己不改 `tasks.md`

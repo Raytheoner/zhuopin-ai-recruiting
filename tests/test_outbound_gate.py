@@ -227,7 +227,9 @@ def test_a_bare_object_with_no_attributes_at_all_is_blocked():
 
 
 @pytest.mark.parametrize("message_type", sorted(REGISTERED_MESSAGE_TYPES))
-@pytest.mark.parametrize("field_name", ["requires_confirmation", "severity", "body"])
+@pytest.mark.parametrize(
+    "field_name", ["requires_confirmation", "severity", "recipient", "body"]
+)
 @pytest.mark.parametrize("bad_kind", ["absent", "none", "empty"])
 def test_registered_types_are_blocked_for_every_unknown_field_value(
     message_type, field_name, bad_kind
@@ -237,9 +239,8 @@ def test_registered_types_are_blocked_for_every_unknown_field_value(
     （delivery-units §3.3 第 1 条）。新增一个消息类型时，参数化会强制作者
     面对每一种未知取值——这正是它铺满的意义。
 
-    ⚠️ field_name 这一维**不含 confirmed_by**：那道闸在下一个 Task 才接上，
-    放进来会让本 Task 的用例在实现尚未落地时就红。confirmed_by 的缺失 /
-    None / 空白三态由 Task 4 的
+    ⚠️ field_name 这一维**不含 confirmed_by**：它属于第一道闸而不是消息
+    自身的畸形，单独由 Task 4 的
     test_missing_or_blank_confirmer_is_blocked_awaiting_confirmation 与
     test_an_absent_confirmed_by_attribute_is_blocked_awaiting_confirmation 覆盖。
 
@@ -570,6 +571,7 @@ def test_all_block_reasons_is_the_closed_set_u6_will_group_by():
             "风险等级缺失或未登记",
             "风险等级为最高级",
             "缺少 AI 生成标识",
+            "收件对象缺失或为空",
             "等待人工确认",
             "外发总开关关闭",
             "外发总开关未以 callable 形式传入",
@@ -668,19 +670,45 @@ def test_judging_writes_nothing_to_disk(tmp_path, monkeypatch):
     assert {p.name for p in tmp_path.iterdir()} == before
 
 
-def test_blank_recipient_is_evidence_only_not_a_block_rule_pending_decision():
+@pytest.mark.parametrize(
+    "recipient", ["", "   ", None, 0, ["candidate-42"], {"open_id": "ou_x"}]
+)
+def test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling(recipient):
     """
-    ⚠️ **口径锁定用例，见 plan 的「需 Shao Peishen 拍板」D-2。**
+    ⚠️ **口径锁定用例。批准人：Shao Peishen｜时间：2026-08-28｜事项：plan 的
+    D-2 取最保险一侧。**
 
-    spec「fail-closed 判定语义」把拦截条件逐条列成六条，recipient 不在其中；
-    「才判为低风险」的四个条件里也没有它。所以本实现按 spec 字面办：
-    recipient 只进证据、不参与判定。
+    spec「fail-closed 判定语义」把拦截条件逐条列成六条，recipient 不在其中，
+    本单元最初按 spec 字面落成"只进证据、不参与判定"。2026-08-28 拍板改为
+    **第七条拦截规则**：收件对象读不出一个非空字符串就是未知，未知即拦截。
 
-    这条用例把当前口径钉住——若 Shao Peishen 改判"空 recipient 也拦"，
-    红的就是这一条，改动面是 _evaluate_outbound_gate 里加一条规则 + 改这
-    条断言。⛔ 实施者不得自行改动。
+    方向是更严（拦得更多），不放松任何闸门——代价是误拦，而误拦由 U6 的
+    6.5 按 message_type 与拦截原因统计兜底观测。
+
+    ⚠️ 非字符串收件人（dict / list）同样判未知：门禁不猜"这个结构里哪个
+    键是收件人"。U5 的适配器负责把渠道对象拍平成字符串再喂进来。
+
+    ⛔ 这条比已批准的 spec 条件清单多一条规则，`specs/outbound-approval-gate`
+    需要同步补第七条——见 plan 的 D-2 记录。
     """
-    decision = compute_outbound_gate(_valid_message(recipient=""), lambda: True)
+    decision = compute_outbound_gate(_valid_message(recipient=recipient), lambda: True)
 
-    assert decision.allowed is True
-    assert decision.evidence["recipient"] == ""
+    assert decision.allowed is False
+    assert decision.reason == "收件对象缺失或为空"
+
+
+def test_absent_recipient_attribute_is_blocked_too():
+    """「属性根本不存在」这一态：与空串走同一条拦截路径。"""
+    fields = {
+        "message_type": "rejection_letter",
+        "requires_confirmation": False,
+        "severity": "low",
+        "body": _LABELLED_BODY,
+        "confirmed_by": "shao-peishen",
+    }
+
+    decision = compute_outbound_gate(_Message(**fields), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "收件对象缺失或为空"
+    assert decision.absent_fields == ("recipient",)
