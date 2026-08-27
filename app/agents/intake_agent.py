@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field, replace
 
@@ -16,6 +17,7 @@ from app.agents.ecu_knowledge import (
 )
 from app.agents.intake_question import IntakeQuestion, derive_question_id, render_questions_text
 from app.llm.gateway import LLMGateway
+from app.observability.redaction import loggable_summary
 from app.schemas.job_profile import SYSTEM_MANAGED_FIELDS, JobProfile
 
 # 有产出轮的预算：只对 is_productive=1 的行计数（design.md 决策 5）。
@@ -148,6 +150,45 @@ def derive_unspecified_fields(accumulated: dict) -> list[str]:
     ]
 
 
+logger = logging.getLogger(__name__)
+
+# 键名本身也要过一遍白名单：profile_patch 是 LLM 自由生成的裸 dict，
+# 模型自称的"未指定字段"里可能出现一个它幻觉出来的字段名，那本身就是自由文本。
+_JOB_PROFILE_FIELD_NAMES = frozenset(JobProfile.model_fields)
+
+
+def _log_unspecified_comparison(
+    accumulated: dict, model_claimed: list[str], derived: list[str]
+) -> None:
+    """
+    把"模型自称的未指定字段"与"系统推导结果"的对照打进 debug 日志（tasks 6.2）。
+
+    这是本变更包里第一次把业务对象内容送进 logging，**必须走 loggable_summary()**
+    （delivery-units.md §3.3）。⛔ 不得写成
+    `logger.debug("...%s", parsed.unspecified_fields)` 直接打——那绕过主防线，
+    只会被 RedactionFilter 事后探测到并告警。
+
+    刻意**不加** `logger.isEnabledFor(DEBUG)` 护栏：加了之后"脱敏是否真的上岗"
+    就取决于运行时日志级别，而 §3.3 的验收要求正是要一条能无条件断言到的调用。
+    代价是每轮多几次 dict 操作——相对一次 7~26 秒的 LLM 调用，可以忽略。
+
+    传给 loggable_summary 的是「字段名 → 该字段当前取值」的映射，不是字段名列表：
+    这样摘要里的 field_names 只会出现字段表里真实存在的名字，模型幻觉出来的名字
+    落进 unknown_field_count 这个计数里，既留下了信号又不把那段自由文本写进日志。
+    """
+    logger.debug(
+        "未指定字段对照（tasks 6.2）：系统推导 %s；模型自称 %s",
+        loggable_summary(
+            {name: accumulated.get(name) for name in derived},
+            known_fields=_JOB_PROFILE_FIELD_NAMES,
+        ),
+        loggable_summary(
+            {name: accumulated.get(name) for name in model_claimed},
+            known_fields=_JOB_PROFILE_FIELD_NAMES,
+        ),
+    )
+
+
 SYSTEM_PROMPT = (
     "你是招聘助手，服务于一家汽车电子（ECU）研发制造企业。\n"
     "任务：判断用户消息是否是用人需求；如果是，结合 ECU 行业知识生成至多 3 个追问问题，"
@@ -237,7 +278,11 @@ class IntakeTurnResult:
     questions: list[IntakeQuestion]
     profile_patch: dict
     is_complete: bool
+    # 系统按画像字段表推导出的未指定字段（tasks 6.1）。**这是真源。**
     unspecified_fields: list[str] = field(default_factory=list)
+    # 模型自称的未指定字段（tasks 6.2）。只作对照：落 job_profile.unspecified_fields
+    # 那一列 + 一条 debug 日志。⛔ 不参与任何判定、不进任何对外 payload。
+    model_claimed_unspecified_fields: list[str] = field(default_factory=list)
     # 已渲染的问题文本。带在结果里而不是让调用方自己 join：history 里的
     # assistant 文本与下发给通道的文本必须同源（design.md 决策 1「代价」）。
     questions_text: str = ""
@@ -803,12 +848,21 @@ def run_intake_turn(
     )
     has_new_question = any(question.question_id not in asked_before for question in questions)
 
+    # tasks 6.1/6.2：未指定字段改由系统推导，模型自称值降级为对照。
+    # ⚠️ 用的是 profile_patch（经 _drop_unchosen_candidate_values 摘过候选值的
+    # 那份，也就是真正会落库的那份），不是 parsed.profile_patch——后者把"模型
+    # 塞进来但用户没选"的候选值算成已答字段，漏报会从模糊回复那条路径原样回来。
+    accumulated_after = {**accumulated, **profile_patch}
+    derived = derive_unspecified_fields(accumulated_after)
+    _log_unspecified_comparison(accumulated_after, parsed.unspecified_fields, derived)
+
     return IntakeTurnResult(
         is_job_related=True,
         questions=questions,
         profile_patch=profile_patch,
         is_complete=give_up or not questions,
-        unspecified_fields=parsed.unspecified_fields if give_up else [],
+        unspecified_fields=derived,
+        model_claimed_unspecified_fields=list(parsed.unspecified_fields),
         questions_text=render_questions_text(questions),
         llm_latency_ms=meta.latency_ms,
         llm_response_model=meta.response_model,
