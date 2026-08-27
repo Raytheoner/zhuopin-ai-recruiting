@@ -1716,33 +1716,32 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 - ✅ **spec 已同步（2026-08-28）**：`specs/outbound-approval-gate/spec.md` 的「fail-closed 判定语义」已补第七条条件、改写「仅当……才判为低风险」那句、新增 `Scenario: 收件对象未知`，并在原文里注明这一条是当日追加、方向更严、门禁不负责从渠道对象推断收件人。`openspec validate ai-audit-trail-and-outbound-gate --strict` 通过。代码与 spec 现在都是七条
 
 
-## ⛔ D-6 —— 未决，**U5 开工前必须解决**（2026-08-28 code review 发现 3）
+## D-6 —— ✅ 已拍板取 (b)（2026-08-28 Shao Peishen）
 
-**问题一句话**：`requires_confirmation=True` 与 `severity` 最高级现在是**终局拦截**，带上 `confirmed_by` 也清不掉。若 U5 照 spec 把候选人信件标成高风险，`queue.approve()` 重走门禁仍会被拦——**待审批队列里的东西永远发不出去，人工放行路径整体失效**。
+> **批准人：Shao Peishen｜时间：2026-08-28｜事项：D-6 放行路径口径｜依据：本人指示「b」**
 
-**两份已批准的文档在这一点上互相矛盾，不是我的实现走偏**：
+**背景**：`tasks.md` 4.6/4.7 与 spec 的三条原文互相矛盾——前者说六条 fail-closed 是彼此独立的**终局拦截**，后者（「这两类 MUST 一律判为高风险」+「高风险消息 SHALL 仅在携带 `confirmed_by` 时才被放行外发」+ Scenario「人工放行」）说它们是**风险分级的输入**、`confirmed_by` 是**清关**。取 (b) 前实现照 `tasks.md` 字面，后果是 `queue.approve()` 带确认人重走门禁仍被拦，**待审批队列里的候选人信件永远发不出去**，本变更包立项要建的人工放行能力从未生效。
 
-| 出处 | 原文 | 推出的模型 |
+**结论：条件分两类，处置不同。**
+
+| 类别 | 哪几条 | 处置 |
 |---|---|---|
-| `tasks.md` 4.6 | 「`requires_confirmation` 为真 …… 全部拦截」 | 六条是**彼此独立的终局拦截条件** |
-| `tasks.md` 4.7 | 「放行的唯一路径：…… + `requires_confirmation` **显式为假** + `severity` 已知非最高级 + …」 | 同上 |
-| spec「门禁覆盖范围」 | 「这两类 MUST **一律**判为高风险」 | 候选人信件恒为高风险 |
-| spec「人工确认才放行」 | 「高风险消息 SHALL **仅在携带** `confirmed_by` 时才被放行外发」 | 六条是**风险分级的输入**，`confirmed_by` 是**清关** |
-| spec Scenario「人工放行」 | 「该草稿携带确认人标识**重新走门禁** …… 两道闸都通过时**被外发**」 | 同上 |
+| **消息畸形** | 未登记类型、确认标志读不出布尔、风险等级不在词表、缺 AI 标识、收件对象读不出非空字符串 | **终局拦截，⛔ 人也清不掉**。签字的前提是知道自己在签什么；允许 `confirmed_by` 清掉畸形，人工确认就成了「随便谁点一下就能发任何东西」的橡皮图章 |
+| **已知的高风险** | 确认标志显式为真、风险等级为已登记的最高级 | **风险分级，不是终局**。由第一道闸的人清关，与 spec 三条原文一致 |
 
-当前实现取的是 `tasks.md` 的字面读法。按 spec 那半边读，高风险 + `confirmed_by` 应当放行。
+**没有被放松的东西**：两道闸仍**串联**（人签了字、总开关关着照样不发）；总开关仍每次求值；`confirmed_by` 仍要求非空字符串。
 
-**⛔ 为什么本 session 不自行改**：让 `confirmed_by` 能清掉这两条是**放松闸门**，属 `CLAUDE.md` 决策代理表的不可代项（「候选人对外通道的开关：拒信/邀约对外发送」）。2026-08-28 的「一律取最保险一侧」是对当时列出的**五项**而言，不构成改写放行路径的授权。而且这里的「最保险」有陷阱：保持终局拦截确实拦得最多，但代价是**这个变更包立项要建的人工放行能力从未生效**——那不是保守，是功能不存在。这个取舍必须他本人知情后再定。
+**无确认人时的原因口径**：仍指出**为何是高风险**（「消息自称需要人工确认」／「风险等级为最高级」），不一律折成「等待人工确认」——理由同 D-3，观察期与 6.5 的分布要读得出来。spec Scenario「未带确认人的高风险消息」那个输入（普通拒信、只缺确认人）仍逐字返回「等待人工确认」，有专门用例钉住。
 
-**三个选项**：
+**判据（锁定用例）**：
+- `test_confirmed_by_clears_a_known_high_risk_block_per_d6_option_b` —— (b) 的放行那一半
+- `test_confirmed_by_cannot_clear_a_malformed_message`（5 条参数化）—— **(b) 更重要的那一半**，变异验证：让 `confirmed_by` 能清掉畸形后 15 条变红
+- `test_a_plain_letter_without_a_confirmer_reports_exactly_the_spec_wording` —— spec 原文那句
+- `test_a_cleared_high_risk_message_is_still_stopped_by_the_master_switch` —— 两道闸串联不变
 
-| | 做法 | 后果 |
-|---|---|---|
-| **(a)** 维持现状（`tasks.md` 字面） | 六条终局拦截，`confirmed_by` 只能清「等待人工确认」 | 拦得最死。U5 的适配器**必须**把候选人信件标成 `requires_confirmation=False` + `severity` 非最高级，否则队列发不出东西——而这与 spec「一律判为高风险」字面冲突，等于把矛盾推给 U5 |
-| **(b)** 按 spec 改：`confirmed_by` 非空时可清掉「自称需确认」与「最高级」两条 | 人工放行路径真正可用，与 spec 的三条原文一致。**仍不放松**：未登记类型、标志未知、等级未知、缺标识、收件人未知、总开关六条依旧终局；放行仍需人 + 总开关两道闸 | 需改 `tasks.md` 4.6/4.7 的措辞 |
-| **(c)** 折中：只让 `confirmed_by` 清掉「最高级」，「自称需确认」仍终局 | 消息作者的显式意图不可被推翻，但风险等级可由人清关 | 语义最绕，两条同源的规则走两套口径，日后没人记得为什么 |
-
-**判据锁定用例**：`test_confirmed_by_cannot_clear_a_self_declared_or_top_severity_block_pending_d6`（钉住 (a)，改判时红的就是它）。
+**同步情况**：
+- ✅ `specs/outbound-approval-gate/spec.md` 已补两类划分、清关范围限定、两个新 Scenario，`openspec validate --strict` 通过
+- ⚠️ **`tasks.md` 4.6/4.7 的措辞仍是旧口径**（「`requires_confirmation` 为真 → 拦截」「放行的唯一路径：…… 显式为假 …… 非最高级」）。本 session 按并发约定不改 `tasks.md`，**留给持写锁的 session 一并订正**，否则第 4 章回勾时会与代码对不上
 
 
 ## 完成判据（`tasks.md` 第 4 章的 checkbox 在这些全部成立后才勾）
@@ -1751,5 +1750,5 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 2. 全量测试全绿，且 `app/config.py` / `app/graph/nodes.py` / `requirements.txt` / `pyproject.toml` 的 diff 为空
 3. `compute_outbound_gate` 在 `app/outbound/` 之外零调用方
 4. ✅ 五项口径已于 2026-08-28 全部拍板（一律取最保险一侧），D-2 已改码并补测，`specs/outbound-approval-gate/spec.md` 的第七条同日补齐、`openspec validate --strict` 通过
-5. ✅ 一轮 code review 的 8 条发现：7 条已修（证据保真度与结构守护，**无一是 fail-open**）；⛔ 第 8 条是 **D-6**，属不可代口径，**U5 开工前必须由 Shao Peishen 定**
+5. ✅ 一轮 code review 的 8 条发现全部处置完毕：7 条已修（证据保真度与结构守护，**无一是 fail-open**），第 8 条 **D-6 已拍板取 (b)** 并同步 spec；⚠️ 唯一遗留是 `tasks.md` 4.6/4.7 的措辞待持写锁的 session 订正
 5. final review 通过后，由**当时持有 `tasks.md` 写锁的那条 session**回勾第 4 章的 9 个 checkbox 并搬运偏离登记——⛔ 本单元自己不改 `tasks.md`
