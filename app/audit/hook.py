@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from typing import Any
 from uuid import uuid4
 
@@ -97,6 +98,17 @@ class RecorderAuditHook:
     def __init__(self, recorder: AuditRecorder, conn: sqlite3.Connection) -> None:
         self._recorder = recorder
         self._conn = conn
+        # ⚠️ 一条连接只有**一个**事务。FastAPI 把同步路由分派进工作线程池
+        # （每请求一个线程，见 app/storage/db.py:238-242），而本适配器是模块级
+        # 单例、被所有线程共用——不加锁时两个并发请求会互相踩：A 的 rollback()
+        # 会把 B 已执行但未提交的 INSERT 一起抹掉，A 的 commit() 会把 B 写了一半
+        # 的事务提前落盘。实测 20 线程并发：SQLite 只剩 12 行、JSONL 17 行、
+        # 3 个 sqlite3.InterfaceError（2026-08-28 review round 1 复现）。
+        #
+        # 用锁而不是每线程一条连接：审计写入很小，串行化的代价可忽略，而
+        # "一条连接、一个事务管理者"这个说法只有在串行时才成立。JsonlChainSink
+        # 本来就是按路径共享进程内锁的同一形态。
+        self._write_lock = threading.Lock()
 
     def record(
         self,
@@ -130,8 +142,15 @@ class RecorderAuditHook:
             rubric_version=context.get("rubric_version"),
             rubric_snapshot=context.get("rubric_snapshot"),
             # analysis_run.raw_response 是 NOT NULL（app/storage/db.py:105）。
-            # 模型返回空响应体时原样传 None 会撞 NOT NULL，把"模型没说话"升级成
-            # "系统故障"。折成空串，并把这个事实记进 error 让镜像留痕。
+            # 模型返回空响应体时原样传 None 会撞 NOT NULL。折成空串，并把这个
+            # 事实记进 error 让镜像留痕。
+            #
+            # ⚠️ 这只保住**留痕**：钩子在 json.loads 之前触发，所以这一行照样落库。
+            # 那次调用本身仍会失败——`app/llm/gateway.py` 紧接着 json.loads(None)
+            # 抛 TypeError，而它不在 `except (JSONDecodeError, ValidationError)`
+            # 里，会直接穿透出去、连重试都不消耗（2026-08-28 review round 1 实测）。
+            # ⛔ 不要把这句注释读成"空响应不会打挂调用"——它挡住的是"留痕本身
+            # 因为 NOT NULL 而失败"，登记为 docs/tech-debt.md TD-4。
             raw_response=raw_response or "",
             token_usage=token_usage,
             latency_ms=latency_ms,
@@ -142,7 +161,19 @@ class RecorderAuditHook:
             ),
         )
 
-        self._write(event)
+        # ⚠️ `stored is False` 只有一种含义：这条 id 之前已经写过，被主键短路了
+        # （`SqliteSink` 的另一种 False 是"非 ai_analysis 事件在这个 sink 里没有
+        # 真身"，而本适配器只造 AI_ANALYSIS 事件，走不到那一支）。这与
+        # 2026-08-28 对残留 B 的拍板一致：调用点自己知道在写什么类型，
+        # ⛔ 不从 False 反推原因。
+        stored = self._write(event)
+        if not stored:
+            # 已经写过 = 镜像里也已经有它那一行。再 append 一条同 id 的行，链上
+            # 就多出一条真身里没有对应新增的记录，而 `reconcile()` 比的是**集合**
+            # 差集，看不见这种重复（2026-08-28 review round 1 实测：SQLite 1 行、
+            # JSONL 2 行，reconcile().ok 仍为 True）。
+            logger.debug("留痕已存在，跳过镜像 append（id=%s）", event.id)
+            return
 
         # 第二段：镜像。⛔ 失败不抛——允许的偏差只有单向「SQLite 有、JSONL 缺行」，
         # 把它升级成故障就等于把一个被明确允许的偏差当成事故。缺行由
@@ -157,25 +188,33 @@ class RecorderAuditHook:
                 exc_info=True,
             )
 
-    def _write(self, event: DecisionEvent) -> None:
+    def _write(self, event: DecisionEvent) -> bool:
         """
         第一段：真身。**失败即抛**——spec：留痕写入失败时该次 AI 结果视为不可用，
         其评分 MUST NOT 进入下游排序。异常穿透出网关正是这条的落地形态。
 
+        返回"这次是不是真的落了一行"：`False` 表示这条 id 之前已经写过、被主键
+        短路了，调用方据此跳过镜像 append。
+
         失败时先回滚：半截写入悬在隐式事务里会被下一次提交顺手带进库
         （`app/storage/idempotency.py:42-47` 描述的正是这个失败模式）。
+
+        ⚠️ 整段在锁内：一条连接只有一个事务，并发线程共用它会互相踩，理由与实测
+        数字见 `__init__` 里 `_write_lock` 那段注释。
         """
-        try:
-            self._recorder.record(self._conn, event)
-            self._conn.commit()
-        except Exception:
+        with self._write_lock:
             try:
-                self._conn.rollback()
+                stored = self._recorder.record(self._conn, event)
+                self._conn.commit()
+                return stored
             except Exception:
-                logger.error(
-                    "留痕写入失败后的 rollback 也失败了（id=%s）；半截写入可能被"
-                    "下一次提交带进库",
-                    event.id,
-                    exc_info=True,
-                )
-            raise
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    logger.error(
+                        "留痕写入失败后的 rollback 也失败了（id=%s）；半截写入可能被"
+                        "下一次提交带进库",
+                        event.id,
+                        exc_info=True,
+                    )
+                raise

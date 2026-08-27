@@ -8,6 +8,7 @@ SQLite 失败必须抛，JSONL 失败必须不抛。把它们写成对称是本 
 
 import json
 import sqlite3
+import threading
 
 import pytest
 
@@ -131,9 +132,12 @@ def test_missing_system_fingerprint_is_stored_as_null_and_does_not_raise(hook, c
 def test_none_raw_response_is_coerced_and_flagged_in_the_mirror(hook, conn, chain_path):
     """
     analysis_run.raw_response 是 NOT NULL（app/storage/db.py:105）。模型返回空
-    响应体时若原样传 None，留痕会撞 NOT NULL 而把整次调用打挂——把"模型没说话"
-    升级成"系统故障"。折成空串写入，并在镜像的 error 字段留下痕迹：真身满足
-    NOT NULL，"这次是空的"这个事实不丢。
+    响应体时若原样传 None，留痕会撞 NOT NULL。折成空串写入，并在镜像的 error
+    字段留下痕迹：真身满足 NOT NULL，"这次是空的"这个事实不丢。
+
+    ⚠️ 本条只证明**留痕这一段**不因空响应而失败。那次调用本身仍会失败——网关
+    紧接着 json.loads(None) 抛 TypeError（TD-4）。⛔ 不要把这条读成"空响应
+    不会打挂调用"。
     """
     _call(hook, raw_response=None)
 
@@ -292,3 +296,62 @@ def test_two_identical_calls_without_graph_context_produce_two_rows(hook, conn):
     rows = _rows(conn)
     assert len(rows) == 2
     assert rows[0]["id"] != rows[1]["id"]
+
+
+# ── review round 1 的两条回归钉子 ────────────────────────────────────────
+
+
+def test_concurrent_calls_do_not_lose_rows_or_diverge(conn, chain_path):
+    """
+    ⭐ 一条 SQLite 连接只有**一个**事务，而本适配器是模块级单例、被 FastAPI 的
+    工作线程池共用（每请求一个线程，见 app/storage/db.py:238-242）。不加锁时
+    并发请求互相踩：A 的 rollback() 抹掉 B 已执行未提交的 INSERT，A 的 commit()
+    把 B 写了一半的事务提前落盘。
+
+    2026-08-28 review round 1 实测（未加锁）：20 线程并发 → SQLite 只剩 12 行、
+    JSONL 17 行、3 个 sqlite3.InterfaceError。按 spec，留痕写入失败意味着那次
+    AI 结果不可用，所以那 3 个异常各会打挂一个真实请求，另外 8 条是**真实付费
+    调用的留痕被静默丢掉**。
+
+    ⚠️ 断言三样都要：行数、镜像行数、异常数。只断言行数的话，"写进去了但两侧
+    对不上"照样绿。
+    """
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    hook = RecorderAuditHook(recorder, conn)
+    errors: list[str] = []
+
+    def worker(index: int) -> None:
+        try:
+            _call(hook, input_hash=f"{index:064d}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert len(_rows(conn)) == 20
+    assert len(chain_path.read_text(encoding="utf-8").strip().splitlines()) == 20
+
+
+def test_a_deduped_write_does_not_append_a_second_mirror_line(hook, conn, chain_path):
+    """
+    ⭐ SQLite 因主键短路没落行时，镜像**也不能**再 append 一条。否则链上会多出
+    一条真身里没有对应新增的记录，而 reconcile() 比的是**集合**差集，看不见这种
+    重复——2026-08-28 review round 1 实测：SQLite 1 行、JSONL 2 行、
+    reconcile().ok 仍为 True，偏差对唯一的检出手段完全隐形。
+
+    这也是 2026-08-28 对残留 B 的拍板在本适配器上的落地：`record()` 返回 False
+    时调用点⛔ 不反推原因——本适配器只造 AI_ANALYSIS 事件，False 只可能是
+    "这条 id 已经写过"。
+    """
+    context = {"thread_id": "job-7", "node": "compute_score"}
+    _call(hook, audit_context=context)
+    _call(hook, audit_context=context)  # 完全相同 → 确定性 id 撞主键
+
+    assert len(_rows(conn)) == 1
+    assert len(chain_path.read_text(encoding="utf-8").strip().splitlines()) == 1
+    assert hook._recorder.reconcile().ok is True

@@ -135,13 +135,19 @@ def test_missing_system_fingerprint_records_null_and_the_call_still_succeeds(wir
     assert row["raw_response"] == json.dumps({"ok": True})  # 其余照常
 
 
-def test_no_resume_plaintext_anywhere_in_the_trail(wired):
+def test_prompt_text_is_never_stored_only_its_hash(wired):
     """
-    ⭐ tasks 3.7 / spec 逐字：「系统 MUST NOT 在留痕记录中存储简历原文。输入内容
+    ⭐ tasks 3.7 / spec 逐字：「系统 MUST NOT 在留痕记录中存储简历原文。**输入内容**
     以哈希形式记录。」
 
     检查两侧介质：SQLite 真身的全部列，与 JSONL 镜像的全部字节。用一个不可能
     自然出现的标记串，所以"没找到"是个有意义的结论。
+
+    ⚠️ **本条只覆盖输入侧，名字不要写成"留痕里没有任何简历原文"。** `raw_response`
+    是**逐字存**的（工程铁律 3 明令要存原始响应），所以一个把简历片段引回来的
+    评分模型会让原文进入留痕，而本测试仍然全绿——桩响应是 `{"ok": true}`，
+    根本不含标记串。这是 spec 与铁律 3 之间一处未解决的张力，登记为
+    docs/tech-debt.md TD-5，⛔ 不要靠改这条测试的名字来掩盖。
     """
     conn, chain_path, hook = wired
     client = FakeOpenAIClient([json.dumps({"ok": True})])
