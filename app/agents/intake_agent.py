@@ -343,6 +343,13 @@ class IntakeTurnResult:
     # 本轮实际问出的问题（已问台账的本轮增量），落进
     # job_profile.asked_questions。第 5 章在其上扩"已答 / 重问次数"。
     asked_questions: list[IntakeQuestion] = field(default_factory=list)
+    # 本轮未溯源的业务字段名（tasks 7.5）。只观测不拦截：这些字段照常在
+    # profile_patch 里，这里只是把"指不出出处"这件事记下来。
+    ungrounded_fields: list[str] = field(default_factory=list)
+    # 本轮写入的业务字段名，含未溯源的那些、不含系统管理字段。
+    # 它是编造率的**分母**——profile_json 存的是累积画像，反推不出本轮写了几个
+    # （同一字段被修正重写时键数不变），所以必须在这里算好、逐轮落库。
+    written_fields: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -997,16 +1004,28 @@ def run_intake_turn(
             asked_questions=questions,
         )
 
+    # 拍平点：从这一行往下，profile_patch 里只有裸值。结构升级
+    # （{value, source_quote, source_turn}）到此为止，不进 IntakeTurnResult、
+    # 不进 profile_patch_accumulated、不进 job_profile.profile_json。
+    # 不拍平会同时炸三处，见 delivery-units.md §2.F。
+    flat_patch, _sources = split_patch_sources(parsed.profile_patch)
+    ungrounded_fields = verify_field_grounding(
+        parsed.profile_patch, history, exempt_fields=_SYSTEM_MANAGED_FIELDS
+    )
+    written_fields = [name for name in flat_patch if name not in _SYSTEM_MANAGED_FIELDS]
+
     # ① 先算本轮的 profile_patch。台账的"已答"判定必须包含用户**这一轮刚
     #    答上来**的字段，否则会把他刚答完的子问题当成"你刚才没答"再问一遍。
+    #    这里一律用拍平后的 flat_patch——_drop_unchosen_candidate_values 要拿
+    #    值去跟候选档位字符串逐字比对，喂它带来源信封的 dict 会让比对必然落空。
     reply_text = _last_user_text(history)
     vague = is_vague_reply(reply_text, asked_questions=prior_questions)
     profile_patch = (
         _drop_unchosen_candidate_values(
-            parsed.profile_patch, reply_text=reply_text, previous_questions=prior_questions
+            flat_patch, reply_text=reply_text, previous_questions=prior_questions
         )
         if vague
-        else parsed.profile_patch
+        else flat_patch
     )
 
     # ② 建台账。answered_fields 用合并本轮 patch 之后的画像算（见 ①）。
@@ -1092,4 +1111,6 @@ def run_intake_turn(
         llm_response_model=meta.response_model,
         is_productive=has_new_profile_content or has_new_question,
         asked_questions=questions,
+        ungrounded_fields=ungrounded_fields,
+        written_fields=written_fields,
     )

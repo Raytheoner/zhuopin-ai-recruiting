@@ -2110,3 +2110,155 @@ def test_transcript_numbers_user_turns_consistently_with_verifier():
     assert "assistant: 助手插一句" in prompt
     # 助手轮次不占编号：三条用户原话，编号只到 3
     assert "user#4" not in prompt
+
+
+def _grounded_turn_response(patch: dict) -> str:
+    return json.dumps({"is_job_related": True, "questions": [], "profile_patch": patch})
+
+
+def test_turn_result_patch_is_flat():
+    """
+    Global Constraints 第一条的机械判据：run_intake_turn 的出口 profile_patch
+    里**不存在任何"带 value 键的 dict"**。这是"结构升级不得穿透到落库层"的
+    第一道也是最重要的一道闸——它之后的 compute_intake_turn / effect_persist_draft /
+    JobProfile.model_validate / jd_agent 全都按裸值读。
+    """
+    gateway = make_gateway(
+        [
+            _grounded_turn_response(
+                {
+                    "headcount": {"value": 2, "source_quote": "要两个人", "source_turn": 1},
+                    "job_title": {"value": "嵌入式工程师", "source_quote": "嵌入式工程师", "source_turn": 1},
+                }
+            )
+        ]
+    )
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "要两个人，做嵌入式工程师"}],
+        round_count=0,
+    )
+    assert result.profile_patch == {"headcount": 2, "job_title": "嵌入式工程师"}
+    for value in result.profile_patch.values():
+        assert not (isinstance(value, dict) and "value" in value)
+    assert result.ungrounded_fields == []
+    assert sorted(result.written_fields) == ["headcount", "job_title"]
+
+
+def test_fabricated_field_is_reported_ungrounded():
+    """
+    tasks 7.6 编造正例：用户一个字都没提 MCU 型号，模型却写了 ARM Cortex-M。
+    无论它给不给引用、引用是否为编的，该字段都必须被判为未溯源——
+    而且**照常写进画像**（只观测不拦截）。
+    """
+    gateway = make_gateway(
+        [
+            _grounded_turn_response(
+                {
+                    "mcu_family": {
+                        "value": ["ARM Cortex-M"],
+                        "source_quote": "我们用的是 ARM Cortex-M",
+                        "source_turn": 1,
+                    }
+                }
+            )
+        ]
+    )
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "要招一个做车身控制器的工程师"}],
+        round_count=0,
+    )
+    assert result.ungrounded_fields == ["mcu_family"]
+    assert result.profile_patch == {"mcu_family": ["ARM Cortex-M"]}  # 照常写入，不拦截
+    assert result.written_fields == ["mcu_family"]
+
+
+def test_normalized_value_with_real_quote_is_grounded():
+    """tasks 7.7 归纳负例：值被规范化成枚举、引用逐字命中 → 已溯源。"""
+    gateway = make_gateway(
+        [
+            _grounded_turn_response(
+                {
+                    "functional_safety": {
+                        "value": "ASIL-D",
+                        "source_quote": "功能安全要 ASIL D",
+                        "source_turn": 1,
+                    }
+                }
+            )
+        ]
+    )
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "功能安全要 ASIL D，量产项目两个"}],
+        round_count=0,
+    )
+    assert result.ungrounded_fields == []
+    assert result.profile_patch == {"functional_safety": "ASIL-D"}
+
+
+def test_malformed_source_structure_degrades_not_raises():
+    """
+    tasks 7.8 / spec「来源结构缺失时降级而非报错」：来源结构完全不合法时
+    采集仍然完成、值照留、该轮业务字段全计未溯源、**不抛异常**。
+    这条路径在提示词刚升到 v5 的头几天一定会被走到。
+    """
+    gateway = make_gateway(
+        [
+            _grounded_turn_response(
+                {
+                    "job_title": {"value": "嵌入式工程师", "source_quote": {"x": 1}, "source_turn": [1]},
+                    "department": "研发部",  # 老形态裸值，也算缺来源
+                }
+            )
+        ]
+    )
+    result = run_intake_turn(
+        gateway,
+        history=[{"role": "user", "content": "研发部要个嵌入式工程师"}],
+        round_count=0,
+    )
+    assert result.is_job_related is True
+    assert result.profile_patch == {"job_title": "嵌入式工程师", "department": "研发部"}
+    assert sorted(result.ungrounded_fields) == ["department", "job_title"]
+
+
+def test_ungrounded_is_subset_of_written():
+    """不变式：未溯源字段必然是本轮写入字段的子集。分子不可能大于分母。"""
+    gateway = make_gateway(
+        [
+            _grounded_turn_response(
+                {
+                    "headcount": {"value": 2, "source_quote": "两个人", "source_turn": 1},
+                    "mcu_family": {"value": ["TriCore"], "source_quote": "编的", "source_turn": 1},
+                }
+            )
+        ]
+    )
+    result = run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要两个人"}], round_count=0
+    )
+    assert set(result.ungrounded_fields) <= set(result.written_fields)
+
+
+def test_system_managed_fields_are_exempt_and_not_counted():
+    """
+    tasks 7.4(a)：系统管理字段不参与来源校验，也不计入写入字段总数
+    （它不是业务经理提供的信息，把它算进分母会让编造率虚低）。
+    """
+    gateway = make_gateway(
+        [
+            _grounded_turn_response(
+                {
+                    "unspecified_fields": {"value": ["mcu_family"]},
+                    "headcount": {"value": 2, "source_quote": "两个人", "source_turn": 1},
+                }
+            )
+        ]
+    )
+    result = run_intake_turn(
+        gateway, history=[{"role": "user", "content": "要两个人"}], round_count=0
+    )
+    assert result.ungrounded_fields == []
+    assert result.written_fields == ["headcount"]
