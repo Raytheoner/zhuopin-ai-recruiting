@@ -22,7 +22,7 @@
 
 - **两行都在代码块内部**，不在外面——他复制整块时 CC 那边要能看到自己是谁、跑在哪
 - **标题行是给复制进去的那个 session 看的**（`[Mac]` 标执行机、`-` 是 id 与主题的唯一分隔符）。⛔ 不写 `OP-` 前缀、不写 `CC ·`、不用空格分隔
-- 🔴 **CC 的 opener 第 3 行必须调 `set_session_title`**，否则侧边栏丢编号——标题行**不会**自动变成 session 名。照抄：`开工第一件事：调 mcp__ccd_session_mgmt__set_session_title（session_id 传字面量 "self"），标题：[Mac]MMDDX-<主题短名>`。Cowork 侧无此工具、名字取自开场词首行（语义前、编号后）。已上 hook 判据②，见 skill「会话命名」。**唯一豁免＝`run-lanes.sh` 无头起的块**（`printf | claude` 是 print 模式，根本不进侧边栏），豁免理由须写在块外的泳道标注下方，⛔ 不许默默省略
+- 🔴 **CC 的 opener 第 3 行必须调 `set_session_title`**，否则侧边栏丢编号——标题行**不会**自动变成 session 名。照抄：`开工第一件事：调 mcp__ccd_session_mgmt__set_session_title（session_id 传字面量 "self"），标题：[Mac]MMDDX-<主题短名>`。**Cowork 侧无此工具，名字是摘要生成的、首行无效**（08-27 实测：首行 `HR业务线-接力0827B` → 侧边栏 `HR业务线接力`，连字符与编号一并被改写掉。既非原样也非截断）。⛔ 不要再改开场词首行格式硬试，那条路已堵死。已上 hook 判据②，见 skill「会话命名」。**唯一豁免＝`run-lanes.sh` 无头起的块**（`printf | claude -p` 下那个 MCP 工具未必挂载，名字另由 `-n` 给），豁免理由须写在块外的泳道标注下方，⛔ 不许默默省略；`run-lanes.sh` 开跑前自检已机器守（块内误补即拒跑）
 - **MMDD 必须实跑 `TZ=Asia/Shanghai date +%m%d` 取**：本机在 EDT，比中国晚 12 小时，照本机日期编会集体差一天且不报错
 - **worktree 后面的括号写理由**，五项一个都不能少、**用 ｜ 分隔写成一行**
 - **CC 与 Cowork 两端同等适用。**「这只是中途一条命令，不算 Opener」**不是豁免**——判据是"这段会不会被复制到另一个界面去"；脚本起 session 用 `claude -n "[Mac]MMDDX-…"`

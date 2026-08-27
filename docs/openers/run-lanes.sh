@@ -231,6 +231,7 @@ echo "计划文件：$PLAN"
 echo "泳道 ${#LANES[@]} 条（并行上限 $MAX_PARALLEL，错峰 ${STAGGER}s，单条预算上限 \$$BUDGET）："
 
 PRECHECK_BAD=0
+EXEMPT_MISSING=""
 for ln in "${LANES[@]}"; do
   echo "  ◆ $ln （泳道内串行）"
   while IFS=$'\t' read -r _l id title; do
@@ -240,6 +241,32 @@ for ln in "${LANES[@]}"; do
       PRECHECK_BAD=1
     else
       printf '      ✓ %-14s 正文 %s 行   %s\n' "$id" "$n" "$title"
+    fi
+
+    # -----------------------------------------------------------------------
+    # set_session_title 自检（2026-08-27 加）
+    #
+    # 由来：CLAUDE.md 的「CC opener 第 3 行必须调 set_session_title」是 08-27 定的，
+    # 但**存量 opener 文件没人回填**，编排文件里当时一条都没带，且完全无症状——
+    # hook（check-opener-header.py）只扫 Claude 的输出，扫不到躺在文件里的 opener。
+    # 这里补上那道机器判据。方向是**反的**，注意别看反：
+    #
+    #   本脚本起的每一条都是无头 print 模式（printf | claude -p），那个 MCP 工具
+    #   未必挂载，名字另由 -n 给。所以对**这些块**，正确状态是「不带那一行」。
+    #
+    #   · 块内**出现** set_session_title → 硬拒。说明有人照 CLAUDE.md 的通用规则
+    #     好心补上了，无头 session 会去调一个未必挂载的 MCP 工具，白烧一次调用甚至卡住。
+    #   · 块外**缺**豁免注明 → 只 WARN 不拒。缺了不影响本次执行，但下一个人看见
+    #     会当成漏写去"补"——于是变成上面那种真会炸的情况。⇒ 拦真会炸的，
+    #     提醒会误导的。摘要里再报一次，避免在 --full-auto 的日志里被淹没。
+    # -----------------------------------------------------------------------
+    if extract "$id" | grep -q 'set_session_title'; then
+      echo "      ✗ $id  块内含 set_session_title —— 无头 session 没有 session 名可设"
+      echo "         无头块是该硬规则的唯一豁免（见 CLAUDE.md），删掉那一行"
+      PRECHECK_BAD=1
+    fi
+    if ! grep -B8 -F "[Mac]$id-" "$PLAN" | grep -q '无头'; then
+      EXEMPT_MISSING="$EXEMPT_MISSING $id"
     fi
   done < <(awk -F'\t' -v L="$ln" '$1==L' "$MANIFEST")
 done
@@ -253,6 +280,17 @@ if [[ $PRECHECK_BAD -eq 1 ]]; then
   echo "  常见原因：编排文件里的标题行格式变了，或 manifest 解析出的 id 被污染。"
   echo "  自查：cat $MANIFEST | od -c | head   ——看 id 两侧有没有多余字节"
   exit 13
+fi
+
+if [[ -n "${EXEMPT_MISSING// /}" ]]; then
+  echo
+  echo "⚠ 下列条目块外缺「无头豁免」注明（不拒跑，但请补上）：$EXEMPT_MISSING"
+  echo "  缺了不影响本次执行，危害在下一个人身上：他看见 CC 的 opener 没有"
+  echo "  set_session_title，会当成漏写去补——补上之后这条无头跑就会去调一个"
+  echo "  未必挂载的 MCP 工具。补法是在 '> 泳道：<名>' 那行下面加引用行："
+  echo "    > ⚠️ 本块不带 set_session_title 那一行，这是豁免不是漏写：由 run-lanes.sh"
+  echo "    > 以 printf | claude -p 无头启动，print 模式下那个 MCP 工具未必挂载，"
+  echo "    > 名字另由 -n 给。🔴 若改为手工贴进 CC Desktop，必须自行补上第 3 行。"
 fi
 
 # ---------------------------------------------------------------------------
@@ -352,10 +390,17 @@ run_lane() {
     t0=$(date +%s)
     echo "[lane:$lane] $id $title | start=$(date -Iseconds)" > "$log"
 
-    # -n 给会话起带编号的名字。⚠️ 这一条不是锦上添花：
-    # 侧边栏拿不到显式名字就只能用首句猜，编号一断，跨会话对账时"这是哪件任务"就查不回来。
-    # 实证：2026-08-26 侧边栏里凡是从 opener 整块复制的会话都带【OP-XXXX-X】，
-    # 凡是即兴敲一句话起的、以及本脚本起的，全部丢号。
+    # -n 给会话起带编号的名字。
+    #
+    # ⚠️ 2026-08-27 订正：这里原来引的"实证"是错的，已删。原文说「凡是从 opener 整块
+    # 复制的会话都带【OP-XXXX-X】」——那些带号的**全是 Shao Peishen 手工补的**
+    # （他 08-27 原话：「已有编号基本都是我手工后加的，几乎很少概率实现」）。
+    # 「首句会被沿用」同日被实测推翻。⇒ 别再拿这两条当依据。
+    #
+    # 🧪 `-n` 在 `-p` print 模式下到底起不起作用，**本项目未实测**。留着是因为无害
+    # （参数不生效也不报错），⛔ 但不要把它写成"编号靠这条保住了"。
+    # 要验只需 5 分钟：跑一条最小 opener，看 claude 那侧有没有这个名字。
+    # 这正是 kickoff skill 那条判据的适用场合——写成规则之前先想能不能推翻它。
     local args=(-p -n "[Mac]$id-$title" --output-format text --max-budget-usd "$BUDGET")
     if [[ $FULL_AUTO -eq 1 ]]; then args+=(--dangerously-skip-permissions)
     else args+=(--permission-mode acceptEdits); fi
