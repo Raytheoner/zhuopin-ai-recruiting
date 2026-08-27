@@ -115,19 +115,40 @@ class GateDecision:
     error: str | None = None
 
 
+def _defines_attribute(message: object, name: str) -> bool:
+    """这个名字在实例字典或类型的 MRO 上有没有定义——**不触发描述符**。
+
+    只服务 `_read` 的一个判断：AttributeError 到底是"没有这个属性"，还是
+    "属性有，但它的 getter 自己抛了 AttributeError"。
+    """
+    try:
+        if name in vars(message):
+            return True
+    except TypeError:
+        pass  # 没有 __dict__（__slots__ / 裸 object()）——继续看类型
+    return any(name in vars(klass) for klass in type(message).__mro__)
+
+
 def _read(message: object, name: str) -> Any:
-    """读一个属性，读不到返回 `_ABSENT`。
+    """读一个属性，**确实没有**才返回 `_ABSENT`。
 
     ⛔ 用两参 `getattr` + `except AttributeError`，**不用三参 getattr**。
     三参写法把"没有这个属性"和"属性值恰好等于那个默认值"折成同一件事，
     fail-closed 当场变 fail-open（delivery-units §3.3 点名的那种一行重构）。
 
-    属性是个会抛别的异常的 property 时，异常原样向上抛——由
-    `compute_outbound_gate()` 的外壳统一兜成"拦截"。
+    ⚠️ AttributeError 有两个来源，必须分开（review round 1 发现 6）：
+    - 对象上根本没有这个名字 → `_ABSENT`，如实记进 absent_fields
+    - 名字有、但它的 property getter 自己抛了 AttributeError → **原样向上抛**，
+      由外壳兜成"门禁判定内部异常"。把后者也记成"缺失"，留痕就会把一个
+      坏掉的 getter 写成"调用方忘了设这个字段"，审计拿着它查错方向。
+
+    属性是个会抛**别的**异常的 property 时，异常同样原样向上抛。
     """
     try:
         return getattr(message, name)
     except AttributeError:
+        if _defines_attribute(message, name):
+            raise
         return _ABSENT
 
 
@@ -163,7 +184,8 @@ def _collect(
 
     # 开关在这里求值，**每次判定恰好一次**。放在采集阶段而不是判定末尾，
     # 是为了让证据里恒有它的原始取值（哪怕消息先被别的规则拦下）。
-    if callable(outbound_enabled):
+    switch_is_callable = callable(outbound_enabled)
+    if switch_is_callable:
         switch_raw: Any = outbound_enabled()
     else:
         switch_raw = _ABSENT
@@ -178,13 +200,17 @@ def _collect(
         "outbound_enabled": _json_safe(switch_raw),
     }
     raw["_switch"] = switch_raw
+    raw["_switch_is_callable"] = switch_is_callable
     return raw, evidence, absent_fields
 
 
-def _evaluate_outbound_gate(
-    message: object, outbound_enabled: Callable[[], bool]
+def _decide(
+    raw: dict[str, Any], evidence: dict[str, Any], absent_fields: tuple[str, ...]
 ) -> GateDecision:
-    """实际判定逻辑，**可能抛异常**——外壳 compute_outbound_gate 统一兜成拦截。
+    """按证据判定，**可能抛异常**——外壳 compute_outbound_gate 统一兜成拦截。
+
+    ⚠️ 与采集分开是刻意的（review round 1 发现 2）：采集成功、判定抛错时，
+    外壳还拿得到那份已经采齐的证据，不必把它重建成一片 None。
 
     判定顺序是契约的一部分（见 plan 的 D-3）：**消息自身的六条 fail-closed
     先判，两道闸最后判**。理由是 design 迁移计划第 4 步——U5 合并时总开关
@@ -192,15 +218,25 @@ def _evaluate_outbound_gate(
     观察期内每一条拦截的 reason 都是"外发总开关关闭"，把其余五条真正的
     畸形消息全部盖住，观察期当场失去意义。
     """
-    raw, evidence, absent_fields = _collect(message, outbound_enabled)
-
     def blocked(reason: str) -> GateDecision:
         return GateDecision(
             allowed=False, reason=reason, evidence=evidence, absent_fields=absent_fields
         )
 
+    # ⓪ 调用方把开关缓存成了值——这是**编程错误**，不是消息的畸形，最优先
+    #    报（review round 1 发现 4）。排在后面的话，一个没带 confirmed_by 的
+    #    草稿会把它盖成"等待人工确认"，这道守护恰好在该响的时候是哑的。
+    if raw["_switch_is_callable"] is False:
+        return blocked(REASON_SWITCH_NOT_CALLABLE)
+
     # ① 未知类型即拦截。_ABSENT 不在集合里，缺属性天然落进这一条。
-    if raw["message_type"] not in REGISTERED_MESSAGE_TYPES:
+    #    ⚠️ isinstance 前置：`x not in frozenset` 对不可哈希取值（没拍平的
+    #    list/dict）抛 TypeError，会把一条本该干干净净"未登记"的拦截打成
+    #    内部异常（review round 1 发现 1）。未登记就是未登记。
+    if (
+        not isinstance(raw["message_type"], str)
+        or raw["message_type"] not in REGISTERED_MESSAGE_TYPES
+    ):
         return blocked(REASON_UNREGISTERED_TYPE)
 
     # ② 严格布尔。⛔ 不用真值性：字符串 "false" 的真值性是 True。
@@ -240,12 +276,7 @@ def _evaluate_outbound_gate(
     if not isinstance(confirmed_by, str) or not confirmed_by.strip():
         return blocked(REASON_AWAITING_CONFIRMATION)
 
-    # ⑨ 第二道闸：外发总开关。⛔ 必须是 callable——传进来一个 bool 说明
-    #    调用方已经把它缓存成值了，那正是 spec 禁止的"启动时缓存一次"。
-    if not callable(outbound_enabled):
-        return blocked(REASON_SWITCH_NOT_CALLABLE)
-
-    # ⑩ 只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
+    # ⑨ 第二道闸：外发总开关。只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
     #    是 True，一个字符串开关就能把闸门打开。与 U1 的 _as_switch()
     #    在配置那一侧的口径一致——未知即关。
     if raw["_switch"] is not True:
@@ -273,8 +304,11 @@ def compute_outbound_gate(
         GateDecision。`allowed is True` 是唯一的放行信号；⛔ 调用方不得用
         真值性判断这个对象本身（GateDecision 实例恒为真）。
     """
+    evidence: dict[str, Any] = {key: None for key in EVIDENCE_KEYS}
+    absent_fields: tuple[str, ...] = ()
     try:
-        return _evaluate_outbound_gate(message, outbound_enabled)
+        raw, evidence, absent_fields = _collect(message, outbound_enabled)
+        return _decide(raw, evidence, absent_fields)
     except Exception as exc:  # noqa: BLE001 —— 见下方注释，这里就是要抓全部
         # ⛔ 契约由**结构**保证，不靠枚举异常类型。U1 的
         # is_candidate_outbound_enabled() 用枚举法失败过两次（round 1 漏
@@ -283,10 +317,14 @@ def compute_outbound_gate(
         # 内部逻辑整体委托给一个私有函数，外层只做一件事——不管里面抛出
         # 什么类型（哪怕是完全没预料到的新类型），一律截停判拦截。
         # 之后任何人往判定里加一段没包线的新异常来源，都不需要再补一轮修复。
+        # ⚠️ 证据用**已经采到的那份**，不是重建一片 None（review round 1
+        # 发现 2）：采集成功、判定抛错是最常见的形状，把证据抹掉会让 U6 的
+        # 6.5 完全 group 不了这批记录——最需要解释的一类拦截留痕最空。
+        # 采集阶段自己就抛了的话，这两个变量仍是上面的基线值。
         return GateDecision(
             allowed=False,
             reason=REASON_GATE_ERROR,
-            evidence={key: None for key in EVIDENCE_KEYS},
-            absent_fields=(),
+            evidence=evidence,
+            absent_fields=absent_fields,
             error=repr(exc),
         )

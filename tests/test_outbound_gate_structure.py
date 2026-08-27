@@ -11,10 +11,11 @@ import pathlib
 import app.outbound.contracts
 import app.outbound.gate
 
-_SOURCE_FILES = {
-    "gate.py": pathlib.Path(app.outbound.gate.__file__),
-    "contracts.py": pathlib.Path(app.outbound.contracts.__file__),
-}
+# ⚠️ 按目录枚举，不是手写清单（review round 1 发现 7）：原来漏了
+# __init__.py，往它里面写一句 `from app.config import ...` 全套结构守护
+# 一条都不响。新增模块也会自动进入扫描面。
+_PACKAGE_DIR = pathlib.Path(app.outbound.gate.__file__).parent
+_SOURCE_FILES = {path.name: path for path in sorted(_PACKAGE_DIR.glob("*.py"))}
 
 _BANNED_IMPORT_PREFIXES = (
     "app.config",
@@ -66,6 +67,13 @@ def test_outbound_package_imports_nothing_stateful():
             if isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
+                # ⛔ 相对 import 一律不许（review round 1 发现 7）：
+                # `from ..config import ...` 在 AST 里是 module='config',
+                # level=2，前缀匹配看不见它，黑名单形同虚设。本包只用绝对
+                # import，规则简单到没有灰区。
+                if node.level:
+                    offenders.append(f"{name}:{node.lineno} 相对 import（level={node.level}），本包只许绝对 import")
+                    continue
                 modules = [node.module or ""]
             else:
                 continue
@@ -74,6 +82,14 @@ def test_outbound_package_imports_nothing_stateful():
                     offenders.append(f"{name}:{node.lineno} {module}")
 
     assert offenders == []
+
+
+def test_the_import_guard_actually_sees_every_module_in_the_package():
+    """
+    发现 7 的元测试：守护自己得先扫到东西。手写清单漏文件是静默失效——
+    测试照样绿，因为它压根没读那个文件。
+    """
+    assert set(_SOURCE_FILES) >= {"__init__.py", "contracts.py", "gate.py"}
 
 
 def test_ai_label_source_is_the_jd_agent_constant():
@@ -107,3 +123,49 @@ def test_gate_has_no_side_effect_vocabulary():
         source = path.read_text(encoding="utf-8")
         for forbidden in ("@idempotent_effect", "INSERT INTO", "conn.execute", "channel.deliver"):
             assert forbidden not in source, f"{name} 里出现了 {forbidden}"
+
+
+def test_every_reason_the_gate_can_return_is_in_the_closed_set():
+    """
+    review round 1 发现 8：原来只有一条把 ALL_BLOCK_REASONS 和字面量集合
+    对比的 pin 测试——它保证不了**门禁真正返回的原因**都在集合里。加一条
+    `blocked(REASON_NEW)` 而忘了往集合里补，U6 的 6.5 会把它静默地漏掉。
+
+    这里用 AST 把 gate.py 里所有 `blocked(<名字>)` 的实参名收出来，加上
+    外壳里那条 REASON_GATE_ERROR，逐个回查模块常量的取值是否在闭集合中。
+    """
+    tree = _tree(_SOURCE_FILES["gate.py"])
+
+    reason_names = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "blocked"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+        ):
+            reason_names.add(node.args[0].id)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.keyword)
+            and node.arg == "reason"
+            and isinstance(node.value, ast.Name)
+            and node.value.id.startswith("REASON_")
+        ):
+            # `reason=reason`（blocked() 内部那个形参）不是常量名，跳过；
+            # 外壳里的 `reason=REASON_GATE_ERROR` 才是要查的。
+            reason_names.add(node.value.id)
+
+    assert reason_names, "一个 blocked(<名字>) 都没扫到，这条守护是哑的"
+    for reason_name in sorted(reason_names):
+        assert reason_name.startswith("REASON_"), (
+            f"{reason_name} 不叫 REASON_*，本条守护按这个命名约定扫描，"
+            "换名字会让新原因从 U6 的统计口径里溜掉"
+        )
+
+    for reason_name in sorted(reason_names):
+        value = getattr(app.outbound.gate, reason_name)
+        assert value in app.outbound.gate.ALL_BLOCK_REASONS, (
+            f"{reason_name} = {value!r} 不在 ALL_BLOCK_REASONS 里，U6 的 6.5 会漏掉它"
+        )

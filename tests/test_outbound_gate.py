@@ -712,3 +712,127 @@ def test_absent_recipient_attribute_is_blocked_too():
     assert decision.allowed is False
     assert decision.reason == "收件对象缺失或为空"
     assert decision.absent_fields == ("recipient",)
+
+
+# ── review round 1 修复的回归钉子 ────────────────────────────────────────
+#
+# 全部来自 2026-08-28 的一轮 code review。⚠️ 八条发现里**没有一条是 fail-open**
+# ——每一条路径都仍然拦。它们伤的是**证据保真度与可观测性**：留痕是这道闸
+# 事后可解释的唯一材料，证据被抹掉或归错因，等于闸拦住了但说不清为什么拦。
+
+
+def test_unhashable_message_type_gets_the_clean_reason_not_an_internal_error():
+    """
+    review 发现 1：`x not in frozenset` 对不可哈希取值抛 TypeError，于是一个
+    没拍平的 list 类型会掉进"门禁判定内部异常"、**证据被整片抹成 None**。
+
+    这个形状不是假想：D-2 的收件人规则就是照着"没拍平的渠道对象"写的，
+    同一个调用方同样会把 message_type 传成 list。未登记就是未登记，
+    该给的原因和证据一个都不能少。
+    """
+    decision = compute_outbound_gate(
+        _valid_message(message_type=["rejection_letter"]), lambda: True
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "未登记的消息类型"
+    assert decision.evidence["message_type"] == "['rejection_letter']"
+
+
+class _ExplodingEq:
+    """比较时抛错——用来让异常发生在**判定阶段**（证据已采齐之后）。"""
+
+    def __eq__(self, other):
+        raise RuntimeError("severity 比较炸了")
+
+    def __hash__(self):
+        return 0
+
+    def __repr__(self):
+        return "<exploding severity>"
+
+
+def test_internal_error_after_collection_keeps_the_evidence_it_already_had():
+    """
+    review 发现 2：兜底外壳原来无条件把证据重建成全 None，哪怕采集阶段
+    早就成功了。U6 的 6.5「按 message_type 与拦截原因统计」于是完全 group
+    不了这批记录——最需要解释的一类拦截，反而是留痕最空的一类。
+    """
+    decision = compute_outbound_gate(_valid_message(severity=_ExplodingEq()), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "门禁判定内部异常"
+    assert decision.evidence["message_type"] == "rejection_letter"
+    assert decision.evidence["severity"] == "<exploding severity>"
+    assert decision.evidence["confirmed_by"] == "shao-peishen"
+    assert "severity 比较炸了" in decision.error
+
+
+def test_cached_switch_is_reported_as_such_even_on_a_draft_awaiting_approval():
+    """
+    review 发现 4：`REASON_SWITCH_NOT_CALLABLE` 原来排在最后一条，于是一个
+    把开关缓存成值的调用方（`is_candidate_outbound_enabled()` 带括号求值）
+    在整个 U5 观察期里都被报成"等待人工确认"——**这道守护恰恰在它该响的
+    时候是哑的**。
+
+    它是调用方的编程错误，不是消息的畸形，所以最优先报。
+    """
+    decision = compute_outbound_gate(_valid_message(confirmed_by=None), True)
+
+    assert decision.allowed is False
+    assert decision.reason == "外发总开关未以 callable 形式传入"
+    # 结构性误用也要留证据，不能因为提前返回就把消息字段丢了
+    assert decision.evidence["message_type"] == "rejection_letter"
+
+
+def test_switch_returning_none_and_a_cached_switch_are_told_apart():
+    """review 发现 5：两者原来在证据里都是 None，靠 reason 区分开。"""
+    returned_none = compute_outbound_gate(_valid_message(), lambda: None)
+    cached = compute_outbound_gate(_valid_message(), True)
+
+    assert returned_none.reason == "外发总开关关闭"
+    assert cached.reason == "外发总开关未以 callable 形式传入"
+
+
+def test_a_property_that_raises_attributeerror_is_not_reported_as_absent():
+    """
+    review 发现 6：`_read` 原来把 property 内部抛的 AttributeError 也当成
+    "这个属性不存在"，于是一个坏掉的 recipient getter 在留痕里被写成
+    "调用方忘了设收件人"——审计拿着这条记录会去查错方向。
+
+    属性**是存在的**，是它的 getter 自己炸了：按判定内部异常处理。
+    """
+
+    class _BrokenGetter:
+        message_type = "rejection_letter"
+        requires_confirmation = False
+        severity = "low"
+        body = _LABELLED_BODY
+        confirmed_by = "shao-peishen"
+
+        @property
+        def recipient(self):
+            raise AttributeError("下游 lookup 挂了")
+
+    decision = compute_outbound_gate(_BrokenGetter(), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "门禁判定内部异常"
+    assert "recipient" not in decision.absent_fields
+    assert "下游 lookup 挂了" in decision.error
+
+
+def test_a_genuinely_absent_attribute_is_still_reported_as_absent():
+    """发现 6 的阳性对照：真的没设这个属性时，仍然要走 absent 那条路。"""
+    fields = {
+        "message_type": "rejection_letter",
+        "requires_confirmation": False,
+        "severity": "low",
+        "body": _LABELLED_BODY,
+        "confirmed_by": "shao-peishen",
+    }
+
+    decision = compute_outbound_gate(_Message(**fields), lambda: True)
+
+    assert decision.reason == "收件对象缺失或为空"
+    assert decision.absent_fields == ("recipient",)
