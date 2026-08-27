@@ -409,11 +409,41 @@ from app.audit.criteria import (
 
 **预期会红三条**，位置已实测确定——U2 的 fixture 用的是**具体技能名**而不是评分维度：
 
+⚠️ **2026-08-28 执行时订正：下面这张表原本只有 3 行，漏了一多半。** 原表是按
+`grep 'criterion_key="'` 得到的，而 U2 有一半构造点用的是**位置参数**
+（`CriterionScore("autosar", 3.0, ...)`），那种形式 grep 不到。漏网的那条在
+`test_audit_recorder.py` 的模块级 `_event()` 里，一条就把该文件 49 条测试全部带红。
+**取全量的正确姿势是 `grep -rn "CriterionScore(" tests/ app/`**，不是按关键字形式 grep。
+
+**构造点（8 处）**：
+
 | 位置 | 现值 | 改成 |
 |---|---|---|
 | `tests/test_audit_sinks_sqlite.py:46` | `criterion_key="autosar"` | `criterion_key="skill_match"` |
 | `tests/test_audit_sinks_sqlite.py:47` | `criterion_key="can_bus"` | `criterion_key="domain_knowledge"` |
+| `tests/test_audit_sinks_sqlite.py:168` | `CriterionScore("autosar", ...)` | `CriterionScore("skill_match", ...)` |
+| `tests/test_audit_sinks_sqlite.py:181` | `CriterionScore("autosar", ...)` | `CriterionScore("skill_match", ...)` |
 | `tests/test_audit_events.py:66` | `criterion_key="autosar"` | `criterion_key="skill_match"` |
+| `tests/test_audit_events.py:139` | `CriterionScore("autosar", ...)` | `CriterionScore("skill_match", ...)` |
+| `tests/test_audit_recorder.py:59` | `CriterionScore("autosar", ...)`（模块级 `_event()`，**49 条测试的共同依赖**） | `CriterionScore("skill_match", ...)` |
+| `tests/test_audit_recorder.py:250` | `CriterionScore("autosar", ...)` | `CriterionScore("skill_match", ...)` |
+
+**依赖断言（3 处，只改构造点不改这里照样红）**：
+
+| 位置 | 要改什么 |
+|---|---|
+| `tests/test_audit_sinks_sqlite.py:115-118` | 确定性 score id 断言。⚠️ **顺序会翻转**——SQL 是 `ORDER BY criterion_key`，旧值 `autosar < can_bus`，新值 `domain_knowledge < skill_match`，两行要对调；紧随其后的 `rows[0][2]` 证据回指也从 `resume-1#120-180` 变成 `resume-1#300-360` |
+| `tests/test_audit_sinks_sqlite.py:219` | `{"autosar", "can_bus"}` → `{"skill_match", "domain_knowledge"}` |
+| `tests/test_audit_events.py:133` | `to_dict()` 载荷里的 `"criterion_key": "autosar"` |
+
+**⛔ 不要改的两处**：`test_audit_sinks_sqlite.py:41` 与 `test_audit_events.py:61` 的
+`rubric_snapshot = {"criteria": [{"key": "autosar", ...}]}` **原样保留**——`autosar`
+作为 rubric 条目落在 `rubric_snapshot` 里，正是口径 A 想要的形状，改掉反而把这个
+对照抹掉了。
+
+`tests/test_db_audit_schema.py:215/223` 走裸 SQL 插 `'autosar'`，不经过
+`CriterionScore`，**不会红**；本计划仍把它一并改成 `'skill_match'`，理由是留一个
+口径不一致的样例在测试里，会被后来者照抄。
 
 ⛔ **不要把 `autosar` / `can_bus` 加进白名单来让测试变绿。** 它们是某个嵌入式岗位
 rubric 里的具体条目，不是评分维度——把它们加进去，白名单就从"七个维度的闸门"
@@ -462,29 +492,46 @@ def test_audit_module_imports_no_config_or_graph(path):
 - [ ] **Step 9: 确认守护真的多覆盖了一个文件**
 
 ```bash
-./venv/bin/python -m pytest tests/test_audit_recorder.py -q -k "imports_no_config_or_graph or scan_is_not_silently_empty" -v 2>&1 | grep -c "PASSED"
+./venv/bin/python -m pytest tests/test_audit_recorder.py -k "imports_no_config_or_graph or scan_is_not_silently_empty" -v 2>&1 | grep -c "PASSED"
 ```
 
-预期：**≥ 6**（`__init__`/`criteria`/`events`/`recorder`/`sinks` 五个参数 + 非空扫描 1 条）。改之前只有 3 个参数，这个数字变大就是覆盖面真的变宽的证据。
+⚠️ **⛔ 不要同时给 `-q` 和 `-v`**（本计划初稿就写错了）：`-q` 会把 `-v` 的逐条
+`PASSED` 压回点号，`grep -c PASSED` 恒返回 0，看起来像守护根本没跑。
+
+预期：**≥ 6**（2026-08-28 实跑正好 6：`__init__`/`criteria`/`events`/`recorder`/`sinks` 五个参数 + 非空扫描 1 条）。改之前只有 3 个参数，这个数字变大就是覆盖面真的变宽的证据。
 
 - [ ] **Step 10: 变异验证——证明白名单真的咬得住**
 
+⛔ **还原一律走备份文件，不要用 `git checkout --`。** 2026-08-28 实测：此刻
+`criteria.py` 还是**未跟踪**文件（本 Task 的 Step 11 才提交），`git checkout --`
+会报 `pathspec did not match any file(s) known to git` 并**静默不还原**——变异残留
+在工作区里，一路提交进去就是把 `facial_expression` 写进了合规白名单。
+
 ```bash
 ./venv/bin/python - <<'PY'
-import pathlib, re
+import pathlib, shutil
 p = pathlib.Path("app/audit/criteria.py")
+shutil.copy(p, "/tmp/criteria.orig.py")          # 备份，⛔ 不依赖 git
 original = p.read_text(encoding="utf-8")
-p.write_text(original.replace(
+mutated = original.replace(
     'CRITERION_KEY_WHITELIST = frozenset(\n    {\n        "skill_match",',
-    'CRITERION_KEY_WHITELIST = frozenset(\n    {\n        "facial_expression",\n        "skill_match",'), encoding="utf-8")
+    'CRITERION_KEY_WHITELIST = frozenset(\n    {\n        "facial_expression",\n        "skill_match",')
+assert mutated != original, "变异没生效——替换目标与文件对不上，⛔ 停下来查"
+p.write_text(mutated, encoding="utf-8")
 print("mutated: facial_expression 已被加进白名单")
 PY
-./venv/bin/python -m pytest tests/test_audit_criteria.py -q 2>&1 | tail -3
-git checkout -- app/audit/criteria.py
+./venv/bin/python -m pytest tests/test_audit_criteria.py 2>&1 | grep -E "^FAILED|passed|failed"
+cp /tmp/criteria.orig.py app/audit/criteria.py && rm /tmp/criteria.orig.py
 ./venv/bin/python -m pytest tests/test_audit_criteria.py -q 2>&1 | tail -2
 ```
 
-预期：变异后 **至少 2 条失败**（`test_biometric_dimensions_are_rejected[facial_expression]` 与 `test_whitelist_itself_contains_no_red_line_dimension[facial_expression]`）；`git checkout` 还原后**全绿**。
+预期（2026-08-28 实跑）：变异后 **3 failed, 17 passed**——`test_biometric_dimensions_are_rejected[facial_expression]`、`test_whitelist_itself_contains_no_red_line_dimension[facial_expression]`、`test_rejection_happens_at_construction_not_at_write_time`；还原后 **20 passed**。
+
+**还原后必须亲眼确认白名单真的回去了**（`git checkout` 那次的教训就是"以为还原了"）：
+
+```bash
+./venv/bin/python -c "from app.audit.criteria import CRITERION_KEY_WHITELIST as w; assert 'facial_expression' not in w, '变异残留！'; print(sorted(w))"
+```
 ⚠️ 若变异后**全绿**，说明白名单没有真的参与判定，⛔ 停下来查——这正是"自我实现的测试"的形状。
 
 - [ ] **Step 11: 提交**
@@ -1342,7 +1389,7 @@ from app.audit.hook import ALLOWED_CONTEXT_KEYS, RecorderAuditHook, UnknownAudit
 - [ ] **Step 6: 确认 U2 的两条 AST 守护仍绿（新文件已被纳入扫描）**
 
 ```bash
-./venv/bin/python -m pytest tests/test_audit_recorder.py -q -k "no_effect_function or imports_no_config_or_graph or scan_is_not_silently_empty" -v 2>&1 | tail -12
+./venv/bin/python -m pytest tests/test_audit_recorder.py -k "no_effect_function or imports_no_config_or_graph or scan_is_not_silently_empty" -v 2>&1 | tail -12
 ```
 
 预期：全部 PASSED，且 `imports_no_config_or_graph` 的参数里**出现 `hook`**（Task 1 的目录扫描生效的直接证据）。若 `hook` 没出现，说明 Step 8 的扫描改动没生效，⛔ 回去查。
@@ -1351,8 +1398,9 @@ from app.audit.hook import ALLOWED_CONTEXT_KEYS, RecorderAuditHook, UnknownAudit
 
 ```bash
 ./venv/bin/python - <<'PY'
-import pathlib
+import pathlib, shutil
 p = pathlib.Path("app/audit/hook.py")
+shutil.copy(p, "/tmp/hook.orig.py")   # ⛔ 不要用 git checkout 还原：此刻 hook.py 还未提交
 src = p.read_text(encoding="utf-8")
 # 把镜像失败改成"也抛"——即把两个方向写成对称
 p.write_text(src.replace("""        except Exception:
@@ -1364,8 +1412,8 @@ p.write_text(src.replace("""        except Exception:
                 "留痕镜像 append 失败"""), encoding="utf-8")
 print("mutated: 镜像失败改成抛")
 PY
-./venv/bin/python -m pytest tests/test_audit_hook.py -q 2>&1 | tail -3
-git checkout -- app/audit/hook.py
+./venv/bin/python -m pytest tests/test_audit_hook.py 2>&1 | grep -E "^FAILED|passed|failed"
+cp /tmp/hook.orig.py app/audit/hook.py && rm /tmp/hook.orig.py
 ./venv/bin/python -m pytest tests/test_audit_hook.py -q 2>&1 | tail -2
 ```
 
@@ -1918,8 +1966,9 @@ def test_the_mirror_chain_verifies_after_a_real_call(wired):
 
 ```bash
 ./venv/bin/python - <<'PY'
-import pathlib
+import pathlib, shutil
 p = pathlib.Path("app/audit/hook.py")
+shutil.copy(p, "/tmp/hook.mut.py")   # 备份还原，⛔ 不用 git checkout：还原手段与文件是否已提交无关才可靠
 src = p.read_text(encoding="utf-8")
 p.write_text(src.replace(
     "            configured_model=model,\n            response_model=response_model,",
@@ -1927,7 +1976,7 @@ p.write_text(src.replace(
 print("mutated: configured_model 被 response_model 覆盖")
 PY
 ./venv/bin/python -m pytest tests/test_audit_end_to_end.py tests/test_audit_hook.py -q 2>&1 | tail -3
-git checkout -- app/audit/hook.py
+cp /tmp/hook.mut.py app/audit/hook.py && rm /tmp/hook.mut.py
 ./venv/bin/python -m pytest tests/test_audit_end_to_end.py tests/test_audit_hook.py -q 2>&1 | tail -2
 ```
 
