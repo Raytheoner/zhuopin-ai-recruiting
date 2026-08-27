@@ -358,6 +358,36 @@ def test_backfill_appends_at_the_tail_not_in_place(conn, chain_path):
     assert records[-1]["error"] == "镜像 append 时磁盘满"
 
 
+def test_backfill_of_a_mid_sequence_gap_still_lands_at_the_tail(conn, chain_path):
+    """
+    review finding（fix round 1）：run-a / run-b / run-c 依时序发生，run-b 的镜像
+    缺行，但 run-c 已经镜像成功——"真正的链尾"与"缺行的逻辑原位"这时才第一次
+    分道扬镳。只在链尾追加 append、镜像 run-a 与 run-c 之间不会分毫改动是这条
+    测试要证明的东西；插回原位（哪怕字节级正确地重算后续 prev_hash）会把
+    backfill 事件夹在 run-a 与 run-c 之间，而不是排在 run-c 之后。
+    """
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    recorder.record(conn, _event(id="run-a"))
+    recorder.record(conn, _event(id="run-b"))
+    recorder.record(conn, _event(id="run-c"))
+    conn.commit()
+    recorder.mirror(_event(id="run-a"))
+    recorder.mirror(_event(id="run-c"))  # run-b 的镜像仍然缺行
+
+    assert recorder.backfill("run-b", reason="镜像缺行") is True
+
+    records = JsonlChainSink(chain_path).read_all()
+    sequence = [
+        record["backfill_of"] if record["event_type"] == "backfill" else record["id"]
+        for record in records
+    ]
+    assert sequence == ["run-a", "run-c", "run-b"]
+    assert records[-1]["event_type"] == "backfill"
+    assert records[-1]["backfill_of"] == "run-b"
+
+    assert recorder.verify_integrity().ok is True
+
+
 def test_backfill_keeps_the_chain_verifiable(conn, chain_path):
     recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
     recorder.mirror(_event(id="run-a"))
