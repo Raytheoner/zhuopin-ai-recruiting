@@ -13,6 +13,10 @@
   .turn { margin-bottom: 12px; white-space: pre-wrap; }
   .qblock { margin-bottom: 10px; }
   .qblock + .qblock { padding-top: 10px; border-top: 1px dashed #e9ecef; }
+  /* 重问的视觉区分（tasks 5.4）：左边框 + 徽标。光靠文本前缀不够——它和
+     问题正文同字号同颜色，混在两三条新问题里一眼看不出来。 */
+  .qblock.reask { border-left: 3px solid #fd7e14; padding-left: 10px; }
+  .reask-badge { display: inline-block; background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; border-radius: 4px; padding: 1px 6px; margin-right: 6px; font-size: 12px; vertical-align: middle; }
   /* 标识文案的样式刻意做得可读而不是"小字免责声明"：《AI 生成合成内容标识
      办法》要的是让人看见，不是让人看不见。 */
   .ai-hint { font-size: 13px; color: #6c757d; margin: 6px 0 6px; }
@@ -103,10 +107,20 @@
       block.dataset.qtext = questionText(q);
 
       const line = document.createElement("div");
-      // 重问前缀与后端 render_questions_text() 保持逐字一致：用户看到的问题文本
-      // 必须与写进 conversation history 的那一份相同。判定 is_reask 属第 5 章
-      // （tasks 5.4），这里只读不写，也不做更强的视觉区分。
-      line.textContent = (q && q.is_reask ? REASK_PREFIX : "") + questionText(q);
+      // 重问的视觉区分（tasks 5.4）：Web 通道用「徽标 + 左边框」，纯文本通道
+      // （conversation history、下面那条 questions_text 降级气泡）仍用后端
+      // render_questions_text() 拼的内联前缀。两个通道形态不同，**用词是同一
+      // 份**——徽标文案逐字取自 REASK_PREFIX，后端改了这个常量而这里没跟，
+      // tests/test_static_frontend.py 的强断言会失败。
+      // ⛔ 徽标与内联前缀不得并存：并存会让用户看到两遍重问提示。
+      if (q && q.is_reask) {
+        block.classList.add("reask");
+        const badge = document.createElement("span");
+        badge.className = "reask-badge";
+        badge.textContent = REASK_PREFIX;
+        line.appendChild(badge);
+      }
+      line.appendChild(document.createTextNode(questionText(q)));
       block.appendChild(line);
 
       const options = questionOptions(q);

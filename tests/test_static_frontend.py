@@ -144,17 +144,20 @@ def test_reask_prefix_stays_in_sync_with_backend():
 
     # 光有常量声明不够：常量声明可以在使用点被删掉之后仍然留在文件里，
     # 上面那条断言照样通过，却已经不再对用户可见（is_reask 不再触发任何
-    # 前缀显示）。这条断言锁住的是使用点本身，不是常量声明。
-    # 交付单元 E 会为了「重问问题的视觉区分」去改这一行——改颜色/加图标是
-    # 允许的，把 REASK_PREFIX 从条件表达式里删掉、或不再拼进 textContent
-    # 则会让这条断言失败。
-    assert (
-        'line.textContent = (q && q.is_reask ? REASK_PREFIX : "") + questionText(q);'
-        in INDEX_HTML
-    ), (
-        "REASK_PREFIX 的使用点（is_reask 触发前缀拼接的那一行）不见了——"
+    # 重问提示）。这条断言锁住的是使用点本身，不是常量声明。
+    #
+    # 2026-08-26（交付单元 E，tasks 5.4）：使用点从"拼进 textContent 的内联
+    # 前缀"改成"徽标节点的文案"。改的是形态不是用词——徽标文案仍然逐字取自
+    # 同一个常量，上面那条防漂移断言一个字没动。⛔ 内联前缀与徽标不得并存，
+    # 否则用户会看到两遍。
+    assert "badge.textContent = REASK_PREFIX;" in INDEX_HTML, (
+        "REASK_PREFIX 的使用点（重问徽标的文案）不见了——"
         "常量还在文件里不代表还在生效，用户可能已经看不到重问提示了。"
     )
+    assert (
+        'line.textContent = (q && q.is_reask ? REASK_PREFIX : "") + questionText(q);'
+        not in INDEX_HTML
+    ), "内联前缀与徽标同时存在，用户会看到两遍重问提示。"
 
 
 def test_reply_api_contract_has_no_selected_options():
@@ -313,3 +316,82 @@ def test_gap_warning_never_falls_back_to_english_identifiers():
         "renderGapWarning 里把英文字段标识 fields 当成可渲染值用了——"
         f"命中 {len(illegal)} 处，只允许 !fields / fields.length"
     )
+
+
+def test_reask_question_is_visually_distinguishable_from_a_new_question():
+    """
+    spec「重问必须显式标注」：重问 SHALL 与新问题在界面上可区分。
+
+    光有文本前缀不够——它和问题正文同字号同颜色，混在两三条新问题里一眼看
+    不出来，那正是 tasks 5.4 说的"混编成看起来是新问题的表述"。这里锁住的是
+    **结构性**的区分：重问块多一个 class、多一个徽标节点。
+    """
+    assert 'block.classList.add("reask");' in INDEX_HTML
+    assert 'badge.className = "reask-badge";' in INDEX_HTML
+    # 样式必须真的存在，否则 class 加了也看不出区别
+    assert ".qblock.reask" in INDEX_HTML
+    assert ".reask-badge" in INDEX_HTML
+
+
+def test_reask_badge_is_not_labelled_as_ai_generated_content():
+    """
+    重问徽标是系统按已问台账算出来的确定性事实，不是 AI 生成内容，
+    ⛔ 不加"AI 建议"标识——那会把一条事实伪装成建议。AI_OPTIONS_HINT
+    只属于 options（单元 C），两者不得串台。
+    """
+    badge_block = INDEX_HTML.split('badge.className = "reask-badge";', 1)[1].split(
+        "block.appendChild", 1
+    )[0]
+
+    assert "AI_OPTIONS_HINT" not in badge_block
+
+
+def test_options_disclosure_still_renders_on_a_reask_question():
+    """重问问题若带 options，那组 options 的 AI 标识必须照常渲染——
+    不能因为这个问题被标成重问就把标识吞掉（合规红线）。
+    锁的是"标识分支与重问分支互不嵌套"这个结构事实。"""
+    options_branch = INDEX_HTML.split("if (options.length > 0) {", 1)[1]
+
+    assert "hint.textContent = AI_OPTIONS_HINT;" in options_branch
+    assert "q.is_reask" not in options_branch.split("block.appendChild(group);", 1)[0]
+
+
+def test_reask_prefix_is_not_duplicated_inline_alongside_the_badge():
+    """
+    ⛔ 决定 5 最重要的一条："不得并存"——badge 与内联前缀不能同时出现，
+    否则用户看到两遍重问提示。
+
+    `test_reask_prefix_stays_in_sync_with_backend` 只挡"改回逐字那一整行
+    旧写法"；把前缀换个等价写法塞回问题正文（比如
+    `document.createTextNode((q && q.is_reask ? REASK_PREFIX : "") +
+    questionText(q))`）不会命中那条否定断言，却制造了同样的双重展示缺陷。
+    这里直接数 renderQuestionBlock 函数体内 REASK_PREFIX 的代码引用次数
+    （去掉行内注释），只允许一处：badge.textContent 的赋值。
+    """
+    start = INDEX_HTML.index("function renderQuestionBlock(")
+    end = INDEX_HTML.index("\n    function ", start + 1)
+    body = INDEX_HTML[start:end]
+    code = "\n".join(line.split("//", 1)[0] for line in body.splitlines())
+
+    assert code.count("REASK_PREFIX") == 1, (
+        "renderQuestionBlock 里 REASK_PREFIX 的代码引用应当只有一处"
+        "（badge.textContent 赋值）——出现第二处说明前缀被又塞回了问题正文"
+        "（哪怕换了个等价写法），用户会看到两遍重问提示。"
+    )
+
+
+def test_reask_badge_is_gated_by_is_reask_flag():
+    """
+    上面那条可区分性测试只锁"徽标节点/class/样式存在"，锁不住"只在
+    is_reask 为真时才生效"——把守卫条件整个删掉（比如改成 `if (true)`）
+    不会动任何字符串字面量：class 名、徽标文案、CSS 全部原样留在文件里，
+    但徽标会渲染在每一条问题上，"重问与新问题可区分"这条要求名存实亡。
+    这里直接锁守卫条件本身，以及 class/badge 两个动作确实在它的分支体内。
+    """
+    parts = INDEX_HTML.split("if (q && q.is_reask) {", 1)
+    assert len(parts) == 2, "重问徽标的守卫条件 `if (q && q.is_reask)` 不见了"
+
+    guarded_body = parts[1].split("line.appendChild(document.createTextNode", 1)[0]
+    assert 'block.classList.add("reask");' in guarded_body
+    assert 'badge.className = "reask-badge";' in guarded_body
+    assert "badge.textContent = REASK_PREFIX;" in guarded_body
