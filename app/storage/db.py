@@ -130,6 +130,43 @@ CREATE TABLE IF NOT EXISTS criterion_score (
 
 CREATE INDEX IF NOT EXISTS idx_criterion_score_run
     ON criterion_score (analysis_run_id);
+
+CREATE TABLE IF NOT EXISTS pending_approval (
+    -- 被门禁拦下、等人工放行的候选人外发草稿。**不复用 outbox**：outbox 的
+    -- 语义是"已决定要投递的消息"，本表的语义相反（"尚未获批、可能永远不发"）。
+    -- 合表就要求每个读 outbox 的地方都加状态过滤，漏一处 = 未审批的拒信被发
+    -- 出去（design D5）。
+    --
+    -- message_type / recipient 可空是刻意的：草稿被拦下的常见原因**正是**这
+    -- 些字段缺失或未知（fail-closed）。把它们设成 NOT NULL，会让"拦下一条畸
+    -- 形消息"从入队变成 IntegrityError——异常穿透到调用方，一个 except 就是
+    -- fail-open。可空性在这里是 fail-closed 的一部分。
+    --
+    -- confirmed_by 现阶段不可信：鉴权是空壳（AuthContext.user_id 恒为 None），
+    -- 值只能由调用方传入。SSO 落地后同一字段变可信，表结构不改（design D7）。
+    id TEXT PRIMARY KEY NOT NULL,
+    thread_id TEXT NOT NULL,
+    message_type TEXT,
+    recipient TEXT,
+    payload_json TEXT NOT NULL,
+    blocked_reason TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'abandoned')),
+    confirmed_by TEXT,
+    enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+);
+
+-- 重复入队的第二道防线（第一道是 U5 的 idempotent_effect）。按
+-- (thread_id, content_hash) 而不是单列 content_hash：U5 的幂等键是
+-- {thread_id}:effect_enqueue_pending_approval:{content_hash}，两道防线的
+-- 粒度必须一致；单列唯一会让两个不同 thread 的同内容草稿撞上 IntegrityError。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approval_content
+    ON pending_approval (thread_id, content_hash);
+
+CREATE INDEX IF NOT EXISTS idx_pending_approval_status
+    ON pending_approval (status);
 """
 
 

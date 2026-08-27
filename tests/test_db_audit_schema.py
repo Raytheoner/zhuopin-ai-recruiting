@@ -228,3 +228,129 @@ def test_criterion_score_has_run_index(conn):
         row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
     }
     assert "idx_criterion_score_run" in indexes
+
+
+# ── pending_approval ────────────────────────────────────────────────────
+
+
+def _enqueue(conn: sqlite3.Connection, row_id: str, content_hash: str, **overrides) -> None:
+    row = {
+        "id": row_id,
+        "thread_id": "job-1",
+        "message_type": "rejection_letter",
+        "recipient": "cand-7",
+        "payload_json": '{"body": "..."}',
+        "blocked_reason": "等待人工确认",
+        "content_hash": content_hash,
+    }
+    row.update(overrides)
+    conn.execute(
+        "INSERT INTO pending_approval (id, thread_id, message_type, recipient, "
+        "payload_json, blocked_reason, content_hash) "
+        "VALUES (:id, :thread_id, :message_type, :recipient, :payload_json, "
+        ":blocked_reason, :content_hash)",
+        row,
+    )
+    conn.commit()
+
+
+def test_pending_approval_defaults_to_pending(conn):
+    _enqueue(conn, "pa-1", "hash-1")
+
+    row = conn.execute(
+        "SELECT status, confirmed_by, resolved_at, enqueued_at FROM pending_approval WHERE id='pa-1'"
+    ).fetchone()
+    assert row[0] == "pending"
+    assert row[1] is None
+    assert row[2] is None
+    assert row[3] is not None
+
+
+@pytest.mark.parametrize("status", ["pending", "approved", "abandoned"])
+def test_pending_approval_accepts_the_three_legal_states(conn, status):
+    _enqueue(conn, f"pa-{status}", f"hash-{status}")
+    conn.execute("UPDATE pending_approval SET status=? WHERE id=?", (status, f"pa-{status}"))
+    conn.commit()
+
+    assert conn.execute(
+        "SELECT status FROM pending_approval WHERE id=?", (f"pa-{status}",)
+    ).fetchone()[0] == status
+
+
+@pytest.mark.parametrize("status", ["sent", "PENDING", "", "deleted"])
+def test_pending_approval_rejects_illegal_status(conn, status):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO pending_approval (id, thread_id, message_type, recipient, "
+            "payload_json, blocked_reason, content_hash, status) "
+            "VALUES ('pa-bad', 'job-1', 'rejection_letter', 'cand-7', '{}', 'x', 'h-bad', ?)",
+            (status,),
+        )
+        conn.commit()
+    conn.rollback()
+
+
+def test_pending_approval_rejects_duplicate_content_in_same_thread(conn):
+    """重复入队的第二道防线（第一道是 U5 的 idempotent_effect）。"""
+    _enqueue(conn, "pa-a", "same-hash")
+    with pytest.raises(sqlite3.IntegrityError):
+        _enqueue(conn, "pa-b", "same-hash")
+    conn.rollback()
+
+
+def test_pending_approval_allows_same_content_in_different_threads(conn):
+    """
+    唯一索引按 (thread_id, content_hash)，不是单列 content_hash——粒度与 U5 的
+    幂等键 {thread_id}:effect_enqueue_pending_approval:{content_hash} 一致。
+    单列唯一会让两个不同 thread 的同内容草稿撞 IntegrityError，把"拦下来排队"
+    变成异常。
+    """
+    _enqueue(conn, "pa-t1", "same-hash", thread_id="job-1")
+    _enqueue(conn, "pa-t2", "same-hash", thread_id="job-2")
+
+    assert conn.execute(
+        "SELECT count(*) FROM pending_approval WHERE content_hash='same-hash'"
+    ).fetchone()[0] == 2
+
+
+def test_pending_approval_accepts_malformed_draft_with_unknown_type_and_recipient(conn):
+    """
+    fail-closed 的一部分：草稿被拦下的常见原因正是这些字段缺失。message_type
+    或 recipient 设成 NOT NULL，就会把"拦下一条畸形消息"变成 IntegrityError，
+    异常穿透到调用方 → 一个 except 就是 fail-open。
+    """
+    _enqueue(conn, "pa-weird", "hash-weird", message_type=None, recipient=None)
+
+    row = conn.execute(
+        "SELECT message_type, recipient, status, blocked_reason FROM pending_approval WHERE id='pa-weird'"
+    ).fetchone()
+    assert row[0] is None
+    assert row[1] is None
+    assert row[2] == "pending"
+    assert row[3] == "等待人工确认"
+
+
+def test_pending_approval_notnull_set(conn):
+    assert _notnull_columns(conn, "pending_approval") == {
+        "id",
+        "thread_id",
+        "payload_json",
+        "blocked_reason",
+        "content_hash",
+        "status",
+        "enqueued_at",
+    }
+
+
+def test_pending_approval_has_status_index(conn):
+    indexes = {
+        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    assert "idx_pending_approval_status" in indexes
+
+
+def test_pending_approval_is_not_outbox(conn):
+    """design D5：两张表各自独立，读错表必须是 no such table/column 级的显性错误。"""
+    outbox_columns = {row[1] for row in conn.execute("PRAGMA table_info(outbox)")}
+    assert "status" not in outbox_columns
+    assert "confirmed_by" not in outbox_columns
