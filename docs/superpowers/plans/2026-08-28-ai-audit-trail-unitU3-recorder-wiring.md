@@ -6,7 +6,7 @@
 
 **Architecture:** 网关继续对业务无知：`extract_structured*()` 新增可选 `audit_context`，**原样透传给钩子、不解释内容**（design D6）。适配层 `RecorderAuditHook` 是唯一知道招聘语义的地方，它把网关的扁平参数折成 `DecisionEvent` 再交给 `AuditRecorder`。**适配器持有一条专属的 SQLite 连接并自己提交**——理由见 §「一处必须自己定的架构决定」。白名单落成 `app/audit/criteria.py` 一处定义，强制点在 `CriterionScore.__post_init__`，任何写入路径都绕不过。
 
-> ⚠️ **开工前先看「需 Shao Peishen 拍板」第 3 条**：`criterion_key` 的口径未定前 **Task 1 不开工**（Task 2–5 不受影响，可先做）。
+> ✅ **`criterion_key` 口径已于 2026-08-28 拍板取 A（评分维度）**，五个 Task 全部无阻塞可开工。依据与被否决的两个口径见文末「口径决定」。
 
 **Tech Stack:** Python 3.14.6（`./venv`）· 标准库 `sqlite3` / `uuid` / `logging` / `ast` · pytest 8.3.4 · **不引入任何新依赖**（`requirements.txt` / `pyproject.toml` diff 必须为空）
 
@@ -418,8 +418,8 @@ rubric 里的具体条目，不是评分维度——把它们加进去，白名�
 退化成"所有岗位所有技能的登记处"，一年后没人敢再拒绝任何 key。具体技能落在
 `rubric_snapshot` 里（那一列本来就是干这个的），维度落在 `criterion_key`。
 
-⚠️ **这条改动依赖下面「需 Shao Peishen 拍板」第 3 条的结论。** 若他选了口径 B
-（`criterion_key` 承载具体条目），本 Task 的白名单形态要整个换掉，⛔ 不要先动手。
+✅ **口径已拍板（2026-08-28，取 A：`criterion_key` = 评分维度）**，本 Task 的白名单
+形态就是最终形态，照做即可。见文末「口径决定」。
 
 - [ ] **Step 8: 修好 import 守护对新文件的盲区**
 
@@ -2039,7 +2039,7 @@ git commit -m "test(audit): 留痕接线端到端验收，TD-1 标注触发条�
 1. **审计走专属连接、业务事务回滚时留痕仍在**（本计划 §「一处必须自己定的架构决定」）。三个方案的取舍已列全，(A) 是唯一不越出 U3 文件边界且不会静默丢留痕的选项，但它确实改变了「留痕与业务写同生共死」这个直觉。
 2. **TD-1 删列另开变更包的时机**：U3 一合并，`job_profile.llm_latency_ms` 与 `analysis_run.latency_ms` 就开始并存。两套数据并存的时间越长，"该信哪一份"的成本越高。
 
-3. **⭐ `criterion_key` 到底是"评分维度"还是"rubric 里的具体条目"——这条决定 Task 1 的白名单能不能成立。**
+3. ~~`criterion_key` 的口径~~ **✅ 2026-08-28 已拍板取 A，无阻塞。** 记录留在下面，因为 M2 的评分器要按这个结论写。
 
    **发现经过**：写 Task 1 时实测仓库里现有的三处 `criterion_key` 取值，全是**具体技能名**——`autosar`（两处）、`can_bus`（一处），位置见 Task 1 Step 7 的表。而 spec 与 design 用的词是"**维度**"：
 
@@ -2054,6 +2054,6 @@ git commit -m "test(audit): 留痕接线端到端验收，TD-1 标注触发条�
    | **B** rubric 具体条目 | `autosar` / `can_bus` / 每个岗位各不相同 | ❌ 封闭白名单不可行——每开一个岗位就要改代码 | 只能退回黑名单或正则，而黑名单对"没想到的新维度"默认放行，**正是红线要防的方向** |
    | **C** 两级 `维度:条目` | `skill_match:autosar` | ✅ 维度侧仍 fail-closed，条目侧自由 | 引入一个需要全仓库遵守的字符串格式；U6 的断言与将来的检索都要按它切分 |
 
-   **我的倾向是 A**，依据是 design Risks 那句"加维度是一行改动 + 一次 review"——只有维度数量是个位数时这句话才成立，B 会让它变成"每个岗位一次 PR"。**但 A 意味着 M2 的评分器必须把具体技能写进 `rubric_snapshot` 而不是 `criterion_key`**，这是个会影响 M2 数据模型的决定，不是我能替他定的。
+   **✅ 2026-08-28 Shao Peishen 拍板：取 A。** 依据是 design Risks 那句"加维度是一行改动 + 一次 review"——只有维度数量是个位数时这句话才成立，B 会让它变成"每个岗位一次 PR"，C 则要全仓库遵守一个字符串格式。
 
-   **⚠️ 在他拍板前，Task 1 不要动手**（Task 2–5 不受影响，可以先做：它们都不碰白名单）。
+   **这条结论对 M2 有约束，必须往下传**：评分器 MUST 把**具体技能/rubric 条目写进 `rubric_snapshot`**，`criterion_key` 只放七个维度之一。写反了会在 `CriterionScore` 构造期当场抛 `ForbiddenCriterionKey`——这是刻意的，不是 bug。
