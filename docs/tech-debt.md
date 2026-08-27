@@ -9,12 +9,36 @@
 **欠的是什么**：`job_profile.turn_started_at` 与 `job_profile.llm_latency_ms`
 （2026-08-19，`m1-intake-quality-fixes` 第 1 章加入）。
 
-**触发条件**：`ai-audit-trail-and-outbound-gate` 的 `analysis_run` 表落地即删
-——该变更的 tasks 1.1 已包含 `latency_ms` 与 `created_at`，届时这两列成为冗余。
+**触发条件（2026-08-28 订正，⚠️ 旧版本写错了）**：**`analysis_run` 里出现带
+`job_id` 的行**——也就是 `audit_context` 真正接到 intake 路径之后。
 
-**怎么还**：删两列 + 删 `effect_persist_draft` 里对它们的写入 + 把统计口径
+> **旧版本写的是「`analysis_run` 表落地即删」，这条已于 2026-08-27（U1）满足，
+> 但按它动手会丢数据。** 实测三处不成立，逐条：
+>
+> 1. **`turn_started_at` 在 `analysis_run` 里没有任何对应列。** 它是「用户开始等」
+>    的时刻，在取数之前就打了（`app/web/server.py:96-100` 的注释逐字：「节点里打
+>    会漏掉下面几次取数的时间」）；`analysis_run.created_at` 是留痕**写入**时刻，
+>    在模型返回**之后**。两者不是同一个东西，替换会让"这一轮用户等了多久"从
+>    可算变成不可算。
+> 2. **两个 `latency_ms` 口径不同。** `job_profile.llm_latency_ms` 是**本轮累计
+>    含重试**，`analysis_run.latency_ms` 是**单次尝试**——`app/llm/gateway.py:218-220`
+>    的注释就写着「两个口径互不污染」。要替换必须先 `SUM(latency_ms) GROUP BY`
+>    那一轮。
+> 3. **而那个 GROUP BY 的键现在不存在。** U3（留痕接线）**不把 `audit_context`
+>    接到 intake 路径**（要改 `app/graph/nodes.py` 与 `app/agents/intake_agent.py`，
+>    超出该单元的文件边界），所以 U3 合并后 intake 侧写进 `analysis_run` 的行
+>    `job_id` / `application_id` 全为 NULL，按岗位聚合无从做起。
+
+**怎么还**：① 先有一个单元把 `audit_context`（至少含 `thread_id` / `job_id` /
+`node`）接到 intake 的 LLM 调用上；② 确认 `SUM(analysis_run.latency_ms)` 能复算出
+与 `job_profile.llm_latency_ms` 一致的数；③ 为「轮次开始时刻」找到落点（要么保留
+`turn_started_at` 这一列不删，要么在 `analysis_run` 增列，**这一步需要决定，不能
+默认删掉**）；④ 才是删列 + 删 `effect_persist_draft` 里对它们的写入 + 把统计口径
 （见 `docs/superpowers/plans/2026-08-19-m1-intake-quality-fixes-unitA-storage-and-structured-questions.md`
 Task 5 的分离口径 SQL）改指 `analysis_run`。
+
+⛔ **删列本身改的是 `.51` 现网库的表结构，属生产决定，需 Shao Peishen 拍板后
+另开变更包**（`delivery-units.md` §2.U3 逐字：「U3 的范围**不含删列**」）。
 
 **不还的后果**：两套时序数据长期并存、互相矛盾，而没人知道该信哪一份。
 

@@ -33,7 +33,9 @@
 
 **(A) 的语义后果，是对的那一侧**：业务事务回滚时，留痕行仍在。这不是偏差——**那次 AI 调用真的发生过**，留痕记录它是事实陈述。反过来（调用发生了但没有留痕）才是 spec 禁止的。
 
-**⚠️ 需 reviewer 确认**：本决定改变了「`record()` 的 `conn` 由业务事务提供」这个 U2 计划里的默认想象。U2 的实现没有阻止它（`recorder.py:86-91` 只断言 conn 与 sink 绑定的是同一对象，不关心那是谁的事务），所以是"U2 未规定、U3 定死"，不是"U3 推翻 U2"。
+**✅ 2026-08-28 Shao Peishen 追认，方案 (A) 生效。** 本决定改变了「`record()` 的 `conn` 由业务事务提供」这个 U2 计划里的默认想象。U2 的实现没有阻止它（`recorder.py:86-91` 只断言 conn 与 sink 绑定的是同一对象，不关心那是谁的事务），所以是"U2 未规定、U3 定死"，不是"U3 推翻 U2"。
+
+**这条要抄进 U5 的 plan**：U5 在 `effect_*` 里写 `pending_approval` 用的是**业务连接**，与审计的专属连接是两条。⛔ 不要因为"审计也在写库"就把两者合并——合并当天就回到被否决的 (C)。
 
 ---
 
@@ -105,7 +107,7 @@ U2 已落 AST 守护（`tests/test_audit_recorder.py:446`）。**但该守护当
 | 事项 | 归属 |
 |---|---|
 | 把 `audit_context` 真正接到 intake / jd 两条业务路径上 | ⛔ 不做。要改 `app/graph/nodes.py` 与 `app/agents/intake_agent.py`，超出 `delivery-units.md:24` 给 U3 的文件边界。U3 只保证**通道通**（网关透传 + 适配器解析 + 端到端测试），业务侧填值另开单元 |
-| 删 `job_profile.turn_started_at` / `llm_latency_ms` 两列 | ⛔ 不做，只标注触发条件已满足（Task 5）。改 `.51` 现网库的表结构属生产决定，不可代 |
+| 删 `job_profile.turn_started_at` / `llm_latency_ms` 两列 | ⛔ 不做。触发条件**尚未**满足（2026-08-28 订正，见「已拍板事项」第 2 条），U3 只在 TD-1 上追加一行现状（Task 5）。改 `.51` 现网库的表结构属生产决定，不可代 |
 | `criterion_score` 的实际写入 | 本变更无写入方（评分在 M2）。U3 只保证白名单强制点在位 |
 | 合规断言与 CI | U6（第 6 章） |
 | 门禁、`pending_approval` | U4 / U5 |
@@ -130,7 +132,7 @@ U2 已落 AST 守护（`tests/test_audit_recorder.py:446`）。**但该守护当
 | `app/audit/__init__.py` | 修改 | 导出 `RecorderAuditHook` / 白名单符号 | 1、3 |
 | `app/llm/gateway.py` | 修改 | `AuditHook` Protocol 扩参；`temperature` 收成单一真源；`extract_structured*` 透传 `audit_context`；`NoopAuditHook` 注释改「测试专用」 | 2 |
 | `app/main.py` | 修改 | 模块级构造 recorder + hook，`_gateway_factory()` 闭包注入。**唯一注入点** | 4 |
-| `docs/tech-debt.md` | 修改 | TD-1 标注「触发条件已满足，删列另开变更」 | 5 |
+| `docs/tech-debt.md` | 修改 | 在 TD-1 已订正的触发条件下追加一行现状（U3 已合并、`job_id` 仍为 NULL、债未到期） | 5 |
 | `tests/test_audit_criteria.py` | **新建** | 白名单：红线维度被拒、未知维度被拒（fail-closed）、强制点在构造期 | 1 |
 | `tests/test_audit_recorder.py` | 修改 | 把 import 守护从硬编码三文件改成目录扫描 | 1 |
 | `tests/test_llm_gateway.py` | 修改 | 扩参后的透传、per-attempt 语义、旧的签名锁定测试同步更新 | 2 |
@@ -1691,7 +1693,7 @@ git commit -m "feat(main): 留痕单点注入 RecorderAuditHook，审计走专�
 
 **Files:**
 - Create: `tests/test_audit_end_to_end.py`
-- Modify: `docs/tech-debt.md`（TD-1 标注触发条件已满足）
+- Modify: `docs/tech-debt.md`（在 TD-1 的「怎么还」四步之后追加一行现状）
 
 **Interfaces:**
 - Consumes: Task 1–4 的全部产出。本 Task 不新增任何生产代码，只做验收与文档。
@@ -1932,27 +1934,24 @@ git checkout -- app/audit/hook.py
 预期：变异后 `test_one_scoring_call_lands_every_reproducibility_field` 与
 `test_configured_and_response_model_land_in_separate_columns` **各自变红**；还原后全绿。
 
-- [ ] **Step 4: 标注 TD-1 的触发条件已满足**
+- [ ] **Step 4: 在 TD-1 上补一条 U3 已合并的状态行**
 
-⚠️ `delivery-units.md` §2.U3 说这条债记在 `07-开发环境现状与优化待办.md`，**实测不是**：真源在 `docs/tech-debt.md`，该文件开头逐字写着「本文件是仓库级真源。变更包归档后 `openspec/changes/` 里的 tasks.md 会移走，计划文件也会变旧，但这份清单留着」。以 `docs/tech-debt.md` 为准。
+⚠️ **本步骤在 2026-08-28 已大幅缩水，因为 TD-1 的触发条件当天已被订正。** 原计划要写的是
+「触发条件已满足」——那句话是**错的**，订正过程与三条依据现在写在 `docs/tech-debt.md`
+的 TD-1 里（触发条件已改成「`analysis_run` 里出现带 `job_id` 的行」），`delivery-units.md`
+§2.U3 那句"U3 合并即满足该触发条件"也已同步订正。**⛔ 不要再把 TD-1 标成到期。**
 
-在 `docs/tech-debt.md` 的 TD-1 小节里，把「**触发条件**」那一段改成：
+本步骤只剩一件事：在 TD-1 的「怎么还」四步之后追加一行现状，让读的人知道第 ① 步还没做。
 
 ```markdown
-**触发条件**：`ai-audit-trail-and-outbound-gate` 的 `analysis_run` 表落地即删
-——该变更的 tasks 1.1 已包含 `latency_ms` 与 `created_at`，届时这两列成为冗余。
-
-**⚠️ 触发条件已于 2026-08-28 满足（U3 留痕接线合并）。** `analysis_run` 表在 U1
-落地（`app/storage/db.py:84-110`），U3 把 `RecorderAuditHook` 接到
-`app/main.py:_gateway_factory()` 之后，每次 LLM 调用都会写 `analysis_run.latency_ms`
-与 `analysis_run.created_at`——两套时序数据从此并存。
-
-**删列不在 U3 范围内**：改 `.51` 现网库的表结构属生产决定，不可代
-（`delivery-units.md` §2.U3 逐字：「U3 的范围**不含删列**」）。**需 Shao Peishen
-拍板后另开一个变更包**，内容 = 删两列 + 删 `effect_persist_draft` 里对它们的写入
-+ 统计口径改指 `analysis_run`。在那之前，`job_profile` 的两列与 `analysis_run`
-的口径**以 `analysis_run` 为准**。
+**现状（2026-08-28，U3 留痕接线合并）**：`RecorderAuditHook` 已接到
+`app/main.py:_gateway_factory()`，`analysis_run` 开始有真实数据；但 intake 路径
+尚未传 `audit_context`，所以那些行的 `job_id` 全为 NULL——**上面第 ① 步仍未完成，
+债未到期**。两列继续照写，口径以 `job_profile` 为准。
 ```
+
+⚠️ 若实施本 Task 时发现 `docs/tech-debt.md` 的 TD-1 里**没有**「触发条件（2026-08-28 订正）」
+这一段，说明该订正被回滚或没合上，⛔ 停下来先确认，不要在旧文本上叠加。
 
 - [ ] **Step 5: 跑全量并确认 U2 的守护仍绿**
 
@@ -1986,7 +1985,7 @@ grep -rn "zhuopin_platform" app tests scripts 2>/dev/null | grep -v venv | wc -l
 
 ```bash
 git add tests/test_audit_end_to_end.py docs/tech-debt.md
-git commit -m "test(audit): 留痕接线端到端验收，TD-1 标注触发条件已满足（tasks 3.5/3.6/3.7）"
+git commit -m "test(audit): 留痕接线端到端验收，TD-1 补现状行（tasks 3.5/3.6/3.7）"
 ```
 
 ---
@@ -2022,7 +2021,7 @@ git commit -m "test(audit): 留痕接线端到端验收，TD-1 标注触发条�
 2. **`analysis_run.id` 在没有图上下文时带随机后缀**（tasks 2.2 字面是 `{thread_id}:{node}:{input_hash}`）。依据：确定性 id 的用途是 LangGraph 重放去重；`jd_agent` 与 `scripts/compare_models.py` 这类调用不在重放路径上，两次内容相同的调用是两次真实的、各花了一次钱的 API 调用，确定性 id 会让第二次撞主键被短路、留痕静默少一条。有图上下文时仍严格按 2.2 的形状（加 `:{attempt}`，理由见偏离 1）。
    > ⚠️ **一条未消除的固有张力，登记但不在 U3 解决**：有图上下文时，LangGraph 重放会真的再调一次 LLM，而确定性 id 会让这第二次被短路成"已写过"。这是 tasks 2.2 的方案本身带来的，不是 U3 引入的。方向是"少记"而不是"记错"，且 U6 的对账能看见。要改需改 2.2 的 id 口径，属跨单元决定。
 
-3. **TD-1 的标注落在 `docs/tech-debt.md` 而不是 `07-开发环境现状与优化待办.md`**（`delivery-units.md` §2.U3 写的是后者）。依据：`docs/tech-debt.md:4` 逐字自述「本文件是仓库级真源」，且 TD-1 条目实际就在那里（`docs/tech-debt.md:7-23`）。`07-` 那份文件里 `grep turn_started_at` 零命中。
+3. **TD-1 的标注落在 `docs/tech-debt.md` 而不是 `07-开发环境现状与优化待办.md`**（`delivery-units.md` §2.U3 写的是后者），**且标注内容与该文件原来写的相反**。依据：`docs/tech-debt.md:4` 逐字自述「本文件是仓库级真源」，`07-` 那份文件里 `grep turn_started_at` 零命中；而"U3 合并即满足触发条件"这个判断经查证不成立（三条依据见「需 Shao Peishen 拍板」第 2 条）。**两处订正已于 2026-08-28 先行落地**（`docs/tech-debt.md` TD-1、`delivery-units.md` §2.U3），所以 Task 5 Step 4 只剩追加一行现状。
 
 ## 已登记的边界与技术债（不在本单元解决）
 
@@ -2030,14 +2029,24 @@ git commit -m "test(audit): 留痕接线端到端验收，TD-1 标注触发条�
 |---|---|
 | `audit_context` 尚未接到 intake / jd 两条真实业务路径 | U3 只保证**通道通**。接业务侧要改 `app/graph/nodes.py` 与 `app/agents/intake_agent.py`，超出 `delivery-units.md:24` 给 U3 的文件边界，另开单元 |
 | 审计专属连接与共享连接并存 | 已由 `journal_mode=WAL` + `busy_timeout=5000` 承载（`app/storage/db.py:245-253`）。M2 迁 Postgres 时两条连接都换成连接池 |
-| `job_profile` 两列删除 | TD-1，触发条件已满足，需 Shao Peishen 拍板后另开变更包（Task 5 Step 4 已标注） |
+| `job_profile` 两列删除 | TD-1。**触发条件尚未满足**——2026-08-28 已把它从「`analysis_run` 落地即删」订正为「`analysis_run` 里出现带 `job_id` 的行」，理由见「已拍板事项」第 2 条。U3 只追加一行现状（Task 5 Step 4） |
 | JSONL 多进程断链 | U7 的 7.6，U2 已登记，U3 不重复 |
 | `criterion_score` 白名单的数据库层强制 | ⛔ 不做。加维度要改 DDL 会让"加一个合法维度"变成一次迁移，`design.md` Risks 明确选了"集中在一处 Python 定义 + review"这条路。纵深防御由 U6 的事后断言承担 |
 
-## 需 Shao Peishen 拍板
+## 已拍板事项与其下游约束（2026-08-28，三条全部有结论）
 
-1. **审计走专属连接、业务事务回滚时留痕仍在**（本计划 §「一处必须自己定的架构决定」）。三个方案的取舍已列全，(A) 是唯一不越出 U3 文件边界且不会静默丢留痕的选项，但它确实改变了「留痕与业务写同生共死」这个直觉。
-2. **TD-1 删列另开变更包的时机**：U3 一合并，`job_profile.llm_latency_ms` 与 `analysis_run.latency_ms` 就开始并存。两套数据并存的时间越长，"该信哪一份"的成本越高。
+> 本节三条在出计划时都是开放问题，同日由 Shao Peishen 全部定完。**结论会往下游传**——
+> 第 1 条约束 U5，第 2 条约束将来那个删列的变更包，第 3 条约束 M2 的评分器。
+> 分析过程原样保留，因为将来重开这些决定时需要看到当初被否决的是什么、依据是什么。
+
+1. **✅ 审计走专属连接，业务事务回滚时留痕仍在**（本计划 §「一处必须自己定的架构决定」）。三个方案的取舍已列全，(A) 是唯一不越出 U3 文件边界、且不会让留痕被 `idempotent_effect` 的 rollback 静默撤销的选项。它确实改变了「留痕与业务写同生共死」这个直觉——**方向是对的那一侧**：那次 AI 调用真的发生过、真的花了钱，留痕记录它是事实陈述。
+
+   **下游约束（抄进 U5 的 plan）**：U5 写 `pending_approval` 用的是业务连接，与审计的专属连接是两条。⛔ 不要因为"审计也在写库"就合并它们。
+2. ~~TD-1 删列另开变更包的时机~~ **✅ 2026-08-28 已定：不删，先订正触发条件。**
+
+   查证发现 TD-1 原来写的触发条件「`analysis_run` 表落地即删」**按字面在 U1 合并当天就已到期**，而照它动手会丢数据。三条依据：① `turn_started_at`（「用户开始等」的时刻，`app/web/server.py:96-100`）在 `analysis_run` 里**没有任何对应列**，`created_at` 是留痕写入时刻、在模型返回之后；② `job_profile.llm_latency_ms` 是本轮**累计含重试**，`analysis_run.latency_ms` 是**单次尝试**（`app/llm/gateway.py:218-220` 注释逐字「两个口径互不污染」），要替换得先 `SUM` 聚合；③ 而聚合的 GROUP BY 键不存在——U3 不把 `audit_context` 接到 intake 路径，那些行的 `job_id` 全为 NULL。
+
+   **已落地的处置**：`docs/tech-debt.md` 的 TD-1 触发条件改成「`analysis_run` 里出现带 `job_id` 的行」，「怎么还」拆成四步（接 `audit_context` → 复算口径 → 给「轮次开始时刻」找落点 → 才删列），并写明删列属生产决定需拍板后另开变更包。`delivery-units.md` §2.U3 那句"U3 合并即满足该触发条件"同步订正。**两套数据会并存更久，这是刻意的**——比按一条错的触发条件删掉一列可复算的数据便宜。
 
 3. ~~`criterion_key` 的口径~~ **✅ 2026-08-28 已拍板取 A，无阻塞。** 记录留在下面，因为 M2 的评分器要按这个结论写。
 

@@ -60,7 +60,11 @@
 
 这不是措辞问题，它直接决定并行性：**在 `app/main.py` 注入，U3 完全不碰 `app/web/server.py`，于是可与 M1 的 B、D 并行**；若真去改 `create_app()` 的签名，立刻与 M1 那两个单元串行（见 §3.2）。**U3 的注入点写死在 `app/main.py:_gateway_factory()`，不改 `create_app` 签名。** 回滚 = 换回一行，与 design 迁移计划第 3 步一致。
 
-**顺带要处置的一条跨变更技术债**：M1 的 1.7 已登记「`job_profile.turn_started_at` / `llm_latency_ms` 两列在本包的 `analysis_run` 落地后删除」。**U3 合并即满足该触发条件**。U3 的范围**不含删列**（改 `.51` 现网库的表结构属生产决定，不可代），但 U3 必须在 `07-开发环境现状与优化待办.md` 里把那条技术债标为"触发条件已满足，删列另开变更"——否则两套时序数据长期并存互相矛盾，正是 M1 1.7 想避免的。
+**顺带要处置的一条跨变更技术债**：M1 的 1.7 已登记「`job_profile.turn_started_at` / `llm_latency_ms` 两列在本包的 `analysis_run` 落地后删除」。**U3 合并即满足该触发条件**。U3 的范围**不含删列**（改 `.51` 现网库的表结构属生产决定，不可代），但 U3 必须把那条技术债的状态更新到位——否则两套时序数据长期并存互相矛盾，正是 M1 1.7 想避免的。
+
+> **⚠️ 2026-08-28 订正两处**（依据见 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU3-recorder-wiring.md` 偏离登记 3）：
+> ① 技术债真源是 **`docs/tech-debt.md` 的 TD-1**，不是 `07-开发环境现状与优化待办.md`（后者 `grep turn_started_at` 零命中）；该文件开头逐字自述「本文件是仓库级真源」。
+> ② 上面「U3 合并即满足该触发条件」**不成立**。实测三处：`turn_started_at` 在 `analysis_run` 里没有对应列；两个 `latency_ms` 一个是本轮累计含重试、一个是单次尝试；而按轮聚合所需的 `job_id` 在 U3 之后仍为 NULL（U3 不接 `audit_context` 到 intake 路径）。真正的触发条件是「`analysis_run` 里出现带 `job_id` 的行」，已写进 TD-1。U3 要做的是**把这个订正写下来**，不是宣布债到期。
 
 ### U4 · `app/outbound` 门禁纯函数（第 4 章）
 
