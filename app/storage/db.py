@@ -71,6 +71,43 @@ CREATE TABLE IF NOT EXISTS outbox (
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下三张表属变更包 ai-audit-trail-and-outbound-gate（交付单元 U1）。
+-- 三张都是新表，全部走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：
+-- 加列路径只服务"老库缺列"这一种情况，新表不需要它。.51 上 data/demo.db 的
+-- 15 个真实 job 与既有表一行不改，无数据迁移。
+-- ─────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS analysis_run (
+    -- ⚠️ 审计资产：本表内容禁止用作任何模型的训练、微调或调优输入。
+    -- 理由：历史评分与录用结果携带既有偏见，拿它当监督信号会把偏见放大并
+    -- 固化（Amazon 2018 教训，见 CLAUDE.md 合规红线「绝不用历史录用结果做
+    -- 监督信号」）。本表只服务两件事：PIPL 第 24 条说明权（"这条评分是哪个
+    -- 模型、哪个版本、按哪份 rubric 打的"）与 CI 里的合规断言。
+    --
+    -- 可空性是刻意设计，不是偷懒：业务关联列与 rubric 列一律允许 NULL。
+    -- U3 把 RecorderAuditHook 接到 app/main.py:_gateway_factory() 之后，M1
+    -- 现有的岗位画像采集调用会立刻开始写本表，而采集期没有投递、没有 rubric。
+    -- 任何一列 NOT NULL 都会在 U3 合并当天把 M1 的采集流程打挂。
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT,
+    job_id TEXT,
+    configured_model TEXT NOT NULL,
+    response_model TEXT,
+    system_fingerprint TEXT,
+    prompt_version TEXT NOT NULL,
+    temperature REAL NOT NULL,
+    input_hash TEXT NOT NULL,
+    rubric_snapshot TEXT,
+    raw_response TEXT NOT NULL,
+    token_usage TEXT,
+    latency_ms REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_run_application
+    ON analysis_run (application_id);
 """
 
 
