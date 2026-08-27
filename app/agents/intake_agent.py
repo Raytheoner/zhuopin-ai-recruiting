@@ -15,7 +15,13 @@ from app.agents.ecu_knowledge import (
     fallback_options_for_field,
     match_ambiguous_terms,
 )
-from app.agents.intake_question import IntakeQuestion, derive_question_id, render_questions_text
+from app.agents.intake_question import (
+    IntakeQuestion,
+    QuestionLedgerEntry,
+    build_question_ledger,
+    derive_question_id,
+    render_questions_text,
+)
 from app.llm.gateway import LLMGateway
 from app.observability.redaction import loggable_summary
 from app.schemas.job_profile import SYSTEM_MANAGED_FIELDS, JobProfile
@@ -27,6 +33,20 @@ MAX_ROUNDS = 5
 # Open Questions 里写明这个数字是拍的，上线后拿真实空转轮分布复核）。
 MAX_TOTAL_ROUNDS = 8
 MAX_QUESTIONS_PER_ROUND = 3
+
+# 同一个子问题的重问上限（spec「重问次数上限」、tasks 5.5）：问 1 次 + 重问
+# 2 次 = 最多出现在 3 轮里。取 2 是给 question_id = field 撞 id 的递进提问
+# （"要不要 ISO 26262" → "要哪个 ASIL 等级"）留的余量，见 design.md Risks
+# 第 3 条。上限只对**未答**的子问题计数，已答字段上的递进提问不受约束。
+#
+# 与 MAX_ROUNDS / MAX_TOTAL_ROUNDS 的关系（tasks 5.5 ↔ 3.10，别搞混）：
+# 这三个数管的是三件不同的事——MAX_ROUNDS 管"有产出轮"能烧几轮，
+# MAX_TOTAL_ROUNDS 管总共能有几轮，MAX_REASKS 管"同一个子问题"能问几次。
+# 超限摘除只发生在本来就要发生的那一轮**之内**：不新增 job_profile 行、
+# 不改 round_count、不改 is_productive 的判定式。被摘掉的子问题因此既不吃
+# 有产出轮预算，也不会促使系统再开一轮去问它。
+MAX_REASKS = 2
+MAX_ASKS_PER_QUESTION = 1 + MAX_REASKS
 
 # unspecified_fields 由系统在追问超限降级时填写，不该出现在给模型的字段表里，
 # 否则模型会把它当成一个可以自己往 profile_patch 里塞的业务字段。
@@ -516,6 +536,64 @@ def _build_user_prompt(
     return "\n\n".join(sections)
 
 
+def _answered_fields(accumulated: dict) -> frozenset[str]:
+    """
+    已答字段 = 业务字段表 − `derive_unspecified_fields(accumulated)`（单元 D）。
+
+    **刻意复用 D 的那一个函数，不另写一套"这个字段算不算答过"的判据。**
+    5.5 的「重问超限 → 目标字段计入未指定字段」靠的正是两边同口径：一个子
+    问题被重问上限摘掉之后，它的目标字段没有值，`derive_unspecified_fields`
+    自然把它列进未指定、单元 D 的缺口警示自然把它摆到业务经理面前。E 因此
+    **不需要、也不得**再写一条平行的标记逻辑（delivery-units.md §2.D）。
+
+    入参必须是**拍平后的裸值画像**（`{"headcount": 3}`，不是
+    `{"headcount": {"value": 3, "source_quote": ...}}`）——这一条是
+    `derive_unspecified_fields` 的前提，delivery-units.md §5 约定 1 要求
+    第 7 章在落库前拍平，E 不为它预留兼容分支。
+    """
+    unspecified = set(derive_unspecified_fields(accumulated))
+    return frozenset(
+        name
+        for name in JobProfile.model_json_schema()["properties"]
+        if name not in _SYSTEM_MANAGED_FIELDS and name not in unspecified
+    )
+
+
+def _apply_question_ledger(
+    questions: list[IntakeQuestion], ledger: dict[str, QuestionLedgerEntry]
+) -> tuple[list[IntakeQuestion], list[str]]:
+    """
+    按已问台账处理本轮问题：给未答的重问打 `is_reask`，把超限的重问摘掉。
+
+    返回 `(保留下来的问题, 被摘掉的 question_id 列表)`。第二个返回值目前只用于
+    测试与将来的观测，**不进 IntakeTurnResult**——摘除这件事在持久层的唯一表征
+    就是"那个字段仍然没有值"，多存一份就多一个会漂移的真源（tasks 5.1 的落库
+    真源约定）。
+
+    三条分支，顺序不能换：
+      1. 台账里没有 → 全新问题，原样保留、不打标记
+      2. 已答（字段有值）→ **递进提问**，不打重问标记（打了就是对用户撒谎：
+         他刚才明明答了），也不受重问上限约束（design.md 决策 2 接受的撞 id
+         近似，见 tasks 5.7）
+      3. 未答且已问满 MAX_ASKS_PER_QUESTION 轮 → 摘掉，不再问；否则打 is_reask
+
+    ⛔ 这里只摘问题，不碰 profile_patch、不填任何字段值。停止追问不等于
+    系统可以替业务经理把这个字段定下来（合规红线「AI 不做自动淘汰/不替人决定」）。
+    """
+    kept: list[IntakeQuestion] = []
+    dropped: list[str] = []
+    for question in questions:
+        entry = ledger.get(question.question_id)
+        if entry is None or entry.is_answered:
+            kept.append(question)
+            continue
+        if entry.ask_count >= MAX_ASKS_PER_QUESTION:
+            dropped.append(question.question_id)
+            continue
+        kept.append(replace(question, is_reask=True))
+    return kept, dropped
+
+
 def _repeats_earlier_assistant_turn(candidate_text: str, history: list[dict]) -> bool:
     """
     判断这轮生成的问题文本是否和历史上**任意一轮** assistant 说过的内容只有
@@ -601,6 +679,8 @@ def _synthesize_fallback_question(
     patch: dict,
     asked_question_ids_before: list[str],
     matched_terms: tuple[str, ...] = (),
+    *,
+    exhausted_question_ids: frozenset[str] = frozenset(),
 ) -> IntakeQuestion | None:
     """
     模糊回复那一轮模型一个问题都没给时，由系统合成一个带档位的问题。
@@ -615,13 +695,22 @@ def _synthesize_fallback_question(
 
     matched_terms 语义同 `_fill_missing_options`：让合成问题的候选档位也按
     当前对话命中的术语选域，而不是固定退回通用档位。
+
+    exhausted_question_ids 是已问满重问上限的 question_id 集合（第 5 章）。
+    全部候选字段都超限时返回 None——那一轮就没有问题可发，会被判成零产出、
+    转入确认，由单元 D 的缺口警示接手。
     """
     merged = {**accumulated, **patch}
     missing = [name for name in FALLBACK_FIELD_ORDER if not _has_value(merged.get(name))]
     if not missing:
         return None
+    # 已经问满重问上限的字段不再合成问题：合成出来也会被
+    # _apply_question_ledger 当场摘掉，白跑一轮还给不出任何问题。
+    candidates = [name for name in missing if name not in exhausted_question_ids]
+    if not candidates:
+        return None
     asked = set(asked_question_ids_before)
-    target = next((name for name in missing if name not in asked), missing[0])
+    target = next((name for name in candidates if name not in asked), candidates[0])
     text = FALLBACK_QUESTION_TEXT[target]
     return IntakeQuestion(
         text=text,
@@ -751,6 +840,7 @@ def run_intake_turn(
     productive_round_count: int | None = None,
     asked_question_ids_before: list[str] | None = None,
     previous_questions: list[IntakeQuestion] | None = None,
+    asked_question_rounds: list[list[dict]] | None = None,
 ) -> IntakeTurnResult:
     """
     round_count = job_profile 总行数（business_key 的口径，不变）。
@@ -758,10 +848,14 @@ def run_intake_turn(
     保持"没接上判定前的行为与今天完全一致"。
     asked_question_ids_before / previous_questions 都由调用方从数据库读出来传入
     ——IntakeState 没有 reducer，真源是库（见 app/graph/state.py 的说明）。
+
+    asked_question_rounds = job_profile.asked_questions 按 version 升序的**每一
+    行**（外层一项 = 一轮）。第 5 章的已问台账全部由它 + 画像现值推导，不另存
+    状态。省略时台账为空，行为与接上之前逐字一致（不打重问标记、不摘任何问题）。
     """
     accumulated = dict(profile_patch_accumulated or {})
-    asked_before = list(asked_question_ids_before or [])
     prior_questions = list(previous_questions or [])
+    asked_rounds = [list(item or []) for item in (asked_question_rounds or [])]
     productive_rounds = round_count if productive_round_count is None else productive_round_count
 
     user_prompt = _build_user_prompt(history, accumulated, suggested_followups(history))
@@ -801,16 +895,41 @@ def run_intake_turn(
             asked_questions=questions,
         )
 
-    # 两个口径任一命中即收尾：有产出轮吃满 MAX_ROUNDS，或总轮数吃满
-    # MAX_TOTAL_ROUNDS（后者是"零产出轮不消耗预算"的兜底，spec「总轮次硬上限
-    # 兜底」）。
+    # ① 先算本轮的 profile_patch。台账的"已答"判定必须包含用户**这一轮刚
+    #    答上来**的字段，否则会把他刚答完的子问题当成"你刚才没答"再问一遍。
+    reply_text = _last_user_text(history)
+    vague = is_vague_reply(reply_text, asked_questions=prior_questions)
+    profile_patch = (
+        _drop_unchosen_candidate_values(
+            parsed.profile_patch, reply_text=reply_text, previous_questions=prior_questions
+        )
+        if vague
+        else parsed.profile_patch
+    )
+
+    # ② 建台账。answered_fields 用合并本轮 patch 之后的画像算（见 ①）。
+    ledger = build_question_ledger(
+        asked_rounds, answered_fields=_answered_fields({**accumulated, **profile_patch})
+    )
+    # 台账在手时，"此前问过的 question_id 并集"直接取它的键序（首问顺序），
+    # 不再另用一份 asked_question_ids_before——同一个事实两份来源就有漂移空间。
+    # 没传按轮台账的调用方仍走老入参，行为与今天逐字一致。
+    asked_before = list(ledger) if asked_rounds else list(asked_question_ids_before or [])
+    exhausted = frozenset(
+        question_id
+        for question_id, entry in ledger.items()
+        if not entry.is_answered and entry.ask_count >= MAX_ASKS_PER_QUESTION
+    )
+
+    # ③ 轮次预算。两个口径任一命中即收尾：有产出轮吃满 MAX_ROUNDS，或总轮数
+    #    吃满 MAX_TOTAL_ROUNDS（后者是"零产出轮不消耗预算"的兜底，spec
+    #    「总轮次硬上限兜底」）。口径与单元 B 逐字不变。
     at_round_limit = productive_rounds >= MAX_ROUNDS or round_count >= MAX_TOTAL_ROUNDS
     capped_questions = (
         [] if at_round_limit else _to_intake_questions(parsed.questions)[:MAX_QUESTIONS_PER_ROUND]
     )
 
-    reply_text = _last_user_text(history)
-    vague = is_vague_reply(reply_text, asked_questions=prior_questions)
+    # ④ 模糊回复的强制兜底档位（单元 B，逻辑不变，只多传一个 exhausted）。
     if vague and not at_round_limit:
         # matched_terms 用整段对话的用户发言算，跟 suggested_followups 用同一份
         # 文本（_user_conversation_text）：同一份对话重放要问出同一组档位，且
@@ -821,27 +940,30 @@ def run_intake_turn(
         capped_questions = _fill_missing_options(capped_questions, matched_terms)
         if not capped_questions:
             synthesized = _synthesize_fallback_question(
-                accumulated, parsed.profile_patch, asked_before, matched_terms
+                accumulated,
+                profile_patch,
+                asked_before,
+                matched_terms,
+                exhausted_question_ids=exhausted,
             )
             capped_questions = [synthesized] if synthesized else []
 
+    # ⑤ 台账落到本轮问题上：打重问标记、摘掉超限重问（tasks 5.4 / 5.5）。
+    #    必须在 ⑥ 的逐字防线**之前**——下发文本会因为重问前缀而改变，防线要
+    #    比对的是真正下发的那一版（design.md 决策 1「代价」）。
+    capped_questions, _dropped_question_ids = _apply_question_ledger(capped_questions, ledger)
+
+    # ⑥ 最后一道逐字防线（tasks 5.8 的结论：保留，职责收窄，见其 docstring）。
     stuck = not at_round_limit and _repeats_earlier_assistant_turn(
         render_questions_text(capped_questions), history
     )
     give_up = at_round_limit or stuck
     questions = [] if give_up else capped_questions
 
-    profile_patch = (
-        _drop_unchosen_candidate_values(
-            parsed.profile_patch, reply_text=reply_text, previous_questions=prior_questions
-        )
-        if vague
-        else parsed.profile_patch
-    )
-
-    # 零产出轮判定（design.md 决策 5）：本轮 profile_patch 相对已累积内容有新
+    # ⑦ 零产出轮判定（design.md 决策 5）：本轮 profile_patch 相对已累积内容有新
     # 字段或改了值，**或**问出了此前未问过的 question_id。两者都没有 = 空转，
-    # 不消耗追问预算。
+    # 不消耗追问预算。判定式**一个字未改**：重问的 question_id 按定义已在
+    # asked_before 里，因此不满足 has_new_question，重问轮不吃有产出轮预算。
     has_new_profile_content = any(
         name not in accumulated or accumulated[name] != value
         for name, value in profile_patch.items()

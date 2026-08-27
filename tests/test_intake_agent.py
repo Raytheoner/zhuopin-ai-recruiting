@@ -5,10 +5,13 @@ from pathlib import Path
 
 from app.agents import intake_agent
 from app.agents.intake_agent import (
+    MAX_ASKS_PER_QUESTION,
+    MAX_REASKS,
     SYSTEM_PROMPT,
     derive_unspecified_fields,
     run_intake_turn,
 )
+from app.agents.intake_question import render_questions_text
 from app.llm.gateway import LLMGateway
 from app.schemas.job_profile import JobProfile
 
@@ -1464,3 +1467,358 @@ def test_unspecified_comparison_log_goes_through_loggable_summary(monkeypatch, c
     assert "底层软件开发工程师" not in text
     # 3) 模型幻觉出的字段名只贡献计数，不贡献名字
     assert "根本不存在的字段" not in text
+
+
+# ---------------------------------------------------------------------------
+# 第 5 章：已问台账接线 —— 重问标注、重问上限、轮次口径对齐
+# ---------------------------------------------------------------------------
+
+
+def _q(text: str, field: str | None = None) -> dict:
+    """构造一个问题 payload，省得每条用例都手写一遍 dict。"""
+    return {"text": text, "field": field, "options": [], "allow_free_text": True}
+
+
+def _turn(responses, **kwargs):
+    """跑一轮采集，默认参数取“第一轮”的形状，用例只覆盖自己关心的那几个。"""
+    gateway = make_gateway(responses)
+    params = {
+        "history": [{"role": "user", "content": "要个嵌入式工程师"}],
+        "round_count": 0,
+        "productive_round_count": 0,
+        "profile_patch_accumulated": {},
+        "asked_question_ids_before": [],
+        "previous_questions": [],
+        "asked_question_rounds": [],
+    }
+    params.update(kwargs)
+    return run_intake_turn(gateway, **params)
+
+
+def test_unanswered_question_asked_again_is_marked_as_a_reask():
+    """spec「重问必须显式标注」：重问同一个未答子问题，is_reask 必须为 True，
+    渲染出来的文本必须带重问提示。"""
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "ASIL 这块到底要不要？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=1,
+        productive_round_count=1,
+        profile_patch_accumulated={"job_title": "嵌入式软件工程师"},
+        asked_question_rounds=[[_q("功能安全等级（ASIL）上有什么要求？", "functional_safety")]],
+    )
+
+    (question,) = result.questions
+    assert question.question_id == "functional_safety"
+    assert question.is_reask is True
+    assert "（这个你刚才没答）" in render_questions_text(result.questions)
+
+
+def test_a_brand_new_question_is_not_marked_as_a_reask():
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "招几个人？", "field": "headcount"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=1,
+        productive_round_count=1,
+        asked_question_rounds=[[_q("功能安全等级（ASIL）上有什么要求？", "functional_safety")]],
+    )
+
+    (question,) = result.questions
+    assert question.is_reask is False
+
+
+def test_answered_question_asked_again_is_not_a_reask():
+    """spec 的重问标注是“这个你刚才没答”。字段已经有值了还问，那是**递进
+    提问**（design.md 决策 2 接受的撞 id 近似），不是重问——打上重问标记会
+    对用户撒谎。"""
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "要哪个 ASIL 等级？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=1,
+        productive_round_count=1,
+        profile_patch_accumulated={"functional_safety": "ASIL-B"},
+        asked_question_rounds=[[_q("是否需要 ISO 26262 功能安全经验？", "functional_safety")]],
+    )
+
+    (question,) = result.questions
+    assert question.is_reask is False
+
+
+def test_reask_stops_after_the_cap_and_the_field_lands_in_unspecified():
+    """
+    spec「重问超限转未指定」+ tasks 5.5。
+
+    上限取 2（问 1 次 + 重问 2 次 = 出现在 3 轮里）。第 4 次再问就必须被摘掉。
+    “计入未指定字段”这一半**不是这里写的一段标记逻辑**——字段没值，单元 D 的
+    derive_unspecified_fields 自然把它列进去。本条用例直接拿 D 的函数断言这一点，
+    正是为了钉死“E 不许写第二套标记”（delivery-units.md §2.D）。
+    """
+    assert MAX_REASKS == 2
+    assert MAX_ASKS_PER_QUESTION == 3
+
+    asked = [[_q("功能安全等级？", "functional_safety")]] * MAX_ASKS_PER_QUESTION
+    accumulated = {"job_title": "嵌入式软件工程师"}
+
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "ASIL 到底要不要？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=3,
+        productive_round_count=1,
+        profile_patch_accumulated=accumulated,
+        asked_question_rounds=asked,
+    )
+
+    assert [q.question_id for q in result.questions] == []
+    assert "functional_safety" in derive_unspecified_fields(accumulated)
+
+
+def test_progressive_questions_on_an_answered_field_are_not_cut_off_early():
+    """
+    tasks 5.7 + design.md Risks 第 3 条：question_id = field 撞 id 的递进提问
+    （“要不要 26262” → “要哪个 ASIL”）不能被上限过早掐断。
+
+    这里给它问满 MAX_ASKS_PER_QUESTION 轮**且字段已有值**，仍然不摘——
+    上限只对**未答**的子问题计数（本计划「关键设计决定 4」）。
+    """
+    asked = [[_q("是否需要 ISO 26262 功能安全经验？", "functional_safety")]] * MAX_ASKS_PER_QUESTION
+
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "要哪个 ASIL 等级？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=3,
+        productive_round_count=2,
+        profile_patch_accumulated={"functional_safety": "ASIL-B"},
+        asked_question_rounds=asked,
+    )
+
+    assert [q.question_id for q in result.questions] == ["functional_safety"]
+    assert result.questions[0].is_reask is False
+
+
+def test_a_question_answered_in_this_very_turn_is_not_reasked():
+    """
+    用户这一轮刚答完的子问题，不能在同一轮的回复里被当成“你刚才没答”重问一遍。
+    台账的 answered_fields 必须用**合并本轮 patch 之后**的画像算，不能只用
+    上一轮的累积值——这是接线顺序错了就会当场对用户撒谎的一处。
+    """
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "要哪个 ASIL 等级？", "field": "functional_safety"}],
+                    "profile_patch": {"functional_safety": "ASIL-B"},
+                }
+            )
+        ],
+        round_count=1,
+        productive_round_count=1,
+        asked_question_rounds=[[_q("功能安全等级？", "functional_safety")]],
+    )
+
+    (question,) = result.questions
+    assert question.is_reask is False
+
+
+def test_dropping_an_exhausted_reask_does_not_make_the_turn_productive():
+    """
+    轮次口径对齐（tasks 5.5 ↔ 3.10）：摘掉超限重问之后本轮没有任何新问题、
+    也没有新画像内容，那就是一轮空转——is_productive 必须为 False，不吃
+    MAX_ROUNDS 的有产出轮预算。判定式一个字没改，这条只是把它钉住。
+    """
+    asked = [[_q("功能安全等级？", "functional_safety")]] * MAX_ASKS_PER_QUESTION
+
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "ASIL 到底要不要？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=3,
+        productive_round_count=1,
+        profile_patch_accumulated={"job_title": "嵌入式软件工程师"},
+        asked_question_rounds=asked,
+    )
+
+    assert result.is_productive is False
+    assert result.is_complete is True  # 没有问题可问了，转确认，交给单元 D 的缺口警示
+
+
+def test_a_plain_reask_within_the_cap_still_does_not_consume_the_productive_budget():
+    """重问在上限之内照样下发，但它的 question_id 早在台账里，
+    has_new_question 不成立——单元 B 落地时就是这个口径，E 不许破坏它。"""
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "ASIL 这块到底要不要？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=1,
+        productive_round_count=1,
+        profile_patch_accumulated={"job_title": "嵌入式软件工程师"},
+        asked_question_rounds=[[_q("功能安全等级？", "functional_safety")]],
+    )
+
+    assert result.questions[0].is_reask is True
+    assert result.is_productive is False
+
+
+def test_off_topic_guidance_is_never_dropped_by_the_reask_cap():
+    """
+    离题轮的引导语走 is_job_related=False 的早返回分支，**不经过台账摘除**。
+    没有这条保护，连说 3 句离题的话之后引导语会被当成“问到第 4 次的子问题”
+    摘掉，用户拿到一个空气泡——比不改还糟。
+    """
+    guidance_round = [[_q("没听懂是不是用人需求，可以试试：'要招一个做XX的工程师'")]]
+
+    result = _turn(
+        [json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}})],
+        round_count=3,
+        asked_question_rounds=guidance_round * MAX_ASKS_PER_QUESTION,
+    )
+
+    assert result.is_job_related is False
+    assert len(result.questions) == 1
+    assert result.questions[0].is_reask is False
+
+
+def test_ledger_is_ignored_when_the_caller_does_not_pass_the_rounds():
+    """向后兼容：没接上按轮台账的调用方（老测试、别的入口）行为与今天逐字一致
+    ——不打重问标记、不摘任何问题。"""
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": "功能安全等级？", "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        round_count=1,
+        productive_round_count=1,
+        asked_question_ids_before=["functional_safety"],
+        asked_question_rounds=[],
+    )
+
+    (question,) = result.questions
+    assert question.is_reask is False
+
+
+def test_fallback_synthesis_skips_a_field_that_already_hit_the_reask_cap():
+    """
+    模糊回复那一轮模型一个问题都没给、系统合成兜底问题时，**已问满重问上限的
+    字段必须跳过**：合成出来也会被 _apply_question_ledger 当场摘掉，那一轮就
+    白跑，用户拿到一个空气泡。
+
+    构造刻意让"优先挑没问过的字段"那条捷径走不通（每个兜底字段都问过一遍），
+    逼合成走"退回第一个候选"的分支——超限过滤只在这条分支上看得出来。
+    """
+    from app.agents.ecu_knowledge import FALLBACK_FIELD_ORDER, FALLBACK_QUESTION_TEXT
+
+    asked = [[_q(FALLBACK_QUESTION_TEXT[name], name) for name in FALLBACK_FIELD_ORDER]]
+    asked += [[_q(FALLBACK_QUESTION_TEXT["job_title"], "job_title")]] * MAX_REASKS
+
+    result = _turn(
+        [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})],
+        history=[{"role": "user", "content": "你决定吧"}],
+        round_count=3,
+        productive_round_count=1,
+        asked_question_rounds=asked,
+    )
+
+    # job_title 已经问满 MAX_ASKS_PER_QUESTION 轮，顺位落到下一个还没超限的字段
+    assert [q.question_id for q in result.questions] == ["department"]
+    assert result.questions[0].is_reask is True
+
+
+def test_the_reask_badge_is_applied_before_the_verbatim_repeat_defense():
+    """
+    ⑤ 打重问标记必须发生在 ⑥ 的逐字防线**之前**（design.md 决策 1「代价」）：
+    防线要比对的是**真正下发的那一版**文本。顺序反过来的话，一个"用户确实没
+    答、带着「这个你刚才没答」诚实再问一次"的重问，会被防线当成模型在原样复读
+    而整轮吞掉，用户拿到空气泡——而重问标注（tasks 5.4）的全部意义就在这里。
+    """
+    repeated = "功能安全等级（ASIL）上有什么要求？"
+
+    result = _turn(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [{"text": repeated, "field": "functional_safety"}],
+                    "profile_patch": {},
+                }
+            )
+        ],
+        history=[
+            {"role": "user", "content": "要个嵌入式工程师"},
+            {"role": "assistant", "content": repeated},
+            {"role": "user", "content": "这个先放一放"},
+        ],
+        round_count=1,
+        productive_round_count=1,
+        profile_patch_accumulated={"job_title": "嵌入式软件工程师"},
+        asked_question_rounds=[[_q(repeated, "functional_safety")]],
+    )
+
+    (question,) = result.questions
+    assert question.is_reask is True
+    assert render_questions_text(result.questions) != repeated
+
+
+def test_a_field_without_a_value_is_never_counted_as_answered():
+    """
+    超限集合 exhausted 用 `not entry.is_answered`（口径来自
+    derive_unspecified_fields），而 _synthesize_fallback_question 的 missing 用
+    `_has_value`——两个不同的判据。今天它们同向：**一个字段进 missing（没值）
+    就一定不算已答**，所以超限过滤永远不会去碰一个"已答"的字段，两处口径不会
+    打架。这条把该前提钉住：判据一旦分叉，重问上限就会开始掐断本该继续递进的
+    已答字段（tasks 5.7 要保住的正是那条路）。
+    """
+    for value in (None, "", [], {}, ()):
+        merged = {"functional_safety": value}
+        assert not intake_agent._has_value(merged["functional_safety"])
+        assert "functional_safety" not in intake_agent._answered_fields(merged)
