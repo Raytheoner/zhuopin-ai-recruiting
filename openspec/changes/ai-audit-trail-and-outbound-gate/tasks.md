@@ -104,13 +104,53 @@
 
 交付单元：合并后铁律 3、4 从"钩子留着"变成真实生效。
 
-- [ ] 3.1 `AuditHook` Protocol 扩参：新增可选 `audit_context`（承载 rubric 快照与 `application_id` / `job_id`），`LLMGateway.extract_structured()` 原样透传不解释内容；现有调用点不传也能跑
-- [ ] 3.2 实现 `RecorderAuditHook`（`AuditHook` → `AuditRecorder` 的适配），`NoopAuditHook` 保留并改注释定位为「测试专用」
-- [ ] 3.3 生产装配处（`create_app()`）注入 `RecorderAuditHook`；新增配置项：审计 JSONL 路径。**注入点只有一处**，回滚 = 换回一行
-- [ ] 3.4 `criterion_key` 白名单集中定义在一处；写入非白名单维度被拒。白名单显式排除声学情绪信号（语速/停顿/静默）与人脸/表情类维度
-- [ ] 3.5 测试：一次真实形状的评分调用后，`analysis_run` 落齐全部字段，且 `configured_model` 与 `response_model` 分两字段各自保存不互相覆盖
-- [ ] 3.6 测试：`system_fingerprint` 缺失时记空值且留痕照常写入（不让网关炸掉）
-- [ ] 3.7 测试：写入声学情绪维度、写入人脸/表情维度分别被拒；留痕中不含简历原文（只有 `input_hash`）
+- [x] 3.1 `AuditHook` Protocol 扩参：新增可选 `audit_context`（承载 rubric 快照与 `application_id` / `job_id`），`LLMGateway.extract_structured()` 原样透传不解释内容；现有调用点不传也能跑
+- [x] 3.2 实现 `RecorderAuditHook`（`AuditHook` → `AuditRecorder` 的适配），`NoopAuditHook` 保留并改注释定位为「测试专用」
+- [x] 3.3 生产装配处（`create_app()`）注入 `RecorderAuditHook`；新增配置项：审计 JSONL 路径。**注入点只有一处**，回滚 = 换回一行
+- [x] 3.4 `criterion_key` 白名单集中定义在一处；写入非白名单维度被拒。白名单显式排除声学情绪信号（语速/停顿/静默）与人脸/表情类维度
+- [x] 3.5 测试：一次真实形状的评分调用后，`analysis_run` 落齐全部字段，且 `configured_model` 与 `response_model` 分两字段各自保存不互相覆盖
+- [x] 3.6 测试：`system_fingerprint` 缺失时记空值且留痕照常写入（不让网关炸掉）
+- [x] 3.7 测试：写入声学情绪维度、写入人脸/表情维度分别被拒；留痕中不含简历原文（只有 `input_hash`）
+
+### 3.x 落地偏离登记（U3 实施，2026-08-28，两轮 review 通过）
+
+本章按 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU3-recorder-wiring.md`
+实施，落地时相对本文件字面有六条偏离。**方向全部是"补齐 spec 要求但字面漏写的东西"
+或"更严"**，没有一条放松。分支实测 654 → 675 passed（含 U4 并行分支的增量）。
+
+| # | 本文件字面 | 实际落地 | 判据（哪条测试咬住它） |
+|---|---|---|---|
+| 1 | 3.1 只说「新增可选 `audit_context`」 | 另加 `temperature` 与 `attempt` 两个参数 | `analysis_run.temperature` 是 **NOT NULL**（`app/storage/db.py:102`）而旧签名里没有它，不补第一条真实写入就撞 NOT NULL；钩子在重试循环内每次尝试各调一次，多次尝试 `input_hash` 完全相同，不带 `attempt` 会撞 2.2 的确定性主键、第 2 次起被 U2 短路成 `False` 静默丢掉。`test_recorded_temperature_is_the_temperature_actually_sent`、`test_attempt_number_is_one_based_and_increments_per_retry` |
+| 2 | 3.3 写「生产装配处（`create_app()`）注入」 | 注入点在 **`app/main.py:_gateway_factory()`**，`create_app` 签名一字未动 | 实际构造 `LLMGateway` 的不是 `create_app`（它只接收一个 `gateway_factory: Callable`，`app/web/server.py:54`）。改它的签名会立刻与 M1 的 B/D 单元串行。以 `delivery-units.md` §2.U3 为准。`test_create_app_signature_is_untouched`、`test_server_module_is_not_touched_by_this_unit` |
+| 3 | 3.3 的「新增配置项：审计 JSONL 路径」 | **U1 已加齐**（`app/config.py:35`），U3 只读不写 `config.py` | `delivery-units.md` §4 约定 1：两个配置键在 U1 一次加齐，否则 U3 与 U4 共写 `config.py`、并行作废 |
+| 4 | 3.4 只说「白名单集中定义在一处」，没说强制点在哪 | 定义在 `app/audit/criteria.py`，**强制点在 `CriterionScore.__post_init__`（构造期）** | 写入期强制只罩得住走那一个 sink 的路径；构造期强制让所有写入方（U5 的 queue、U6 的断言、M2 的评分器）连一个非法对象都造不出来。`test_rejection_happens_at_construction_not_at_write_time` |
+| 5 | 本文件未规定 `criterion_key` 的口径 | **口径 A：存七个评分维度，不存 rubric 具体条目**（Shao Peishen 2026-08-28 拍板） | 仓库原有三处取值全是具体技能名（`autosar` / `can_bus`），而 spec 与 design 用的词是「维度」、且 design Risks 说「加维度是一行改动 + 一次 review」——只有维度是个位数时那句才成立。**对 M2 有约束**：评分器 MUST 把具体技能写进 `rubric_snapshot`，写进 `criterion_key` 会在构造期抛 `ForbiddenCriterionKey`。`tests/test_audit_criteria.py` 全部 |
+| 6 | 本文件与 `delivery-units.md` **都没写**钩子拿不到事务连接这件事 | **审计走专属 SQLite 连接、自己提交**（需 Shao Peishen 追认，已于 2026-08-28 追认） | 钩子触发点在 `LLMGateway` 内部，那里没有 `conn`；复用全应用共享的那条会踩 `app/storage/idempotency.py:41-68`——被装饰函数抛异常时装饰器 `conn.rollback()`，留痕行被一起回滚，而那次 LLM 调用真的发生过、真的花了钱。铁律 1 禁止的是同一条连接上有第二个事务管理者，专属连接上只有适配器一个。三个方案的取舍见计划 §「一处必须自己定的架构决定」 |
+
+#### 两轮 review 各自改掉的东西（全部有回归钉子 + 变异验证）
+
+**round 1（两条真缺陷）**：
+
+1. **共享连接 + 并发线程**。适配器是模块级单例，被 FastAPI 工作线程池共用；一条 SQLite 连接只有一个事务，A 的 `rollback()` 会抹掉 B 已执行未提交的 INSERT。**实测 20 线程并发：SQLite 只剩 12 行、JSONL 17 行、3 个 `InterfaceError`**——按 spec 那 3 个异常各打挂一个真实请求，另外 8 条是真实付费调用的留痕被静默丢掉。加 `_write_lock` 后 20/20/0。`test_concurrent_calls_do_not_lose_rows_or_diverge`
+2. **SQLite 主键短路时镜像照样 append**。实测 SQLite 1 行、JSONL 2 行，而 `reconcile()` 比的是**集合**差集，`ok` 仍为 `True`——偏差对唯一的检出手段完全隐形。改成用 `record()` 的返回值短路。`test_a_deduped_write_does_not_append_a_second_mirror_line`
+
+**round 2（三条，另驳回一条）**：
+
+3. **镜像行的 `created_at` 是 `null`**。留 `None` 让数据库 `datetime('now')` 填，只有 SQLite 那侧有时刻——而镜像才是防篡改的那份独立证据，说不出"这次调用发生在什么时候"的证据基本不成立，`reconcile()` 只比 id 也发现不了。改成显式 `sqlite_utc_now()`，两侧同一时刻。`test_mirror_line_carries_the_call_timestamp`
+4. **未登记的 `audit_context` 键抛在留痕之前**。那次 API 调用已经付过钱、已经发生了，此刻抛会让它一条记录都不剩。改成按已登记的键先记完再抛，且 `error` **只记键名不记值**（未登记的键正是可能藏简历原文的那些）。`test_a_rejected_context_key_still_leaves_a_trail_without_leaking_its_value`
+5. **去重丢弃打 DEBUG 而 `log_level` 默认 INFO**——丢掉一次真实付费调用的留痕却零可观测痕迹。提到 WARNING。
+6. **驳回**：round 2 称 `test_none_raw_response` 只断言镜像侧，实测不成立——该测试同时断言了 SQLite 侧的 `raw_response == ""`。不改。
+
+#### ⚠️ 交给下游的三条硬约束
+
+1. **接 `audit_context` 到业务侧的那个单元**：`app/agents/jd_agent.py:69` 的 `generate_jd()` 循环最多两次，两次 prompt **逐字相同**、gateway 的 `attempt` 都是 1——接上 `audit_context` 后第二次（"上一次生成了歧视性表述所以重试"的那次，最该留痕的一次）会被确定性 id 直接去重掉。**必须先解决**，判据是那条 WARNING 日志有没有出现。
+2. **U5**：写 `pending_approval` 用的是业务连接，与审计的专属连接是两条，⛔ 不要合并。另，`recorder.record()` 返回 `False` 时调用点⛔ 不反推原因（2026-08-28 对残留 B 的拍板）。
+3. **M2 的评分器**：具体技能/rubric 条目写 `rubric_snapshot`，`criterion_key` 只放七个维度之一（偏离 5）。
+
+#### 本章新登记的两条技术债（均在 `docs/tech-debt.md`）
+
+- **TD-4**：模型返回空响应体时网关 `json.loads(None)` 抛 `TypeError`，不在 `except` 元组里、直接穿透且不消耗重试。**非 U3 引入**，是写空响应兜底时照出来的。
+- **TD-5**：`raw_response` 逐字存（铁律 3 明令），而 spec 只约束**输入**不得存原文——评分模型把简历片段引回响应里，原文就进了 append-only 的镜像。**M1 不触发**（没有评分调用），⚠️ 需 Shao Peishen 本人拍板，属合规红线相关的不可代项。
 
 ## 4. `app/outbound`：门禁纯函数与消息契约
 
