@@ -836,3 +836,42 @@ def test_a_genuinely_absent_attribute_is_still_reported_as_absent():
 
     assert decision.reason == "收件对象缺失或为空"
     assert decision.absent_fields == ("recipient",)
+
+
+def test_confirmed_by_cannot_clear_a_self_declared_or_top_severity_block_pending_d6():
+    """
+    ⚠️ **口径锁定用例 —— 未决问题 D-6，见 plan。⛔ 实施者不得自行改动。**
+
+    当前行为（按 tasks 4.6/4.7 字面）：`requires_confirmation=True` 与
+    `severity` 最高级是**终局拦截**，带上 confirmed_by 也清不掉。
+
+    但 spec 的另外两条读起来是相反的：
+    - 「门禁覆盖范围」：拒信与邀约「这两类 MUST 一律判为高风险」
+    - 「人工确认才放行」：「高风险消息 SHALL 仅在携带 confirmed_by 时才被
+      放行外发」，且 Scenario「人工放行」写明放行后草稿重走门禁、两道闸
+      都过就被外发
+
+    两边合起来推出的模型是：fail-closed 六条是**风险分级的输入**，
+    confirmed_by 是**清关**。按那个模型，高风险 + confirmed_by 应当放行。
+
+    这条差别对 U5 是硬后果：若 U5 的适配器照 spec 把候选人信件标成
+    severity 最高级或 requires_confirmation=True，那么 `queue.approve()`
+    带着 confirmed_by 重走门禁**仍然会被拦**，待审批队列里的东西永远发不
+    出去——整个人工放行路径失效。
+
+    ⛔ 本 session 不改这条：让 confirmed_by 能清掉这两条是**放松闸门**，
+    属 CLAUDE.md 决策代理表的不可代项（候选人对外通道）。2026-08-28 的
+    「一律取最保险一侧」是对当时列出的五项而言，不构成改写放行路径的授权。
+    """
+    self_declared = compute_outbound_gate(
+        _valid_message(requires_confirmation=True), lambda: True
+    )
+    top_severity = compute_outbound_gate(_valid_message(severity="high"), lambda: True)
+
+    assert self_declared.allowed is False
+    assert self_declared.reason == "消息自称需要人工确认"
+    assert self_declared.evidence["confirmed_by"] == "shao-peishen"
+
+    assert top_severity.allowed is False
+    assert top_severity.reason == "风险等级为最高级"
+    assert top_severity.evidence["confirmed_by"] == "shao-peishen"

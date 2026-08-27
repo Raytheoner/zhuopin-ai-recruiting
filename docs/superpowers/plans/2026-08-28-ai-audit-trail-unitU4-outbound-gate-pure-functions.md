@@ -1716,10 +1716,40 @@ git commit -m "feat(outbound): 异常按拦截处理、纯函数性与源码形�
 - ✅ **spec 已同步（2026-08-28）**：`specs/outbound-approval-gate/spec.md` 的「fail-closed 判定语义」已补第七条条件、改写「仅当……才判为低风险」那句、新增 `Scenario: 收件对象未知`，并在原文里注明这一条是当日追加、方向更严、门禁不负责从渠道对象推断收件人。`openspec validate ai-audit-trail-and-outbound-gate --strict` 通过。代码与 spec 现在都是七条
 
 
+## ⛔ D-6 —— 未决，**U5 开工前必须解决**（2026-08-28 code review 发现 3）
+
+**问题一句话**：`requires_confirmation=True` 与 `severity` 最高级现在是**终局拦截**，带上 `confirmed_by` 也清不掉。若 U5 照 spec 把候选人信件标成高风险，`queue.approve()` 重走门禁仍会被拦——**待审批队列里的东西永远发不出去，人工放行路径整体失效**。
+
+**两份已批准的文档在这一点上互相矛盾，不是我的实现走偏**：
+
+| 出处 | 原文 | 推出的模型 |
+|---|---|---|
+| `tasks.md` 4.6 | 「`requires_confirmation` 为真 …… 全部拦截」 | 六条是**彼此独立的终局拦截条件** |
+| `tasks.md` 4.7 | 「放行的唯一路径：…… + `requires_confirmation` **显式为假** + `severity` 已知非最高级 + …」 | 同上 |
+| spec「门禁覆盖范围」 | 「这两类 MUST **一律**判为高风险」 | 候选人信件恒为高风险 |
+| spec「人工确认才放行」 | 「高风险消息 SHALL **仅在携带** `confirmed_by` 时才被放行外发」 | 六条是**风险分级的输入**，`confirmed_by` 是**清关** |
+| spec Scenario「人工放行」 | 「该草稿携带确认人标识**重新走门禁** …… 两道闸都通过时**被外发**」 | 同上 |
+
+当前实现取的是 `tasks.md` 的字面读法。按 spec 那半边读，高风险 + `confirmed_by` 应当放行。
+
+**⛔ 为什么本 session 不自行改**：让 `confirmed_by` 能清掉这两条是**放松闸门**，属 `CLAUDE.md` 决策代理表的不可代项（「候选人对外通道的开关：拒信/邀约对外发送」）。2026-08-28 的「一律取最保险一侧」是对当时列出的**五项**而言，不构成改写放行路径的授权。而且这里的「最保险」有陷阱：保持终局拦截确实拦得最多，但代价是**这个变更包立项要建的人工放行能力从未生效**——那不是保守，是功能不存在。这个取舍必须他本人知情后再定。
+
+**三个选项**：
+
+| | 做法 | 后果 |
+|---|---|---|
+| **(a)** 维持现状（`tasks.md` 字面） | 六条终局拦截，`confirmed_by` 只能清「等待人工确认」 | 拦得最死。U5 的适配器**必须**把候选人信件标成 `requires_confirmation=False` + `severity` 非最高级，否则队列发不出东西——而这与 spec「一律判为高风险」字面冲突，等于把矛盾推给 U5 |
+| **(b)** 按 spec 改：`confirmed_by` 非空时可清掉「自称需确认」与「最高级」两条 | 人工放行路径真正可用，与 spec 的三条原文一致。**仍不放松**：未登记类型、标志未知、等级未知、缺标识、收件人未知、总开关六条依旧终局；放行仍需人 + 总开关两道闸 | 需改 `tasks.md` 4.6/4.7 的措辞 |
+| **(c)** 折中：只让 `confirmed_by` 清掉「最高级」，「自称需确认」仍终局 | 消息作者的显式意图不可被推翻，但风险等级可由人清关 | 语义最绕，两条同源的规则走两套口径，日后没人记得为什么 |
+
+**判据锁定用例**：`test_confirmed_by_cannot_clear_a_self_declared_or_top_severity_block_pending_d6`（钉住 (a)，改判时红的就是它）。
+
+
 ## 完成判据（`tasks.md` 第 4 章的 checkbox 在这些全部成立后才勾）
 
 1. 五个 Task 全部完成，三次变异验证都如期变红并已撤销
 2. 全量测试全绿，且 `app/config.py` / `app/graph/nodes.py` / `requirements.txt` / `pyproject.toml` 的 diff 为空
 3. `compute_outbound_gate` 在 `app/outbound/` 之外零调用方
 4. ✅ 五项口径已于 2026-08-28 全部拍板（一律取最保险一侧），D-2 已改码并补测，`specs/outbound-approval-gate/spec.md` 的第七条同日补齐、`openspec validate --strict` 通过
+5. ✅ 一轮 code review 的 8 条发现：7 条已修（证据保真度与结构守护，**无一是 fail-open**）；⛔ 第 8 条是 **D-6**，属不可代口径，**U5 开工前必须由 Shao Peishen 定**
 5. final review 通过后，由**当时持有 `tasks.md` 写锁的那条 session**回勾第 4 章的 9 个 checkbox 并搬运偏离登记——⛔ 本单元自己不改 `tasks.md`
