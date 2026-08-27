@@ -159,3 +159,197 @@ def test_read_all_returns_every_line_including_prev_hash(chain_path):
     assert [record["id"] for record in records] == ["run-1", "run-2"]
     assert records[1]["event_type"] == OUTBOUND_BLOCKED
     assert "prev_hash" in records[0]
+
+
+# ── verify_chain()：四个攻击场景 ─────────────────────────────────────────
+
+
+def _rewrite(path, objects: list[dict]) -> None:
+    """按给定对象重写整个文件（模拟攻击者持有写权限）。"""
+    payload = b"\n".join(
+        json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        for obj in objects
+    )
+    path.write_bytes(payload + b"\n")
+
+
+def test_intact_chain_passes_and_returns_total(chain_path):
+    sink = JsonlChainSink(chain_path)
+    for index in range(5):
+        sink.write(_event(index))
+
+    result = sink.verify_chain()
+    assert result.ok is True
+    assert result.total == 5
+    assert result.broken_at is None
+
+
+@pytest.mark.parametrize("prepare", ["missing", "empty"])
+def test_missing_or_empty_file_passes_with_zero_total(chain_path, prepare):
+    if prepare == "empty":
+        chain_path.parent.mkdir(parents=True, exist_ok=True)
+        chain_path.write_bytes(b"")
+
+    result = JsonlChainSink(chain_path).verify_chain()
+    assert result.ok is True
+    assert result.total == 0
+
+
+def test_modified_middle_line_breaks_at_the_next_line(chain_path):
+    """
+    spec「中间一行被修改」：校验失败并指出首个断链位置。
+    改第 2 行 → 第 3 行的 prev_hash 对不上 → 首个断链位置是 3。
+    """
+    sink = JsonlChainSink(chain_path)
+    for index in range(4):
+        sink.write(_event(index))
+
+    objects = _objects(chain_path)
+    objects[1]["raw_response"] = '{"score": 5}'  # 篡改
+    _rewrite(chain_path, objects)
+
+    result = sink.verify_chain()
+    assert result.ok is False
+    assert result.broken_at == 3
+
+
+def test_deleted_middle_line_breaks_at_that_position(chain_path):
+    """spec「中间一行被删除」。删掉第 2 行后，原第 3 行落到第 2 位且 prev_hash 对不上。"""
+    sink = JsonlChainSink(chain_path)
+    for index in range(4):
+        sink.write(_event(index))
+
+    objects = _objects(chain_path)
+    _rewrite(chain_path, objects[:1] + objects[2:])
+
+    result = sink.verify_chain()
+    assert result.ok is False
+    assert result.broken_at == 2
+
+
+def test_all_prev_hash_fields_stripped_breaks_at_line_two(chain_path):
+    """
+    ⭐ 这条是这道防线的分水岭，不是"多写一个用例"（OP-0826-E §三 第 3 条）。
+
+    攻击者删光镜像中所有记录的 prev_hash 字段，试图让整链因"字段缺失即豁免"
+    而通过校验。平台侧踩过这个绕过，本仓库一次做对。
+
+    ⚠️ 断言的是 broken_at == 2，**不是** ok is False：只断言 ok is False 的话，
+    一个"任何 prev_hash 缺失都算断链（含第 1 行）"的实现也会绿，而那个实现违反
+    spec「仅第 1 条记录可豁免（向前兼容既有文件）」。位置断言同时锁住了豁免的
+    存在与豁免的边界。
+    """
+    sink = JsonlChainSink(chain_path)
+    for index in range(4):
+        sink.write(_event(index))
+
+    objects = _objects(chain_path)
+    for obj in objects:
+        obj.pop("prev_hash")
+    _rewrite(chain_path, objects)
+
+    result = sink.verify_chain()
+    assert result.ok is False
+    assert result.broken_at == 2
+    assert "prev_hash" in (result.error or "")
+
+
+def test_line_one_may_omit_prev_hash(chain_path):
+    """spec：仅第 1 条记录可豁免（向前兼容既有文件）。单行文件缺字段应通过。"""
+    sink = JsonlChainSink(chain_path)
+    sink.write(_event(1))
+
+    objects = _objects(chain_path)
+    objects[0].pop("prev_hash")
+    _rewrite(chain_path, objects)
+
+    assert sink.verify_chain().ok is True
+
+
+def test_non_json_line_is_reported_as_a_break(chain_path):
+    sink = JsonlChainSink(chain_path)
+    sink.write(_event(1))
+    with open(chain_path, "ab") as handle:
+        handle.write(b"not json at all\n")
+
+    result = sink.verify_chain()
+    assert result.ok is False
+    assert result.broken_at == 2
+
+
+# ── 序列化鲁棒性（tasks 2.6）────────────────────────────────────────────
+
+
+def test_chinese_and_escaped_newlines_do_not_false_alarm(chain_path):
+    """
+    spec「记录内容含中文与特殊字符」：链校验仍能正确通过，不因序列化差异误报。
+    design D3 第 2 条：校验对磁盘原始字节重算，不做 JSON 解析后重新 dumps 的
+    规范化——重排序、ensure_ascii 差异、空格差异都会让哈希对不上。
+    """
+    sink = JsonlChainSink(chain_path)
+    sink.write(_event(1, blocked_reason="缺少『AI 生成』标识\n第二行\t制表符"))
+    sink.write(_event(2, blocked_reason="严重度未知——按拦截处理"))
+    sink.write(_event(3, raw_response='{"评语": "熟悉 AUTOSAR，CAN 通信经验 3 年"}'))
+
+    result = sink.verify_chain()
+    assert result.ok is True
+    assert result.total == 3
+    # 一条含真实换行的记录仍然只占一行——json.dumps 把它转义成两个字符。
+    assert len(_lines(chain_path)) == 3
+
+
+def test_verification_is_byte_based_not_content_based(chain_path):
+    """
+    把第 1 行按不同的键顺序重新序列化：**内容完全一样、字节不同**。
+    一个"解析后重新 dumps 再比"的实现会放过它；按字节算的实现必须在第 2 行报断。
+    这条是 design D3 第 2 条的反向证明。
+    """
+    sink = JsonlChainSink(chain_path)
+    sink.write(_event(1))
+    sink.write(_event(2))
+
+    objects = _objects(chain_path)
+    reordered = json.dumps(objects[0], ensure_ascii=False, sort_keys=False, indent=None)
+    rest = _lines(chain_path)[1:]
+    chain_path.write_bytes(b"\n".join([reordered.encode("utf-8"), *rest]) + b"\n")
+
+    result = sink.verify_chain()
+    assert result.ok is False
+    assert result.broken_at == 2
+
+
+def test_broken_at_reports_only_the_first_break(chain_path):
+    sink = JsonlChainSink(chain_path)
+    for index in range(6):
+        sink.write(_event(index))
+
+    objects = _objects(chain_path)
+    objects[1]["raw_response"] = "tampered-a"
+    objects[4]["raw_response"] = "tampered-b"
+    _rewrite(chain_path, objects)
+
+    # 改了第 2 行与第 5 行 → 第 3 行与第 6 行都对不上，只报第一处。
+    assert sink.verify_chain().broken_at == 3
+
+
+def test_tail_hash_matches_the_last_line_digest(chain_path):
+    """
+    已知边界：哈希链检不出**最后一行**被改（没有后继来暴露它）。返回 tail_hash
+    让将来需要时可以把链尾锚定到外部。spec 未要求，U2 不做锚定本身。
+    """
+    sink = JsonlChainSink(chain_path)
+    sink.write(_event(1))
+    sink.write(_event(2))
+
+    assert sink.verify_chain().tail_hash == hashlib.sha256(_lines(chain_path)[-1]).hexdigest()
+
+
+def test_chain_stays_verifiable_after_more_appends(chain_path):
+    sink = JsonlChainSink(chain_path)
+    sink.write(_event(1))
+    assert sink.verify_chain().ok is True
+
+    sink.write(_event(2))
+    result = sink.verify_chain()
+    assert result.ok is True
+    assert result.total == 2

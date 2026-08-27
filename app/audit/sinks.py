@@ -339,3 +339,65 @@ class JsonlChainSink:
 
     def read_all(self) -> list[dict[str, Any]]:
         return [json.loads(line.decode("utf-8")) for line in self._raw_lines()]
+
+    # ── 自校验 ──────────────────────────────────────────────────────────
+
+    def verify_chain(self) -> ChainVerification:
+        """
+        链完整性校验：能检出任意一行被删除、插入或修改。
+
+        **对磁盘原始字节重算 SHA-256**（design D3 第 2 条）——⛔ 不做 JSON 解析
+        后重新 `dumps` 的规范化。重排序、`ensure_ascii` 差异、空格差异都会让哈希
+        对不上，导致明明没被改的中文记录报断链。链的定义就是"上一行落盘字节的
+        SHA-256"，不是"上一行内容的某种规范形式的 SHA-256"。
+
+        **第 2 条记录起，缺 `prev_hash` 即判定断链；仅第 1 条可豁免**（design D3
+        第 1 条）。否则攻击者删光全文件的 `prev_hash` 字段重写，整链会因"每行都
+        豁免"而通过校验——这是平台侧修过的绕过。
+
+        第 1 行的 `prev_hash` **取值不校验**：它没有前驱，拿什么和它比？
+        `GENESIS_PREV_HASH` 是写入侧的约定，不是可校验的主张。硬要求第 1 行等于
+        哨兵，会把"接管一份既有文件"变成永久断链的误报。
+
+        ⚠️ 已知边界：检不出**最后一行**被修改（没有后继来暴露它）。这是哈希链的
+        固有性质。返回 `tail_hash` 供外部锚定，本层不做锚定。
+        """
+        lines = self._raw_lines()
+        expected: str | None = None
+
+        for index, line in enumerate(lines, start=1):
+            try:
+                record = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                return ChainVerification(
+                    ok=False,
+                    total=len(lines),
+                    broken_at=index,
+                    error=f"第 {index} 行不是合法的 UTF-8 JSON: {exc}",
+                )
+
+            if "prev_hash" not in record:
+                if index > 1:
+                    return ChainVerification(
+                        ok=False,
+                        total=len(lines),
+                        broken_at=index,
+                        error=(
+                            f"第 {index} 行缺少 prev_hash 字段；"
+                            "缺字段豁免只对第 1 行生效（design D3 第 1 条）"
+                        ),
+                    )
+            elif index > 1 and record["prev_hash"] != expected:
+                return ChainVerification(
+                    ok=False,
+                    total=len(lines),
+                    broken_at=index,
+                    error=(
+                        f"第 {index} 行的 prev_hash 与上一行落盘字节的 SHA-256 不一致："
+                        f"期望 {expected}，实得 {record['prev_hash']}"
+                    ),
+                )
+
+            expected = hashlib.sha256(line).hexdigest()
+
+        return ChainVerification(ok=True, total=len(lines), tail_hash=expected)
