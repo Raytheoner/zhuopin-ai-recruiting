@@ -365,18 +365,29 @@ def test_reask_prefix_is_not_duplicated_inline_alongside_the_badge():
     旧写法"；把前缀换个等价写法塞回问题正文（比如
     `document.createTextNode((q && q.is_reask ? REASK_PREFIX : "") +
     questionText(q))`）不会命中那条否定断言，却制造了同样的双重展示缺陷。
-    这里直接数 renderQuestionBlock 函数体内 REASK_PREFIX 的代码引用次数
-    （去掉行内注释），只允许一处：badge.textContent 的赋值。
-    """
-    start = INDEX_HTML.index("function renderQuestionBlock(")
-    end = INDEX_HTML.index("\n    function ", start + 1)
-    body = INDEX_HTML[start:end]
-    code = "\n".join(line.split("//", 1)[0] for line in body.splitlines())
 
-    assert code.count("REASK_PREFIX") == 1, (
-        "renderQuestionBlock 里 REASK_PREFIX 的代码引用应当只有一处"
-        "（badge.textContent 赋值）——出现第二处说明前缀被又塞回了问题正文"
-        "（哪怕换了个等价写法），用户会看到两遍重问提示。"
+    2026-08-27（reviewer 复审）：数 REASK_PREFIX **标识符**出现次数这条
+    也不够——它挡得住字面量层面的重复引用，挡不住**值**层面的重复：
+    把 badge.textContent 赋值后再读回来（`prefixText = badge.textContent`）
+    或用一个模块级别名（`const RP = REASK_PREFIX;`）在别处再引用一次，
+    REASK_PREFIX 这个标识符的计数依然是 1，但问题正文那次追加还是被塞进
+    了前缀文本。这里改成锁**问题正文那次 appendChild 调用的完整字面量**：
+    它必须逐字是 `document.createTextNode(questionText(q))`——参数是裸
+    `questionText(q)`，不掺任何变量、字面量或拼接。只要正文那次调用不接
+    受除 `questionText(q)` 以外的任何东西，前缀就没有第二条路径能混进去，
+    不管前缀本身是字面量、变量、还是读回来的值。
+    """
+    assert (
+        INDEX_HTML.count(
+            "line.appendChild(document.createTextNode(questionText(q)));"
+        )
+        == 1
+    ), (
+        "问题正文那次 appendChild(createTextNode(...)) 必须逐字是"
+        " `document.createTextNode(questionText(q))`——参数是裸问题文本，"
+        "不掺任何前缀变量或拼接。这行缺失、被改写、或前缀通过其它变量/"
+        "读回值的方式混进了这次调用，都说明用户会看到两遍重问提示"
+        "（一遍在徽标里，一遍在问题正文里）。"
     )
 
 
