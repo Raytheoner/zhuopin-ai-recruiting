@@ -56,7 +56,7 @@ def _event(**overrides) -> DecisionEvent:
         "temperature": 0.0,
         "input_hash": "sha256:abc",
         "raw_response": "{}",
-        "scores": (CriterionScore("autosar", 3.0, "resume-1#1-20"),),
+        "scores": (CriterionScore("skill_match", 3.0, "resume-1#1-20"),),
     }
     payload.update(overrides)
     return DecisionEvent(**payload)
@@ -247,7 +247,7 @@ def test_record_propagates_storage_failure(conn, chain_path):
     recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
 
     with pytest.raises(sqlite3.IntegrityError):
-        recorder.record(conn, _event(scores=(CriterionScore("autosar", 3.0, ""),)))
+        recorder.record(conn, _event(scores=(CriterionScore("skill_match", 3.0, ""),)))
 
 
 # ── 转发与边界 ───────────────────────────────────────────────────────────
@@ -442,16 +442,37 @@ def _modules_importing_config_or_graph(source: str) -> list[str]:
     return [name for name in imported if name.startswith(("app.config", "app.graph"))]
 
 
-@pytest.mark.parametrize("module", ["events", "sinks", "recorder"])
-def test_audit_module_imports_no_config_or_graph(module):
+def _audit_module_paths() -> list[Path]:
+    """
+    扫目录而不是写死文件名——写死的列表对"新加的文件"是瞎的。
+
+    2026-08-28（U3）发现：这里原本参数化在硬编码的 `["events", "sinks", "recorder"]`
+    上，于是 U3 新增的 `criteria.py` / `hook.py` 完全不在守护范围内，可以随便
+    `import app.config` 而这条测试全绿。
+    """
+    return sorted((APP_ROOT / "audit").glob("*.py"))
+
+
+def test_audit_module_scan_is_not_silently_empty():
+    """
+    ⭐ 上面那个 glob 一旦因为路径写错返回空列表，下面的参数化测试会**一条都不跑**，
+    而 pytest 对"参数化出 0 条"不报错——守护会以"没有失败"的形式消失。这条用字面
+    文件名钉住扫描确实扫到了东西。用子集而不是相等：这个目录后续还会加文件，
+    相等会把无关的改动一起弄红。
+    """
+    names = {path.name for path in _audit_module_paths()}
+
+    assert {"events.py", "sinks.py", "recorder.py", "criteria.py"} <= names
+
+
+@pytest.mark.parametrize("path", _audit_module_paths(), ids=lambda path: path.stem)
+def test_audit_module_imports_no_config_or_graph(path):
     """
     铁律 2 的落点：app/audit 是被 L4 调用的存储适配层，自己不决定何时被调用。
     import app.config 会让审计路径在启动时绑死配置、并让 U3 的注入点不再是唯一
     一处；import app.graph 是反向依赖。路径与连接一律由调用方传入。
     """
-    source = (APP_ROOT / "audit" / f"{module}.py").read_text(encoding="utf-8")
-
-    assert _modules_importing_config_or_graph(source) == []
+    assert _modules_importing_config_or_graph(path.read_text(encoding="utf-8")) == []
 
 
 @pytest.mark.parametrize(

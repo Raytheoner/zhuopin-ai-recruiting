@@ -43,8 +43,12 @@ def _event(**overrides) -> DecisionEvent:
         "token_usage": {"total_tokens": 128},
         "latency_ms": 812.5,
         "scores": (
-            CriterionScore(criterion_key="autosar", score=3.0, evidence_ref="resume-1#120-180"),
-            CriterionScore(criterion_key="can_bus", score=2.0, evidence_ref="resume-1#300-360"),
+            CriterionScore(
+                criterion_key="skill_match", score=3.0, evidence_ref="resume-1#120-180"
+            ),
+            CriterionScore(
+                criterion_key="domain_knowledge", score=2.0, evidence_ref="resume-1#300-360"
+            ),
         ),
     }
     payload.update(overrides)
@@ -112,10 +116,12 @@ def test_scores_get_deterministic_ids(sink, conn):
         "SELECT id, criterion_key, evidence_ref FROM criterion_score ORDER BY criterion_key"
     ).fetchall()
     assert [row[0] for row in rows] == [
-        "thread-1:effect_record_analysis:sha256:abc:autosar",
-        "thread-1:effect_record_analysis:sha256:abc:can_bus",
+        "thread-1:effect_record_analysis:sha256:abc:domain_knowledge",
+        "thread-1:effect_record_analysis:sha256:abc:skill_match",
     ]
-    assert rows[0][2] == "resume-1#120-180"
+    # ORDER BY criterion_key：domain_knowledge 排在 skill_match 前，
+    # 所以 rows[0] 是那条 domain_knowledge 的证据回指。
+    assert rows[0][2] == "resume-1#300-360"
 
 
 # ── 事务归属：⛔ 不自行 commit ───────────────────────────────────────────
@@ -165,7 +171,7 @@ def test_empty_evidence_ref_is_not_swallowed(sink, conn, blank):
     把 `except sqlite3.IntegrityError: return False` 写宽一格，铁律 4 就从
     "数据库强制"退回"静默放过"，而所有正常用例照样全绿。
     """
-    event = _event(scores=(CriterionScore("autosar", 3.0, blank),))
+    event = _event(scores=(CriterionScore("skill_match", 3.0, blank),))
 
     with pytest.raises(sqlite3.IntegrityError):
         sink.write(event)
@@ -178,7 +184,7 @@ def test_failed_score_leaves_no_orphan_run(sink, conn):
     回滚由调用方的事务承担（本层不 commit 正是为了这一点）。
     """
     with pytest.raises(sqlite3.IntegrityError):
-        sink.write(_event(scores=(CriterionScore("autosar", 3.0, ""),)))
+        sink.write(_event(scores=(CriterionScore("skill_match", 3.0, ""),)))
     conn.rollback()
 
     assert conn.execute("SELECT count(*) FROM analysis_run").fetchone()[0] == 0
@@ -216,7 +222,10 @@ def test_read_all_nests_scores_under_their_run(sink):
 
     records = sink.read_all()
     assert len(records) == 1
-    assert {score["criterion_key"] for score in records[0]["scores"]} == {"autosar", "can_bus"}
+    assert {score["criterion_key"] for score in records[0]["scores"]} == {
+        "skill_match",
+        "domain_knowledge",
+    }
 
 
 def test_read_all_does_not_mutate_row_factory(sink, conn):

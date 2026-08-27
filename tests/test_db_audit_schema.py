@@ -212,7 +212,7 @@ def test_criterion_score_is_reachable_from_its_analysis_run(conn):
     _insert_run(conn, "run-join", application_id="app-9")
     conn.execute(
         "INSERT INTO criterion_score (id, analysis_run_id, criterion_key, score, evidence_ref) "
-        "VALUES ('cs-join', 'run-join', 'autosar', 3.0, 'resume:cand-9#4-40')"
+        "VALUES ('cs-join', 'run-join', 'skill_match', 3.0, 'resume:cand-9#4-40')"
     )
     conn.commit()
 
@@ -220,7 +220,7 @@ def test_criterion_score_is_reachable_from_its_analysis_run(conn):
         "SELECT r.application_id, s.criterion_key FROM criterion_score s "
         "JOIN analysis_run r ON r.id = s.analysis_run_id WHERE s.id='cs-join'"
     ).fetchone()
-    assert row == ("app-9", "autosar")
+    assert row == ("app-9", "skill_match")
 
 
 def test_criterion_score_has_run_index(conn):

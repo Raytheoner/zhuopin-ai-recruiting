@@ -7,6 +7,11 @@ AI 决策留痕。design D1：SQLite 为可查询真身，JSONL hash-chain 为�
 并让 U3 的注入点不再是唯一一处，后者是反向依赖。路径与连接一律由调用方传入。
 """
 
+from app.audit.criteria import (
+    CRITERION_KEY_WHITELIST,
+    ForbiddenCriterionKey,
+    validate_criterion_key,
+)
 from app.audit.events import (
     AI_ANALYSIS,
     BACKFILL,
@@ -26,6 +31,9 @@ from app.audit.sinks import (
 )
 
 __all__ = [
+    "CRITERION_KEY_WHITELIST",
+    "ForbiddenCriterionKey",
+    "validate_criterion_key",
     "AI_ANALYSIS",
     "BACKFILL",
     "EVENT_TYPES",

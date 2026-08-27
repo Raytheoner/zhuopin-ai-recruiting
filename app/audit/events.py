@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Any
 
+from app.audit.criteria import validate_criterion_key
+
 # ── 事件类型白名单 ──────────────────────────────────────────────────────
 # 未登记的类型在构造时就抛，不留给下游 sink 去猜。与门禁的 fail-closed 同一
 # 口径：未知就是错，不是默认值。
@@ -55,6 +57,17 @@ class CriterionScore:
     score: float
     evidence_ref: str
     id: str | None = None
+
+    # ⚠️ 上面那句「本层不做重复校验」针对的是 evidence_ref（它由数据库 CHECK
+    # 强制）。criterion_key 是另一回事：数据库没有、也不该有维度白名单——加维度
+    # 要改 DDL 就没人愿意加，白名单会退化成摆设。强制点只能在这里，见 __post_init__。
+    def __post_init__(self) -> None:
+        """
+        白名单强制点，**唯一一处**。放在构造期而不是 sink 的写入期：写入期强制
+        只罩得住走那一个 sink 的路径，构造期强制让所有写入方连一个非法对象都造
+        不出来。定义在 app/audit/criteria.py，本处只调用不重复判定。
+        """
+        validate_criterion_key(self.criterion_key)
 
     def to_dict(self) -> dict[str, Any]:
         return {

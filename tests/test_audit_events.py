@@ -63,7 +63,9 @@ def _analysis_event(**overrides) -> DecisionEvent:
         "token_usage": {"total_tokens": 128},
         "latency_ms": 812.5,
         "scores": (
-            CriterionScore(criterion_key="autosar", score=3.0, evidence_ref="resume-1#120-180"),
+            CriterionScore(
+                criterion_key="skill_match", score=3.0, evidence_ref="resume-1#120-180"
+            ),
         ),
     }
     payload.update(overrides)
@@ -130,13 +132,18 @@ def test_scores_serialise_as_list_of_dicts():
     payload = _analysis_event().to_dict()
 
     assert payload["scores"] == [
-        {"id": None, "criterion_key": "autosar", "score": 3.0, "evidence_ref": "resume-1#120-180"}
+        {
+            "id": None,
+            "criterion_key": "skill_match",
+            "score": 3.0,
+            "evidence_ref": "resume-1#120-180",
+        }
     ]
 
 
 def test_scores_are_normalised_to_a_tuple():
     """传 list 也要变成 tuple——frozen dataclass 里挂一个可变列表是个陷阱。"""
-    event = _analysis_event(scores=[CriterionScore("autosar", 3.0, "resume-1#1-2")])
+    event = _analysis_event(scores=[CriterionScore("skill_match", 3.0, "resume-1#1-2")])
 
     assert isinstance(event.scores, tuple)
 
