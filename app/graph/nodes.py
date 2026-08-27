@@ -73,6 +73,12 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         # 时序：只放耗时，不放模型标识——intake-turn-observability 要求时序
         # 留痕不承担审计职责。模型标识由第 7 章按 intake-field-grounding 落库。
         "llm_latency_ms": result.llm_latency_ms,
+        # 溯源三件套（第 7 章）。时序留痕不承担审计职责，所以模型标识不走
+        # llm_latency_ms 那条线，而是随未溯源清单一起、按 intake-field-grounding
+        # 的「编造信号可按模型版本归因」落库。
+        "ungrounded_fields": result.ungrounded_fields,
+        "written_fields": result.written_fields,
+        "llm_response_model": result.llm_response_model,
     }
 
 
@@ -107,7 +113,12 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     2026-08-27（第 6 章 tasks 6.2/6.5）：derived_unspecified_fields 开始写值——
     系统推导的那份进这一列（真源），模型自称的那份留在 unspecified_fields
     （对照）。⛔ 两列不许写同一个值，否则 8.1 的回放对比失去对照组。
-    ungrounded_fields / llm_response_model 两列仍然不写值（第 7 章接上）。
+
+    2026-08-25（第 7 章 tasks 7.5/7.9）：ungrounded_fields / written_fields /
+    llm_response_model 三列写在**同一条 INSERT** 里，不新增 effect 节点、
+    business_key 语义不变（仍是 round_count）。理由与上面的时序两列完全一致：
+    intake-field-grounding 的「来源与画像同生共死」要求"画像有这一轮、来源没有
+    这一轮"不可能出现，同一条 INSERT 是这条契约唯一自然成立的形态。
     """
     profile_json = json.dumps(state.get("profile_patch_accumulated", {}), ensure_ascii=False)
     # 两列分工见 app/storage/db.py 的建表注释：derived_* 是系统推导的真源，
@@ -124,8 +135,9 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
         "INSERT INTO job_profile "
         "(id, job_id, version, status, profile_json, unspecified_fields, "
         "derived_unspecified_fields, "
-        "turn_started_at, llm_latency_ms, is_productive, asked_questions) "
-        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?, ?, ?, ?)",
+        "turn_started_at, llm_latency_ms, is_productive, asked_questions, "
+        "ungrounded_fields, written_fields, llm_response_model) "
+        "VALUES (?, ?, ?, 'drafting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             f"{thread_id}-v{version}",
             thread_id,
@@ -138,6 +150,9 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
             # 默认 True：判定没接上时按"有产出"算，与列默认值和历史行一致。
             1 if state.get("is_productive", True) else 0,
             asked_questions_json,
+            json.dumps(state.get("ungrounded_fields", []), ensure_ascii=False),
+            json.dumps(state.get("written_fields", []), ensure_ascii=False),
+            state.get("llm_response_model"),
         ),
     )
     conn.execute(

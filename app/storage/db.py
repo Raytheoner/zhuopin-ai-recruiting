@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS job_profile (
     derived_unspecified_fields TEXT NOT NULL DEFAULT '[]',
     -- 本轮未通过来源校验的字段清单（第 7 章写）。
     ungrounded_fields TEXT NOT NULL DEFAULT '[]',
+    -- 本轮写入的业务字段名，编造率的分母（第 7 章写）。
+    written_fields TEXT NOT NULL DEFAULT '[]',
     -- 本轮 API 响应里实际返回的模型标识（第 7 章写，铁律 5）。
     llm_response_model TEXT,
     -- 本轮实际问出的问题（IntakeQuestion.to_payload() 的 JSON 数组）。
@@ -188,6 +190,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("job_profile", "llm_latency_ms", "REAL"),
     ("job_profile", "derived_unspecified_fields", "TEXT NOT NULL DEFAULT '[]'"),
     ("job_profile", "ungrounded_fields", "TEXT NOT NULL DEFAULT '[]'"),
+    # 编造率的分母（第 7 章）。profile_json 存的是累积画像，反推不出"本轮写了
+    # 几个字段"——同一字段被修正重写时键数不变，差集恒为空、分母恒偏小、
+    # 编造率恒偏大。所以逐轮把写入字段名单单独落一列。
+    # 默认值必须是常量（SQLite 拒绝非常量默认值的 ALTER TABLE ADD COLUMN）。
+    ("job_profile", "written_fields", "TEXT NOT NULL DEFAULT '[]'"),
     ("job_profile", "llm_response_model", "TEXT"),
     ("job_profile", "asked_questions", "TEXT NOT NULL DEFAULT '[]'"),
 )

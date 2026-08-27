@@ -13,6 +13,7 @@ from app.graph.nodes import (
     effect_persist_draft,
 )
 from app.llm.gateway import LLMGateway
+from app.schemas.job_profile import JobProfile
 from app.storage.db import get_connection, init_schema
 
 
@@ -30,34 +31,39 @@ class FakeChoice:
 class FakeResponse:
     choices: list
     usage: object = None
+    model: str | None = None
 
 
 class FakeChatCompletions:
-    def __init__(self, responses):
+    def __init__(self, responses, response_model: str | None = None):
         self._responses = list(responses)
+        self._response_model = response_model
 
     def create(self, **kwargs):
         content = self._responses.pop(0)
-        return FakeResponse(choices=[FakeChoice(message=FakeMessage(content=content))])
+        return FakeResponse(
+            choices=[FakeChoice(message=FakeMessage(content=content))],
+            model=self._response_model,
+        )
 
 
 class FakeChat:
-    def __init__(self, responses):
-        self.completions = FakeChatCompletions(responses)
+    def __init__(self, responses, response_model: str | None = None):
+        self.completions = FakeChatCompletions(responses, response_model=response_model)
 
 
 class FakeOpenAIClient:
-    def __init__(self, responses):
-        self.chat = FakeChat(responses)
+    def __init__(self, responses, response_model: str | None = None):
+        self.chat = FakeChat(responses, response_model=response_model)
 
 
-def make_gateway(responses):
+def make_gateway(responses, response_model: str | None = None):
     return LLMGateway(
         api_key="k",
         base_url="https://example.com",
         model="deepseek-chat-241226",
         supports_json_schema=False,
-        client=FakeOpenAIClient(responses),
+        client=FakeOpenAIClient(responses, response_model=response_model),
     )
 
 
@@ -446,11 +452,17 @@ def test_system_time_and_user_think_time_are_separable(tmp_path):
     assert total == 105
 
 
-def test_timing_trace_records_no_model_identity(tmp_path):
+def test_timing_trace_carries_no_model_identity_of_its_own(tmp_path):
     """
-    intake-turn-observability「时序留痕不承担审计职责」：本单元的留痕里只有
-    时间与耗时。llm_response_model 这一列已经建好（Task 1）但**本单元不写值**，
-    它归第 7 章的 intake-field-grounding（按模型版本归因编造率）。
+    intake-turn-observability「时序留痕不承担审计职责」：**时序那两列**里只有
+    时间与耗时，不含模型标识。
+
+    2026-08-25 更新（第 7 章 intake-field-grounding 上岗）：llm_response_model
+    这一列从此**有值**了，但它是溯源归因写的，不是时序留痕写的——原断言
+    `row[0] is None` 记录的是"第 7 章还没做"这个事实，不是一条永久契约
+    （单元 A 在原注释里就写明了"它归第 7 章"）。这里改为守住真正的契约：
+    时序两列不因模型标识而改变，模型标识来自 result.llm_response_model 这条
+    独立通道。**这不是把测试改松，是把它改准。**
     """
     conn = get_connection(str(tmp_path / "test.db"))
     init_schema(conn)
@@ -458,7 +470,8 @@ def test_timing_trace_records_no_model_identity(tmp_path):
     conn.commit()
 
     gateway = make_gateway(
-        [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {"headcount": 1}})]
+        [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {"headcount": 1}})],
+        response_model="deepseek-chat-20260801",
     )
     state = compute_intake_turn(
         {
@@ -466,18 +479,132 @@ def test_timing_trace_records_no_model_identity(tmp_path):
             "history": [{"role": "user", "content": "要一个人"}],
             "round_count": 0,
             "profile_patch_accumulated": {},
-            "turn_started_at": "2026-08-19 01:02:03",
+            "turn_started_at": "2026-08-25 01:02:03",
         },
         gateway=gateway,
     )
     effect_persist_draft(conn, thread_id="job1", business_key="0", state=state)
 
     row = conn.execute(
-        "SELECT llm_response_model, ungrounded_fields FROM job_profile WHERE job_id='job1'"
+        "SELECT turn_started_at, llm_latency_ms, llm_response_model "
+        "FROM job_profile WHERE job_id='job1'"
     ).fetchone()
-    assert row[0] is None
-    assert json.loads(row[1]) == []
-    assert "llm_response_model" not in state  # 也不许经 state 漏进来
+    assert row[0] == "2026-08-25 01:02:03"
+    assert row[1] is not None
+    # 模型标识经溯源通道落库，与时序两列互不干涉
+    assert row[2] == "deepseek-chat-20260801"
+    assert state["llm_response_model"] == "deepseek-chat-20260801"
+
+
+def test_grounding_columns_land_in_same_insert(tmp_path):
+    """
+    tasks 7.5 / 7.9 + spec「来源与画像同生共死」：未溯源清单、写入字段清单、
+    响应模型标识与画像草案在**同一条 INSERT** 里落库，不新增 effect 节点、
+    business_key 不变。effect_log 条数与 job_profile 行数按 thread 恒等（铁律 1）。
+    """
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    conn.commit()
+
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {
+                        "headcount": {"value": 2, "source_quote": "要两个人", "source_turn": 1},
+                        "mcu_family": {
+                            "value": ["TriCore"],
+                            "source_quote": "我们一直用 TriCore",
+                            "source_turn": 1,
+                        },
+                    },
+                }
+            )
+        ],
+        response_model="deepseek-chat-20260801",
+    )
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [{"role": "user", "content": "要两个人"}],
+            "round_count": 0,
+            "profile_patch_accumulated": {},
+            "turn_started_at": "2026-08-25 01:02:03",
+        },
+        gateway=gateway,
+    )
+    effect_persist_draft(conn, thread_id="job1", business_key="0", state=state)
+
+    row = conn.execute(
+        "SELECT ungrounded_fields, written_fields, llm_response_model, profile_json "
+        "FROM job_profile WHERE job_id='job1'"
+    ).fetchone()
+    assert json.loads(row[0]) == ["mcu_family"]          # 引用是编的 → 未溯源
+    assert sorted(json.loads(row[1])) == ["headcount", "mcu_family"]
+    # 铁律 5：记的是**响应返回的**标识，不是配置里的别名 deepseek-chat-241226
+    assert row[2] == "deepseek-chat-20260801"
+    assert row[2] != "deepseek-chat-241226"
+
+    counts = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM job_profile WHERE job_id='job1'), "
+        "(SELECT COUNT(*) FROM effect_log WHERE thread_id='job1' "
+        " AND effect_key LIKE '%effect_persist_draft%')"
+    ).fetchone()
+    assert counts[0] == counts[1] == 1
+
+
+def test_profile_json_stays_flat_end_to_end(tmp_path):
+    """
+    Global Constraints 第一条的**终点判据**：落库后的 profile_json 反序列化出来
+    必须是裸值，且能直接喂进 JobProfile.model_validate（headcount 收到 int 而
+    不是 dict）。这条炸了就是 POST /confirm 的 422，以及 jd_agent 读到一堆 dict。
+    """
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('job1', 't', 'drafting')")
+    conn.commit()
+
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": True,
+                    "questions": [],
+                    "profile_patch": {
+                        "job_title": {"value": "嵌入式工程师", "source_quote": "嵌入式工程师", "source_turn": 1},
+                        "department": {"value": "研发部", "source_quote": "研发部", "source_turn": 1},
+                        "headcount": {"value": 2, "source_quote": "两个", "source_turn": 1},
+                        "education_requirement": {"value": "本科", "source_quote": "本科", "source_turn": 1},
+                        "experience_years": {"value": "3-5年", "source_quote": "3-5年", "source_turn": 1},
+                    },
+                }
+            )
+        ]
+    )
+    state = compute_intake_turn(
+        {
+            "job_id": "job1",
+            "history": [
+                {"role": "user", "content": "研发部要两个嵌入式工程师，本科，3-5年经验"}
+            ],
+            "round_count": 0,
+            "profile_patch_accumulated": {},
+            "turn_started_at": "2026-08-25 01:02:03",
+        },
+        gateway=gateway,
+    )
+    # 累积态本身也必须是裸值——它是下一轮 prompt 的输入，信封会污染下一轮
+    assert state["profile_patch_accumulated"]["headcount"] == 2
+
+    effect_persist_draft(conn, thread_id="job1", business_key="0", state=state)
+    stored = json.loads(
+        conn.execute("SELECT profile_json FROM job_profile WHERE job_id='job1'").fetchone()[0]
+    )
+    assert stored["headcount"] == 2
+    JobProfile.model_validate(stored)  # 不抛 = POST /confirm 那一步不会 422
 
 
 def _job1_conn(tmp_path):

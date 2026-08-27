@@ -79,3 +79,14 @@ class IntakeState(TypedDict, total=False):
     # 本轮 LLM 累计耗时（含重试），由 compute_intake_turn 写入、
     # effect_persist_draft 与画像草案在同一条 INSERT 里落库。
     llm_latency_ms: float
+
+    # 本轮未溯源的业务字段名（第 7 章 intake-field-grounding）。
+    # 只观测不拦截：这几个键的存在不影响图的任何分支判断。
+    ungrounded_fields: list[str]
+
+    # 本轮写入的业务字段名，编造率的分母。
+    written_fields: list[str]
+
+    # API 响应里实际返回的模型标识（铁律 5）。与配置里的别名分开记录、
+    # 不互相覆盖——配置里写的名字不算数，响应返回的才算。
+    llm_response_model: str | None

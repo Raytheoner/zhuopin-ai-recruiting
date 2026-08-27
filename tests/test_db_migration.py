@@ -71,7 +71,8 @@ def test_legacy_rows_survive_migration_with_defaults(tmp_path):
 
     row = conn.execute(
         "SELECT profile_json, unspecified_fields, is_productive, turn_started_at, "
-        "llm_latency_ms, derived_unspecified_fields, ungrounded_fields, llm_response_model "
+        "llm_latency_ms, derived_unspecified_fields, ungrounded_fields, written_fields, "
+        "llm_response_model "
         "FROM job_profile WHERE id='old-job-v1'"
     ).fetchone()
     assert json.loads(row[0])["job_title"] == "采购工程师"  # 老数据一字不动
@@ -81,7 +82,8 @@ def test_legacy_rows_survive_migration_with_defaults(tmp_path):
     assert row[4] is None
     assert json.loads(row[5]) == []
     assert json.loads(row[6]) == []
-    assert row[7] is None
+    assert json.loads(row[7]) == []   # written_fields 老行按默认值 [] 成立，不回填
+    assert row[8] is None
 
 
 def test_apply_column_migrations_is_idempotent(tmp_path):
