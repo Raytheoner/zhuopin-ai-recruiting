@@ -108,6 +108,28 @@ CREATE TABLE IF NOT EXISTS analysis_run (
 
 CREATE INDEX IF NOT EXISTS idx_analysis_run_application
     ON analysis_run (application_id);
+
+CREATE TABLE IF NOT EXISTS criterion_score (
+    -- ⚠️ 审计资产：与 analysis_run 同，禁止用作训练/微调/调优输入。
+    --
+    -- evidence_ref 的 CHECK 是工程铁律 4 的存储层落点：证据回指为空的评分项
+    -- 不允许写入，且这条**由数据库强制**——绕过应用层直接 INSERT 同样被拒。
+    -- trim 的第二参数显式列出空格/制表/换行/回车：SQLite 的单参 trim() 只剥
+    -- 空格，只写 trim(evidence_ref) 的话一个纯制表符的 evidence_ref 会通过，
+    -- 那就等于铁律 4 有一个静默缺口。
+    id TEXT PRIMARY KEY NOT NULL,
+    analysis_run_id TEXT NOT NULL REFERENCES analysis_run(id),
+    criterion_key TEXT NOT NULL,
+    score REAL NOT NULL,
+    evidence_ref TEXT NOT NULL CHECK (
+        evidence_ref IS NOT NULL
+        AND trim(evidence_ref, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_criterion_score_run
+    ON criterion_score (analysis_run_id);
 """
 
 

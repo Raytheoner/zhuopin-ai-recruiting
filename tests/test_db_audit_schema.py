@@ -150,3 +150,81 @@ def test_analysis_run_has_application_index(conn):
         row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
     }
     assert "idx_analysis_run_application" in indexes
+
+
+# ── criterion_score ─────────────────────────────────────────────────────
+
+
+def test_criterion_score_accepts_row_with_evidence(conn):
+    _insert_run(conn)
+    conn.execute(
+        "INSERT INTO criterion_score (id, analysis_run_id, criterion_key, score, evidence_ref) "
+        "VALUES ('cs-1', 'run-1', 'embedded_c', 4.0, 'resume:cand-7#120-186')"
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT analysis_run_id, evidence_ref FROM criterion_score WHERE id='cs-1'"
+    ).fetchone()
+    assert row == ("run-1", "resume:cand-7#120-186")
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        pytest.param(None, id="null"),
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="spaces"),
+        pytest.param("\t", id="tab"),
+        pytest.param("\n", id="newline"),
+        pytest.param(" \t\r\n ", id="mixed-whitespace"),
+    ],
+)
+def test_criterion_score_rejects_blank_evidence_at_storage_layer(conn, evidence):
+    """
+    铁律 4 由存储层强制：这里是**直接执行 INSERT**，完全绕过任何应用层校验，
+    照样必须被拒。纯制表符/换行那几个参数是 trim 字符集的守护——单参 trim()
+    只剥空格，写成 trim(evidence_ref) 的话这几条会通过，铁律 4 就有了缺口。
+    """
+    _insert_run(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO criterion_score (id, analysis_run_id, criterion_key, score, evidence_ref) "
+            "VALUES ('cs-blank', 'run-1', 'embedded_c', 4.0, ?)",
+            (evidence,),
+        )
+        conn.commit()
+    conn.rollback()
+
+
+def test_criterion_score_requires_existing_analysis_run(conn):
+    """评分与调用快照双向可追溯：外键保证不会出现指向空气的评分项。"""
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO criterion_score (id, analysis_run_id, criterion_key, score, evidence_ref) "
+            "VALUES ('cs-orphan', 'no-such-run', 'embedded_c', 4.0, 'resume:x#1-2')"
+        )
+        conn.commit()
+    conn.rollback()
+
+
+def test_criterion_score_is_reachable_from_its_analysis_run(conn):
+    _insert_run(conn, "run-join", application_id="app-9")
+    conn.execute(
+        "INSERT INTO criterion_score (id, analysis_run_id, criterion_key, score, evidence_ref) "
+        "VALUES ('cs-join', 'run-join', 'autosar', 3.0, 'resume:cand-9#4-40')"
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT r.application_id, s.criterion_key FROM criterion_score s "
+        "JOIN analysis_run r ON r.id = s.analysis_run_id WHERE s.id='cs-join'"
+    ).fetchone()
+    assert row == ("app-9", "autosar")
+
+
+def test_criterion_score_has_run_index(conn):
+    indexes = {
+        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    assert "idx_criterion_score_run" in indexes
