@@ -576,3 +576,111 @@ def test_all_block_reasons_is_the_closed_set_u6_will_group_by():
             "门禁判定内部异常",
         }
     )
+
+
+def test_exception_inside_the_gate_is_treated_as_a_block_not_a_leak():
+    """
+    tasks 4.3 / spec「门禁判定自身抛错」：按拦截处理，MUST NOT 因判定失败
+    而放行。异常穿透到调用方，调用方一个 `except: pass` 就是 fail-open。
+    """
+
+    class _Exploding:
+        message_type = "rejection_letter"
+        requires_confirmation = False
+        severity = "low"
+        recipient = "candidate-42"
+        confirmed_by = "shao-peishen"
+
+        @property
+        def body(self):
+            raise RuntimeError("读 body 炸了")
+
+    decision = compute_outbound_gate(_Exploding(), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "门禁判定内部异常"
+    assert "读 body 炸了" in decision.error
+
+
+def test_an_exception_type_nobody_enumerated_still_closes_the_gate():
+    """
+    ⛔ 契约由结构保证，不靠枚举异常类型。U1 的枚举法失败过两次
+    （tasks.md 偏离 5）：round 1 漏了 OSError 之外的类型，round 2 被 NUL
+    字节路径的裸 ValueError 逃掉。这里直接抛一个本仓库里根本不存在的
+    异常类型，闸门照样必须关。
+    """
+
+    class _NobodyEverHeardOfThis(Exception):
+        pass
+
+    def switch():
+        raise _NobodyEverHeardOfThis("全新的失败形状")
+
+    decision = compute_outbound_gate(_valid_message(), switch)
+
+    assert decision.allowed is False
+    assert decision.reason == "门禁判定内部异常"
+
+
+def test_keyboard_interrupt_is_not_swallowed():
+    """
+    兜底只抓 Exception，⛔ 不抓 BaseException：把 KeyboardInterrupt /
+    SystemExit 吞成一条"拦截"会让进程杀不掉，那不是 fail-closed，是挂死。
+    """
+
+    def switch():
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        compute_outbound_gate(_valid_message(), switch)
+
+
+@pytest.mark.parametrize(
+    "message_factory",
+    [
+        lambda: _valid_message(),
+        lambda: _valid_message(severity="high"),
+        lambda: _Message(),
+        lambda: object(),
+    ],
+)
+def test_repeated_evaluation_is_identical(message_factory):
+    """tasks 4.9 / spec「重复判定结果一致」。"""
+    message = message_factory()
+
+    first = compute_outbound_gate(message, lambda: True)
+    second = compute_outbound_gate(message, lambda: True)
+
+    assert first == second
+
+
+def test_judging_writes_nothing_to_disk(tmp_path, monkeypatch):
+    """
+    tasks 4.9 后半句：判定过程无任何持久化写入与消息投递。
+    在一个空目录里当工作目录跑一遍判定，目录必须一个文件都不多。
+    """
+    monkeypatch.chdir(tmp_path)
+    before = {p.name for p in tmp_path.iterdir()}
+
+    compute_outbound_gate(_valid_message(), lambda: True)
+    compute_outbound_gate(object(), lambda: False)
+
+    assert {p.name for p in tmp_path.iterdir()} == before
+
+
+def test_blank_recipient_is_evidence_only_not_a_block_rule_pending_decision():
+    """
+    ⚠️ **口径锁定用例，见 plan 的「需 Shao Peishen 拍板」D-2。**
+
+    spec「fail-closed 判定语义」把拦截条件逐条列成六条，recipient 不在其中；
+    「才判为低风险」的四个条件里也没有它。所以本实现按 spec 字面办：
+    recipient 只进证据、不参与判定。
+
+    这条用例把当前口径钉住——若 Shao Peishen 改判"空 recipient 也拦"，
+    红的就是这一条，改动面是 _evaluate_outbound_gate 里加一条规则 + 改这
+    条断言。⛔ 实施者不得自行改动。
+    """
+    decision = compute_outbound_gate(_valid_message(recipient=""), lambda: True)
+
+    assert decision.allowed is True
+    assert decision.evidence["recipient"] == ""
