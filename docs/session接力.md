@@ -8,9 +8,14 @@
 ## 开场词（复制即用）
 
 ```
-HR业务线-接力0827B
+HR业务线-接力0827D
 读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 恢复上下文，然后按【下一步】继续。
 ```
+
+> ⏳ **实验第一轮已跑（2026-08-27）**：上一轮用首行 `HR业务线-接力0827B` 开了一个 Cowork
+> session，**结果待 Shao Peishen 回报侧边栏实际显示什么**，按下表三选一处置。
+> ⚠️ 编号跳到 `0827D` 是刻意的：`0827B`/`0827C` 已被第四批 CC 泳道占用，
+> 同日同号在两个界面指不同东西会读岔。**Cowork 与 CC 共用一个 MMDDX 号池。**
 
 > 🧪 **首行是一次待验证的实验，不是已确立的规则（2026-08-27）**
 >
@@ -41,11 +46,11 @@ HR业务线-接力0827B
 
 | 项 | 现状 |
 |---|---|
-| main | `7e088cb` — 单元 A/B/C/D/E 与 audit U1 全部已合并 |
+| main | `a171cef` — 单元 A/B/C/D/E 与 audit U1 全部已合并；与 `origin/main` 同步（0/0） |
 | 测试 | **222 passed**（pytest 实测。⚠️ 别用 `grep -c "def test_"`，那个数是 221，参数化/类内方法对不上） |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，结构化日志版已上线（08-19 发版） |
 | 活跃变更包 | `m1-intake-quality-fixes` **49/69**（第 3/4/5/6 章全勾，剩第 7 章 F、第 8 章 G）<br>`ai-audit-trail-and-outbound-gate` **6/53**（第 1 章 U1 全勾，剩 U2–U7）<br>`m1-job-profile-intake` 33/71（08-26 已按现实重写 WBS，四类归档） |
-| 待提交 | ⚠️ 工作区有 6 改 1 新（本轮 Cowork 产出），见【二、下一步】 |
+| 待提交 | ⚠️ 工作区有 3 改（0827D 轮 Cowork 产出：opener 补 `set_session_title`），见【二、下一步】① |
 
 **M1 demo 已有 3 位业务经理试用过**（pilot 08-16~08-18）。`m1-intake-quality-fixes`
 整个变更包就是为修 pilot 暴露的问题而立。
@@ -54,19 +59,33 @@ HR业务线-接力0827B
 
 ## 二、下一步
 
-### ① 先提交本轮 Cowork 产出（工作区 6 改 1 新，全是规则真源与执行器）
+### ~~① 提交 0827B 轮 Cowork 产出（6 改 1 新）~~ ✅ 已完成 08-27
+
+三条 commit 已在 `origin/main`：`5e1e151`（set_session_title 硬规则）、`a5fc8d3`
+（lane-dispatch skill）、`a171cef`（run-lanes 链式 + 锁预检 + 预算上调）。
+
+### ① 提交 0827D 轮的 opener 补丁（工作区 3 改）
+
+昨天定的「CC opener 第 3 行必须调 `set_session_title`」只落进了 CLAUDE.md / kickoff skill /
+hook，**没回填到已有的 opener 文件**——编排文件里当时一条都没带。本轮补齐：
 
 ```
-.claude/skills/kickoff/SKILL.md      会话命名节按正本重写；pull 顺序更正
-.claude/skills/lane-dispatch/        🆕 新 skill：说「开始泳道看护」即触发的四步流程
-CLAUDE.md                            set_session_title 硬规则；pull --autostash；lane-dispatch 指针
-docs/openers/OP-0820-全量编排.md      第四批 0827B/0827C；13 处 pull 顺序更正
-docs/openers/run-lanes.sh            链式接续 + 自动摘标注 + 锁预检 + BUDGET-HIT
-docs/session接力.md                  本文件
-scripts/hooks/check-opener-header.py 判据②：CC 块缺 set_session_title 即 exit 2
+CLAUDE.md                        set_session_title 硬规则补「无头块是唯一豁免」口径
+docs/openers/OP-0820-全量编排.md  0826Z 看护者补第 3 行；0827B/0827C 加豁免注明
+docs/session接力.md               本文件
 ```
 
-⚠️ `.git/index.lock` 是 Cowork VM 的 bash 建的、VM 删不掉，**CC 那边提交前先 `rm -f .git/index.lock`**。
+**为什么 0827B/0827C 是加注明而不是补那一行**：这两条由 `run-lanes.sh` 以
+`printf | claude` 无头启动，是 print 模式、根本不进侧边栏，没有 session 名可设；
+真给它加上，无头 session 会去调一个未必挂载的 MCP 工具。但**不能默默省略**——
+下一个人看见会当成漏写去"修"。所以块外写明豁免理由，并在 CLAUDE.md 里落了口径。
+`0826Z` 是明确要贴进 CC Desktop 的交互 session，**不豁免，已补**。
+
+✅ 已验证加的三行引用注释不影响 `run-lanes.sh` 的 awk 解析（单独跑解析仍出
+`溯源/0827B` + `审计/0827C` 两条）。
+
+⚠️ `.git/index.lock` 是 Cowork VM 的 bash 建的、VM 删不掉，**CC 那边提交前先
+`rm -f .git/index.lock`**。（0827D 轮全程用了 `git --no-optional-locks`，本轮**没留锁**。）
 
 ### ② 然后发第四批泳道（两条，可真并行）
 
@@ -81,8 +100,13 @@ bash docs/openers/run-lanes.sh --dry-run              # 预期 2 泳道 2 条，
 bash docs/openers/run-lanes.sh --chain --full-auto --yes
 ```
 
-看护用编排文件顶部的 `[Mac]0826Z-泳道批次看护`。**首次跑 run-build 建议先不加 `--chain`**，
-拿到耗时与用量样本再开链式。
+看护用编排文件里的 `[Mac]0826Z-泳道批次看护`（已补第 3 行 `set_session_title`）。
+**首次跑 run-build 建议先不加 `--chain`**，拿到耗时与用量样本再开链式。
+开跑前看一眼 `/usage` 的 5 小时窗口余量——并行两条 run-build 用量翻倍，
+`--budget` 那个美元数在 Max 订阅下不是钱闸，拦不住用量窗口。
+
+⚠️ ① 与 ② **可并行**：② 起的泳道只改 `app/` 下的代码，① 只改 `CLAUDE.md` 与 `docs/openers/`、
+`docs/session接力.md`，零重叠。②读的是磁盘上的编排文件，① 提交与否都不影响它读到的内容。
 
 ---
 
@@ -96,8 +120,9 @@ bash docs/openers/run-lanes.sh --chain --full-auto --yes
 | 4 | ~~`deploy-server.ps1` 的 ACL 段~~ | **✅ 已核实 08-26**（`2d5eaf0`），06 清单 1.1 一并落地 |
 | 5 | 决策代理人 | `CLAUDE.md` 里框架已建，人选待 Shao Peishen 指定 |
 | 6 | 06 清单剩余 6 条 🟢 | 工具链四条已落地（`f4f2c8f`）。剩下的：3.3 企微 webhook（无挂载点）、7.1/7.4 合规条款（应进 audit 包的 spec）、9.1/9.2/9.3 沟通线 |
-| 7 | ~~两个 prunable worktree~~ | **✅ 已清 08-27** |
-| 8 | 🧪 **Cowork session 命名实验** | 开场词首行已改为 `HR业务线-接力0827B`。下次开 session 看侧边栏显示什么，三种结果三种处置，见本文顶部实验表。⚠️ 结果出来前不落规则 |
+| 7 | prunable worktree | ⚠️ **清完又长出来一个**：`session-naming-lane-dispatch-54cff7`（停在 `7e088cb`，detached）。<br>⇒ 这不是"忘了清"，是**每跑一轮就产生一个**。修个例没用，该在 `run-build` 收口段或 `run-lanes.sh` 尾部加一次 `git worktree prune` |
+| 8 | 🧪 **Cowork session 命名实验** | **第一轮已跑完**（首行 `HR业务线-接力0827B` 开了一个 Cowork session），⏳ **只差 Shao Peishen 报一句侧边栏实际显示什么**，三选一处置见本文顶部实验表。⚠️ 结果出来前不落规则 |
+| 9 | 🆕 opener 规则回填缺口 | `set_session_title` 的教训是：**新规则落进 CLAUDE.md/skill/hook 之后，存量 opener 文件没人回填**，且完全无症状。已补本次三处，但缺一道机器判据（hook 只扫 Claude 的输出，扫不到躺在文件里的 opener）。⇒ 值不值得给 `run-lanes.sh` 加一条开跑前自检？待定 |
 
 ---
 
