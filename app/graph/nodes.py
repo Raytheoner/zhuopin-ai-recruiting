@@ -114,7 +114,7 @@ def effect_persist_draft(conn: sqlite3.Connection, *, thread_id: str, business_k
     系统推导的那份进这一列（真源），模型自称的那份留在 unspecified_fields
     （对照）。⛔ 两列不许写同一个值，否则 8.1 的回放对比失去对照组。
 
-    2026-08-25（第 7 章 tasks 7.5/7.9）：ungrounded_fields / written_fields /
+    2026-08-27（第 7 章 tasks 7.5/7.9）：ungrounded_fields / written_fields /
     llm_response_model 三列写在**同一条 INSERT** 里，不新增 effect 节点、
     business_key 语义不变（仍是 round_count）。理由与上面的时序两列完全一致：
     intake-field-grounding 的「来源与画像同生共死」要求"画像有这一轮、来源没有

@@ -13,6 +13,20 @@ _WITHOUT_LINE_COMMENTS = "\n".join(
 # 扫描 HTML 属性值与 JS 字符串/模板字面量：单引号、双引号、反引号包住的内容。
 _STRING_LITERAL_RE = re.compile(r"""(["'`])((?:\\.|(?!\1).)*)\1""")
 
+# 抓出 collectSelections() 的函数体，而不是在全文件里裸搜分隔符——避免其它
+# 无关代码里偶然出现同样的标点导致假阴性（测试该红时没红）。
+_COLLECT_SELECTIONS_RE = re.compile(r"function collectSelections\(\)\s*\{(.*?)\n {4}\}", re.DOTALL)
+
+
+def _collect_selections_body() -> str:
+    match = _COLLECT_SELECTIONS_RE.search(INDEX_HTML)
+    assert match, (
+        "index.html 里找不到 collectSelections() 函数——点选拼接逻辑可能被"
+        "重命名、移动或删除了，tasks 7.4(b)『点选天然命中子串判定』的核实"
+        "结论需要重新核对，不要绕过这条断言。"
+    )
+    return match.group(1)
+
 
 def test_index_html_has_no_absolute_paths():
     r"""
@@ -199,6 +213,44 @@ def test_selection_and_free_text_compose_one_message():
     # 提交后上一轮的选项要冻结，防止用户点到两轮之前的档位
     assert "function freezeActiveQuestions" in INDEX_HTML
     assert "box.disabled = true;" in INDEX_HTML
+
+
+def test_collect_selections_format_still_matches_the_fixture():
+    """
+    交付单元 F 终审 finding 3：这条探针原在 tests/test_field_grounding.py，
+    该文件在模块导入期读 index.html，使那 25 条纯函数用例的可收集性绑死在
+    前端文件上——前端文件被移动/改名时会整体 collection 失败，而不是只红
+    这一条探针。本文件已是前端断言的既有归属地（模块顶层已经在读
+    INDEX_HTML），挪过来后收窄成"只有这一条测试会红"。tests/test_field_grounding.py
+    的 7.4(b) 用例 docstring 留了一行指针指回这里。
+
+    锁的是 collectSelections() 函数体里三个要素的**组合**，而不是整行字面量
+    或单个标点：
+    - `block.dataset.qtext`：拼接里仍然带着问题原文（不是只发送档位 ID），
+      这正是"点选文本会落进用户原话"这条结论成立的前提；
+    - `"："`：问题原文与档位之间的分隔符；
+    - `picked.join("、")`：档位仍然以字符串 join 的方式拼进同一行文本，
+      而不是被序列化成结构化数据（比如 JSON.stringify(picked)）。
+
+    只锁标点（太松）会漏掉"改成结构化 ID"这类真正让 (b) 重新成立的漂移；
+    锁整行字面量（太紧）会被无关的换行/空格/变量名重排等格式化改动误伤。
+    三者组合命中的是"点选内容是否仍以可被子串搜到的文本形式，混进用户
+    原话"这一件事——这正是 tasks 7.4(b) 的核实结论所依赖的事实。
+
+    这条测试将来若失败，说明 collectSelections() 的拼接方式变了，
+    tasks 7.4(b) 需要重新判断是否要给 API 加回 selected_options
+    ——不是可以删掉的测试。
+    """
+    body = _collect_selections_body()
+    assert "block.dataset.qtext" in body, (
+        "collectSelections() 不再把问题原文拼进去了——点选内容可能只剩档位 ID，"
+        "7.4(b)『点选文本天然落进用户原话』的前提已经不成立。"
+    )
+    assert '"："' in body, "问题原文与档位之间的分隔符变了，需要重新核对 7.4(b)。"
+    assert 'picked.join("、")' in body, (
+        "档位不再以字符串 join 的形式拼接（可能改成了结构化数据），"
+        "子串判定天然命中的假设需要重新核对。"
+    )
 
 
 def test_served_html_under_root_path_keeps_option_rendering():

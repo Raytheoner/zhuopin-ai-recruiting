@@ -332,9 +332,9 @@ class IntakeTurnResult:
     questions_text: str = ""
     # 本轮 LLM 累计耗时（含重试），由 effect_persist_draft 落库（第 1 章）。
     llm_latency_ms: float = 0.0
-    # API 响应里实际返回的模型标识（铁律 5）。本单元只透出不落库——落库属
-    # 第 7 章（字段溯源要按模型版本归因），而 intake-turn-observability 明确
-    # 要求时序留痕不记模型标识。
+    # API 响应里实际返回的模型标识（铁律 5）。第 7 章起由 effect_persist_draft
+    # 落进 job_profile.llm_response_model 列（字段溯源要按模型版本归因）；
+    # intake-turn-observability（第 1 章）的时序留痕本身仍不记模型标识。
     llm_response_model: str | None = None
     # 本轮是否有产出（新画像内容 **或** 问出了未问过的 question_id）。
     # 由 effect_persist_draft 落进 job_profile.is_productive，追问预算按它计数

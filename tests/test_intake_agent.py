@@ -959,8 +959,8 @@ def test_misjudged_vague_reply_does_not_clear_extracted_fields():
     assert result.profile_patch == {"headcount": 2, "mcu_family": ["英飞凌 Aurix"]}
 
 
-def test_prompt_version_is_intake_v4():
-    """铁律 5：SYSTEM_PROMPT 改了就必须升版本。v4→v5 由单元 F 的 7.2 触发（见下方 test_prompt_version_is_v5）。"""
+def test_prompt_version_is_intake_v5():
+    """铁律 5：SYSTEM_PROMPT 改了就必须升版本。v4→v5 由单元 F 的 7.2 触发。"""
     gateway = make_gateway(
         [json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})]
     )
@@ -2065,21 +2065,6 @@ def test_verbatim_repeat_detection_still_guards_jobs_with_an_empty_ledger():
 # ---------------------------------------------------------------------------
 # 交付单元 F（tasks 7.2）：SYSTEM_PROMPT 要求逐字来源 + 用户轮次编号 + intake-v5
 # ---------------------------------------------------------------------------
-
-
-def test_prompt_version_is_v5():
-    """
-    铁律 5：SYSTEM_PROMPT 改了就必须升版本，否则 input_hash 与历史评分对不上。
-    v4 是单元 B 占用的，F 是 v5，**不要重号**（delivery-units.md §5 约定 3）。
-    """
-    gateway = make_gateway([json.dumps({"is_job_related": True, "questions": [], "profile_patch": {}})])
-    run_intake_turn(gateway, history=[{"role": "user", "content": "要招人"}], round_count=0)
-    assert gateway._client.chat.completions.calls  # 确实调过模型
-    # prompt_version 不进请求体，只进 AuditHook；这里直接对着源码常量断言。
-    import app.agents.intake_agent as mod
-    import inspect
-
-    assert 'prompt_version="intake-v5"' in inspect.getsource(mod.run_intake_turn)
 
 
 def test_system_prompt_demands_verbatim_source():

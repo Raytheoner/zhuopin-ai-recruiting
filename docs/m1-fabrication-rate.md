@@ -12,7 +12,11 @@
   判定的业务字段名。判定规则见 `app/agents/field_grounding.py::verify_field_grounding`
   ——引用（NFKC + 去空白归一化后）必须在它自己声明的那一轮用户原话里原样找到。
 - **分母** `job_profile.written_fields`：该轮写进画像的业务字段名，**含**未溯源的那些，
-  **不含**系统管理字段（`unspecified_fields` / `derived_unspecified_fields`）。
+  **不含**系统管理字段（`SYSTEM_MANAGED_FIELDS`，`app/schemas/job_profile.py`，
+  目前只有 `unspecified_fields` 一项）。`derived_unspecified_fields` 不在此列——它是
+  `job_profile` 的独立 DB 列（系统推导的真源，见 `app/graph/nodes.py`
+  `effect_persist_draft` 注释），从不出现在 `profile_patch` 里，因此也谈不上要不要
+  从 `written_fields` 里排除。
   *为什么单独存一列而不是从 `profile_json` 数*：`profile_json` 是**累积**画像，
   同一字段被修正重写时键数不变，反推出来的分母恒偏小、编造率恒偏大。
 - **分组键** `job_profile.llm_response_model`：API 响应里实际返回的模型标识
@@ -47,6 +51,15 @@ sqlite3 data/demo.db < docs/sql/fabrication-rate.sql
 `ungrounded_fields` 两列都是默认值 `[]`、`llm_response_model` 为 `NULL`，
 分母为 0，没有 `NULLIF` 会直接除零报错，整份统计拿不到任何结果。
 
+**`turns` 含离题轮，据此估样本量会偏高**：`app/agents/intake_agent.py` 的
+`is_job_related=False` 早退路径（约第 987 行）仍会拿到 `meta.response_model`
+并原样赋给 `IntakeTurnResult.llm_response_model`，但不显式设置 `written_fields`
+（默认 `field(default_factory=list)`，即 `[]`）。这份结果经 `app/graph/nodes.py`
+流入 `effect_persist_draft`，与产出轮走同一条 `INSERT`，所以离题轮同样会落一行
+`job_profile`：带 `llm_response_model`、`written_fields='[]'`。口径 SQL 里的
+`turns`（`COUNT(*)`）因此把这类"没有产出任何字段"的轮次也计入，会大于"真正
+产出过字段的轮数"——用 `turns` 估样本量的人需要知道这一点。
+
 ### 老行（`.51` 上 2026-08-19 之前的 15 个历史 job）的处置口径
 
 这些行 `written_fields = '[]'`、`ungrounded_fields = '[]'`、`llm_response_model = NULL`。
@@ -63,10 +76,10 @@ sqlite3 data/demo.db < docs/sql/fabrication-rate.sql
 
 ## 这个数字是**下界**，不是精确值
 
-`design.md` 决策 11 已经声明这一点，这里补齐已知的三条低估/高估来源。前两条让
+`design.md` 决策 11 已经声明这一点，这里补齐已知的四条低估/高估来源。前三条让
 真实编造率**大于等于**这里算出的数字（方向：偏低，即让编造被误判为"已溯源"），
-第三条让统计结果**大于等于**真正落进画像的编造字段数（方向：偏高，即分母/分子
-含有随后被摘除、并未真正留在 `profile_json` 里的字段）。三条都写明是因为读数字
+第四条让统计结果**大于等于**真正落进画像的编造字段数（方向：偏高，即分母/分子
+含有随后被摘除、并未真正留在 `profile_json` 里的字段）。四条都写明是因为读数字
 的人需要知道自己在读什么，而不是把这个数字当精确值使用。
 
 1. **【偏低】点选提交会把问题原文一起拼进用户消息**：单元 C 的 `collectSelections()`
@@ -81,7 +94,12 @@ sqlite3 data/demo.db < docs/sql/fabrication-rate.sql
    例如 `"C  A"` 能匹配 `"CA"`。同样只会让本该判"未溯源"的引用被判成"已溯源"，
    方向偏低，与下界不变式一致。要收紧需要区分中英文分别处理空白折叠规则，
    等真实数据显示这类误判确实发生了再说。
-3. **【偏高】`ungrounded_fields` / `written_fields` 取自候选值摘除之前的 patch**：
+3. **【偏低】极短引用几乎必然命中**：`_coerce_quote`（`app/agents/field_grounding.py`）
+   只拒绝空白串，不设最小长度门槛。单字引用（如 `source_quote: "的"`、`"要"`）在
+   中文原话里几乎必然能找到子串命中，与"空串是万能通行证"只差一个数量级——很可能
+   是真实数据上占比最大的一条低估来源。方向同样是偏低，与下界不变式一致。是否加
+   最小长度门槛留给 8.7 拿到真实分布之后再定，本轮不改代码。
+4. **【偏高】`ungrounded_fields` / `written_fields` 取自候选值摘除之前的 patch**：
    某字段若随后被单元 B"候选档位不得代替用户做决定"这条防线从 patch 里摘掉，
    仍会计入这两个列表——落库后 `ungrounded_fields` 里**可能出现
    `profile_json` 里查不到的字段名**。人工核对数字与画像内容时会显得不一致，
