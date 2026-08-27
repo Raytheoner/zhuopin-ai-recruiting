@@ -14,7 +14,7 @@ import json
 import sqlite3
 from typing import Any, Protocol
 
-from app.audit.events import AI_ANALYSIS, EVENT_TYPES, CriterionScore, DecisionEvent
+from app.audit.events import AI_ANALYSIS, EVENT_TYPES, DecisionEvent
 
 
 class AuditSink(Protocol):
@@ -130,8 +130,30 @@ class SqliteSink:
                     event.created_at,
                 ),
             )
+
+            for score in event.scores:
+                self.conn.execute(
+                    "INSERT INTO criterion_score "
+                    "(id, analysis_run_id, criterion_key, score, evidence_ref, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))",
+                    (
+                        score.id or f"{event.id}:{score.criterion_key}",
+                        event.id,
+                        # ⛔ 这里**不做** criterion_key 白名单校验：白名单必须集中
+                        # 在一处 Python 定义里（U3 的 3.4），散成两处会出现"一处
+                        # 放行一处拒绝"的分叉，而分叉的那一侧就是红线的缺口。
+                        score.criterion_key,
+                        score.score,
+                        score.evidence_ref,
+                        event.created_at,
+                    ),
+                )
         except sqlite3.IntegrityError as exc:
-            # ⚠️ 只短路"这条 run 已经写过"这一种情形。把 except 写宽一格
+            # ⚠️ 只短路"这条 run 已经写过"这一种情形——判据精确到
+            # analysis_run.id 的 UNIQUE 冲突。criterion_score 的 INSERT 现在
+            # 也落在这个 try 里，是刻意的：evidence_ref 的 CHECK 失败发生在
+            # criterion_score 一侧，narrowing 逻辑必须同时罩住两条语句，否则
+            # "只短路 analysis_run 冲突"这句话名不副实。把 except 写宽一格
             # （`except sqlite3.IntegrityError: return False`），evidence_ref
             # 的 CHECK 失败就会被当成"已写入"静默放过——铁律 4 当场从"数据库
             # 强制"退回"静默放过"，而所有正常用例照样全绿。
@@ -139,23 +161,6 @@ class SqliteSink:
                 raise
             return False
 
-        for score in event.scores:
-            self.conn.execute(
-                "INSERT INTO criterion_score "
-                "(id, analysis_run_id, criterion_key, score, evidence_ref, created_at) "
-                "VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))",
-                (
-                    score.id or f"{event.id}:{score.criterion_key}",
-                    event.id,
-                    # ⛔ 这里**不做** criterion_key 白名单校验：白名单必须集中在
-                    # 一处 Python 定义里（U3 的 3.4），散成两处会出现"一处放行
-                    # 一处拒绝"的分叉，而分叉的那一侧就是红线的缺口。
-                    score.criterion_key,
-                    score.score,
-                    score.evidence_ref,
-                    event.created_at,
-                ),
-            )
         return True
 
     @staticmethod
