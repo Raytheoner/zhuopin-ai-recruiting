@@ -22,11 +22,11 @@
 
 - **两行都在代码块内部**，不在外面——他复制整块时 CC 那边要能看到自己是谁、跑在哪
 - **标题行是给复制进去的那个 session 看的**（`[Mac]` 标执行机、`-` 是 id 与主题的唯一分隔符）。⛔ 不写 `OP-` 前缀、不写 `CC ·`、不用空格分隔
-- 🔴 **CC 的 opener 第 3 行必须调 `set_session_title`**，否则侧边栏丢编号——标题行**不会**自动变成 session 名。照抄：`开工第一件事：调 mcp__ccd_session_mgmt__set_session_title（session_id 传字面量 "self"），标题：[Mac]MMDDX-<主题短名>`。**Cowork 侧无此工具，名字是摘要生成的、首行无效**（08-27 实测：首行 `HR业务线-接力0827B` → 侧边栏 `HR业务线接力`，连字符与编号一并被改写掉。既非原样也非截断）。⛔ 不要再改开场词首行格式硬试，那条路已堵死。已上 hook 判据②，见 skill「会话命名」。**唯一豁免＝`run-lanes.sh` 无头起的块**（`printf | claude -p` 下那个 MCP 工具未必挂载，名字另由 `-n` 给），豁免理由须写在块外的泳道标注下方，⛔ 不许默默省略；`run-lanes.sh` 开跑前自检已机器守（块内误补即拒跑）
-- **MMDD 必须实跑 `TZ=Asia/Shanghai date +%m%d` 取**：本机在 EDT，比中国晚 12 小时，照本机日期编会集体差一天且不报错
+- 🔴 **CC 的 opener 第 3 行必须调 `set_session_title`**（否则侧边栏丢编号——标题行**不会**自动变成 session 名）。照抄：`开工第一件事：调 mcp__ccd_session_mgmt__set_session_title（session_id 传字面量 "self"），标题：[Mac]MMDDX-<主题短名>`。**Cowork 侧首行无效（走摘要，08-27 实测），⛔ 不要再改首行格式硬试。** 唯一豁免＝`run-lanes.sh` 无头起的块。实测证据、豁免写法与两道机器判据见 skill「会话命名」与 `scripts/hooks/check-opener-header.py`（旧格式 `【OP-…】` 仍放行不追改）
+- 🔴 **他在 Desktop 用 CC，不开终端——要他执行的东西一律包成 opener 代码块给，⛔ 不给裸 bash/终端命令。** 发车、跑脚本、git 全部做成 CC opener（`lane-dispatch` 只给看护者 opener **一块**，⛔ 不另给发车命令，那块自己会启动脚本）。已犯多次
+- **MMDD 必须实跑 `TZ=Asia/Shanghai date +%m%d` 取**：本机在 EDT，比中国晚 12 小时，照本机日期编会集体差一天且不报错。⚠️ **序号出前先查号池台账（`docs/openers/OP-0820-全量编排.md` 顶部），给出后当场登记**——只在聊天里派、不落档的号下轮必被重派，08-27 一天撞了 4 次；Cowork 接力号与 CC 共用同一号池
 - **worktree 后面的括号写理由**，五项一个都不能少、**用 ｜ 分隔写成一行**
 - **CC 与 Cowork 两端同等适用。**「这只是中途一条命令，不算 Opener」**不是豁免**——判据是"这段会不会被复制到另一个界面去"；脚本起 session 用 `claude -n "[Mac]MMDDX-…"`
-- CC 侧有 `Stop` hook 机器校验，旧格式 `【OP-…】` 仍放行不追改，见 `scripts/hooks/check-opener-header.py`
 
 固定判据：
 

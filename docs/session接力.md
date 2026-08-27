@@ -8,7 +8,7 @@
 ## 开场词（复制即用）
 
 ```
-HR业务线-接力0827D
+HR业务线-接力0827G
 读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 恢复上下文，然后按【下一步】继续。
 ```
 
@@ -24,8 +24,11 @@ HR业务线-接力0827D
 > （CC 侧那三条假说就是这么栽的。）
 >
 > 🔒 **首行仍然要写，但它的用处只剩"给读接力文档的人对编号"**，不再指望侧边栏。
-> ⚠️ 编号跳到 `0827D` 是刻意的：`0827B`/`0827C` 已被第四批 CC 泳道占用，
-> 同日同号在两个界面指不同东西会读岔。**Cowork 与 CC 共用一个 MMDDX 号池。**
+>
+> 🔴 **出号前必查号池台账**（`docs/openers/OP-0820-全量编排.md` 顶部「🔢 号池台账」）。
+> **Cowork 与 CC 共用一个 MMDDX 号池。** 本号原定 `0827D`，查台账发现 `D` 已被一条 CC
+> 提交 session 占用，改判 `0827G`（`A`–`F` 全已占，`E` 因撞号 3 次作废）。
+> ⚠️ 08-27 一天撞号 4 次，根因是提交类 opener 只在聊天里派、从不落档 ⇒ 下轮 grep 不到 ⇒ 重派。
 
 ---
 
@@ -33,7 +36,7 @@ HR业务线-接力0827D
 
 | 项 | 现状 |
 |---|---|
-| main | `a171cef` — 单元 A/B/C/D/E 与 audit U1 全部已合并；与 `origin/main` 同步（0/0） |
+| main | `ef2c850` — 单元 A/B/C/D/E 与 audit U1 全部已合并；与 `origin/main` 同步（0/0） |
 | 测试 | **222 passed**（pytest 实测。⚠️ 别用 `grep -c "def test_"`，那个数是 221，参数化/类内方法对不上） |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，结构化日志版已上线（08-19 发版） |
 | 活跃变更包 | `m1-intake-quality-fixes` **49/69**（第 3/4/5/6 章全勾，剩第 7 章 F、第 8 章 G）<br>`ai-audit-trail-and-outbound-gate` **6/53**（第 1 章 U1 全勾，剩 U2–U7）<br>`m1-job-profile-intake` 33/71（08-26 已按现实重写 WBS，四类归档） |

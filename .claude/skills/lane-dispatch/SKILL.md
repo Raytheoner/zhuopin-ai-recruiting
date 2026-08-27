@@ -84,21 +84,30 @@ bash docs/openers/run-lanes.sh --dry-run
 - 无 `index.lock`（有锁会 `exit 14`，带锁开跑五条泳道会全灭）
 - 工作区没有本批相关的未提交改动
 
-然后给 Shao Peishen **两样，一次给全**：
+然后给 Shao Peishen **一样东西：看护者 opener 的完整正文，整块贴出来**。
 
-1. **看护者 opener** —— `OP-0820-全量编排.md` 顶部那份 `[Mac]MMDDZ-泳道批次看护`，
-   **把里面的预期值改成本批的**（几泳道几条、各多少行）
-2. **发车命令**：
+> 🔴 **⛔ 不要另给发车命令，不要给任何裸 bash。已犯多次，这是本节最容易错的地方。**
+>
+> **他在 Desktop 用 CC，不开终端。** 裸 `bash docs/openers/run-lanes.sh …` 对他没用。
+> 而且发车命令本来就是**多余**的——看护者 opener 的【三、后台启动】就是启动脚本，
+> 那条 CC 会自己跑。给两样只会让他以为要自己开终端跑一遍。
+>
+> 同理 ⛔ **不要写「去编排文件第 N 行整块复制」**。CLAUDE.md：每份指令必须是
+> 完整可整块复制的，不要让他拼接片段、更不要让他自己去文件里找。
+> **把 `[Mac]MMDDZ-泳道批次看护` 那一块的正文原样贴进回话里。**
 
-   ```bash
-   cd /Users/paulshao/Projects/HumanResource
-   bash docs/openers/run-lanes.sh --dry-run
-   bash docs/openers/run-lanes.sh --chain --full-auto --yes
-   ```
+贴出去之前，**把那块里的预期值改成本批的**——这些值是上一批的，不改就等于没核：
 
-   ⚠️ **首次跑某个新类型的任务时建议先不加 `--chain`**（如第一批 run-build），
-   拿到耗时与用量样本再开链式。链式用 `exec` 重启自身，中途 `Ctrl-C` 只杀当前轮，
-   已起的子 session 要用 `claude agents` / `claude stop` 收。
+| 要改的地方 | 改成什么 |
+|---|---|
+| 【二】3 的 dry-run 预期 | 本批几泳道几条、每条**正文多少行**（数字从 dry-run 实际输出抄） |
+| 【四】"直到 N 条泳道都收敛" | 本批泳道数 |
+| 【五】的 checkbox 核验 | 本批各变更包的**章节号与项数** |
+| 编号 `MMDDZ` | 当日日期，`TZ=Asia/Shanghai date +%m%d` 实跑取 |
+
+⚠️ **首次跑某个新类型的任务时，看护者块里的启动命令先不加 `--chain`**（如第一批
+run-build），拿到耗时与用量样本再开链式。链式用 `exec` 重启自身，中途 `Ctrl-C`
+只杀当前轮，已起的子 session 要用 `claude agents` / `claude stop` 收。
 
 ---
 
@@ -108,6 +117,8 @@ bash docs/openers/run-lanes.sh --dry-run
 - ⛔ **不要手工摘泳道标注**。跑成的条目由 `run-lanes.sh` 的 `mark_done()` 自动摘
   （只摘 OK/PARTIAL）。你手工摘会和它打架。
 - ⛔ **不要把不可代项排进泳道**（见 ①.3）。
+- ⛔ **不要给他裸 bash 命令**（见 ④）。他在 Desktop 用 CC，不开终端。
+  本 skill 的产出只有一样：**整块贴出的看护者 opener**。
 - ⛔ **不要在 opener 里写提问句**。它们在无人值守下跑，没人能回答，写了即空转且不报错。
   一律改成预案覆盖，口径同 `CLAUDE.md`「无人值守 prompt 禁止提问」。
 
