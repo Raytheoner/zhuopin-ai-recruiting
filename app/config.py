@@ -71,6 +71,37 @@ def _as_switch(raw: str | None) -> bool:
     return False  # 空文件 / 全空行：未知即关
 
 
+class _SwitchFileBroken(Exception):
+    """内部哨兵：开关文件路径结构性损坏（不是"文件不存在"），必须直接关闭，
+    不允许继续降级去看环境变量。"""
+
+
+def _read_switch_file(switch_file: Path) -> str | None:
+    """读开关文件的内容。
+
+    返回值：
+    - 文件内容（`str`）—— 正常读到
+    - `None` —— 文件**确实不存在**（`FileNotFoundError` / ENOENT），这是
+      "没配"，调用方应当降级去看环境变量
+
+    其余任何读取失败——路径结构损坏（ENOTDIR：某个上级路径段本身是个普通
+    文件）、符号链接自环（ELOOP）、权限、目录占位（IsADirectoryError）、
+    编码坏（UnicodeDecodeError）——一律抛 `_SwitchFileBroken`。这些是
+    "配置坏了"，不是"没配"，必须直接判定为关，**不能**降级去看环境变量：
+    一个结构损坏的开关文件路径不该让 `.51` 的 `.env` 说开就开。
+
+    用 `read_text()`（内部就是 `open()`）而不是 `Path.exists()` 判断是否
+    存在——`exists()` 对 ENOTDIR/ELOOP 这类结构性错误同样返回 `False`，
+    没法把它们和"真的没有这个文件"区分开。
+    """
+    try:
+        return switch_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _SwitchFileBroken from exc
+
+
 def is_candidate_outbound_enabled() -> bool:
     """
     候选人外发总开关，**每次外发时求值**。
@@ -78,6 +109,13 @@ def is_candidate_outbound_enabled() -> bool:
     ⛔ 禁止把返回值存成模块级常量、`__init__` 里的属性、或任何单例上的字段。
     ⛔ 调用点必须带括号求值：`is_candidate_outbound_enabled()`。函数对象本身
        恒为真，漏掉括号会让 fail-closed 静默变成 fail-open。
+    ⛔ 本函数**不允许抛出任何异常**。任何一步出错——包括 `Settings` 本身
+       构造失败（比如 `.env` 里某个字段类型不对，pydantic 抛
+       `ValidationError`；或 `validate_model_version()` 抛的
+       `ValueError`，跟外发开关毫无关系）——结果都必须是 `False`。配置
+       崩了 = 全拦，这比"让异常经调用方某个 `except Exception` 冒泡、最终
+       被更上游的兜底变成放行"更保守，也是「未知即拦截」在异常这个维度上
+       唯一自洽的读法。
 
     取值优先级（前者存在即短路）：
 
@@ -88,21 +126,28 @@ def is_candidate_outbound_enabled() -> bool:
     3. `Settings.candidate_outbound_enabled` 基线值，默认 False
 
     任何一层读不出明确的"开"，结果都是 False：未知即拦截。文件读失败
-    （权限、目录占位、编码坏）同样返回 False——出错的方向只能是更保守的
-    那一侧。
+    （权限、目录占位、路径结构损坏、编码坏）同样返回 False——出错的方向
+    只能是更保守的那一侧。
     """
-    settings = get_settings()
+    try:
+        settings = get_settings()
+    except Exception:
+        # Settings 本身都构不出来（字段类型不对、validate_model_version()
+        # 抛出等）——配置已经坏了，直接关，连开关文件都不看。
+        return False
 
     switch_file = Path(settings.candidate_outbound_switch_file)
     try:
-        if switch_file.exists():
-            return _as_switch(switch_file.read_text(encoding="utf-8"))
-    except OSError:
+        raw = _read_switch_file(switch_file)
+    except _SwitchFileBroken:
         return False
-    except UnicodeDecodeError:
-        return False
+    if raw is not None:
+        return _as_switch(raw)
 
-    raw_env = os.environ.get("CANDIDATE_OUTBOUND_ENABLED")
+    try:
+        raw_env = os.environ.get("CANDIDATE_OUTBOUND_ENABLED")
+    except Exception:
+        return False
     if raw_env is not None:
         return _as_switch(raw_env)
 
