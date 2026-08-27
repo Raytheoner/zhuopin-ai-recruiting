@@ -54,7 +54,26 @@ REASON_CONFIRMATION_REQUIRED = "消息自称需要人工确认"
 REASON_SEVERITY_UNKNOWN = "风险等级缺失或未登记"
 REASON_SEVERITY_MAX = "风险等级为最高级"
 REASON_MISSING_AI_LABEL = "缺少 AI 生成标识"
+REASON_AWAITING_CONFIRMATION = "等待人工确认"
+REASON_OUTBOUND_DISABLED = "外发总开关关闭"
+REASON_SWITCH_NOT_CALLABLE = "外发总开关未以 callable 形式传入"
 REASON_GATE_ERROR = "门禁判定内部异常"
+
+# U6 的 6.5 按拦截原因统计，需要一个封闭集合。新增原因必须同时加进这里。
+ALL_BLOCK_REASONS: frozenset[str] = frozenset(
+    {
+        REASON_UNREGISTERED_TYPE,
+        REASON_CONFIRMATION_FLAG_UNKNOWN,
+        REASON_CONFIRMATION_REQUIRED,
+        REASON_SEVERITY_UNKNOWN,
+        REASON_SEVERITY_MAX,
+        REASON_MISSING_AI_LABEL,
+        REASON_AWAITING_CONFIRMATION,
+        REASON_OUTBOUND_DISABLED,
+        REASON_SWITCH_NOT_CALLABLE,
+        REASON_GATE_ERROR,
+    }
+)
 
 
 class _Absent:
@@ -201,7 +220,23 @@ def _evaluate_outbound_gate(
     if not evidence["ai_label_present"]:
         return blocked(REASON_MISSING_AI_LABEL)
 
-    # 两道闸在下一个 Task 接上。
+    # ⑦ 第一道闸：人工确认。spec「人工确认才放行」——确认人标识为空的
+    #    高风险消息 MUST 被拦截。空白串不是人。
+    confirmed_by = raw["confirmed_by"]
+    if not isinstance(confirmed_by, str) or not confirmed_by.strip():
+        return blocked(REASON_AWAITING_CONFIRMATION)
+
+    # ⑧ 第二道闸：外发总开关。⛔ 必须是 callable——传进来一个 bool 说明
+    #    调用方已经把它缓存成值了，那正是 spec 禁止的"启动时缓存一次"。
+    if not callable(outbound_enabled):
+        return blocked(REASON_SWITCH_NOT_CALLABLE)
+
+    # ⑨ 只有**恰好是 True** 才算开。⛔ 不用真值性：字符串 "false" 的真值性
+    #    是 True，一个字符串开关就能把闸门打开。与 U1 的 _as_switch()
+    #    在配置那一侧的口径一致——未知即关。
+    if raw["_switch"] is not True:
+        return blocked(REASON_OUTBOUND_DISABLED)
+
     return GateDecision(
         allowed=True, reason=None, evidence=evidence, absent_fields=absent_fields
     )

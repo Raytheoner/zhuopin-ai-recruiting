@@ -351,3 +351,228 @@ def test_near_miss_labels_do_not_count_as_labelled(body):
 
     assert decision.allowed is False
     assert decision.reason == "缺少 AI 生成标识"
+
+
+from app.config import get_settings, is_candidate_outbound_enabled
+
+
+def test_the_only_release_path():
+    """
+    tasks 4.7：放行的唯一路径 = 类型已登记 + requires_confirmation 显式为假
+    + severity 已知非最高级 + 标识齐备 + 带 confirmed_by + 总开关开启。
+    这条是全套用例里**唯一**一条 allowed is True，改动它等于改动红线。
+    """
+    decision = compute_outbound_gate(_valid_message(), lambda: True)
+
+    assert decision.allowed is True
+    assert decision.reason is None
+    assert decision.error is None
+
+
+@pytest.mark.parametrize("confirmed_by", [None, "", "   ", 0, False, ["shao"]])
+def test_missing_or_blank_confirmer_is_blocked_awaiting_confirmation(confirmed_by):
+    """
+    spec「人工确认才放行」：确认人标识为空的高风险消息 MUST 被拦截。
+    空白串也算空——一个全是空格的 confirmed_by 不是人。
+    """
+    decision = compute_outbound_gate(
+        _valid_message(confirmed_by=confirmed_by), lambda: True
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "等待人工确认"
+
+
+def test_an_absent_confirmed_by_attribute_is_blocked_awaiting_confirmation():
+    """
+    「属性根本不存在」这一态：Task 3 的笛卡尔积不覆盖 confirmed_by（那道闸
+    当时还没接上），这里补齐。⛔ 缺属性走的必须是同一条拦截路径，
+    不能因为读不到就掉进别的分支。
+    """
+    fields = {
+        "message_type": "rejection_letter",
+        "requires_confirmation": False,
+        "severity": "low",
+        "recipient": "candidate-42",
+        "body": _LABELLED_BODY,
+    }
+
+    decision = compute_outbound_gate(_Message(**fields), lambda: True)
+
+    assert decision.allowed is False
+    assert decision.reason == "等待人工确认"
+    assert decision.absent_fields == ("confirmed_by",)
+
+
+def test_confirmed_message_is_still_blocked_when_the_master_switch_is_off():
+    """
+    tasks 4.8 / spec「第二道结构性总开关」：总开关关闭时，**即便消息已携带
+    人工确认人标识**也不外发，且 reason 与「等待人工确认」区分开。
+    """
+    decision = compute_outbound_gate(_valid_message(), lambda: False)
+
+    assert decision.allowed is False
+    assert decision.reason == "外发总开关关闭"
+    assert decision.evidence["confirmed_by"] == "shao-peishen"
+    assert decision.evidence["outbound_enabled"] is False
+
+
+def test_awaiting_confirmation_wins_over_switch_off_so_the_observation_window_stays_readable():
+    """
+    判定顺序的锁定用例（见 plan 的 D-3）：没带确认人 + 总开关也关着时，
+    reason 是「等待人工确认」而不是「外发总开关关闭」。
+
+    为什么这条重要：U5 合并时总开关保持关闭（design 迁移计划第 4 步），
+    那段观察期里**每一条**外发都会撞上关着的总开关。若总开关先判，
+    观察期内所有拦截留痕的 reason 都是同一句话，"某类消息一直在被拦"
+    这个 6.5 想回答的问题就永远读不出答案。
+    """
+    decision = compute_outbound_gate(_valid_message(confirmed_by=None), lambda: False)
+
+    assert decision.allowed is False
+    assert decision.reason == "等待人工确认"
+
+
+@pytest.mark.parametrize("switch_value", ["true", "1", 1, "false", [], object()])
+def test_only_the_literal_true_opens_the_switch(switch_value):
+    """
+    ⚠️ 开关回来的必须**恰好是 True 这个对象**。用真值性判断的话，
+    一个返回字符串 "false" 的开关会把闸门打开——"false" 的真值性是 True。
+    这正是 U1 的 _as_switch() 在配置那一侧堵的同一个洞（未知即关）。
+    """
+    decision = compute_outbound_gate(_valid_message(), lambda: switch_value)
+
+    assert decision.allowed is False
+
+
+@pytest.mark.parametrize("not_callable", [True, False, 1, "true", None])
+def test_a_non_callable_switch_is_structural_misuse_and_blocks(not_callable):
+    """
+    delivery-units §3.5 硬约束 1：⛔ 禁止在模块导入期、__init__ 里、或任何
+    单例上把开关读成一个常量。传进来一个 bool 就是那个失败形状的现场——
+    值是什么已经不重要，它已经被缓存过了。判拦截，并给一个能一眼看懂的原因。
+    """
+    decision = compute_outbound_gate(_valid_message(), not_callable)
+
+    assert decision.allowed is False
+    assert decision.reason == "外发总开关未以 callable 形式传入"
+
+
+def test_switch_callable_is_invoked_exactly_once_per_decision():
+    """
+    "每次外发时求值"的两面：不能一次都不调（那就是缓存），也不能调多次
+    （多次调用之间开关可能变，一次判定里出现两个不同的开关状态）。
+    """
+    calls = []
+
+    def switch():
+        calls.append(1)
+        return True
+
+    compute_outbound_gate(_valid_message(), switch)
+    assert len(calls) == 1
+
+    compute_outbound_gate(_valid_message(message_type="offer_letter"), switch)
+    assert len(calls) == 2  # 被第一条规则拦下也照样求值，证据里要有它
+
+
+def test_switch_flipped_at_runtime_takes_effect_on_the_next_decision():
+    """
+    spec「总开关运行期间被关闭」：此后的外发请求立即被拦截，**无需重启**。
+    """
+    state = {"on": True}
+
+    def switch():
+        return state["on"]
+
+    assert compute_outbound_gate(_valid_message(), switch).allowed is True
+
+    state["on"] = False
+
+    second = compute_outbound_gate(_valid_message(), switch)
+    assert second.allowed is False
+    assert second.reason == "外发总开关关闭"
+
+
+# ── 合规默认值必须真正参与求值 ──────────────────────────────────────────
+#
+# U1 那轮的教训（tasks.md「1.x 落地偏离登记」偏离 5 末段）：合规默认值被改
+# 成 True 却无人发现，是因为所有用例都在喂桩、没有一条逼真实默认值参与。
+# 下面这一对用例把 app/config.py 的**真实** is_candidate_outbound_enabled
+# 接进门禁，且消息在其余六条上全部合格——只有这样才能走到最后一道闸，
+# 让基线默认值 False 成为唯一的拦截理由。⛔ 不允许用喂空消息走 None 分支
+# 的方式"覆盖"这条：那是把默认值绕过去，不是逼它求值。
+
+
+@pytest.fixture
+def _real_switch_env(tmp_path, monkeypatch):
+    """把真实开关指到一个不存在的临时文件，清干净环境变量与 Settings 缓存。
+
+    形状照抄 tests/test_config_audit_and_outbound.py 的 switch_path 夹具——
+    那是 U1 已经验证过的隔离方式，别另起一套。
+    """
+    path = tmp_path / "candidate_outbound.switch"
+    monkeypatch.setenv("CANDIDATE_OUTBOUND_SWITCH_FILE", str(path))
+    monkeypatch.delenv("CANDIDATE_OUTBOUND_ENABLED", raising=False)
+    get_settings.cache_clear()
+    yield path
+    get_settings.cache_clear()
+
+
+def test_real_config_baseline_default_closes_the_gate_for_an_otherwise_valid_message(
+    _real_switch_env,
+):
+    """
+    没有开关文件、没有环境变量 → 走到基线值 candidate_outbound_enabled=False。
+    消息本身完全合格，所以拦截理由只可能来自那个默认值。
+
+    变异验证：把 app/config.py 的
+    `candidate_outbound_enabled: bool = False` 改成 True，本条必须变红。
+    """
+    decision = compute_outbound_gate(_valid_message(), is_candidate_outbound_enabled)
+
+    assert decision.allowed is False
+    assert decision.reason == "外发总开关关闭"
+    assert decision.evidence["outbound_enabled"] is False
+
+
+def test_real_switch_file_opens_the_same_message_that_the_default_closed(
+    _real_switch_env,
+):
+    """
+    ⭐ 上一条的**阳性对照**，缺了它上一条就是"恒真"的：一条永远过不了
+    其余六条的消息也会拿到 allowed is False，看不出默认值有没有参与。
+    同一条消息、只把开关文件写上 true，就必须放行——两条合起来才证明
+    "拦截确实是那个默认值造成的"。
+    """
+    _real_switch_env.parent.mkdir(parents=True, exist_ok=True)
+    _real_switch_env.write_text("true", encoding="utf-8")
+
+    decision = compute_outbound_gate(_valid_message(), is_candidate_outbound_enabled)
+
+    assert decision.allowed is True
+    assert decision.reason is None
+
+
+def test_all_block_reasons_is_the_closed_set_u6_will_group_by():
+    """
+    U6 的 6.5「按 message_type 与拦截原因统计」要求原因取值来自一个有限
+    集合。断言用字面量集合——加一个原因就该在这里显性变红，让作者顺手去
+    U6 补一行统计口径，而不是让新原因静默地掉进"其他"桶里。
+    """
+    from app.outbound.gate import ALL_BLOCK_REASONS
+
+    assert ALL_BLOCK_REASONS == frozenset(
+        {
+            "未登记的消息类型",
+            "确认标志缺失或取值未知",
+            "消息自称需要人工确认",
+            "风险等级缺失或未登记",
+            "风险等级为最高级",
+            "缺少 AI 生成标识",
+            "等待人工确认",
+            "外发总开关关闭",
+            "外发总开关未以 callable 形式传入",
+            "门禁判定内部异常",
+        }
+    )
