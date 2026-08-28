@@ -23,13 +23,20 @@ _SOURCE_FILES = {path.name: path for path in sorted(_PACKAGE_DIR.glob("*.py"))}
 # 不复用 outbox，是独立的持久化落点）；messages.py 天生要 import
 # `app.channels.base.OutboundMessage`（`to_outbound_message()` 的返回形状）。
 #
+# U5（tasks 5.5）又新增了 delivery.py：它是 L4 编排层（判一次 → 分流 → 留痕 →
+# 提交后镜像），必然要 import `sqlite3`、`app.audit.*`（构造/写 DecisionEvent）
+# 与 `app.graph.nodes`（调用三个 effect_* 节点）——这些正是纯度检查要防的东西,
+# 但 delivery.py 本就不是纯度检查要保的对象：三条纯度检查测的是**门禁本身**
+# 有没有腐化成 fail-open 的形状（compute_outbound_gate 是否还纯、还 fail-closed），
+# delivery.py 从不判定、只编排既有判定结果，categorically 不在这条检查的管辖范围。
+#
 # ⚠️ 这是**排除清单**，不是白名单：纯度扫描面 = `_SOURCE_FILES` 减去这个显式
 # 登记的排除集合，⛔ 不是"只扫这几个文件"的手写允许清单。往 app/outbound/
 # 下新增任何模块（无论叫什么名字）都会自动落进三条纯度检查——这正是 review
 # round 1（第 14-16 行）要保的性质："新增模块也会自动进入扫描面"。只有显式
 # 写进 `_NON_GATE_MODULES` 的文件名会被豁免；忘了登记 = 新文件默认被纯度检查
 # 覆盖、大概率跑出违规，而不是默认被悄悄放过。方向反过来（fail-closed）。
-_NON_GATE_MODULES = {"messages.py", "queue.py"}
+_NON_GATE_MODULES = {"messages.py", "queue.py", "delivery.py"}
 
 _GATE_PURITY_FILES = {
     name: path
@@ -118,7 +125,8 @@ def test_gate_purity_scope_excludes_only_the_registered_non_gate_modules():
 
     1) 排除集合被悄悄加大——比如以后哪个模块图省事被顺手塞进
        `_NON_GATE_MODULES` 来避开纯度检查，而不是老老实实通过检查。逐字钉死
-       当前登记为 `{"messages.py", "queue.py"}`，多一个就得有人主动改这行，
+       当前登记为 `{"messages.py", "queue.py", "delivery.py"}`（U5 tasks 5.5
+       新增了 delivery.py，2026-08-28 裁决登记），多一个就得有人主动改这行，
        不能顺手加。
     2) `gate.py` / `contracts.py` / `__init__.py` 被误排除出扫描面——断言
        三者都还在 `_GATE_PURITY_FILES`（即 `_SOURCE_FILES` 减排除集合）里。
@@ -128,7 +136,7 @@ def test_gate_purity_scope_excludes_only_the_registered_non_gate_modules():
     在 `_GATE_PURITY_FILES` 是"白名单过滤"时永远不可能失败。改成排除清单后，
     这条改成分别校验排除集合与扫描面结果，两者都是能失败的断言。
     """
-    assert _NON_GATE_MODULES == {"messages.py", "queue.py"}
+    assert _NON_GATE_MODULES == {"messages.py", "queue.py", "delivery.py"}
     assert {"__init__.py", "contracts.py", "gate.py"} <= set(_GATE_PURITY_FILES)
 
 

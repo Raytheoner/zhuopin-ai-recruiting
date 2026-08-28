@@ -40,3 +40,15 @@ def __getattr__(name: str):
 
         return deliver_candidate_message
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """
+    配套 `__getattr__`（PEP 562）：`__getattr__` 单独存在时，`dir(app.outbound)`
+    / IDE 补全看不到 `deliver_candidate_message`——它只在真正按名访问时才会被
+    Python 触发，`dir()` 走的是另一条只看模块 `__dict__` 的默认路径，两者互不
+    知情。2026-08-28 实测：不补这个函数，`'deliver_candidate_message' in
+    dir(app.outbound)` 是 `False`，尽管 `from app.outbound import
+    deliver_candidate_message` 与它本身在 `__all__` 里都正常。
+    """
+    return sorted(set(globals()) | set(__all__))
