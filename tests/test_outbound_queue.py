@@ -155,3 +155,33 @@ def test_content_hash_ignores_the_confirmation_signature(conn):
 def test_content_hash_changes_when_the_body_changes():
     """阴性对照：别把 content_hash 写成常量，那样上一条恒真而去重全错。"""
     assert _msg().content_hash() != _msg(body=AI_BODY + "（改了一个字）").content_hash()
+
+
+def test_list_pending_message_type_filter_returns_only_the_matching_type(conn):
+    """
+    `queue.list_pending(conn, *, message_type=...)` 的过滤分支此前零覆盖。
+    两种登记消息类型各入队一条，按类型过滤应只拿到对应那条；不传
+    message_type 时两条都要在（阴性对照，防止过滤条件被写反成"总是过滤"）。
+    """
+    rejection_id = queue.enqueue(
+        conn,
+        thread_id="job-7",
+        message=_msg(message_type="rejection_letter"),
+        blocked_reason="等待人工确认",
+    )
+    invitation_id = queue.enqueue(
+        conn,
+        thread_id="job-7",
+        message=_msg(message_type="interview_invitation", body=AI_BODY + "（面试邀约）"),
+        blocked_reason="等待人工确认",
+    )
+    conn.commit()
+
+    rejection_only = queue.list_pending(conn, message_type="rejection_letter")
+    assert [row["id"] for row in rejection_only] == [rejection_id]
+
+    invitation_only = queue.list_pending(conn, message_type="interview_invitation")
+    assert [row["id"] for row in invitation_only] == [invitation_id]
+
+    unfiltered_ids = {row["id"] for row in queue.list_pending(conn)}
+    assert unfiltered_ids == {rejection_id, invitation_id}

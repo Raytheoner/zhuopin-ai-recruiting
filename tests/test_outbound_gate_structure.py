@@ -22,17 +22,19 @@ _SOURCE_FILES = {path.name: path for path in sorted(_PACKAGE_DIR.glob("*.py"))}
 # queue.py 天生要 `import sqlite3`、写 `INSERT INTO`（design D5：待审批队列
 # 不复用 outbox，是独立的持久化落点）；messages.py 天生要 import
 # `app.channels.base.OutboundMessage`（`to_outbound_message()` 的返回形状）。
-# 下面三条纯度检查测的是**门禁本身**（`compute_outbound_gate` 及其常量表）
-# 有没有腐化成 fail-open 的形状，检查对象收窄到 gate.py 实际用得到的文件——
-# __init__.py（暴露面）、contracts.py（常量表）、gate.py（判定逻辑）。
-# ⛔ 这不是把 review round 1 的目录枚举改回手写清单：`_SOURCE_FILES` 本身仍
-# 按目录 glob 生成（`test_the_import_guard_actually_sees_every_module_in_the_package`
-# 照旧守着它），只是**纯度检查**这三条另开一个显式登记的子集——messages.py /
-# queue.py 的副作用是 U5 设计的一部分，不该被当成门禁腐化误报。
+#
+# ⚠️ 这是**排除清单**，不是白名单：纯度扫描面 = `_SOURCE_FILES` 减去这个显式
+# 登记的排除集合，⛔ 不是"只扫这几个文件"的手写允许清单。往 app/outbound/
+# 下新增任何模块（无论叫什么名字）都会自动落进三条纯度检查——这正是 review
+# round 1（第 14-16 行）要保的性质："新增模块也会自动进入扫描面"。只有显式
+# 写进 `_NON_GATE_MODULES` 的文件名会被豁免；忘了登记 = 新文件默认被纯度检查
+# 覆盖、大概率跑出违规，而不是默认被悄悄放过。方向反过来（fail-closed）。
+_NON_GATE_MODULES = {"messages.py", "queue.py"}
+
 _GATE_PURITY_FILES = {
     name: path
     for name, path in _SOURCE_FILES.items()
-    if name in {"__init__.py", "contracts.py", "gate.py"}
+    if name not in _NON_GATE_MODULES
 }
 
 _BANNED_IMPORT_PREFIXES = (
@@ -110,14 +112,24 @@ def test_the_import_guard_actually_sees_every_module_in_the_package():
     assert set(_SOURCE_FILES) >= {"__init__.py", "contracts.py", "gate.py"}
 
 
-def test_gate_purity_scope_is_exactly_the_gate_owned_files():
+def test_gate_purity_scope_excludes_only_the_registered_non_gate_modules():
     """
-    守着 `_GATE_PURITY_FILES` 本身：U5 把 messages.py / queue.py 从三条纯度
-    检查里划走是显式登记，不是"因为在同一目录里就默认继承"。这条钉死当前
-    登记——将来如果又在 app/outbound/ 下新增一个真正的 compute_* 纯函数模块，
-    它不会自动进入纯度扫描面，必须有人手动把文件名加进上面的集合。
+    守着 `_NON_GATE_MODULES` 本身，两个方向都要防：
+
+    1) 排除集合被悄悄加大——比如以后哪个模块图省事被顺手塞进
+       `_NON_GATE_MODULES` 来避开纯度检查，而不是老老实实通过检查。逐字钉死
+       当前登记为 `{"messages.py", "queue.py"}`，多一个就得有人主动改这行，
+       不能顺手加。
+    2) `gate.py` / `contracts.py` / `__init__.py` 被误排除出扫描面——断言
+       三者都还在 `_GATE_PURITY_FILES`（即 `_SOURCE_FILES` 减排除集合）里。
+
+    ⚠️ 与旧版 `test_gate_purity_scope_is_exactly_the_gate_owned_files` 的区别：
+    旧版拿 `_GATE_PURITY_FILES` 与算它时用的同一个字面量集合比较，是重言式，
+    在 `_GATE_PURITY_FILES` 是"白名单过滤"时永远不可能失败。改成排除清单后，
+    这条改成分别校验排除集合与扫描面结果，两者都是能失败的断言。
     """
-    assert set(_GATE_PURITY_FILES) == {"__init__.py", "contracts.py", "gate.py"}
+    assert _NON_GATE_MODULES == {"messages.py", "queue.py"}
+    assert {"__init__.py", "contracts.py", "gate.py"} <= set(_GATE_PURITY_FILES)
 
 
 def test_ai_label_source_is_the_jd_agent_constant():
