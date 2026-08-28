@@ -183,7 +183,11 @@ pytest 222 作**下限**不作靶子、尾步加 `git worktree prune`）。
   没有本地副本 → **grep 不了，引用必须给文件级 URL**。
 - **git 相关只能在 CC**——Cowork 的 bash 在隔离 VM 里，对 `.git/` 只能写不能删。
 - **跨界面看不到对方会话**：`list_sessions` 只列 Cowork 会话，CC tab 的永远看不到。
-  查 CC 干了什么走文件系统（git log / `.claude/handoff/*.log`）。
+  查 CC 干了什么走文件系统（git log / `.claude/handoff/*` / 各 `tasks.md` 的回勾）。
+- 🔴 **他说的【xx】大概率指 session 名**（2026-08-28 定），不是文件名、不是章节名。
+  ⛔ 别去 grep 文件找它——找不到是正常的，那条 session 的内容你根本看不到。
+  正确反应是**照上一条走文件系统盘点真身**，然后说明「那条 session 我看不到，以下是
+  从文件系统盘出来的」。他说：其他地方会尽量少用【】。
 
 ---
 
