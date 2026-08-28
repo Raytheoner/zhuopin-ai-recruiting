@@ -81,7 +81,7 @@ U4 那条 session 在 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU4-o
 
 - ⛔ **不碰** `app/graph/build.py` 的采集图接线、`app/agents/intake_agent.py`、`app/web/server.py`、`app/config.py`、`app/audit/`（U2/U3 已交付且已回勾）。
 - `app/graph/nodes.py` **只追加两个新的 `effect_*` 函数**，⛔ 不改 `effect_deliver_message` / `effect_persist_draft` / `effect_confirm_profile` / `message_business_key` 的任何一行（tasks 5.5 逐字：「不改 `effect_deliver_message` 内部逻辑、不改 `Channel` Protocol」）。
-- **Task 1 要改 `app/outbound/gate.py` 与 `tests/test_outbound_gate.py`（U4 的文件）**：开工前先跑 `git log -3 --format='%h %ad %s' --date=format:'%H:%M' -- app/outbound/`，若最近一笔在 30 分钟内，⛔ 停下来确认那条 session 是否还在跑，别两边同写。
+- ~~**Task 1 要改 `app/outbound/gate.py` 与 `tests/test_outbound_gate.py`（U4 的文件）**~~ ⚰️ **2026-08-28 订正（`[Mac]0828B`）：这句是 D-6 拍板前的残留，与本文件「开工前置」段（D-6 已由 U4 的 `121713f` 落码、`bcc41a1` 同步 spec）以及 File Structure 表直接冲突——⛔ 本单元不改 `app/outbound/gate.py`、不改 `tests/test_outbound_gate.py`，门禁在这里是只读消费方。照它执行会把四条 D-6 锁定用例翻回 (a)，待审批队列里的候选人信件将永远发不出去。** 保留的仍然有效部分：开工前跑 `git log -3 --format='%h %ad %s' --date=format:'%H:%M' -- app/outbound/`，若最近一笔在 30 分钟内，⛔ 停下来确认那条 session 是否还在跑，别两边同写。
 - 只 `git add` 本 Task 明确列出的路径，⛔ 禁止 `git add -A` / `git commit -a`。
 - `.git/index.lock` 存在 → 等 5 秒重试最多 5 次；仍不行才看孤儿锁三项判据，**判据 3 用 `pgrep -x git`，⛔ 不要用 `-f`**。
 
@@ -114,17 +114,19 @@ U4 那条 session 在 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU4-o
 
 ## File Structure
 
+> ⚠️ **2026-08-28 订正（`[Mac]0828B`）：Task 列原先整体多一位**（沿用 D-6 拍板前那个"Task 1 改 gate.py"的旧编号）。本文件实际只有 **5 个 Task**（`grep -c '^### Task '` = 5），下表已改为实际编号。
+
 | 文件 | 动作 | 职责 | Task |
 |---|---|---|---|
-| `app/outbound/messages.py` | **新建** | `CandidateOutboundMessage`：门禁六字段 + `to_outbound_message()`，是唯一能喂进候选人门禁的形状 | 2 |
-| `app/outbound/queue.py` | **新建** | `pending_approval` 的读写与状态机；`enqueue` / `list_pending` / `approve` / `abandon` | 2、3 |
-| `app/graph/nodes.py` | **追加**两个函数 | `effect_enqueue_pending_approval`、`effect_record_outbound_audit` | 4 |
-| `app/outbound/delivery.py` | **新建** | `deliver_candidate_message()`：判一次 → 分流 → 留痕 → 提交后镜像 | 5 |
-| `app/outbound/__init__.py` | 修改 | 导出新符号 | 2、5 |
-| `tests/test_outbound_queue.py` | **新建** | 状态机、幂等、死锁防线 | 2、3 |
-| `tests/test_outbound_effects.py` | **新建** | 两个 effect 的幂等与事务归属 | 4 |
-| `tests/test_outbound_delivery.py` | **新建** | 分流、判定只求值一次、证据原样 | 5 |
-| `tests/test_outbound_end_to_end.py` | **新建** | 5.6–5.9 的端到端与回归 | 6 |
+| `app/outbound/messages.py` | **新建** | `CandidateOutboundMessage`：门禁六字段 + `to_outbound_message()`，是唯一能喂进候选人门禁的形状 | 1 |
+| `app/outbound/queue.py` | **新建** | `pending_approval` 的读写与状态机；`enqueue` / `list_pending` / `approve` / `abandon` | 1、2 |
+| `app/graph/nodes.py` | **追加**两个函数 | `effect_enqueue_pending_approval`、`effect_record_outbound_audit` | 3 |
+| `app/outbound/delivery.py` | **新建** | `deliver_candidate_message()`：判一次 → 分流 → 留痕 → 提交后镜像 | 4 |
+| `app/outbound/__init__.py` | 修改 | 导出新符号 | 1、4 |
+| `tests/test_outbound_queue.py` | **新建** | 状态机、幂等、死锁防线 | 1、2 |
+| `tests/test_outbound_effects.py` | **新建** | 两个 effect 的幂等与事务归属 | 3 |
+| `tests/test_outbound_delivery.py` | **新建** | 分流、判定只求值一次、证据原样 | 4 |
+| `tests/test_outbound_end_to_end.py` | **新建** | 5.6–5.9 的端到端与回归 | 5 |
 
 ---
 
