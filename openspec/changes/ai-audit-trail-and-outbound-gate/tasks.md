@@ -100,6 +100,26 @@
 - [x] 2.8 `recorder.py`：`AuditRecorder`，`record()` 按 D1 顺序**先 SQLite 后 JSONL**；SQLite 写失败即抛异常（调用方不吞，评分视为不可用）；提供 `query_by(**filters)` 与 `verify_integrity()`
 - [x] 2.9 测试双写故障语义：JSONL append 抛错时 SQLite 记录仍在且异常可见；对账能检出差集；补齐以链尾 `type=backfill` 事件形式追加（不插回原位）
 
+### 2.x 落地偏离登记（U2 实施，2026-08-27）
+
+本章按 `docs/superpowers/plans/2026-08-26-ai-audit-trail-unitU2-audit-module.md` 实施，
+落地时相对本文件字面有四条偏离。**前三条是该计划正文已预先登记的**（计划 §偏离登记
+1–3），第四条是 review round 1 新发现。分支实测 `tests/test_audit_*.py` 98 passed，
+全量 487 passed。核对报告见
+`docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU2-plan-reconciliation.md`。
+
+| # | 本文件字面 | 实际落地 | 判据（哪条测试咬住它） |
+|---|---|---|---|
+| 1 | 2.8 的 `record()` 一次调用内"先 SQLite 后 JSONL" | **两段式** `record(conn, event)` / `mirror(event)`，⛔ 无打包方法 | 2.8 是**顺序**要求，两段式满足它；打包会在事务回滚时留下「JSONL 有、SQLite 无」，design D1 明令这是更糟的一侧。`test_record_writes_sqlite_only`、`test_mirror_writes_jsonl_only`、`test_recorder_exposes_no_packed_method`（AST，带阳性对照 `test_packed_method_detector_actually_detects`） |
+| 2 | 2.1 把 `rubric_version` 列为一等字段 | 与 `rubric_snapshot` 合并落进 `analysis_run.rubric_snapshot` 一列，形态 `{"version":…,"snapshot":…}`，`read_all()` 无损拆回 | U1 的 `analysis_run` 没有 version 列，而 U2 ⛔ 不改 U1 的表（跨单元改 `db.py` 会作废并行、且让 U1 的老库回归守护失效）。spec 要"完整快照"，版本是快照的属性。`test_rubric_version_and_snapshot_round_trip` |
+| 3 | 2.2 未写 `write` 的返回类型 | `AuditSink.write` 返回 `bool`；`SqliteSink` 对非 `ai_analysis` 事件返回 `False` 而不造表 | 主键冲突短路需要一个调用方与对账都观察得到的信号。外发事件的真身是 `pending_approval`（U5 写），补录事件只存在于镜像链上。`test_non_analysis_events_have_no_body_in_this_sink`（参数化 OUTBOUND_BLOCKED / BACKFILL） |
+| 4 | 计划正文 Task 2 把 `criterion_score` 的 INSERT 写在 try/except **之外** | 挪进主键短路的**同一个 try 块**（`app/audit/sinks.py:118-170`） | review round 1 Important：CHECK 失败发生在 try 之外时，把 except 写宽成 `except sqlite3.IntegrityError: return False` 那条守护**依然全绿**——测试咬不住它声称守护的回归。挪进来后窄化判据 `_is_analysis_run_pk_conflict` 才同时罩住两条语句。可观察行为不变。`test_empty_evidence_ref_is_not_swallowed`（commit `f6eb9b2`） |
+
+**⚠️ 已拍板（2026-08-28，Shao Peishen）**：`record()` 返回 `False` 承载两种含义——「这条 run
+已经写过」（主键短路，`tests/test_audit_sinks_sqlite.py:155`）与「这类事件在这个 sink 里没有
+真身」（`:207`）。**结论：不动 U2**，由 U5 的调用点按 `event.event_type` 自行分辨（调用点本来
+就知道自己在写什么类型）。⛔ U5 不得从 `False` 反推原因。分析见核对报告 §五 残留 B。
+
 ## 3. 留痕接线：网关钩子 + 生产装配 + 评分项白名单
 
 交付单元：合并后铁律 3、4 从"钩子留着"变成真实生效。
@@ -156,15 +176,77 @@
 
 交付单元：门禁判定可独立测试，此时**尚未插入外发路径**。
 
-- [ ] 4.1 `contracts.py`：门禁所需字段的 Protocol（`message_type` / `requires_confirmation` / `severity` / `recipient` / `body`）+ 已登记消息类型清单（`rejection_letter`、`interview_invitation`）
-- [ ] 4.2 `gate.py`：`compute_outbound_gate(message, outbound_enabled) -> GateDecision` 纯函数。fail-closed 六条判定按 spec 实现；`GateDecision` 携带 `allowed` / `reason` / `evidence`（判定所依据字段的**原始取值**，含空值），留痕直接消费 `evidence` 不重新求值
-- [ ] 4.3 门禁内部异常按拦截处理（判定失败绝不放行）
-- [ ] 4.4 AI 生成标识校验：拒信/邀约缺标识按拦截处理。**复用** `app/agents/jd_agent.py` 现有的 `AI_LABEL_TEMPLATE` 机制判定，不另写一套标识逻辑
-- [ ] 4.5 配置项 `CANDIDATE_OUTBOUND_ENABLED`，默认**关闭**；总开关每次外发现求值，不启动时缓存（支持传 callable）
-- [ ] 4.6 测试 fail-closed 六条判定各一个用例：未登记类型、缺 `requires_confirmation`、`requires_confirmation` 为真、`severity` 为空、`severity` 最高级、缺 AI 标识——全部拦截
-- [ ] 4.7 测试放行的唯一路径：类型已登记 + `requires_confirmation` 显式为假 + `severity` 已知非最高级 + 标识齐备 + 带 `confirmed_by` + 总开关开启
-- [ ] 4.8 测试总开关优先级：带有效 `confirmed_by` 但总开关关闭 → 仍拦截，`reason` 为「外发总开关关闭」，与「等待人工确认」区分
-- [ ] 4.9 测试纯函数性：同一消息同一开关状态两次判定结果相同，且过程无任何持久化写入与消息投递
+- [x] 4.1 `contracts.py`：门禁所需字段的 Protocol（`message_type` / `requires_confirmation` / `severity` / `recipient` / `body`）+ 已登记消息类型清单（`rejection_letter`、`interview_invitation`）
+- [x] 4.2 `gate.py`：`compute_outbound_gate(message, outbound_enabled) -> GateDecision` 纯函数。fail-closed 六条判定按 spec 实现；`GateDecision` 携带 `allowed` / `reason` / `evidence`（判定所依据字段的**原始取值**，含空值），留痕直接消费 `evidence` 不重新求值
+- [x] 4.3 门禁内部异常按拦截处理（判定失败绝不放行）
+- [x] 4.4 AI 生成标识校验：拒信/邀约缺标识按拦截处理。**复用** `app/agents/jd_agent.py` 现有的 `AI_LABEL_TEMPLATE` 机制判定，不另写一套标识逻辑
+- [x] 4.5 配置项 `CANDIDATE_OUTBOUND_ENABLED`，默认**关闭**；总开关每次外发现求值，不启动时缓存（支持传 callable）
+- [x] 4.6 **（2026-08-28 D-6 取 (b) 后订正）** 测试**五条消息畸形**各一个用例：未登记类型、确认标志读不出布尔、风险等级不在词表、缺 AI 标识、收件对象读不出非空字符串——全部拦截，且 **`confirmed_by` 也清不掉**（终局）。另测**两类已知高风险**（确认标志显式为真、风险等级为已登记最高级）：无确认人时各自报出自己的原因，⛔ 不折成「等待人工确认」。
+  > 订正前的旧口径把「`requires_confirmation` 为真」「`severity` 最高级」也算作六条 fail-closed 之一的**终局拦截**，与代码和 `specs/outbound-approval-gate/spec.md` 都对不上——照旧口径实现会让 `queue.approve()` 带确认人重走门禁仍被拦，待审批队列里的信件永远发不出去。依据见下方 4.x 的 D-6 节（commit `121713f` / `bcc41a1`）。
+- [x] 4.7 **（2026-08-28 D-6 取 (b) 后订正）** 测试放行的唯一路径：类型已登记 + 确认标志读得出布尔 + `severity` 在词表内 + 标识齐备 + 收件对象为非空字符串 + 带非空 `confirmed_by` + 总开关开启。
+  > 订正前写作「`requires_confirmation` **显式为假** + `severity` **已知非最高级**」——那是取 (b) 前的旧口径。两类已知高风险现在由第一道闸的人以 `confirmed_by` **清关**，不再是放行的排除条件；两道闸仍串联（人签了字、总开关关着照样不发）。
+- [x] 4.8 测试总开关优先级：带有效 `confirmed_by` 但总开关关闭 → 仍拦截，`reason` 为「外发总开关关闭」，与「等待人工确认」区分
+- [x] 4.9 测试纯函数性：同一消息同一开关状态两次判定结果相同，且过程无任何持久化写入与消息投递
+
+### 4.x 落地偏离登记（U4 实施，2026-08-28）
+
+本章按 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU4-outbound-gate-pure-functions.md`
+实施，落地时相对本文件 / `delivery-units.md` 字面有八条偏离。**方向全部是"更严"或"信息不丢"**，
+没有一条放松。实测 `tests/test_outbound_gate.py tests/test_outbound_gate_structure.py` 124 passed，
+全量 675 passed。落码 commit：`5e3fe79`（契约与词表）、`b3f8c46`（证据三态）、`32ccb14`（六条判定与
+裸对象主防线）、`534d310`（两道闸）、`9475543`（异常按拦截与纯函数性）、`de0eb62`（review round 1
+七条）、`b83f081` + `adcee86`（第七条 fail-closed 与 spec 同步）、`121713f` + `bcc41a1`（D-6 取 (b) 与 spec 同步）。
+
+| # | 文件字面 | 实际落地 | 方向 / 理由 |
+|---|---|---|---|
+| 1 | 4.1 的 Protocol 字段是五个（`message_type` / `requires_confirmation` / `severity` / `recipient` / `body`） | 六个，多一个 `confirmed_by` | **保签名**。design D4 把签名定死为 `compute_outbound_gate(message, outbound_enabled)` 两参，而 4.7 要求判定"带 `confirmed_by`"。`confirmed_by` 只能挂在消息上。缺失方向是拦截，无 fail-open 风险 |
+| 2 | 4.5「支持传 callable」 | **只**接受 callable，传 bool 判拦截 | **更严**。"支持"是允许，落地升级成强制——把 `delivery-units.md` §3.5 硬约束 1「禁止把它读成一个常量」从约定变成类型上做不到。`test_a_non_callable_switch_is_structural_misuse_and_blocks` |
+| 3 | 4.2 的 `GateDecision` 是三字段（`allowed` / `reason` / `evidence`） | 五字段，多 `absent_fields` 与 `error` | **信息不丢**。U2 已落地的 `DecisionEvent.evidence` 是扁平 `dict[str, Any]`，absent 与 None 在扁平 dict 里必然同形；区别挪到 `absent_fields` 承载，`evidence` 保持 U5 可直接消费。`test_absent_attribute_is_distinguishable_from_an_explicit_none` |
+| 4 | `delivery-units.md` §2.U4 只写了 `tests/test_outbound_gate.py` | 拆成行为面 + 结构面两个文件 | **可读性**。结构面读源码解析 AST，与行为用例不共享 fixture 也不共享失败信号；混在一起 `-k` 跑不开，reviewer 也难一眼看出结构防线还在不在 |
+| 5 | spec 未规定判定顺序 | 六条 fail-closed 先判，两道闸最后判 | **口径**，见 D-3。总开关先判会在 U5 的观察期内把其余五条原因全部盖住。`test_awaiting_confirmation_wins_over_switch_off_so_the_observation_window_stays_readable` |
+| 6 | spec「留痕记录判定所依据的各字段原始取值」 | `body` 不进 `evidence`，改记 `ai_label_present` 布尔 | **更保守**。拒信正文是候选人可识别内容；正文指纹由 U5 的 `content_hash` 承担。`test_evidence_never_carries_the_message_body` |
+| 7 | spec 原本的六条拦截条件不含 `recipient` | **新增第七条拦截规则**：收件对象非空字符串才放行 | **更严**，见 D-2。✅ spec 已同步补第七条，`validate --strict` 通过，代码与 spec 一致。`test_unknown_recipient_is_blocked_per_the_2026_08_28_ruling`、`test_absent_recipient_attribute_is_blocked_too` |
+| 8 | 4.4「复用 `AI_LABEL_TEMPLATE`」未规定匹配强度 | 取模板 `{generated_at}` 之前的**不变前缀全量匹配** | **最严的一侧**，见 D-1。`test_ai_label_prefix_is_pinned_verbatim`、`test_near_miss_labels_do_not_count_as_labelled` |
+
+#### 五项口径 —— ✅ 已拍板（2026-08-28 Shao Peishen）
+
+> **批准人：Shao Peishen（本项目唯一决策人）｜时间：2026-08-28｜事项：本节 D-1 至 D-5 全部**
+> **依据：本人指示「五项拍板都按最保险落地确认」。** 留痕格式按 `CLAUDE.md`「决策代理」的要求。
+> 其中 D-2 改变了已落地的行为，当次即改代码并补了回归测试；其余四项**当前落地本身就是最保险的一侧**，不改一行。
+
+| 项 | 结论 | 是否改动代码 |
+|---|---|---|
+| **D-1** AI 标识判定强度 | **(a) 保持**：匹配 `AI_LABEL_TEMPLATE` 中 `{generated_at}` 之前的完整不变前缀。三个选项里最严的一侧 | 否 |
+| **D-2** 空 `recipient` 是否拦截 | **(b) 改判**：新增**第七条** fail-closed 规则，收件对象读不出非空字符串即拦截；非字符串（dict/list）同样判未知 | **是** |
+| **D-3** 拦截原因归属顺序 | **(a) 保持**：消息自身的畸形先判，两道闸最后判。「最保险」在这一项上不构成区分——两个选项下放行/拦截行为完全一致，差别只在留痕记哪一条 `reason`；判据是可观测性 | 否 |
+| **D-4** 风险等级词表 | **(a) 保持** `("low","medium","high")`，最高级 `"high"`，实际过闸的只有 low / medium。**加 `critical` 反而更松**（`"high"` 会变成非最高级而放行），三档才是更严的一侧 | 否 |
+| **D-5** 只接受 callable | **保持并追认**：传 bool 判拦截。把 §3.5 硬约束 1「禁止读成常量」从约定变成类型上做不到 | 否 |
+
+#### D-6 —— ✅ 已拍板取 (b)（2026-08-28 Shao Peishen）
+
+> **批准人：Shao Peishen｜时间：2026-08-28｜事项：D-6 放行路径口径｜依据：本人指示「b」**
+
+**背景**：本文件 4.6/4.7 的原措辞与 spec 的三条原文互相矛盾——前者说六条 fail-closed 是彼此独立的**终局拦截**，后者（「这两类 MUST 一律判为高风险」+「高风险消息 SHALL 仅在携带 `confirmed_by` 时才被放行外发」+ Scenario「人工放行」）说它们是**风险分级的输入**、`confirmed_by` 是**清关**。取 (b) 前实现照本文件字面，后果是 `queue.approve()` 带确认人重走门禁仍被拦，**待审批队列里的候选人信件永远发不出去**，本变更包立项要建的人工放行能力从未生效。4.6/4.7 的措辞已于 2026-08-28 随本次回勾一并订正。
+
+| 类别 | 哪几条 | 处置 |
+|---|---|---|
+| **消息畸形** | 未登记类型、确认标志读不出布尔、风险等级不在词表、缺 AI 标识、收件对象读不出非空字符串 | **终局拦截，⛔ 人也清不掉**。签字的前提是知道自己在签什么；允许 `confirmed_by` 清掉畸形，人工确认就成了「随便谁点一下就能发任何东西」的橡皮图章 |
+| **已知的高风险** | 确认标志显式为真、风险等级为已登记的最高级 | **风险分级，不是终局**。由第一道闸的人清关，与 spec 三条原文一致 |
+
+**没有被放松的东西**：两道闸仍**串联**（人签了字、总开关关着照样不发）；总开关仍每次求值；`confirmed_by` 仍要求非空字符串。
+
+**判据（锁定用例）**：
+
+- `test_confirmed_by_clears_a_known_high_risk_block_per_d6_option_b` —— (b) 的放行那一半
+- `test_confirmed_by_cannot_clear_a_malformed_message`（5 条参数化）—— **(b) 更重要的那一半**，变异验证：让 `confirmed_by` 能清掉畸形后 15 条变红
+- `test_a_plain_letter_without_a_confirmer_reports_exactly_the_spec_wording` —— spec 原文那句
+- `test_a_cleared_high_risk_message_is_still_stopped_by_the_master_switch` —— 两道闸串联不变
+
+**同步情况**：`specs/outbound-approval-gate/spec.md` 已补两类划分、清关范围限定、两个新 Scenario（`bcc41a1`），`openspec validate --strict` 通过。
+
+#### ⚠️ 交给 U5 的一条硬约束
+
+⛔ **U5 不得改 `app/outbound/gate.py` 与 `tests/test_outbound_gate.py`**。D-6 已于 2026-08-28 落码并同步 spec，翻转上面四条锁定用例＝把 D-6 修掉的那个 bug 装回去。U5 计划 `:29` 与 File Structure 表的 stale 描述已于同日订正。
 
 ## 5. 待审批队列与图节点接线
 
@@ -201,5 +283,5 @@
 - [ ] 7.3 `docs/` 增一页说明留痕与门禁的运维口径：JSONL 路径与备份、链校验怎么手动跑、`CANDIDATE_OUTBOUND_ENABLED` 的开关流程与「不提供一键放行全部」的理由
   - **⚠️ U1 发现、U7 承接（2026-08-27 Shao Peishen 拍板取方案 (b)，见第 1 章「遗留一」）：本页必须写入开关文件的编码约束。** 规定唯一允许的写法是 `[System.IO.File]::WriteAllText($path, 'true')`；**⛔ 禁止** PowerShell 的 `Out-File` / `>` / `>>`（默认 UTF-16LE）与记事本的"UTF-8"另存（带 BOM）。`_read_switch_file()` 不剥 BOM、不认 UTF-16，用错写法的症状是**开关静默不生效且不报错**（方向 fail-closed，拦住了但打不开）。他明确选择不改代码——改代码剥 BOM 属「在合规开关上放松」，是不可代项。**U5 接线前必须确认本条已落地**，否则总开关在 `.51` 上不具备可操作性
 - [ ] 7.4 `06-企业AI转型资产借鉴清单.md` 追加本次借鉴记录：借的四条做法、自建的对应模块、**明确未引入依赖未拷贝代码**
-- [ ] 7.5 技术债登记：`operator_id` 现阶段不可信（鉴权空壳）；企微 OAuth SSO 待两侧共同决定，是 M2 处理真实简历前的阻塞项之一（另一半留痕已由本变更完成）
-- [ ] 7.6 技术债登记：JSONL 写入侧仅进程内锁，假设单进程部署；M2 迁 Postgres 时需重新处理并发写与 JSONL 的关系
+- [x] 7.5 技术债登记：`operator_id` 现阶段不可信（鉴权空壳）；企微 OAuth SSO 待两侧共同决定，是 M2 处理真实简历前的阻塞项之一（另一半留痕已由本变更完成）→ **`docs/tech-debt.md` TD-6**（2026-08-28 登记，触发条件＝部署约束 5 的「M2 起处理真实简历前」）
+- [x] 7.6 技术债登记：JSONL 写入侧仅进程内锁，假设单进程部署；M2 迁 Postgres 时需重新处理并发写与 JSONL 的关系 → **`docs/tech-debt.md` TD-7**（2026-08-28 登记，触发条件＝M2 迁 Postgres 或 `.51` 部署形态转多进程，孰先触发）

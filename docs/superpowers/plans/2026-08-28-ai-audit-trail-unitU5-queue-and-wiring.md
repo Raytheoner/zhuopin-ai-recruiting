@@ -26,7 +26,9 @@ U4 那条 session 在 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU4-o
 
 **为什么 (a) 不是"更保险的那一侧"**：(a) 下队列里的候选人信件永远发不出去，于是 U5 的适配器只能把候选人信件标成 `requires_confirmation=False` + 非最高级才能让流程跑通——那与 spec「这两类 MUST **一律**判为高风险」正面冲突，等于**为了跑通流程而谎报风险等级**。谎报比放行更糟：放行至少留了 `confirmed_by`，谎报连"这是高风险"这个事实都没了。
 
-**落地在本单元 Task 1**（改 `app/outbound/gate.py`、翻转 U4 的锁定用例、同步 `tasks.md` 4.6/4.7 的措辞）。⚠️ 那是 U4 的文件——开工前先 `git log -3 -- app/outbound/` 确认那条 session 已停手，见 Global Constraints 第五条。
+**✅ 已闭环，本单元不再做（2026-08-28 订正）**：D-6 已由 U4 那条 session 当日落码（`121713f`）并同步 spec（`bcc41a1`），`tasks.md` 4.6/4.7 的措辞由 `[Mac]0828A-账目对齐` 订正、第 4 章已回勾。
+
+⛔ **本单元不改 `app/outbound/gate.py`，也不改 `tests/test_outbound_gate.py`。** 那两个文件里的四条 D-6 锁定用例（`test_confirmed_by_clears_a_known_high_risk_block_per_d6_option_b`、`test_confirmed_by_cannot_clear_a_malformed_message`、`test_a_plain_letter_without_a_confirmer_reports_exactly_the_spec_wording`、`test_a_cleared_high_risk_message_is_still_stopped_by_the_master_switch`）**已经是 (b) 的样子**——翻转它们＝把 D-6 修掉的那个 bug 装回去：`queue.approve()` 带 `confirmed_by` 重走门禁仍被拦，待审批队列里的候选人信件永远发不出去。本单元的门禁是**只读消费方**。
 
 ---
 
@@ -114,9 +116,6 @@ U4 那条 session 在 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU4-o
 
 | 文件 | 动作 | 职责 | Task |
 |---|---|---|---|
-| `app/outbound/gate.py` | 修改（U4 的文件） | 落实 D-6 口径 B：`confirmed_by` 清关「自称需确认」与「最高级」 | 1 |
-| `tests/test_outbound_gate.py` | 修改（U4 的文件） | 翻转 D-6 锁定用例 | 1 |
-| `openspec/.../tasks.md` | 修改 | 4.6/4.7 措辞与 spec 对齐 | 1 |
 | `app/outbound/messages.py` | **新建** | `CandidateOutboundMessage`：门禁六字段 + `to_outbound_message()`，是唯一能喂进候选人门禁的形状 | 2 |
 | `app/outbound/queue.py` | **新建** | `pending_approval` 的读写与状态机；`enqueue` / `list_pending` / `approve` / `abandon` | 2、3 |
 | `app/graph/nodes.py` | **追加**两个函数 | `effect_enqueue_pending_approval`、`effect_record_outbound_audit` | 4 |
@@ -1855,7 +1854,7 @@ git diff app/graph/nodes.py | grep '^-' | grep -v '^---' && echo "⛔ 改到了�
 在 `docs/tech-debt.md` 末尾追加：
 
 ```markdown
-## TD-6 · 候选人外发门禁已就位，但生产里没有调用方
+## TD-8 · 候选人外发门禁已就位，但生产里没有调用方
 
 **欠的是什么**：`app/outbound/delivery.py:deliver_candidate_message()` 是候选人
 拒信/邀约的受保护外发入口，U5 已把它连同待审批队列、两个 `effect_*` 节点与
@@ -1930,7 +1929,7 @@ git commit -m "test(outbound): 拦截→入队→放行→投递端到端，内�
 
 | 事项 | 处置 |
 |---|---|
-| 生产里没有调用方 | **TD-6**（Task 5 Step 6 登记）。M2 的信件生成单元必须走 `deliver_candidate_message()` |
+| 生产里没有调用方 | **TD-8**（Task 5 Step 6 登记）。M2 的信件生成单元必须走 `deliver_candidate_message()` |
 | 待审批队列的 Web UI / API | ⛔ 不做，要改 `app/web/server.py`，超出文件边界。M2 或单独变更 |
 | `confirmed_by` 不可信（鉴权空壳） | `design.md` D7，U7 的 7.5 登记，U5 不重复登记 |
 | 审批时效提醒 | `design.md` Open Questions，明确不改本变更的 spec 与任务拆解 |
