@@ -220,6 +220,65 @@ def test_approving_with_the_switch_on_delivers_and_marks_approved(conn):
     assert row["confirmed_by"] == "张三"
 
 
+def test_the_row_is_already_approved_at_the_moment_deliver_runs(conn):
+    """
+    ⭐ 顺序断言（review 发现 1）。`mark_resolved` 的 `UPDATE ... WHERE
+    status = 'pending'` 本身就是一次比较后交换（CAS）——必须先拿到行的所有权
+    （UPDATE 成功）才能 `deliver`，不能反过来。用一个会在被调用的当下回读
+    数据库状态的 `deliver` 探针来钉住顺序：如果实现被"优化"回"先 deliver
+    后 mark_resolved"，这里看到的会是 "pending" 而不是 "approved"，测试变红。
+    """
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
+    )
+    statuses_seen_by_deliver = []
+
+    def spy_deliver(message):
+        statuses_seen_by_deliver.append(queue.get(conn, approval_id)["status"])
+
+    queue.approve(
+        conn,
+        approval_id,
+        confirmed_by="张三",
+        outbound_enabled=lambda: True,
+        deliver=spy_deliver,
+    )
+    conn.commit()
+
+    assert statuses_seen_by_deliver == ["approved"]
+
+
+def test_losing_the_resolve_race_does_not_deliver_a_second_time(conn, monkeypatch):
+    """
+    ⭐ 并发丢失竞态（review 发现 1，Important）。两个 `approve()` 几乎同时
+    读到同一行 pending、都过了门禁，但 `mark_resolved` 的 CAS 只有一个能真正
+    命中——抢输的那一方 ⛔ 不能 `deliver`，否则候选人会收到两封信而 DB 里
+    干干净净只有一条 `approved`，查无重复的痕迹。
+
+    单线程测试里没法真的并发，所以用 monkeypatch 固定 `approve()` 内部读到的
+    `get()` 快照仍是 pending，而数据库里这一行**已经**被真实地结清（模拟另一个
+    并发调用抢先完成）——`mark_resolved` 的 UPDATE 因此在真实表上找不到匹配行，
+    返回 False，触发的正是抢输分支。
+    """
+    from app.outbound import queue as q
+
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
+    )
+    stale_snapshot = queue.get(conn, approval_id)
+    # 真实地让这一行被"另一个并发的放行"抢先结清
+    assert queue.mark_resolved(
+        conn, approval_id, status=queue.STATUS_APPROVED, confirmed_by="李四"
+    )
+    monkeypatch.setattr(q, "get", lambda c, a: stale_snapshot)
+
+    delivered = []
+    with pytest.raises(queue.ApprovalNotPending):
+        _approve(conn, approval_id, switch=True, delivered=delivered)
+
+    assert delivered == []
+
+
 def test_top_severity_is_cleared_by_the_signature_not_terminal(conn):
     """
     ⭐ D-6 取 (b) 的下游判据。默认草稿是 severity=high + requires_confirmation=True
@@ -233,11 +292,16 @@ def test_top_severity_is_cleared_by_the_signature_not_terminal(conn):
 def test_approving_with_the_switch_off_does_not_deliver_and_does_not_requeue(conn):
     """
     ⭐ 死锁防线（design D5，平台侧踩过）。spec「放行时总开关关闭」：
-    消息仍不外发、草稿 MUST NOT 被重复入队、状态保持 pending、
-    可在开关开启后再次放行。
+    消息仍不外发、状态保持 pending、可在开关开启后再次放行。
 
-    ⚠️ 三样都要断言。只断言"没投递"的话，一个"投递前先重新入队"的实现照样绿，
-    而那正是会撞自己唯一索引的写法。
+    ⚠️ `len(list_pending) == 1` 这条**不能**单独当成"没有重复入队"的证明——
+    review 发现 2：`enqueue()` 是 `ON CONFLICT(thread_id, content_hash) DO
+    NOTHING`，同一内容重入队是静默 no-op，行数照样是 1。真正证明"approve
+    的放行复发路径里根本没有调用 enqueue"的是
+    `test_the_approve_path_contains_no_enqueue_call`（AST 结构守护）与
+    `test_the_switch_off_path_never_calls_enqueue`（行为级 spy，堵住 AST
+    扫描认不出的间接调用）两条测试。这里的行数与状态断言只负责它们各自
+    字面能证明的事——"没多一行"、"状态没被改成别的"——不越界代言。
     """
     approval_id = queue.enqueue(
         conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
@@ -250,8 +314,37 @@ def test_approving_with_the_switch_off_does_not_deliver_and_does_not_requeue(con
     assert decision.allowed is False
     assert decision.reason == "外发总开关关闭"
     assert delivered == []
-    assert len(queue.list_pending(conn)) == 1  # 没有重复入队
+    assert len(queue.list_pending(conn)) == 1  # 队列行数没变
     assert queue.get(conn, approval_id)["status"] == "pending"  # 状态没动
+
+
+def test_the_switch_off_path_never_calls_enqueue(conn, monkeypatch):
+    """
+    ⭐ 补齐 AST 结构守护的盲区（review 发现 2）。
+    `test_the_approve_path_contains_no_enqueue_call` 只扫描 `approve` 函数体里
+    **字面写成** `enqueue(...)` 的调用节点——经一层小助手、一个别名 import，
+    或 `getattr(queue_module, "enqueue")(...)` 转一手，就能绕过纯文本 AST 匹配、
+    同时原样复活死锁。
+
+    这里换成行为级 spy：把 `app.outbound.queue.enqueue` 本体替换掉，不管
+    `approve()` 内部用什么姿势去调用它——只要真的调用了模块里那个 `enqueue`
+    对象，这里就会看见。AST 测试与这条测试合起来才是"没有重复入队"的完整证明，
+    单独一条都不够（同上一条测试的说明）。
+    """
+    from app.outbound import queue as q
+
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
+    )
+    enqueue_calls = []
+    monkeypatch.setattr(q, "enqueue", lambda *a, **k: enqueue_calls.append((a, k)))
+
+    delivered = []
+    decision = _approve(conn, approval_id, switch=False, delivered=delivered)
+    conn.commit()
+
+    assert decision.allowed is False
+    assert enqueue_calls == []
 
 
 def test_a_draft_blocked_by_the_switch_can_be_approved_again_later(conn):

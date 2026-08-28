@@ -180,6 +180,18 @@ def approve(
     被拦时状态保持 `pending`：总开关开启后可以再次放行（spec 逐字）。
 
     ⛔ 不自行 `commit`：调用方（`effect_*` 或测试）负责事务边界。
+
+    ⚠️ **先 `mark_resolved`（CAS），确认拿到行的所有权后才 `deliver`**（review
+    发现 1）：`mark_resolved` 的 `UPDATE ... WHERE status = 'pending'` 本身就是
+    一次比较后交换——两个并发的 `approve()` 都能读到 `pending`、都能过门禁，
+    但只有一个的 UPDATE 真正命中一行。若顺序是先 `deliver` 后 `mark_resolved`，
+    两边都会各投递一次，DB 里却只留下一条 `approved`——重复来信查无痕迹。
+    把顺序换过来后，抢输的一方直接判定为"这条已经被别人处置了"（复用
+    `ApprovalNotPending`，与"未知/已处置 id"是同一件事只是晚一步被观察到），
+    ⛔ 不投递。**代价是方向性的**：如果进程在 UPDATE 与 `deliver` 之间崩溃，
+    这一行会停在 `approved` 但信没发出去——这比"发两次却查不出"更安全，
+    因为一封没发出的信人工可以补，一封发重的信收不回来。⛔ 不要把这个顺序
+    "优化"回去。
     """
     row = get(conn, approval_id_)
     if row is None or row["status"] != STATUS_PENDING:
@@ -193,6 +205,13 @@ def approve(
     if not decision.allowed:
         return decision
 
+    claimed = mark_resolved(conn, approval_id_, status=STATUS_APPROVED, confirmed_by=confirmed_by)
+    if not claimed:
+        # 抢输了这次 CAS：另一个并发的 approve() 已经先一步把这一行结清。
+        # 不投递——deliver() 只属于赢得所有权的那一方。
+        raise ApprovalNotPending(
+            f"approval {approval_id_!r} 在放行过程中被并发处置，已失去 pending 所有权"
+        )
+
     deliver(signed)
-    mark_resolved(conn, approval_id_, status=STATUS_APPROVED, confirmed_by=confirmed_by)
     return decision
