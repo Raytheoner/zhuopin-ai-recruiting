@@ -10,5 +10,6 @@
 """
 
 from app.outbound.gate import GateDecision, compute_outbound_gate
+from app.outbound.messages import CandidateOutboundMessage
 
-__all__ = ["GateDecision", "compute_outbound_gate"]
+__all__ = ["GateDecision", "compute_outbound_gate", "CandidateOutboundMessage"]

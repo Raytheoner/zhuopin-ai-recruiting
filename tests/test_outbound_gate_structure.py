@@ -17,6 +17,24 @@ import app.outbound.gate
 _PACKAGE_DIR = pathlib.Path(app.outbound.gate.__file__).parent
 _SOURCE_FILES = {path.name: path for path in sorted(_PACKAGE_DIR.glob("*.py"))}
 
+# U5（tasks 5.1）在同一个包目录里新增了 messages.py（候选人消息契约）与
+# queue.py（待审批队列的持久化读写）。这两个文件是刻意的例外，不是漏网之鱼：
+# queue.py 天生要 `import sqlite3`、写 `INSERT INTO`（design D5：待审批队列
+# 不复用 outbox，是独立的持久化落点）；messages.py 天生要 import
+# `app.channels.base.OutboundMessage`（`to_outbound_message()` 的返回形状）。
+# 下面三条纯度检查测的是**门禁本身**（`compute_outbound_gate` 及其常量表）
+# 有没有腐化成 fail-open 的形状，检查对象收窄到 gate.py 实际用得到的文件——
+# __init__.py（暴露面）、contracts.py（常量表）、gate.py（判定逻辑）。
+# ⛔ 这不是把 review round 1 的目录枚举改回手写清单：`_SOURCE_FILES` 本身仍
+# 按目录 glob 生成（`test_the_import_guard_actually_sees_every_module_in_the_package`
+# 照旧守着它），只是**纯度检查**这三条另开一个显式登记的子集——messages.py /
+# queue.py 的副作用是 U5 设计的一部分，不该被当成门禁腐化误报。
+_GATE_PURITY_FILES = {
+    name: path
+    for name, path in _SOURCE_FILES.items()
+    if name in {"__init__.py", "contracts.py", "gate.py"}
+}
+
 _BANNED_IMPORT_PREFIXES = (
     "app.config",
     "app.storage",
@@ -42,7 +60,7 @@ def test_gate_source_has_no_defaulted_attribute_reads():
     合理默认值"那种一行重构的机器判据。
     """
     offenders = []
-    for name, path in _SOURCE_FILES.items():
+    for name, path in _GATE_PURITY_FILES.items():
         for node in ast.walk(_tree(path)):
             if not isinstance(node, ast.Call):
                 continue
@@ -62,7 +80,7 @@ def test_outbound_package_imports_nothing_stateful():
     「逻辑上不依赖 U2/U3」——所以 app.audit 也在黑名单里。
     """
     offenders = []
-    for name, path in _SOURCE_FILES.items():
+    for name, path in _GATE_PURITY_FILES.items():
         for node in ast.walk(_tree(path)):
             if isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
@@ -92,6 +110,16 @@ def test_the_import_guard_actually_sees_every_module_in_the_package():
     assert set(_SOURCE_FILES) >= {"__init__.py", "contracts.py", "gate.py"}
 
 
+def test_gate_purity_scope_is_exactly_the_gate_owned_files():
+    """
+    守着 `_GATE_PURITY_FILES` 本身：U5 把 messages.py / queue.py 从三条纯度
+    检查里划走是显式登记，不是"因为在同一目录里就默认继承"。这条钉死当前
+    登记——将来如果又在 app/outbound/ 下新增一个真正的 compute_* 纯函数模块，
+    它不会自动进入纯度扫描面，必须有人手动把文件名加进上面的集合。
+    """
+    assert set(_GATE_PURITY_FILES) == {"__init__.py", "contracts.py", "gate.py"}
+
+
 def test_ai_label_source_is_the_jd_agent_constant():
     """
     tasks 4.4：**复用** app/agents/jd_agent.py 现有的 AI_LABEL_TEMPLATE
@@ -119,7 +147,7 @@ def test_gate_has_no_side_effect_vocabulary():
     """
     铁律 2：compute_* 无副作用。源码里出现这几个词就说明副作用爬进来了。
     """
-    for name, path in _SOURCE_FILES.items():
+    for name, path in _GATE_PURITY_FILES.items():
         source = path.read_text(encoding="utf-8")
         for forbidden in ("@idempotent_effect", "INSERT INTO", "conn.execute", "channel.deliver"):
             assert forbidden not in source, f"{name} 里出现了 {forbidden}"
