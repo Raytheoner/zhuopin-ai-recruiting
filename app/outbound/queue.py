@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
+from app.outbound.gate import compute_outbound_gate
 from app.outbound.messages import CandidateOutboundMessage
+
+if TYPE_CHECKING:
+    from app.outbound.gate import GateDecision
 
 # 队列状态。⛔ 应用层**不**再写一份取值校验：U1 已把它做成数据库 CHECK
 # （app/storage/db.py:159-160），两处判定就会出现"一处放行一处拒绝"的分叉。
@@ -151,3 +155,44 @@ def to_message(row: dict[str, Any]) -> CandidateOutboundMessage:
         requires_confirmation=payload["requires_confirmation"],
         payload=payload.get("payload", {}),
     )
+
+
+class ApprovalNotPending(LookupError):
+    """要放行的 approval 不存在，或已经不是 pending。"""
+
+
+def approve(
+    conn: sqlite3.Connection,
+    approval_id_: str,
+    *,
+    confirmed_by: str,
+    outbound_enabled: Callable[[], bool],
+    deliver: Callable[[CandidateOutboundMessage], None],
+) -> "GateDecision":
+    """
+    人工放行：把草稿取回来、带上确认人标识**重新走门禁**，两道闸都过才投递。
+
+    ⛔ **放行复发被拦时不重复入队**（design D5 的死锁防线，平台侧踩过）：
+    它已经在队列里，重入会撞自己的唯一索引，把"暂时发不出去"变成 IntegrityError。
+    判据是「是否携带 `confirmed_by`」——本函数走的永远是携带的那一支，所以这里
+    **一行入队代码都没有**，这就是防线本身。⛔ 不要"顺手补一个 upsert 保险"。
+
+    被拦时状态保持 `pending`：总开关开启后可以再次放行（spec 逐字）。
+
+    ⛔ 不自行 `commit`：调用方（`effect_*` 或测试）负责事务边界。
+    """
+    row = get(conn, approval_id_)
+    if row is None or row["status"] != STATUS_PENDING:
+        raise ApprovalNotPending(
+            f"approval {approval_id_!r} 不存在或已不是 pending"
+            f"（当前 {None if row is None else row['status']!r}）"
+        )
+
+    signed = to_message(row).with_confirmation(confirmed_by)
+    decision = compute_outbound_gate(signed, outbound_enabled)
+    if not decision.allowed:
+        return decision
+
+    deliver(signed)
+    mark_resolved(conn, approval_id_, status=STATUS_APPROVED, confirmed_by=confirmed_by)
+    return decision

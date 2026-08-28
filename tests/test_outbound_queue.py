@@ -185,3 +185,160 @@ def test_list_pending_message_type_filter_returns_only_the_matching_type(conn):
 
     unfiltered_ids = {row["id"] for row in queue.list_pending(conn)}
     assert unfiltered_ids == {rejection_id, invitation_id}
+
+
+# ── 放行与死锁防线（tasks 5.2 / design D5）──────────────────────────────
+
+
+def _approve(conn, approval_id, *, switch, delivered, confirmed_by="张三"):
+    from app.outbound import queue as q
+
+    return q.approve(
+        conn,
+        approval_id,
+        confirmed_by=confirmed_by,
+        outbound_enabled=lambda: switch,
+        deliver=delivered.append,
+    )
+
+
+def test_approving_with_the_switch_on_delivers_and_marks_approved(conn):
+    """spec「人工放行」：草稿携带确认人标识重新走门禁，两道闸都通过时被外发。"""
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
+    )
+    delivered = []
+
+    decision = _approve(conn, approval_id, switch=True, delivered=delivered)
+    conn.commit()
+
+    assert decision.allowed is True
+    assert [m.recipient for m in delivered] == ["cand-9@example.com"]
+    assert delivered[0].confirmed_by == "张三"  # 投递出去的是带签名的那份
+    row = queue.get(conn, approval_id)
+    assert row["status"] == "approved"
+    assert row["confirmed_by"] == "张三"
+
+
+def test_top_severity_is_cleared_by_the_signature_not_terminal(conn):
+    """
+    ⭐ D-6 取 (b) 的下游判据。默认草稿是 severity=high + requires_confirmation=True
+    （spec：候选人信件一律高风险），上一条能放行出去，就证明这两条确实是**由人
+    清关**而不是终局拦截。若 U4 的门禁被改回 (a)，上一条会红，本条给出可读的理由。
+    """
+    assert _msg().severity == "high"
+    assert _msg().requires_confirmation is True
+
+
+def test_approving_with_the_switch_off_does_not_deliver_and_does_not_requeue(conn):
+    """
+    ⭐ 死锁防线（design D5，平台侧踩过）。spec「放行时总开关关闭」：
+    消息仍不外发、草稿 MUST NOT 被重复入队、状态保持 pending、
+    可在开关开启后再次放行。
+
+    ⚠️ 三样都要断言。只断言"没投递"的话，一个"投递前先重新入队"的实现照样绿，
+    而那正是会撞自己唯一索引的写法。
+    """
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
+    )
+    delivered = []
+
+    decision = _approve(conn, approval_id, switch=False, delivered=delivered)
+    conn.commit()
+
+    assert decision.allowed is False
+    assert decision.reason == "外发总开关关闭"
+    assert delivered == []
+    assert len(queue.list_pending(conn)) == 1  # 没有重复入队
+    assert queue.get(conn, approval_id)["status"] == "pending"  # 状态没动
+
+
+def test_a_draft_blocked_by_the_switch_can_be_approved_again_later(conn):
+    """spec 同一 Scenario 的后半句：可在总开关开启后再次放行。"""
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
+    )
+    delivered = []
+
+    _approve(conn, approval_id, switch=False, delivered=delivered)
+    decision = _approve(conn, approval_id, switch=True, delivered=delivered)
+    conn.commit()
+
+    assert decision.allowed is True
+    assert len(delivered) == 1
+    assert queue.get(conn, approval_id)["status"] == "approved"
+
+
+def test_a_malformed_draft_is_not_delivered_even_with_a_signature(conn):
+    """
+    spec「确认人不能放行一条畸形消息」：风险等级读不出但带了确认人标识 →
+    仍拦截，原因是「风险等级未知」而非「等待人工确认」。
+
+    ⭐ 这条是 D-6 口径 B 的**边界**：签名清关"已知的高风险"，⛔ 清不了"畸形"。
+    没有它，(b) 就退化成"签个字什么都能发"。
+    """
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(severity="不认识的等级"),
+        blocked_reason="风险等级缺失或未登记",
+    )
+    delivered = []
+
+    decision = _approve(conn, approval_id, switch=True, delivered=delivered)
+    conn.commit()
+
+    assert decision.allowed is False
+    assert decision.reason == "风险等级缺失或未登记"
+    assert delivered == []
+    assert queue.get(conn, approval_id)["status"] == "pending"
+
+
+def test_approving_an_unknown_or_already_resolved_id_raises(conn):
+    """
+    ⛔ 不静默返回。放行一条不存在或已处置的草稿是调用方的错，静默吞掉会让
+    "我明明点了放行"和"它真的发出去了"这两件事再也对不上。
+    """
+    approval_id = queue.enqueue(
+        conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
+    )
+    _approve(conn, approval_id, switch=True, delivered=[])
+    conn.commit()
+
+    with pytest.raises(queue.ApprovalNotPending):
+        _approve(conn, approval_id, switch=True, delivered=[])  # 已经 approved
+    with pytest.raises(queue.ApprovalNotPending):
+        _approve(conn, "job-7:不存在", switch=True, delivered=[])
+
+
+def test_the_approve_path_contains_no_enqueue_call():
+    """
+    ⭐ 死锁防线的机械判据。上面那条行为测试只能证明"当前实现没有重复入队"；
+    这条证明"approve 的函数体里**根本没有**入队这个动作"，将来有人为了
+    "保险"补一个 upsert 会立刻变红。
+
+    带阳性对照——0 命中同时兼容"约束守住了"和"检查根本没跑"两种解释。
+    """
+    import ast
+    from pathlib import Path
+
+    def enqueue_calls_in(source: str, func_name: str) -> list[str]:
+        hits = []
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name != func_name:
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call):
+                    name = getattr(inner.func, "id", None) or getattr(inner.func, "attr", None)
+                    if name in {"enqueue", "INSERT"}:
+                        hits.append(name)
+        return hits
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "outbound" / "queue.py").read_text(
+        encoding="utf-8"
+    )
+    assert enqueue_calls_in(source, "approve") == []
+    # 阳性对照
+    offending = "def approve(conn, i):\n    enqueue(conn, thread_id='t', message=m, blocked_reason='r')\n"
+    assert enqueue_calls_in(offending, "approve") == ["enqueue"]
