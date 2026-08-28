@@ -191,9 +191,72 @@ def test_evidence_object_identity_is_preserved_not_copied():
     就是在打开"可以在两者之间悄悄插入改动"的口子，即使当下内容还相等
     （design D4「不重新求值一遍」）。
     """
-    decision = compute_outbound_gate(_msg().with_confirmation("张三"), lambda: True)
-    event = _audit_event("job-7", _msg().with_confirmation("张三"), decision)
+    signed = _msg().with_confirmation("张三")
+    decision = compute_outbound_gate(signed, lambda: True)
+    event = _audit_event("job-7", signed, decision, signed.content_hash())
     assert event.evidence is decision.evidence
+
+
+def test_replaying_a_blocked_delivery_does_not_duplicate_the_mirror_line(wired):
+    """
+    review round 2 Important：`effect_record_outbound_audit` 被 `idempotent_effect`
+    包裹，命中同一个 `(thread_id, business_key)` 时返回 `None` 而不真的执行——
+    这次不是"这个事件类型在 SqliteSink 里没有真身"（那是 `False`），是"这条决策
+    以前处理过，业务写已经跳过了"。外发事件在 `SqliteSink` 里天生没有真身
+    （`SUPPORTED_EVENT_TYPES` 排除它），JSONL 这一行是它**唯一**的记录——如果
+    `None` 也无条件 mirror，重放 N 次就会在链上写出 N 条同 `id` 的行，腐蚀这份
+    唯一记录，而 `reconcile()` 的 id 集合差集看不出这种重复
+    （precedent: app/audit/hook.py:184-218 已经踩过同一个坑并留了实测证据）。
+
+    ⚠️ reviewer 特别提醒：只断言 `effect_log` 行数是假绿——`effect_log` 本来就
+    该恒为 1（这是幂等键要保证的），能证明"没有重复留痕"的只有**数 JSONL 的
+    行数**。这条直接数链文件的行数，不碰 effect_log。
+
+    这条测的是**拦截 → 入队**分支：未带签名的草稿被拦、入队，用同一个 thread_id
+    连续调用三次（同一条草稿内容 → 同一个 content_hash → 同一个 business_key）。
+    """
+    conn, chain_path, recorder, channel = wired
+    message = _msg()
+
+    for _ in range(3):
+        deliver_candidate_message(
+            conn,
+            thread_id="job-7",
+            message=message,
+            channel=channel,
+            recorder=recorder,
+            outbound_enabled=lambda: True,
+        )
+
+    lines = _mirror_lines(chain_path)
+    assert len(lines) == 1, f"预期 JSONL 恰好 1 行，实得 {len(lines)} 行：{lines}"
+    assert lines[0]["event_type"] == OUTBOUND_BLOCKED
+    # 入队本身也是幂等的（ON CONFLICT DO NOTHING），顺带确认队列没有跟着重复。
+    assert len(queue.list_pending(conn)) == 1
+
+
+def test_replaying_an_allowed_delivery_does_not_duplicate_the_mirror_line(wired):
+    """
+    同上，覆盖**放行 → 投递**分支——它的 business_key 与拦截分支不同
+    （`f"{content_hash}:{decision.allowed}"` 里 `decision.allowed` 不同），
+    是独立的幂等键，必须单独用例覆盖，不能靠上一条顺带证明。
+    """
+    conn, chain_path, recorder, channel = wired
+    message = _msg().with_confirmation("张三")
+
+    for _ in range(3):
+        deliver_candidate_message(
+            conn,
+            thread_id="job-7",
+            message=message,
+            channel=channel,
+            recorder=recorder,
+            outbound_enabled=lambda: True,
+        )
+
+    lines = _mirror_lines(chain_path)
+    assert len(lines) == 1, f"预期 JSONL 恰好 1 行，实得 {len(lines)} 行：{lines}"
+    assert lines[0]["event_type"] == OUTBOUND_DELIVERED
 
 
 def test_no_bypass_parameter_exists():
