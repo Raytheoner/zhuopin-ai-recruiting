@@ -179,7 +179,7 @@ openspec-archive-change  →  specs 折进 openspec/specs/           ← 活文�
 | 角色 | 人 |
 |---|---|
 | 决策人 | **Shao Peishen**（本项目唯一决策人） |
-| 代理人 | ⬜ **待 Shao Peishen 指定** |
+| 代理人 | ⬜ **继续不设**（2026-08-28 Shao Peishen 决定，见 `docs/findings/2026-08-28-Shao-Peishen-五条裁决落档.md` §1） |
 
 **可代**（Shao Peishen 缺席时代理人可直接拍板，事后告知即可）：
 
@@ -200,6 +200,7 @@ openspec-archive-change  →  specs 折进 openspec/specs/           ← 活文�
 **留痕**：任何代批当次就要在会话产出里写明「代批人 / 时间 / 事项 / 依据」，并在 Shao Peishen 回归后第一次会话复述一次。无留痕的代批视为未决。
 
 **代理人未指定期间的默认**：上表「可代」项同样一律挂起等本人。留空不等于谁都可以。
+2026-08-28 决定**继续不设**——明确不设与留空对下游的约束完全相同，本条继续有效。
 
 ## 数据模型要点
 
