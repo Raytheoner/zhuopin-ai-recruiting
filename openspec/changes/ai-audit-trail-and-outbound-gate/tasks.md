@@ -276,6 +276,43 @@
 - [ ] 5.8 测试重放安全：外发相关节点被从头重跑 → 已外发不重复外发、已入队不重复入队（`effect_log` 命中短路）
 - [ ] 5.9 测试内部通知不受影响：岗位画像确认卡片不经候选人门禁，M1 现有投递行为与本变更前一致（回归）
 
+### 5.x 落地偏离登记（U5 实施，2026-08-28 起 / 2026-08-30 续跑，全分支终审通过）
+
+本章按 `docs/superpowers/plans/2026-08-28-ai-audit-trail-unitU5-queue-and-wiring.md` 实施。
+分支 `worktree-audit-u5-queue-and-wiring`，10 笔提交，全量实测 **720 passed**
+（main 侧 675 → 本分支 720，增量 45 条）。
+
+⚠️ **本章 checkbox 仍为 0/9，不是漏勾**：回勾判据是「final review 通过**且已合并**」，
+而本章前言那条 `.51` §5-3 前置（在 `.51` 上按 4.1 实际创建一次开关文件 + 跑 3.3 验证）
+**截至 2026-08-30 仍未闭合**（`docs/audit-and-outbound-ops.md` 第五节第 3 项无实跑输出、
+无日期、无「已闭合」字样），属不可代项。代码与测试已全部就位并过终审，**停在合并前**。
+
+| # | 本文件字面 | 实际落地 | 判据（哪条测试咬住它） |
+|---|---|---|---|
+| 1 | `delivery-units.md:26` 给 U5 列的触碰文件是 `queue.py`｜`nodes.py`｜`build.py` | 新增 `app/outbound/messages.py` 与 `app/outbound/delivery.py` 两个文件 | 门禁要的六个字段在既有 `OutboundMessage`（只有 `type`/`payload`）上不存在，必须有具体形状承载；编排逻辑放 `queue.py` 会形成 `queue → nodes → queue` 循环 import。`tests/test_outbound_gate_structure.py::test_gate_purity_scope_excludes_only_the_registered_non_gate_modules` |
+| 2 | `delivery-units.md:26` 把 `app/graph/build.py` 列进 U5 的触碰文件 | **⛔ 一行没改** | `build.py` 里是**采集图**，它投递的 `question`/`confirmation_prompt` 是发给业务经理的内部通知，spec「内部通知不受影响」明令不走候选人门禁。候选人外发是独立入口 `deliver_candidate_message`。方向是更严不是更松。`test_the_intake_graph_cannot_reach_the_candidate_gate`（结构，带阳性对照）+ `test_internal_notifications_still_deliver_unconditionally`（行为） |
+| 3 | 本文件与 `delivery-units.md` 都没规定 `severity`/`requires_confirmation` 的默认值 | `severity` 默认最高级、`requires_confirmation` 默认 `True` | spec「门禁覆盖范围」逐字「拒信与邀约这两类 MUST **一律**判为高风险」。默认值写反的话，一封忘记显式设置的拒信会走"低风险"路径直接发出去——默认值必须站在红线这一侧 |
+| 4 | 5.8 计划原文的重放测试只断言 `effect_log` 条数 | 改为断言 **JSONL 镜像行数**（同一 `event.id` 恰好 1 行） | 🔴 只断言 `effect_log` 是**假绿**：`idempotent_effect` 重放时返回 `None`、函数体根本没跑，`effect_log` 由幂等键天然恒为 1 条，对"镜像被写重了没有"零分辨力。而外发事件在 `SqliteSink` 里没有真身（`SUPPORTED_EVENT_TYPES` 只收 `ai_analysis`），JSONL 那一行是唯一留痕，`reconcile()` 比的是 id **集合**差集，同 id 出现三次对它完全隐形。变异验证：撤销 `70de7b2` 的重放守卫后本条单独转红（实测「同一个 event.id 在 JSONL 里出现了 3 次」），其余四条仍绿 |
+| 5 | 5.5 未规定开关文件路径口径的落点 | 口径（部署脚本锁定工作目录，Shao Peishen 2026-08-28 拍板）写进 `app/outbound/delivery.py` 模块 docstring | 运维页那一半 7.3/7.4 已写（`docs/audit-and-outbound-ops.md` §1.1 表格 + §3.1），本次只补接线处说明。⛔ 代码里不做路径兜底——兜底＝在合规开关上放松：从错误目录拉起的进程本该读不到开关文件而**全拦**，兜底会让它反而读到别处的开关并**放行** |
+
+**⚠️ 终审发现一条真缺陷，已登记 TD-9，⛔ 本单元不修**：
+**同一草稿的第二次及以后的拦截永远不留痕。** 实测（2026-08-30）：首次拦截 ✅ 留痕、
+最终成功放行 ✅ 留痕，但中间"人点了放行、被总开关拦下"这次尝试**零留痕**，
+违反 spec「外发与拦截动作强制留痕」的 `系统 SHALL 对每一次外发尝试留痕，无论结果是
+放行还是拦截`。两条成因**叠加**，缺一条都不足以解释：
+① `queue.approve()` 在 `decision.allowed` 为假时**早返回**，`deliver_candidate_message`
+   根本没被调用，自然没有留痕；
+② 就算改成无条件调用它也仍然无效——`business_key` = `{content_hash}:{allowed}`
+   （本文件 5.4 **字面规定**）只区分"拦截 vs 放行"，不区分**是哪一条拦截**，
+   于是第二次拦截撞上首次拦截的 `effect_log` 行、装饰器返回 `None`、镜像被跳过。
+
+**为什么只登记不修**：修它要同时改本文件 5.4 字面规定的幂等键公式（拟改为
+`{content_hash}:{allowed}:{reason}`，仍满足 5.4「重放不重复留痕」的原意）**并**给
+已过审的 Task 2 的 `queue.approve()` 加审计依赖（签名变更）。这是计划/契约层的变更，
+且触碰合规路径上的留痕语义，⛔ 不在无人值守的续跑 session 里自行拍板重设计。
+**影响面已界定：闸门本身完好，没有任何不该发的消息会被发出去，丢的只是可观测性**；
+且 TD-8 已登记本单元在生产里没有调用方，现网不受影响。
+
 ## 6. 合规断言、对账与 CI
 
 交付单元：红线被破坏时 CI 直接红。
