@@ -186,3 +186,36 @@ JSONL 镜像的关系：镜像还留不留、留的话锁往哪放）；② 或�
 指向它的记录，链**当场断在那里**，而 `verify_chain()` 事后只能报告"第 N 行
 断了"——分不清是并发写还是有人篡改。**防篡改证据链失去证明力的方式，
 恰恰是它自己被写坏。** 且这个损坏不可事后修复：镜像是 append-only 的。
+
+---
+
+## TD-8 · 候选人外发门禁已就位，但生产里没有调用方
+
+**欠的是什么**：`app/outbound/delivery.py:deliver_candidate_message()` 是候选人
+拒信/邀约的受保护外发入口，U5 已把它连同待审批队列、两个 `effect_*` 节点与
+拦截/放行留痕全部建好。**但 M1 里没有任何地方生成拒信或邀约**——2026-08-30 实测
+`grep -rn "rejection_letter\|interview_invitation" app/` 在 `app/outbound/` 之外
+零命中，`deliver_candidate_message` 在 `app/outbound/` 之外也零调用方（只有
+`app/outbound/__init__.py` 的延迟导出）。采集图只发 `question` /
+`confirmation_prompt` 这类内部通知。
+
+**所以本单元交付的是"机制"不是"在跑的流程"**：门禁、队列、留痕全部有测试覆盖，
+但生产路径上一次都不会被执行到。与 U3 的 `audit_context` 同一形状。
+
+**触发条件**：M2 开始生成候选人信件时。那个单元**必须**走
+`deliver_candidate_message()`，⛔ 不得直接调 `effect_deliver_message` 或
+`channel.deliver` 发候选人信件——那会绕过整道闸，而合规红线「AI 只做排序推荐、
+不做自动淘汰」的技术保证就在这道闸上。
+
+**怎么还**：M2 的拒信/邀约生成单元接上这个入口，并把
+`is_candidate_outbound_enabled()` 作为 `outbound_enabled` 传进去。
+
+**不还的后果**：一整套门禁与审批留痕建好了却没人用，而真正发信的代码另起一条
+不受管的路径——比没有门禁更糟，因为审计会看到一个"门禁存在"的假象。
+
+**为什么现在只登记不做**：拒信/邀约的内容生成属 M2 范围
+（`delivery-units.md:26` 给 U5 的文件边界不含 agent 层）。
+
+⚠️ **本条不是"等 M2 再说"就完事**：U5 合并时 `CANDIDATE_OUTBOUND_ENABLED` 保持
+默认关闭（全拦），design 迁移计划要的"观察拦截留痕是否符合预期"这个观察期，
+在没有调用方之前**采不到任何样本**。观察期实际上从 M2 接线那一刻才开始计时。

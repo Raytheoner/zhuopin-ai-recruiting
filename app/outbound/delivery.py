@@ -5,6 +5,17 @@
 ⛔ 本模块不提供任何"跳过门禁"的参数、开关或环境变量（design.md 迁移计划回滚
 策略：关闭 `CANDIDATE_OUTBOUND_ENABLED` 是更安全的方向；真要恢复无门禁投递必须
 显式移除门禁节点）。守护见 `tests/test_outbound_delivery.py::test_no_bypass_parameter_exists`。
+
+⚠️ **`outbound_enabled` 的开关文件按进程工作目录解析，口径已拍板取「部署脚本里
+锁定工作目录」**（Shao Peishen 2026-08-28，tasks.md 第 1 章「遗留二」）：`.51` 上由
+计划任务的 `-WorkingDirectory $AppDir` 锁定（`deploy-server.ps1:95`），解析到
+`C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch`。运维口径与排查步骤见
+`docs/audit-and-outbound-ops.md` §1.1 / §3.1。
+
+⛔ **不在代码里对这个路径做任何兜底**（"找不到就往上翻一级"、"回退到绝对路径"之类）。
+兜底＝在合规开关上放松：一个从错误目录拉起的进程本该读不到开关文件而**全拦**，
+兜底会让它反而读到某个别的目录下的开关并**放行**。宁可"记录不见了"，不可"闸门自己开了"。
+⛔ 这条属不可代项，改它要 Shao Peishen 本人拍板。
 """
 
 from __future__ import annotations
