@@ -191,3 +191,198 @@ def scan_app_tree(root: Path) -> list[Violation]:
                 )
 
     return violations
+
+
+def scan_dependency_files(root: Path) -> list[Violation]:
+    """7.2 前半：`requirements.txt` 与 `pyproject.toml` 不含 `zhuopin_platform`。
+
+    另加一条 `pyproject.toml` 的**结构性**检查：不得声明任何运行时依赖表。
+    理由见 `check_dependency_diff()` —— diff 判据只锁 `requirements.txt`，
+    若不补这条，往 `[project] dependencies` 里加一行依赖就能整条溜过去。
+    """
+    violations: list[Violation] = []
+
+    for name in DEPENDENCY_FILES:
+        path = root / name
+        if not path.exists():
+            violations.append(
+                Violation(
+                    rule="7.2-missing",
+                    path=name,
+                    line=0,
+                    message="依赖声明文件不存在，无法核验边界（被删除或改名了？）",
+                )
+            )
+            continue
+        text = _read_text(path) or ""
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if FORBIDDEN_MODULE in line:
+                violations.append(
+                    Violation(
+                        rule="7.2-module",
+                        path=name,
+                        line=lineno,
+                        message=f"依赖声明里出现 {FORBIDDEN_MODULE!r}",
+                    )
+                )
+
+    violations.extend(_scan_pyproject_dependency_tables(root))
+    return violations
+
+
+def _scan_pyproject_dependency_tables(root: Path) -> list[Violation]:
+    path = root / "pyproject.toml"
+    if not path.exists():
+        return []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, OSError) as exc:
+        return [
+            Violation(
+                rule="7.2-pyproject",
+                path="pyproject.toml",
+                line=0,
+                message=f"解析失败，无法核验依赖表：{exc}",
+            )
+        ]
+
+    project = data.get("project", {})
+    tables: list[tuple[str, object]] = [
+        ("project.dependencies", project.get("dependencies")),
+        ("project.optional-dependencies", project.get("optional-dependencies")),
+        ("dependency-groups", data.get("dependency-groups")),
+        (
+            "tool.poetry.dependencies",
+            data.get("tool", {}).get("poetry", {}).get("dependencies"),
+        ),
+    ]
+
+    violations: list[Violation] = []
+    for label, value in tables:
+        if value:
+            violations.append(
+                Violation(
+                    rule="7.2-pyproject",
+                    path="pyproject.toml",
+                    line=0,
+                    message=(
+                        f"{label} 非空。本仓库的依赖真源是 requirements.txt，"
+                        "pyproject.toml ⛔ 不声明依赖——否则 diff 判据只锁 "
+                        "requirements.txt 就留下一个绕过口"
+                    ),
+                )
+            )
+    return violations
+
+
+def _default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(args),
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+
+def check_dependency_diff(
+    root: Path,
+    baseline: str = BASELINE_COMMIT,
+    runner: Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]] = _default_runner,
+) -> list[Violation]:
+    """7.2 后半：本变更的依赖文件 diff 必须为空。
+
+    **判据只锁 `requirements.txt`，这是实测后的刻意收缩，不是漏写。**
+    `pyproject.toml` 自立项以来确有 6 行 diff——U6 往 `[tool.pytest.ini_options]`
+    加了 `markers` 段（合规断言的 pytest 标记）。那是测试配置，不是依赖。把
+    `pyproject.toml` 一起纳入 diff 判据，这条检查从上线第一天就是红的，
+    ⇒ 必然被加白名单或整条注释掉。**恒假的检查和恒真的检查一样没用。**
+    `pyproject.toml` 的依赖侧改由 `_scan_pyproject_dependency_tables()`
+    做结构性检查，那条不会被无关的配置编辑打扰。
+
+    `runner` 参数是为了测试能注入非空 diff 做反证——真实仓库里这条永远是绿的，
+    只靠真实仓库测不出它会不会红。
+    """
+    args = ["git", "diff", "--stat", f"{baseline}..HEAD", "--", *DIFF_GUARDED_FILES]
+    result = runner(args, root)
+
+    if result.returncode != 0:
+        return [
+            Violation(
+                rule="7.2-diff",
+                path=" ".join(DIFF_GUARDED_FILES),
+                line=0,
+                message=(
+                    f"`{' '.join(args)}` 退出码 {result.returncode}："
+                    f"{result.stderr.strip() or '无 stderr'}。"
+                    "CI 上最常见的原因是 checkout 深度不足取不到基线 commit，"
+                    "该 job 需要 fetch-depth: 0"
+                ),
+            )
+        ]
+
+    if result.stdout.strip():
+        return [
+            Violation(
+                rule="7.2-diff",
+                path=" ".join(DIFF_GUARDED_FILES),
+                line=0,
+                message=(
+                    f"自基线 {baseline[:7]} 起依赖文件有改动，本变更不得新增依赖：\n"
+                    + result.stdout.rstrip()
+                ),
+            )
+        ]
+
+    return []
+
+
+def run_all(
+    root: Path,
+    baseline: str = BASELINE_COMMIT,
+    skip_diff: bool = False,
+    runner: Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]] = _default_runner,
+) -> list[Violation]:
+    violations = scan_app_tree(root) + scan_dependency_files(root)
+    if not skip_diff:
+        violations += check_dependency_diff(root, baseline=baseline, runner=runner)
+    return violations
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="边界守护：禁止 zhuopin_platform 依赖与跨仓库注入（tasks.md 7.1/7.2）"
+    )
+    parser.add_argument("--root", default=".", help="仓库根目录，默认当前目录")
+    parser.add_argument(
+        "--baseline", default=BASELINE_COMMIT, help="依赖 diff 的基线 commit"
+    )
+    parser.add_argument(
+        "--skip-diff",
+        action="store_true",
+        help="跳过 git diff 判据（无 git 历史的临时目录里用）",
+    )
+    ns = parser.parse_args(argv)
+
+    root = Path(ns.root).resolve()
+    violations = run_all(root, baseline=ns.baseline, skip_diff=ns.skip_diff)
+
+    if violations:
+        print(f"边界守护：{len(violations)} 条违例", file=sys.stderr)
+        for v in violations:
+            print("  " + v.render(), file=sys.stderr)
+        print(
+            "\n本包硬边界见 delivery-units.md §4 约定 7 与 CLAUDE.md"
+            "「已迁 GitHub，只读参考」：读取参考 + 在本仓库自建实现，"
+            "⛔ 不 clone、不跨仓库引用、不拷贝文件。",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"边界守护：通过（root={root}，基线={ns.baseline[:7]}）")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

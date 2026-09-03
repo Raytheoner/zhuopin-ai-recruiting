@@ -10,12 +10,23 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
-from scripts.check_boundary import Violation, scan_app_tree
+from scripts.check_boundary import (
+    BASELINE_COMMIT,
+    Violation,
+    check_dependency_diff,
+    run_all,
+    scan_app_tree,
+    scan_dependency_files,
+)
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 CLEAN_PYPROJECT = """\
 [project]
@@ -46,9 +57,15 @@ def make_repo(root: Path, app_files: dict[str, str] | None = None, **overrides: 
     return root
 
 
+def fake_git(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(list(args), returncode, stdout, stderr)
+
+    return runner
+
+
 def rules(violations: list[Violation]) -> set[str]:
     return {v.rule for v in violations}
-
 
 
 # ── 基线：干净的 app/ 必须全过 ────────────────────────────────────────────
@@ -149,3 +166,125 @@ def test_syntax_error_file_does_not_crash_the_check(tmp_path: Path) -> None:
     """AST 解析失败不能让整条检查抛异常——异常穿透到 CI 就是一个绿色的谎。"""
     root = make_repo(tmp_path, app_files={"__init__.py": "", "broken.py": "def (\n"})
     assert scan_app_tree(root) == []
+
+
+# ── 基线：干净的树必须全过 ────────────────────────────────────────────────
+
+
+def test_clean_tree_has_no_violations(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    assert run_all(root, skip_diff=True, runner=fake_git()) == []
+
+
+# ── 反证三（7.2）：依赖声明里的 zhuopin_platform 必须被抓 ─────────────────
+
+
+def test_zhuopin_platform_in_requirements_is_detected(tmp_path: Path) -> None:
+    root = make_repo(tmp_path, requirements=CLEAN_REQUIREMENTS + "zhuopin_platform==1.0.0\n")
+    violations = scan_dependency_files(root)
+    assert "7.2-module" in rules(violations)
+
+
+def test_zhuopin_platform_in_pyproject_is_detected(tmp_path: Path) -> None:
+    root = make_repo(
+        tmp_path,
+        pyproject=CLEAN_PYPROJECT + '\n[tool.zhuopin_platform]\nenabled = true\n',
+    )
+    assert "7.2-module" in rules(scan_dependency_files(root))
+
+
+def test_missing_dependency_file_is_a_violation(tmp_path: Path) -> None:
+    """删掉 requirements.txt 不能等于"没有违例"。"""
+    root = make_repo(tmp_path)
+    (root / "requirements.txt").unlink()
+    assert "7.2-missing" in rules(scan_dependency_files(root))
+
+
+# ── 反证四（7.2）：pyproject 声明依赖必须被抓 ─────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        '[project]\nname = "f"\nversion = "0"\ndependencies = ["zhuopin-sdk"]\n',
+        '[project]\nname = "f"\nversion = "0"\n[project.optional-dependencies]\ndev = ["x"]\n',
+        '[project]\nname = "f"\nversion = "0"\n[dependency-groups]\ndev = ["x"]\n',
+        '[project]\nname = "f"\nversion = "0"\n[tool.poetry.dependencies]\nx = "^1"\n',
+    ],
+    ids=["project", "optional", "groups", "poetry"],
+)
+def test_pyproject_dependency_table_is_detected(tmp_path: Path, table: str) -> None:
+    """diff 判据只锁 requirements.txt，这条堵住由此产生的绕过口。"""
+    root = make_repo(tmp_path, pyproject=table)
+    assert "7.2-pyproject" in rules(scan_dependency_files(root))
+
+
+def test_broken_pyproject_is_a_violation(tmp_path: Path) -> None:
+    root = make_repo(tmp_path, pyproject="[project\nname =\n")
+    assert "7.2-pyproject" in rules(scan_dependency_files(root))
+
+
+# ── 反证五（7.2）：非空 diff 必须被抓 ─────────────────────────────────────
+
+
+def test_non_empty_dependency_diff_is_detected(tmp_path: Path) -> None:
+    """真实仓库里这条永远绿，只靠真实仓库测不出它会不会红。"""
+    root = make_repo(tmp_path)
+    violations = check_dependency_diff(
+        root, runner=fake_git(stdout=" requirements.txt | 1 +\n 1 file changed, 1 insertion(+)\n")
+    )
+    assert "7.2-diff" in rules(violations)
+    assert "requirements.txt" in violations[0].message
+
+
+def test_empty_dependency_diff_passes(tmp_path: Path) -> None:
+    assert check_dependency_diff(make_repo(tmp_path), runner=fake_git(stdout="\n")) == []
+
+
+def test_git_failure_is_a_violation_not_a_pass(tmp_path: Path) -> None:
+    """取不到基线 commit（CI 浅克隆）必须红。
+
+    ⛔ 不许把 git 失败当成"没有 diff"——那正是 CI 上最容易出现的、
+    看起来是绿色的静默失效。
+    """
+    violations = check_dependency_diff(
+        make_repo(tmp_path),
+        runner=fake_git(returncode=128, stderr="fatal: bad object"),
+    )
+    assert "7.2-diff" in rules(violations)
+    assert "fetch-depth" in violations[0].message
+
+
+# ── 真实仓库：今天必须是绿的 ──────────────────────────────────────────────
+
+
+def test_real_repository_passes_boundary_guard() -> None:
+    """反证证明"会红"，这条证明"今天不该红"。两条都要有。"""
+    violations = run_all(REPO_ROOT, baseline=BASELINE_COMMIT)
+    assert violations == [], "\n".join(v.render() for v in violations)
+
+
+def test_cli_exits_1_on_violation(tmp_path: Path) -> None:
+    """CI 靠退出码判成败，退出码本身要有测试。"""
+    root = make_repo(tmp_path, app_files={"__init__.py": "", "leak.py": "import zhuopin_platform\n"})
+    result = subprocess.run(
+        [sys.executable, "scripts/check_boundary.py", "--root", str(root), "--skip-diff"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "7.1-module" in result.stderr
+
+
+def test_cli_exits_0_on_clean_tree(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "scripts/check_boundary.py", "--root", str(root), "--skip-diff"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
