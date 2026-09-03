@@ -4,7 +4,9 @@
   },
   "permissions": {
     "allow": [
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(bash docs/openers/run-lanes.sh:*)",
+      "Bash(nohup bash docs/openers/run-lanes.sh:*)"
     ]
   },
   "hooks": {
