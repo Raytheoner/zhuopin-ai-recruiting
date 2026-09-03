@@ -168,57 +168,60 @@ def test_unknown_criterion_key_is_detected(conn):
     assert result.violations[0]["criterion_key"] == novel_key
 
 
-def test_null_criterion_key_not_in_semantics_requires_is_null_guard():
+def test_null_criterion_key_is_detected_by_the_real_assertion():
     """assert_no_unlisted_criterion_key 的 WHERE 子句里有一句
     `criterion_key IS NULL OR ...`，注释给的理由是"SQL 的 NOT IN 对 NULL
     求值为 NULL、不是 TRUE，一条 NULL 的 key 会从 NOT IN 底下溜过去"——
-    但这只是一句带理由的注释，没有反证守着，删掉这半句 43 条 compliance
-    用例照样全绿（reviewer 实测确认）。这条用例把这半句钉住。
+    但这只是一句带理由的注释，没有反证守着：删掉这半句，`-m compliance`
+    照样全绿。这条用例把这半句钉住，而且**直接调用生产函数**
+    `assert_no_unlisted_criterion_key()`，不是另起炉灶手抄一遍 WHERE 子句——
+    手抄版测的是 SQLite 的 NOT IN 语义本身，不是这个断言函数有没有守住它，
+    删掉生产 SQL 里的这半句也不会让手抄版变红，等于没测到东西。
 
-    ⚠️ 打不进真实的 criterion_score.criterion_key：这一列是 `TEXT NOT
-    NULL`（app/storage/db.py），经验证 `PRAGMA ignore_check_constraints`
-    只关 CHECK、管不到 NOT NULL——直接试过：
+    ⚠️ 不能用 get_connection()/init_schema()：真实 schema 里
+    criterion_score.criterion_key 是 `TEXT NOT NULL`（app/storage/db.py），
+    经验证 `PRAGMA ignore_check_constraints` 只关 CHECK、管不到 NOT NULL——
+    直接试过：
         conn.execute("PRAGMA ignore_check_constraints = ON")
         conn.execute("INSERT INTO criterion_score (..., criterion_key, ...)"
                      " VALUES (..., NULL, ...)")
     仍然报 `sqlite3.IntegrityError: NOT NULL constraint failed:
-    criterion_score.criterion_key`。Python sqlite3 驱动没有别的旁路能在
-    不改表结构的前提下把 NULL 写进一个 NOT NULL 列，所以这条反证退到能
-    触达的层次：在一张**允许 NULL** 的临时表上，直接对比"带 IS NULL 守卫"
-    与"裸 NOT IN"两条 SQL 的查询结果，证明这半句守卫确实在做事——而不是
-    通过真实的 assert_no_unlisted_criterion_key() 调用（它硬编码查
-    criterion_score，改不了目标表）。
+    criterion_score.criterion_key`，Python sqlite3 驱动没有别的旁路能在不
+    改表结构的前提下把 NULL 写进一个 NOT NULL 列。所以这里手搭一张**允许
+    NULL** 的 criterion_score 表——列名与断言 SELECT 的列（id /
+    analysis_run_id / criterion_key / evidence_ref）完全一致，只是去掉了
+    NOT NULL——模拟一个现实风险：将来某次迁移放宽了这一列的约束，或者有
+    外部工具绕过应用层直接写库。断言函数拿到的连接因此确实是
+    "criterion_score 表、且其中一行 criterion_key 为 NULL"，测的是断言
+    本身的 WHERE 子句有没有守住这半句，而不是重新验证一遍 SQLite 的
+    三值逻辑。
     """
     raw = sqlite3.connect(":memory:")
     try:
-        raw.execute("CREATE TABLE fixture_criterion_key (criterion_key TEXT)")
-        raw.executemany(
-            "INSERT INTO fixture_criterion_key (criterion_key) VALUES (?)",
-            [("skill_match",), (None,), ("facial_expression",)],
+        raw.execute(
+            "CREATE TABLE criterion_score ("
+            "  id TEXT PRIMARY KEY,"
+            "  analysis_run_id TEXT,"
+            "  criterion_key TEXT,"  # 刻意不写 NOT NULL —— 理由见上方 docstring
+            "  score REAL,"
+            "  evidence_ref TEXT"
+            ")"
+        )
+        raw.execute(
+            "INSERT INTO criterion_score "
+            "(id, analysis_run_id, criterion_key, score, evidence_ref) "
+            "VALUES ('s-null', 'run-1', NULL, 3.0, 'resume-1#1-9')"
         )
         raw.commit()
 
-        whitelist = sorted(CRITERION_KEY_WHITELIST)
-        placeholders = ", ".join("?" * len(whitelist))
+        result = assert_no_unlisted_criterion_key(raw)
 
-        guarded = raw.execute(
-            "SELECT criterion_key FROM fixture_criterion_key "
-            f"WHERE criterion_key IS NULL OR criterion_key NOT IN ({placeholders})",
-            whitelist,
-        ).fetchall()
-        bare = raw.execute(
-            "SELECT criterion_key FROM fixture_criterion_key "
-            f"WHERE criterion_key NOT IN ({placeholders})",
-            whitelist,
-        ).fetchall()
-
-        assert (None,) in guarded, "带 IS NULL 守卫的查询必须捕到 NULL 行"
-        assert "facial_expression" in {row[0] for row in guarded}
-        assert (None,) not in bare, (
-            "裸 NOT IN 必须漏掉 NULL 行——这正是要证明的那半句缺陷本身。"
-            "如果这一断言失败，说明 SQLite 的 NOT IN 三值逻辑变了，"
-            "assertions.py 里那句注释与本反证要一起重新核实。"
+        assert result.ok is False, (
+            "criterion_key 为 NULL 的行被断言放行了——IS NULL 守卫没有生效"
         )
+        assert len(result.violations) == 1
+        assert result.violations[0]["id"] == "s-null"
+        assert result.violations[0]["criterion_key"] is None
     finally:
         raw.close()
 
