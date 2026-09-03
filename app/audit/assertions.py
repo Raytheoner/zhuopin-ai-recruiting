@@ -27,9 +27,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from app.audit.criteria import CRITERION_KEY_WHITELIST
+from app.audit.events import OUTBOUND_BLOCKED, OUTBOUND_DELIVERED
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型标注
     from app.audit.recorder import AuditRecorder
+    from app.audit.sinks import AuditSink
 
 # ── M2 才会建的拒绝记录表 ────────────────────────────────────────────────
 # ⛔ 本单元不建这张表（delivery-units.md：M1 尚不存在，M2 建表后本断言自动
@@ -337,4 +339,78 @@ def chain_assertion(recorder: "AuditRecorder") -> AssertionResult:
             f"{verification.error}。⚠️ 断链意味着镜像文件被改过，"
             "先查文件权限与访问记录，⛔ 不要直接重建文件——重建会毁掉唯一的证据。"
         ),
+    )
+
+
+# ── 拦截统计（6.5）──────────────────────────────────────────────────────
+#
+# fail-closed 误拦的**兜底观测**（design.md Risks 第 2 条）：漏发一封邀约可以
+# 补，未审批发出一封拒信不能撤——所以门禁刻意拦得更多。代价是新增消息类型忘
+# 登记就会被静默拦下，本统计让"某类消息一直在被拦"可被发现，而不是等业务方
+# 投诉。
+#
+# **数据源是 JSONL 镜像，不是 pending_approval 表。** 三条理由：
+#   ① 外发事件在 SqliteSink 里没有真身（SUPPORTED_EVENT_TYPES 只含
+#      ai_analysis，app/audit/sinks.py），镜像是它唯一的记录；
+#   ② 放行复发被拦时**不入队**（app/outbound/delivery.py 的死锁防线），只查
+#      pending_approval 会系统性漏掉这一整类拦截；
+#   ③ spec 的原话是"依据**留痕**检索出该类型的拦截次数与拦截原因分布"。
+
+UNKNOWN_MESSAGE_TYPE = "<未知类型>"
+UNRECORDED_REASON = "<未记录原因>"
+
+
+@dataclass(frozen=True)
+class OutboundBlockStats:
+    """按 `message_type` × 拦截原因的计数，外加一个替人做完减法的字段。
+
+    `always_blocked_types` 才是要人去看的那一列：拦过、且一次都没发出去过的
+    类型。把原始计数表摊在运维面前，他得自己做这个减法——那一步就是"发现得
+    太晚"的来源。
+    """
+
+    blocked_by_type_and_reason: dict[str, dict[str, int]]
+    blocked_by_type: dict[str, int]
+    blocked_by_reason: dict[str, int]
+    delivered_by_type: dict[str, int]
+    always_blocked_types: tuple[str, ...]
+
+
+def outbound_block_stats(mirror: "AuditSink") -> OutboundBlockStats:
+    """spec「查询某类消息的拦截情况」。
+
+    ⚠️ 字段缺失的事件 ⛔ 不丢弃，折进 `<未知类型>` / `<未记录原因>` 两个桶：
+    被拦下的草稿最常见的原因**正是**这些字段缺失（fail-closed），丢掉它们等
+    于让最该被看见的那一类从统计里消失。
+    """
+    by_type_and_reason: dict[str, dict[str, int]] = {}
+    by_type: dict[str, int] = {}
+    by_reason: dict[str, int] = {}
+    delivered: dict[str, int] = {}
+
+    for record in mirror.read_all():
+        event_type = record.get("event_type")
+        if event_type not in (OUTBOUND_BLOCKED, OUTBOUND_DELIVERED):
+            continue
+
+        message_type = record.get("message_type") or UNKNOWN_MESSAGE_TYPE
+        if event_type == OUTBOUND_DELIVERED:
+            delivered[message_type] = delivered.get(message_type, 0) + 1
+            continue
+
+        reason = record.get("blocked_reason") or UNRECORDED_REASON
+        by_type[message_type] = by_type.get(message_type, 0) + 1
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        bucket = by_type_and_reason.setdefault(message_type, {})
+        bucket[reason] = bucket.get(reason, 0) + 1
+
+    always_blocked = tuple(
+        sorted(name for name in by_type if not delivered.get(name))
+    )
+    return OutboundBlockStats(
+        blocked_by_type_and_reason=by_type_and_reason,
+        blocked_by_type=by_type,
+        blocked_by_reason=by_reason,
+        delivered_by_type=delivered,
+        always_blocked_types=always_blocked,
     )
