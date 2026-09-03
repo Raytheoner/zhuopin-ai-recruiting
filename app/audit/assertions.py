@@ -13,6 +13,11 @@ commit()：它是审计的观测端，不是写入端。有副作用的动作全
 **分层**：本模块不 import `app.config`、不 import `app.graph`、不 import
 `app.outbound`（`app/audit/__init__.py` 的既有规矩 + 分层方向）。数据库连接与
 镜像路径一律由调用方传入。
+
+**反证已实测（2026-09-03，U6 实施）**：把断言一的 `ok=not rows` 改成 `ok=True`、
+把断言二的 trim 改成单参、把断言三的白名单里塞进一个本该被拒的 key——三次注入
+分别让 `tests/test_audit_assertion_effectiveness.py` 的对应用例变红。这段记录
+存在的意义：下一个想"简化"这里的人，能看到简化会撞上哪条测试。
 """
 
 from __future__ import annotations
