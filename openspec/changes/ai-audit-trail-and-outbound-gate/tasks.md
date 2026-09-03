@@ -4,6 +4,8 @@
 
 **每份 plan 的 Global Constraints 段**从 `CLAUDE.md`「工程铁律」逐字复制，并追加本变更的三条硬边界：不新增 `zhuopin_platform` 依赖、不跨仓库 import、不改 `effect_log` 与 `idempotent_effect`。
 
+**进度（2026-09-03，0903E）：44/53。未归档依据：第 6 章 0/7、第 7 章 4/6 未完。**
+
 ---
 
 ## 1. 数据层：三张新表与存储层约束
@@ -266,15 +268,15 @@
 > 1. **7.3 已从 U7 的尾部排期中提出，改为本章的前置项**——原先「U7 排最后」与 7.3 那句「U5 接线前必须确认本条已落地」互相打架，本次裁决解掉。7.3/7.4 已于 2026-08-28 落地并回勾（`db6596e`），产出 `docs/audit-and-outbound-ops.md`。⚠️ 该页第五节仍有三项 `.51` 上机留步，**其中第 3 项（在 `.51` 上按 4.1 实际创建一次开关文件）仍是本章开工前的未闭合前置**，属不可代项。
 > 2. **开关文件路径按进程 CWD 解析：已拍板取「部署脚本里锁定工作目录」**（第 1 章「遗留二」）。本章接线时按此口径写说明，⛔ 不在代码里做路径兜底、⛔ 不重开该决定。
 
-- [ ] 5.1 `queue.py`：`pending_approval` 的读写与状态机（`pending` → `approved` / `abandoned`）；放行不 `DELETE` 而是改状态并记 `confirmed_by` 与 `resolved_at`；查询只返回 `pending`
-- [ ] 5.2 `queue.approve(id, confirmed_by)`：带 `confirmed_by` 重走门禁。**死锁防线（平台侧踩过）**：仅首道拦截（无 `confirmed_by`）才入队；放行复发被总开关拦下时不重复入队、状态保持 `pending`，可在开关开启后再次放行
-- [ ] 5.3 `effect_enqueue_pending_approval`：沿用现有 `idempotent_effect` 装饰器（**不改装饰器、不改 `effect_log`**）。**幂等策略**：`business_key` = 草稿内容哈希（复用 `message_business_key()` 的做法），幂等键 `{thread_id}:effect_enqueue_pending_approval:{content_hash}`；叠加 1.3 的 `content_hash` 唯一索引作第二道防线。函数体内不 `commit`，由装饰器统一提交
-- [ ] 5.4 `effect_record_outbound_audit`：沿用 `idempotent_effect`。**幂等策略**：`business_key` = `{content_hash}:{allowed}`，同一草稿的"拦截"与"放行"各留一条痕、重放不重复留痕
-- [ ] 5.5 外发路径接线：`compute_outbound_gate` 判定 → 按结果分流到 `effect_enqueue_pending_approval` 或既有 `effect_deliver_message`，两条路径都走 `effect_record_outbound_audit`。**不改 `effect_deliver_message` 内部逻辑、不改 `Channel` Protocol**
-- [ ] 5.6 测试端到端拦截：一封无 `confirmed_by` 的拒信 → 未投递、入队为 `pending`、留痕含拦截原因与判定字段原始取值
-- [ ] 5.7 测试端到端放行：队列 `approve` + 总开关开启 → 投递发生、队列转 `approved`、留痕动作类型为「已发送」且含 `confirmed_by`
-- [ ] 5.8 测试重放安全：外发相关节点被从头重跑 → 已外发不重复外发、已入队不重复入队（`effect_log` 命中短路）
-- [ ] 5.9 测试内部通知不受影响：岗位画像确认卡片不经候选人门禁，M1 现有投递行为与本变更前一致（回归）
+- [x] 5.1 `queue.py`：`pending_approval` 的读写与状态机（`pending` → `approved` / `abandoned`）；放行不 `DELETE` 而是改状态并记 `confirmed_by` 与 `resolved_at`；查询只返回 `pending`
+- [x] 5.2 `queue.approve(id, confirmed_by)`：带 `confirmed_by` 重走门禁。**死锁防线（平台侧踩过）**：仅首道拦截（无 `confirmed_by`）才入队；放行复发被总开关拦下时不重复入队、状态保持 `pending`，可在开关开启后再次放行
+- [x] 5.3 `effect_enqueue_pending_approval`：沿用现有 `idempotent_effect` 装饰器（**不改装饰器、不改 `effect_log`**）。**幂等策略**：`business_key` = 草稿内容哈希（复用 `message_business_key()` 的做法），幂等键 `{thread_id}:effect_enqueue_pending_approval:{content_hash}`；叠加 1.3 的 `content_hash` 唯一索引作第二道防线。函数体内不 `commit`，由装饰器统一提交
+- [x] 5.4 `effect_record_outbound_audit`：沿用 `idempotent_effect`。**幂等策略**：`business_key` = `{content_hash}:{allowed}`，同一草稿的"拦截"与"放行"各留一条痕、重放不重复留痕
+- [x] 5.5 外发路径接线：`compute_outbound_gate` 判定 → 按结果分流到 `effect_enqueue_pending_approval` 或既有 `effect_deliver_message`，两条路径都走 `effect_record_outbound_audit`。**不改 `effect_deliver_message` 内部逻辑、不改 `Channel` Protocol**
+- [x] 5.6 测试端到端拦截：一封无 `confirmed_by` 的拒信 → 未投递、入队为 `pending`、留痕含拦截原因与判定字段原始取值
+- [x] 5.7 测试端到端放行：队列 `approve` + 总开关开启 → 投递发生、队列转 `approved`、留痕动作类型为「已发送」且含 `confirmed_by`
+- [x] 5.8 测试重放安全：外发相关节点被从头重跑 → 已外发不重复外发、已入队不重复入队（`effect_log` 命中短路）
+- [x] 5.9 测试内部通知不受影响：岗位画像确认卡片不经候选人门禁，M1 现有投递行为与本变更前一致（回归）
 
 ### 5.x 落地偏离登记（U5 实施，2026-08-28 起 / 2026-08-30 续跑，全分支终审通过）
 
@@ -282,10 +284,12 @@
 分支 `worktree-audit-u5-queue-and-wiring`，10 笔提交，全量实测 **720 passed**
 （main 侧 675 → 本分支 720，增量 45 条）。
 
-⚠️ **本章 checkbox 仍为 0/9，不是漏勾**：回勾判据是「final review 通过**且已合并**」，
-而本章前言那条 `.51` §5-3 前置（在 `.51` 上按 4.1 实际创建一次开关文件 + 跑 3.3 验证）
-**截至 2026-08-30 仍未闭合**（`docs/audit-and-outbound-ops.md` 第五节第 3 项无实跑输出、
-无日期、无「已闭合」字样），属不可代项。代码与测试已全部就位并过终审，**停在合并前**。
+✅ **本章 9/9 已回勾（2026-09-03，0903E）**：回勾判据「final review 通过**且已合并**」两项均已满足——
+`.51` §5-3 前置已闭合（`docs/audit-and-outbound-ops.md` §五第 2、3 项 2026-09-03 三次实跑标 ✅ 已闭合），
+分支 `worktree-audit-u5-queue-and-wiring` 已合并回 `main`（merge commit `06a55d2c`，`--no-ff`；
+`git rev-list --count main..worktree-audit-u5-queue-and-wiring` = 0，确认无残留提交）。
+合并后全量 `pytest` **720 passed**、0 failed（合并前 main 基线 675，本章增量 45 条如数并入）。
+分支已随合并以 `git branch -d` 删除。
 
 | # | 本文件字面 | 实际落地 | 判据（哪条测试咬住它） |
 |---|---|---|---|

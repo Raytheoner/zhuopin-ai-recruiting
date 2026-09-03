@@ -25,8 +25,8 @@ HR业务线-接力0903B
 
 | 项 | 现状 |
 |---|---|
-| main | `e8ef150`，**ahead origin 2**（`git push` 反复被 auto mode classifier 拦，见【三】#1） |
-| 工作区 | ⚠️ 2 个文件未提交（本轮 Cowork 产出：本文 + 号池补登 0903D/E），`0903D` 第 0 步顺带提交 |
+| main | `aa57782`，**ahead origin 4**（`git push` 反复被 auto mode classifier 拦，见【三】#1） |
+| 工作区 | 干净（`0903D` 已把 Cowork 产出一并提交）。本行之后的改动由 `0903E` 提交 |
 | `.51` 代码 | ✅ **已发版 `d104249`**（`0903D` 2026-09-03 完成，`sync-to-server.sh`，冒烟 4 项与 §5-3 四步 + §2.2 链校验全过，见 `docs/audit-and-outbound-ops.md` §五第 2/3 项） |
 | pytest | main 侧 **675 passed / 0 failed**（08-30 实测）。⛔ 别把这个数抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
@@ -36,7 +36,7 @@ HR业务线-接力0903B
 
 | 变更包 | 进度 | 剩什么 |
 |---|---|---|
-| `ai-audit-trail-and-outbound-gate` | **35/53** | 第1–4章✅ 6/6·9/9·7/7·9/9；**第5章 0/9**（U5，代码已在分支上）；第6章 0/7；第7章 4/6 |
+| `ai-audit-trail-and-outbound-gate` | **44/53** | 第1–5章✅ 6/6·9/9·7/7·9/9·9/9（U5 已合并 main，`06a55d2c`，0903E）；第6章 0/7；第7章 4/6 |
 | `m1-intake-quality-fixes` | **60/69** | 只剩**第 8 章**（真实会话回放与上线，9 项，多数要 `.51`） |
 | `m1-job-profile-intake` | 33/71 | 08-26 已按现实重写 WBS，四类归档 |
 
@@ -72,15 +72,13 @@ opener 全文在该会话里；若 CC 侧还没跑，去 0903B 会话复制整�
 - 影响面：3 位 pilot 业务经理会看到 `m1-intake-quality-fixes` 60/69 的新行为（这是设计目的，
   第 8 章"真实会话回放与上线"本来就要它上 `.51`）
 
-### ③ `0903D` 报「§5-3 已闭合」后，再发 `[Mac]0903E` U5 收口
+### ~~③ `0903D` 报「§5-3 已闭合」后，再发 `[Mac]0903E` U5 收口~~ ✅ 已跑完（合并 commit `06a55d2c`）
 
-⚠️ **原 `[Mac]0831B` 的写法已失效**：它写的是「在既有 worktree `audit-u5-queue-and-wiring`
-里续跑」，**那个 worktree 已经没了**。改成：从 `worktree-audit-u5-queue-and-wiring`
-分支直接走 `finishing-a-development-branch` 合并回 main，或重新 `git worktree add` 一个。
-
-收口内容不变：合并 → 回勾第 5 章 9/9 → **不归档**（第 6、7 章未完，写明依据）。
-收口验证逐字执行：`git rev-list --count main..<分支>`，非 0 再 `git cherry -v main <分支>`
-——全 `-` 是 rebase 假阳性，有 `+` 才是真没合。⛔ 确认内容真在 main 上之前不许报完成。
+结果：`finishing-a-development-branch` 把 `worktree-audit-u5-queue-and-wiring` 合回 `main`
+（`--no-ff`，merge commit `06a55d2c`）。`git rev-list --count main..<分支>` = 0，确认真合
+非 rebase 假阳性。合并后全量 `pytest` **720 passed / 0 failed**（合并前基线 675）。
+第 5 章 9/9 已回勾，**未归档**（第 6 章 0/7、第 7 章 4/6 未完，见 `tasks.md` 顶部进度行）。
+分支已 `git branch -d` 删除（worktree 本就已不在）。
 
 ---
 
@@ -91,7 +89,7 @@ opener 全文在该会话里；若 CC 侧还没跑，去 0903B 会话复制整�
 | 1 | 🔴 **`git push` 被 auto mode classifier 拦** | 反复出现（08-28、08-30 两次记录在案）。main 现 ahead 1。两条路：**(a)** 每次在能批准的 session 里点放行；**(b)** 给 `.claude/settings.json` 加 `"permissions": {"allow": ["Bash(git push:*)"]}`——项目级、可提交、对所有 session 生效。**(b) 是改权限，等 Shao Peishen 拍板** |
 | 2 | 🔴 **worktree 被未落档地清理，已发生两次** | 08-30 11:38 扫掉 u2/unitE/unitF/u1 四条（判据＝真未合 0，代码零损失）；**09-03 前 u5 也被移除**——而 08-30 那份报告刚评估过「u5 真未合 11，同样的清理不会碰它」。⇒ **判据变了或用了 `--force`，机制不明**。代码没丢（分支 `worktree-audit-u5-queue-and-wiring` 与 `19ab503`/`f899c98` 都在），丢的是 worktree 内 git-ignored 的 `.superpowers/sdd/` 台账。**要不要查清是谁在清、加个护栏？** |
 | 3 | **TD-9**：同一草稿第二次拦截零留痕 | 违反 spec「每一次外发尝试都留痕」。要动 5.4 幂等键公式 + 已过审的 `approve()` 签名，属**契约层变更需过审**。闸门完好不会误发，丢的只是可观测性，现网风险 0（TD-8 记明生产无调用方）。**修 or 等 U6 一并处理？** |
-| 4 | `.51` 留步清单还剩两项 | §5-1 备份任务确认/新增（`0903D` 只做一次性快照，不等于备份任务）；§5-2 链校验——`0903A` 已实跑，报 `app.audit` 缺包，同一部署缺口，`0903D` 发版后补跑。见 `docs/audit-and-outbound-ops.md` 第五节 |
+| 4 | `.51` 留步清单**只剩一项** | §5-1 备份任务确认/新增（`0903D` 只做了一次性快照 `C:\apps\backups\20260903-1003`，不等于常态化备份任务）。§5-2 链校验与 §5-3 四步已于 09-03 闭合。见 `docs/audit-and-outbound-ops.md` 第五节 |
 | 5 | `.51` 整机重启 | 阻断已清、只差窗口。⚠️ 爆炸半径 **7 个服务**（含门户网关本体），`CBS RebootPending=True` + 已 85 天未重启，停机时长不可按常规估。opener＝编排文件 `[Mac] 0820-9R` |
 | 6 | 阶段 C 门户导航 | 需在 Win 笔记本上改门户 HTML。板块名「HR·招聘智能体」，外链 `http://192.168.100.51:8095/hr/recruit-agent/`。与 `.51` 服务无关，不影响运行中的服务 |
 | 7 | 决策代理人 | `CLAUDE.md` 框架已建，**2026-08-28 决定继续不设**。「可代」项在无代理人期间同样一律挂起等本人 |
