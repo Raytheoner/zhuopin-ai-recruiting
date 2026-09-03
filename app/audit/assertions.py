@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from app.audit.criteria import CRITERION_KEY_WHITELIST
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型标注
+    from app.audit.recorder import AuditRecorder
 
 # ── M2 才会建的拒绝记录表 ────────────────────────────────────────────────
 # ⛔ 本单元不建这张表（delivery-units.md：M1 尚不存在，M2 建表后本断言自动
@@ -243,3 +246,95 @@ def run_compliance_assertions(conn: sqlite3.Connection) -> list[AssertionResult]
     看到一条违例，第二条要等下一轮 CI 才现形。
     """
     return [assertion(conn) for assertion in COMPLIANCE_ASSERTIONS]
+
+
+# ── 对账与链校验（6.4）──────────────────────────────────────────────────
+#
+# ⚠️ 这两条是**不同的断言，不可互相替代**（delivery-units.md §3.4 / §2.U6）：
+#
+#     chain_assertion()          链自身有没有被改        —— 检不出"少留了一条痕"
+#     reconciliation_assertion() 该留的痕都留了没有      —— 检不出"内容被改过"
+#
+# 两条各有盲区，恰好互补。⛔ 不要因为"都跑一遍太啰嗦"把其中一条删掉。
+# ⛔ 也不要去改 verify_chain() 或 app/audit/sinks.py：本模块只是它们的调用方。
+
+ASSERTION_RECONCILED = "SQLite 真身与 JSONL 镜像无未解释的差集"
+ASSERTION_CHAIN_INTACT = "JSONL 镜像的哈希链完整"
+
+
+def reconciliation_assertion(recorder: "AuditRecorder") -> AssertionResult:
+    """design D1 的检出手段：按 `analysis_run.id` 比对两侧记录集合。
+
+    两类差集的严重程度不同，但都算违例：
+
+      `unexplained_missing` —— 镜像缺行且链尾没有补录事件。这是崩溃窗口的
+        正常残留（允许的单向偏差），但**必须被看见并补录**，不能一直挂着。
+      `missing_in_store`    —— 镜像有、真身没有。这是 design D1 明令更糟的
+        那一侧（审计能查到一条数据库里不存在的记录），出现即说明有人违反了
+        「⛔ 禁止在 effect_* 函数体内 append JSONL」。
+
+    已 backfill 的缺行**不算违例**（`Reconciliation.unexplained_missing` 已
+    扣掉）：已知且已登记的东西一直报红，红久了就没人看了。
+    """
+    report = recorder.reconcile()
+    violations: list[dict[str, Any]] = [
+        {"kind": "missing_in_mirror", "analysis_run_id": run_id}
+        for run_id in sorted(report.unexplained_missing)
+    ]
+    violations += [
+        {"kind": "missing_in_store", "analysis_run_id": run_id}
+        for run_id in sorted(report.missing_in_store)
+    ]
+
+    detail = ""
+    if report.missing_in_store:
+        detail = (
+            "镜像里存在真身查不到的记录——design D1 明令更糟的偏差方向。"
+            "查一遍是不是有人在 effect_* 函数体内 append 了 JSONL。"
+        )
+    elif report.unexplained_missing:
+        detail = (
+            "镜像缺行（允许的单向偏差：真身完整、镜像缺证据）。"
+            "补齐方式是 AuditRecorder.backfill() 在链尾追加补录事件，"
+            "⛔ 不要插回原位——插回必然断链。"
+        )
+    if report.backfilled:
+        detail += f"（已补录 {len(report.backfilled)} 条，不计入违例）"
+
+    return AssertionResult(
+        name=ASSERTION_RECONCILED,
+        ok=report.ok,
+        violations=tuple(violations),
+        detail=detail,
+    )
+
+
+def chain_assertion(recorder: "AuditRecorder") -> AssertionResult:
+    """spec「留痕不可无痕篡改」：能检出任意一行被删除、插入或修改。
+
+    ⚠️ 已知边界（`verify_chain()` 的 docstring 已声明）：检不出**最后一行**
+    被修改——它没有后继来暴露它。这是哈希链的固有性质，不是本条断言的缺陷；
+    外部锚定不在本单元范围内。
+    """
+    verification = recorder.verify_integrity()
+    violations: tuple[dict[str, Any], ...] = ()
+    if not verification.ok:
+        violations = (
+            {
+                "broken_at": verification.broken_at,
+                "total": verification.total,
+                "error": verification.error,
+            },
+        )
+    return AssertionResult(
+        name=ASSERTION_CHAIN_INTACT,
+        ok=verification.ok,
+        violations=violations,
+        detail=(
+            ""
+            if verification.ok
+            else f"链在第 {verification.broken_at} 行断开（共 {verification.total} 行）："
+            f"{verification.error}。⚠️ 断链意味着镜像文件被改过，"
+            "先查文件权限与访问记录，⛔ 不要直接重建文件——重建会毁掉唯一的证据。"
+        ),
+    )
