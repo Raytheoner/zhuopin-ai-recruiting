@@ -1,0 +1,240 @@
+"""
+合规断言、跨介质对账与拦截统计——**红线被破坏时 CI 直接红**。
+
+⚠️ **本模块全部是只读查询。** ⛔ 不得出现任何 INSERT / UPDATE / DELETE /
+commit()：它是审计的观测端，不是写入端。有副作用的动作全部在 L4 编排层的
+`effect_*` 节点里（工程铁律 1、2）。reviewer 可以直接 grep 这一条。
+
+⚠️ **"0 命中"不等于"红线守住了"。** 三条断言在空表上全部恒真——同一个绿色
+同时兼容"红线守住了"和"断言根本没生效"两种解释。区分这两者的唯一手段是
+`tests/test_audit_assertion_effectiveness.py`：故意造违例，断言必须失败。
+⛔ 改本模块任何一条判定逻辑时，必须同步确认那份反证仍然会红。
+
+**分层**：本模块不 import `app.config`、不 import `app.graph`、不 import
+`app.outbound`（`app/audit/__init__.py` 的既有规矩 + 分层方向）。数据库连接与
+镜像路径一律由调用方传入。
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from typing import Any, Callable, Sequence
+
+from app.audit.criteria import CRITERION_KEY_WHITELIST
+
+# ── M2 才会建的拒绝记录表 ────────────────────────────────────────────────
+# ⛔ 本单元不建这张表（delivery-units.md：M1 尚不存在，M2 建表后本断言自动
+# 生效）。三个名字提成常量：M2 建表时若与这里不一致，改这三行即可，⛔ 不要
+# 把新名字散到查询语句里。取值来自 CLAUDE.md 合规红线的原话：
+# 「审计断言：rejection_record 中 reason_type='ai_score' 的记录数恒为 0」。
+REJECTION_TABLE = "rejection_record"
+REJECTION_REASON_COLUMN = "reason_type"
+AI_SCORE_REASON = "ai_score"
+
+# 空 evidence_ref 的判据。**与 app/storage/db.py 的 CHECK 逐字同源**：
+# SQLite 的单参 trim() 只剥空格，写成 trim(evidence_ref) 的话一个纯制表符
+# 的 evidence_ref 会从断言底下溜过去——那正是 U1 偏离登记 1 堵过的缺口，
+# 断言不能比它守护的 CHECK 还弱。
+_BLANK_EVIDENCE_SQL = (
+    "evidence_ref IS NULL "
+    "OR trim(evidence_ref, ' ' || char(9) || char(10) || char(13)) = ''"
+)
+
+
+@dataclass(frozen=True)
+class AssertionResult:
+    """一条合规断言的结论。
+
+    `violations` 不是可选的装饰：spec「合规断言在 CI 中执行」要求
+    "任一条不成立时判定为失败**并指出违例记录**"。ok=False 而
+    violations 为空的结果，人拿到手里没法往下查——除非失败原因本身就
+    不是"查到了违例行"（如表缺列），那种情况也要造一条描述性的违例项。
+    """
+
+    name: str
+    ok: bool
+    violations: tuple[dict[str, Any], ...] = ()
+    detail: str = ""
+
+
+def _rows(
+    conn: sqlite3.Connection, sql: str, params: Sequence[Any] = ()
+) -> list[dict[str, Any]]:
+    """⚠️ 刻意不设 `conn.row_factory`：conn 是全应用共享的一条连接
+    （`app/storage/db.py:get_connection`），换掉它会让所有按下标取值的既有
+    代码静默改变行为（与 `app/audit/sinks.py:_rows_as_dicts`、
+    `app/outbound/queue.py:_row_to_dict` 同一理由）。"""
+    cursor = conn.execute(sql, tuple(params))
+    columns = [d[0] for d in cursor.description]
+    return [dict(zip(columns, raw)) for raw in cursor.fetchall()]
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    # 表名不能参数化，只能拼进 SQL。这里拼的是模块级常量，不是外部输入。
+    return {row["name"] for row in _rows(conn, f"PRAGMA table_info({table})")}
+
+
+# ── 断言一（6.1）：AI 不做自动淘汰 ──────────────────────────────────────
+
+ASSERTION_NO_AI_SCORE_REJECTION = "以 AI 评分为理由的拒绝记录数恒为 0"
+
+
+def assert_no_ai_score_rejections(conn: sqlite3.Connection) -> AssertionResult:
+    """合规红线「AI 只做排序推荐，不做自动淘汰」的机器判据。
+
+    三条分支，**处置各不相同**：
+      表不存在        → 通过，但 detail 明说"还没到能验证的时候"
+      表存在、缺列    → **失败**（fail-closed：验不了红线不算守住了红线）
+      表存在、有违例  → 失败，violations 带上违例行全文
+    """
+    if not _table_exists(conn, REJECTION_TABLE):
+        return AssertionResult(
+            name=ASSERTION_NO_AI_SCORE_REJECTION,
+            ok=True,
+            detail=(
+                f"{REJECTION_TABLE} 表尚不存在（M1 现状）。"
+                "⚠️ 这个通过**不代表红线守住了**，只代表还没到能验证的时候——"
+                "M2 建表后本条自动开始真正生效。"
+            ),
+        )
+
+    columns = _columns(conn, REJECTION_TABLE)
+    if REJECTION_REASON_COLUMN not in columns:
+        return AssertionResult(
+            name=ASSERTION_NO_AI_SCORE_REJECTION,
+            ok=False,
+            violations=(
+                {
+                    "table": REJECTION_TABLE,
+                    "missing_column": REJECTION_REASON_COLUMN,
+                    "actual_columns": sorted(columns),
+                },
+            ),
+            detail=(
+                f"{REJECTION_TABLE} 已建表但没有 {REJECTION_REASON_COLUMN} 列，"
+                "本条断言无法验证红线。fail-closed：验不了就算不通过。"
+                "⛔ 不要改成跳过——跳过会把「列名改了」静默折成「零违例」。"
+            ),
+        )
+
+    rows = _rows(
+        conn,
+        f"SELECT * FROM {REJECTION_TABLE} WHERE {REJECTION_REASON_COLUMN} = ?",
+        (AI_SCORE_REASON,),
+    )
+    return AssertionResult(
+        name=ASSERTION_NO_AI_SCORE_REJECTION,
+        ok=not rows,
+        violations=tuple(rows),
+        detail=(
+            ""
+            if not rows
+            else f"发现 {len(rows)} 条以 AI 评分为理由的拒绝记录，违反合规红线"
+            "「AI 只做排序推荐，不做自动淘汰」。淘汰必须有人工确认节点并留痕。"
+        ),
+    )
+
+
+# ── 断言二（6.2）：evidence_ref 非空 ────────────────────────────────────
+
+ASSERTION_NO_BLANK_EVIDENCE = "criterion_score 中 evidence_ref 为空的记录数恒为 0"
+
+
+def assert_no_blank_evidence_ref(conn: sqlite3.Connection) -> AssertionResult:
+    """工程铁律 4 的纵深防御。
+
+    U1 已经把它做成了数据库 CHECK，本条是 CHECK **之上**的事后断言，不是
+    重复劳动：`PRAGMA ignore_check_constraints` 能把 CHECK 整个关掉
+    （design.md Risks 段点名），关掉之后只剩这一条守着。
+    """
+    rows = _rows(
+        conn,
+        "SELECT id, analysis_run_id, criterion_key, evidence_ref "
+        f"FROM criterion_score WHERE {_BLANK_EVIDENCE_SQL}",
+    )
+    return AssertionResult(
+        name=ASSERTION_NO_BLANK_EVIDENCE,
+        ok=not rows,
+        violations=tuple(rows),
+        detail=(
+            ""
+            if not rows
+            else f"发现 {len(rows)} 条证据回指为空的评分项，违反工程铁律 4。"
+            "这类记录只可能来自绕过 CHECK 的写入路径（如 "
+            "PRAGMA ignore_check_constraints），需要查清写入来源。"
+        ),
+    )
+
+
+# ── 断言三（6.3）：criterion_key 白名单 ─────────────────────────────────
+
+ASSERTION_NO_UNLISTED_CRITERION = "criterion_score.criterion_key 不存在白名单外的取值"
+
+
+def assert_no_unlisted_criterion_key(conn: sqlite3.Connection) -> AssertionResult:
+    """合规红线「禁止人脸/表情分析」「声学情绪信号不进 criterion_score」的机器判据。
+
+    白名单是 `app.audit.criteria.CRITERION_KEY_WHITELIST`——**唯一真源**。
+    ⛔ 不在这里重列任何一个 key：散成两份就会出现"一处放行一处拒绝"的分叉，
+    而分叉的那一侧就是红线的缺口（criteria.py 模块 docstring 的原话）。
+    """
+    whitelist = sorted(CRITERION_KEY_WHITELIST)
+    if not whitelist:
+        # 空白名单会让 NOT IN () 变成语法错误，或（在别的方言里）退化成恒真。
+        # 白名单被清空本身就是红线事故，直接判失败。
+        return AssertionResult(
+            name=ASSERTION_NO_UNLISTED_CRITERION,
+            ok=False,
+            violations=({"error": "CRITERION_KEY_WHITELIST 为空"},),
+            detail="白名单为空——未登记即拒绝的闸门已失效。",
+        )
+
+    placeholders = ", ".join("?" * len(whitelist))
+    rows = _rows(
+        conn,
+        "SELECT id, analysis_run_id, criterion_key, evidence_ref "
+        "FROM criterion_score "
+        # criterion_key IS NULL 要单独列：SQL 的 NOT IN 对 NULL 求值为 NULL，
+        # 不是 TRUE，一条 NULL 的 key 会从 NOT IN 底下溜过去。DDL 里它是
+        # NOT NULL，但绕过约束的写入路径正是本断言存在的理由。
+        f"WHERE criterion_key IS NULL OR criterion_key NOT IN ({placeholders})",
+        whitelist,
+    )
+    return AssertionResult(
+        name=ASSERTION_NO_UNLISTED_CRITERION,
+        ok=not rows,
+        violations=tuple(rows),
+        detail=(
+            ""
+            if not rows
+            else f"发现 {len(rows)} 条白名单外的评分维度。若涉及语速/停顿/静默"
+            "或人脸/表情，这不是漏配，是红线——⛔ 不要把它加进白名单。"
+            f"已登记维度：{whitelist}"
+        ),
+    )
+
+
+# ── 三条一起跑 ──────────────────────────────────────────────────────────
+
+COMPLIANCE_ASSERTIONS: tuple[Callable[[sqlite3.Connection], AssertionResult], ...] = (
+    assert_no_ai_score_rejections,
+    assert_no_blank_evidence_ref,
+    assert_no_unlisted_criterion_key,
+)
+
+
+def run_compliance_assertions(conn: sqlite3.Connection) -> list[AssertionResult]:
+    """spec「合规断言在 CI 中执行」：三条全部成立才通过。
+
+    ⚠️ **全部跑完再返回，⛔ 不短路。** 第一条红了就返回的话，一次修复只能
+    看到一条违例，第二条要等下一轮 CI 才现形。
+    """
+    return [assertion(conn) for assertion in COMPLIANCE_ASSERTIONS]
