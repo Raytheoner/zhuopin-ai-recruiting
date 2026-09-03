@@ -169,3 +169,76 @@ def test_empty_mirror_yields_empty_stats(mirror):
     assert stats.blocked_by_type_and_reason == {}
     assert stats.delivered_by_type == {}
     assert stats.always_blocked_types == ()
+
+
+def test_a_second_block_on_the_same_draft_gets_its_own_bucket(tmp_path):
+    """
+    ⭐ tasks 2.4 / TD-9 的可观测性目标本身。
+
+    TD-9 描述的"系统性缺席"：同一封拒信被拦两次（首次入队、放行时被总开关拦下），
+    6.5 的 blocked_by_type_and_reason 里只能看到**第一次**的那个 reason 桶——
+    第二次被幂等机制吞掉，而"一直发不出去的那批信"恰恰是最该被看见的那批。
+
+    ⚠️ 与本文件其余用例的分工：那些手工投喂事件给 mirror，证明的是统计函数的
+    分桶逻辑；这条走**真实外发路径**（deliver_candidate_message → queue.approve），
+    证明的是真实路径产出的事件能被统计看见。两者不互相替代。
+
+    ⛔ 本用例不改 app/audit/assertions.py：统计函数按现有逻辑遍历镜像即可看见
+    （proposal Non-goals 逐字）。若需要改统计代码才能绿，说明留痕这一侧还没修对。
+    """
+    from app.audit.recorder import AuditRecorder
+    from app.audit.sinks import JsonlChainSink, SqliteSink
+    from app.outbound import queue
+    from app.outbound.delivery import deliver_candidate_message
+    from app.outbound.gate import REASON_OUTBOUND_DISABLED
+    from app.outbound.messages import CandidateOutboundMessage
+    from app.storage.db import get_connection, init_schema
+
+    AI_BODY = (
+        "【AI 生成】本文案由系统基于岗位画像自动生成，生成时间 2026-08-28。很遗憾……"
+    )
+
+    class SpyChannel:
+        def __init__(self):
+            self.delivered = []
+
+        def deliver(self, thread_id, message):
+            self.delivered.append((thread_id, message))
+
+        def latest(self, thread_id):
+            return None
+
+    conn = get_connection(str(tmp_path / "stats.db"))
+    init_schema(conn)
+    mirror_sink = JsonlChainSink(tmp_path / "decisions.jsonl")
+    recorder = AuditRecorder(SqliteSink(conn), mirror_sink)
+    channel = SpyChannel()
+    message = CandidateOutboundMessage(
+        message_type="rejection_letter", recipient="cand-9@example.com", body=AI_BODY
+    )
+
+    first = deliver_candidate_message(
+        conn, thread_id="job-7", message=message, channel=channel,
+        recorder=recorder, outbound_enabled=lambda: True,
+    )
+    approval_id = queue.list_pending(conn)[0]["id"]
+    queue.approve(
+        conn,
+        approval_id,
+        confirmed_by="张三",
+        outbound_enabled=lambda: False,
+        deliver=lambda m: None,
+        recorder=recorder,
+    )
+    conn.commit()
+
+    stats = outbound_block_stats(mirror_sink)
+    buckets = stats.blocked_by_type_and_reason["rejection_letter"]
+
+    assert buckets == {first.reason: 1, REASON_OUTBOUND_DISABLED: 1}, (
+        f"两次不同原因的拦截应各占一个桶，实得 {buckets}——TD-9 的'系统性缺席'还在"
+    )
+    assert stats.blocked_by_type["rejection_letter"] == 2
+    assert stats.blocked_by_reason[REASON_OUTBOUND_DISABLED] == 1
+    assert stats.always_blocked_types == ("rejection_letter",)
+    assert channel.delivered == []
