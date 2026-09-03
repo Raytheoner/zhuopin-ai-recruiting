@@ -9,3 +9,9 @@ requires-python = ">=3.14,<3.15"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+# 合规断言（U6）。CI 在跑完全量之后**再单独跑一遍**打了这个标记的用例，
+# 让「红线被破坏」变成一个可归因的失败步骤，而不是埋在几百条用例里的一行红。
+# 重复执行是刻意的成本，⛔ 不要为了省几秒把全量那次改成 -m "not compliance"。
+markers = [
+    "compliance: 合规红线断言与其反证（tasks.md 第 6 章）",
+]
