@@ -27,7 +27,7 @@ HR业务线-接力0903B
 |---|---|
 | main | `b86db65`，**与 origin 同步（ahead 0）**（`0903J` 推成；`0903Z` 发车前那次 push 被 classifier 拒、收尾那次成功，见【三】#1） |
 | 工作区 | 未提交（Cowork 侧 0903B 产出）：本文、`OP-0820-全量编排.md`、`CLAUDE.md`、kickoff / lane-dispatch / run-build 三个 skill、`docs/openers/0903K-*.md` `0903L-*.md`。`0903K` 提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
-| `.51` 代码 | ✅ **已发版 `d104249`**（`0903D` 2026-09-03 完成，`sync-to-server.sh`，冒烟 4 项与 §5-3 四步 + §2.2 链校验全过，见 `docs/audit-and-outbound-ops.md` §五第 2/3 项） |
+| `.51` 代码 | ✅ **已发版 `b86db65`（含 U6）**（`0903L` 2026-09-03 二次发版，`sync-to-server.sh`，冒烟 4 项全过；U6 巡检 CLI 首次实跑 `EXIT=2`／JSONL 镜像不存在＝尚无审计记录非失败；8.4 已在页面手工跑通并回勾，见 `docs/audit-and-outbound-ops.md` §五与 `tasks.md` 8.4） |
 | pytest | main 侧 **786 passed / 1 skipped / 0 failed**（09-03 `0903Z` 独立复核；skipped 那条＝`REPLAY_LIVE` 门控的真回放）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
 | worktree | 只剩主工作区，无多余分支（G/H 的 worktree 由各自 finishing 流程自删，不是外部清理；H 的陈旧分支 `0903J` 已删） |

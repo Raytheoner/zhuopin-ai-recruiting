@@ -467,6 +467,43 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    （`C:\apps\backups\20260903-1003`），不构成第 1 项要求的常态化备份任务，
    需另行确认或新增。
 
+   **2026-09-03 二次发版记录（`[Mac]0903L`）**
+
+   执行人：`[Mac]0903L` session ｜ 依据：Shao Peishen 2026-09-03 14:05 在 Cowork
+   会话 `HR业务线-接力0903B` 回「都要上」（对"8.4 + U6 巡检都要上 `.51`"的裁决），
+   见 `docs/session接力.md` 【二】⑥ 与号池台账 0903L 行互为印证。
+
+   | 项 | 值 |
+   |---|---|
+   | 发版 HEAD | `b86db65`（含 U6，`ai-audit-trail-and-outbound-gate` 第 6 章） |
+   | 快照目录 | `C:\apps\backups\20260903-1428`（`app\` + `data\`） |
+   | `sync-to-server.sh` | `HTTP 200` + "发版完成" |
+   | 冒烟 1：首页 | `curl` → `200` |
+   | 冒烟 2：相对资源 | 页面唯一 `href="/hr/recruit-agent/"`，`curl` → `200`，无 404 |
+   | 冒烟 3：`logs\app.log` 尾 60 行 | 无 `Traceback` / `OperationalError`；新进程于 `2026-09-03 14:29:29` 启动 |
+   | 冒烟 4：`app\audit\assertions.py`（本次发版目标文件） | `Test-Path` → `True` |
+
+   四项冒烟全过，未触发回滚。第 1 项（备份任务）状态不变，仍 ⏸。
+
+   **U6 巡检 CLI 首次实跑（2026-09-03）**
+
+   ```powershell
+   cd C:\apps\zhuopin-recruit-agent
+   .venv\Scripts\python.exe -m app.audit.assertions --db data\demo.db --mirror data\audit\decisions.jsonl
+   ```
+
+   `EXIT=2`，原文（核对源码 `app/audit/assertions.py:485` 确认字面量一致，
+   SSH/PowerShell 控制台编码链路多次尝试仍会把中文重编码乱码，故以源码为准）：
+
+   > JSONL 镜像不存在：data\audit\decisions.jsonl。⛔ 巡检未执行——路径错了就是
+   > 没查过，不要把这种情况当成通过。
+
+   `assertions.py` 的检查顺序是先"数据库"、后"JSONL 镜像"（见源码 482-489 行）；
+   报错主体是"JSONL 镜像"而非"数据库"，说明 `data\demo.db` 存在、检查在镜像这一
+   项才终止。这与 §五第 2 项链校验此前得到的 `ok=True, total=0` 结论一致：
+   `data/audit/decisions.jsonl` 在 `.51` 上至今未生成（现网无外发调用方，尚无
+   审计记录）。**这是"尚无审计记录"，不是巡检失败**，未创建空文件充数，如实登记。
+
 ---
 
 ## 关联
