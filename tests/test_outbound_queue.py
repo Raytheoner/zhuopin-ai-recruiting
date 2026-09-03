@@ -190,7 +190,17 @@ def test_list_pending_message_type_filter_returns_only_the_matching_type(conn):
 # ── 放行与死锁防线（tasks 5.2 / design D5）──────────────────────────────
 
 
-def _approve(conn, approval_id, *, switch, delivered, confirmed_by="张三"):
+@pytest.fixture
+def recorder(conn, tmp_path):
+    """approve() 的留痕依赖（TD-9）。⛔ 不给 recorder 造 stub——真的 sink 才能
+    让"被拦时留没留痕"这件事在别处（e2e）被数出来。"""
+    from app.audit.recorder import AuditRecorder
+    from app.audit.sinks import JsonlChainSink, SqliteSink
+
+    return AuditRecorder(SqliteSink(conn), JsonlChainSink(tmp_path / "decisions.jsonl"))
+
+
+def _approve(conn, approval_id, *, switch, delivered, recorder, confirmed_by="张三"):
     from app.outbound import queue as q
 
     return q.approve(
@@ -199,17 +209,18 @@ def _approve(conn, approval_id, *, switch, delivered, confirmed_by="张三"):
         confirmed_by=confirmed_by,
         outbound_enabled=lambda: switch,
         deliver=delivered.append,
+        recorder=recorder,
     )
 
 
-def test_approving_with_the_switch_on_delivers_and_marks_approved(conn):
+def test_approving_with_the_switch_on_delivers_and_marks_approved(conn, recorder):
     """spec「人工放行」：草稿携带确认人标识重新走门禁，两道闸都通过时被外发。"""
     approval_id = queue.enqueue(
         conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
     )
     delivered = []
 
-    decision = _approve(conn, approval_id, switch=True, delivered=delivered)
+    decision = _approve(conn, approval_id, switch=True, delivered=delivered, recorder=recorder)
     conn.commit()
 
     assert decision.allowed is True
@@ -220,7 +231,7 @@ def test_approving_with_the_switch_on_delivers_and_marks_approved(conn):
     assert row["confirmed_by"] == "张三"
 
 
-def test_the_row_is_already_approved_at_the_moment_deliver_runs(conn):
+def test_the_row_is_already_approved_at_the_moment_deliver_runs(conn, recorder):
     """
     ⭐ 顺序断言（review 发现 1）。`mark_resolved` 的 `UPDATE ... WHERE
     status = 'pending'` 本身就是一次比较后交换（CAS）——必须先拿到行的所有权
@@ -242,13 +253,14 @@ def test_the_row_is_already_approved_at_the_moment_deliver_runs(conn):
         confirmed_by="张三",
         outbound_enabled=lambda: True,
         deliver=spy_deliver,
+        recorder=recorder,
     )
     conn.commit()
 
     assert statuses_seen_by_deliver == ["approved"]
 
 
-def test_losing_the_resolve_race_does_not_deliver_a_second_time(conn, monkeypatch):
+def test_losing_the_resolve_race_does_not_deliver_a_second_time(conn, monkeypatch, recorder):
     """
     ⭐ 并发丢失竞态（review 发现 1，Important）。两个 `approve()` 几乎同时
     读到同一行 pending、都过了门禁，但 `mark_resolved` 的 CAS 只有一个能真正
@@ -274,7 +286,7 @@ def test_losing_the_resolve_race_does_not_deliver_a_second_time(conn, monkeypatc
 
     delivered = []
     with pytest.raises(queue.ApprovalNotPending):
-        _approve(conn, approval_id, switch=True, delivered=delivered)
+        _approve(conn, approval_id, switch=True, delivered=delivered, recorder=recorder)
 
     assert delivered == []
 
@@ -289,7 +301,7 @@ def test_top_severity_is_cleared_by_the_signature_not_terminal(conn):
     assert _msg().requires_confirmation is True
 
 
-def test_approving_with_the_switch_off_does_not_deliver_and_does_not_requeue(conn):
+def test_approving_with_the_switch_off_does_not_deliver_and_does_not_requeue(conn, recorder):
     """
     ⭐ 死锁防线（design D5，平台侧踩过）。spec「放行时总开关关闭」：
     消息仍不外发、状态保持 pending、可在开关开启后再次放行。
@@ -308,7 +320,7 @@ def test_approving_with_the_switch_off_does_not_deliver_and_does_not_requeue(con
     )
     delivered = []
 
-    decision = _approve(conn, approval_id, switch=False, delivered=delivered)
+    decision = _approve(conn, approval_id, switch=False, delivered=delivered, recorder=recorder)
     conn.commit()
 
     assert decision.allowed is False
@@ -318,7 +330,7 @@ def test_approving_with_the_switch_off_does_not_deliver_and_does_not_requeue(con
     assert queue.get(conn, approval_id)["status"] == "pending"  # 状态没动
 
 
-def test_the_switch_off_path_never_calls_enqueue(conn, monkeypatch):
+def test_the_switch_off_path_never_calls_enqueue(conn, monkeypatch, recorder):
     """
     ⭐ 补齐 AST 结构守护的盲区（review 发现 2）。
     `test_the_approve_path_contains_no_enqueue_call` 只扫描 `approve` 函数体里
@@ -340,22 +352,22 @@ def test_the_switch_off_path_never_calls_enqueue(conn, monkeypatch):
     monkeypatch.setattr(q, "enqueue", lambda *a, **k: enqueue_calls.append((a, k)))
 
     delivered = []
-    decision = _approve(conn, approval_id, switch=False, delivered=delivered)
+    decision = _approve(conn, approval_id, switch=False, delivered=delivered, recorder=recorder)
     conn.commit()
 
     assert decision.allowed is False
     assert enqueue_calls == []
 
 
-def test_a_draft_blocked_by_the_switch_can_be_approved_again_later(conn):
+def test_a_draft_blocked_by_the_switch_can_be_approved_again_later(conn, recorder):
     """spec 同一 Scenario 的后半句：可在总开关开启后再次放行。"""
     approval_id = queue.enqueue(
         conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
     )
     delivered = []
 
-    _approve(conn, approval_id, switch=False, delivered=delivered)
-    decision = _approve(conn, approval_id, switch=True, delivered=delivered)
+    _approve(conn, approval_id, switch=False, delivered=delivered, recorder=recorder)
+    decision = _approve(conn, approval_id, switch=True, delivered=delivered, recorder=recorder)
     conn.commit()
 
     assert decision.allowed is True
@@ -363,7 +375,7 @@ def test_a_draft_blocked_by_the_switch_can_be_approved_again_later(conn):
     assert queue.get(conn, approval_id)["status"] == "approved"
 
 
-def test_a_malformed_draft_is_not_delivered_even_with_a_signature(conn):
+def test_a_malformed_draft_is_not_delivered_even_with_a_signature(conn, recorder):
     """
     spec「确认人不能放行一条畸形消息」：风险等级读不出但带了确认人标识 →
     仍拦截，原因是「风险等级未知」而非「等待人工确认」。
@@ -377,7 +389,7 @@ def test_a_malformed_draft_is_not_delivered_even_with_a_signature(conn):
     )
     delivered = []
 
-    decision = _approve(conn, approval_id, switch=True, delivered=delivered)
+    decision = _approve(conn, approval_id, switch=True, delivered=delivered, recorder=recorder)
     conn.commit()
 
     assert decision.allowed is False
@@ -386,7 +398,7 @@ def test_a_malformed_draft_is_not_delivered_even_with_a_signature(conn):
     assert queue.get(conn, approval_id)["status"] == "pending"
 
 
-def test_approving_an_unknown_or_already_resolved_id_raises(conn):
+def test_approving_an_unknown_or_already_resolved_id_raises(conn, recorder):
     """
     ⛔ 不静默返回。放行一条不存在或已处置的草稿是调用方的错，静默吞掉会让
     "我明明点了放行"和"它真的发出去了"这两件事再也对不上。
@@ -394,13 +406,13 @@ def test_approving_an_unknown_or_already_resolved_id_raises(conn):
     approval_id = queue.enqueue(
         conn, thread_id="job-7", message=_msg(), blocked_reason="等待人工确认"
     )
-    _approve(conn, approval_id, switch=True, delivered=[])
+    _approve(conn, approval_id, switch=True, delivered=[], recorder=recorder)
     conn.commit()
 
     with pytest.raises(queue.ApprovalNotPending):
-        _approve(conn, approval_id, switch=True, delivered=[])  # 已经 approved
+        _approve(conn, approval_id, switch=True, delivered=[], recorder=recorder)  # 已经 approved
     with pytest.raises(queue.ApprovalNotPending):
-        _approve(conn, "job-7:不存在", switch=True, delivered=[])
+        _approve(conn, "job-7:不存在", switch=True, delivered=[], recorder=recorder)
 
 
 def test_the_approve_path_contains_no_enqueue_call():

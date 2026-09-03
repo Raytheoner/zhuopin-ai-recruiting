@@ -118,6 +118,7 @@ def test_approving_the_queued_letter_delivers_it_and_leaves_a_second_trail(wired
             recorder=recorder,
             outbound_enabled=lambda: True,
         ),
+        recorder=recorder,
     )
     conn.commit()
 
@@ -227,6 +228,59 @@ def test_the_intake_graph_cannot_reach_the_candidate_gate():
     assert "app.outbound.delivery" in imported_names(
         "from app.outbound.delivery import deliver_candidate_message\n"
     )
+
+
+def test_approving_into_a_closed_switch_leaves_its_own_trail(wired):
+    """
+    ⭐ TD-9 的正面回归（tasks 1.7 / spec Scenario「从待审批队列放行时被总开关拦下，
+    与首次入队的拦截分别留痕」）。
+
+    2026-09-04 在 main 上实测：approve() 被总开关拦下时镜像行数原地不动（1 → 1），
+    因为它在 `if not decision.allowed: return decision` 就走了，`deliver` 从未被调用
+    （TD-9 成因①），而且就算调了也会被旧幂等键吞掉（成因②）。两条成因缺一条修不好。
+
+    ⚠️ 首次拦截的原因 ⛔ 不许硬编码文案：默认 CandidateOutboundMessage 的
+    `requires_confirmation` 为 True（红线要求），实际命中的是
+    `REASON_CONFIRMATION_REQUIRED`「消息自称需要人工确认」，不是 tasks 散文里写的
+    「等待人工确认」。这里一律用第一次调用返回的 decision.reason 与 REASON_* 常量。
+
+    判据是 **JSONL 镜像行数**（Global Constraint 6），⛔ 不是 effect_log 计数。
+    """
+    from app.outbound.gate import REASON_OUTBOUND_DISABLED
+
+    conn, chain_path, recorder, channel = wired
+    first = deliver_candidate_message(
+        conn, thread_id="job-7", message=_msg(), channel=channel,
+        recorder=recorder, outbound_enabled=lambda: True,
+    )
+    approval_id = queue.list_pending(conn)[0]["id"]
+    assert len(_mirror(chain_path)) == 1  # 首次拦截那一条，先钉住基线
+
+    decision = queue.approve(
+        conn,
+        approval_id,
+        confirmed_by="张三",
+        outbound_enabled=lambda: False,
+        deliver=lambda m: pytest.fail("总开关关闭时 ⛔ 不得投递"),
+        recorder=recorder,
+    )
+    conn.commit()
+
+    assert decision.allowed is False
+    assert decision.reason == REASON_OUTBOUND_DISABLED
+    assert channel.delivered == []
+
+    lines = _mirror(chain_path)
+    assert len(lines) == 2, f"放行被拦下必须新增一条痕，实得 {len(lines)} 行：{lines}"
+    assert [l["event_type"] for l in lines] == [OUTBOUND_BLOCKED, OUTBOUND_BLOCKED]
+    assert lines[1]["blocked_reason"] == REASON_OUTBOUND_DISABLED
+    assert lines[0]["blocked_reason"] == first.reason
+    assert first.reason != REASON_OUTBOUND_DISABLED
+    # spec 逐字：两条记录各自可按 id 分别被检索到
+    assert lines[0]["id"] != lines[1]["id"]
+    # ⛔ 除留痕外一个状态都不许动（design D5）
+    assert queue.get(conn, approval_id)["status"] == "pending"
+    assert len(queue.list_pending(conn)) == 1
 
 
 def test_internal_notifications_still_deliver_unconditionally(tmp_path):
