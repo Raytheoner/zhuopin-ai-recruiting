@@ -4,7 +4,7 @@
 
 **每份 plan 的 Global Constraints 段**从 `CLAUDE.md`「工程铁律」逐字复制，并追加本变更的三条硬边界：不新增 `zhuopin_platform` 依赖、不跨仓库 import、不改 `effect_log` 与 `idempotent_effect`。
 
-**进度（2026-09-03，0903E）：44/53。未归档依据：第 6 章 0/7、第 7 章 4/6 未完。**
+**进度（2026-09-03，0903G）：51/53。未归档依据：第 7 章 7.1/7.2 未完（U7 的 CI 边界守护两项）。**
 
 ---
 
@@ -321,13 +321,53 @@
 
 交付单元：红线被破坏时 CI 直接红。
 
-- [ ] 6.1 `assertions.py` 断言一：以 AI 评分为理由的拒绝记录数恒为 0（`rejection_record.reason_type='ai_score'`；该表尚不存在时断言以「表不存在即通过、表存在则必须为 0」的形式实现，M2 建表后自动生效）
-- [ ] 6.2 `assertions.py` 断言二：`criterion_score` 中 `evidence_ref` 为空的记录数恒为 0（`CHECK` 之上的纵深防御）
-- [ ] 6.3 `assertions.py` 断言三：`criterion_score.criterion_key` 不存在白名单外的取值
-- [ ] 6.4 `assertions.py` 对账查询：按 `analysis_run.id` 比对 SQLite 与 JSONL 两侧记录集合，差集非空即报告（D1 的检出手段）
-- [ ] 6.5 `assertions.py` 拦截统计查询：按 `message_type` 与拦截原因统计次数，使「某类消息一直在被拦」可被发现（fail-closed 误拦的兜底观测）
-- [ ] 6.6 三条断言 + 链校验（`verify_chain()`）接入测试套件与 CI；任一条不成立即判失败并指出违例记录
-- [ ] 6.7 测试断言本身有效：故意插入一条以 AI 评分为理由的拒绝记录 / 一条白名单外的 `criterion_key` → 对应断言必须失败（防止断言写成恒真）
+- [x] 6.1 `assertions.py` 断言一：以 AI 评分为理由的拒绝记录数恒为 0（`rejection_record.reason_type='ai_score'`；该表尚不存在时断言以「表不存在即通过、表存在则必须为 0」的形式实现，M2 建表后自动生效）
+- [x] 6.2 `assertions.py` 断言二：`criterion_score` 中 `evidence_ref` 为空的记录数恒为 0（`CHECK` 之上的纵深防御）
+- [x] 6.3 `assertions.py` 断言三：`criterion_score.criterion_key` 不存在白名单外的取值
+- [x] 6.4 `assertions.py` 对账查询：按 `analysis_run.id` 比对 SQLite 与 JSONL 两侧记录集合，差集非空即报告（D1 的检出手段）
+- [x] 6.5 `assertions.py` 拦截统计查询：按 `message_type` 与拦截原因统计次数，使「某类消息一直在被拦」可被发现（fail-closed 误拦的兜底观测）
+- [x] 6.6 三条断言 + 链校验（`verify_chain()`）接入测试套件与 CI；任一条不成立即判失败并指出违例记录
+- [x] 6.7 测试断言本身有效：故意插入一条以 AI 评分为理由的拒绝记录 / 一条白名单外的 `criterion_key` → 对应断言必须失败（防止断言写成恒真）
+
+### 6.x 落地偏离登记（U6 实施，2026-09-03，全分支终审 + 一轮 fix wave 通过）
+
+本章按 `docs/superpowers/plans/2026-09-03-ai-audit-trail-unitU6-assertions-and-ci.md` 实施，
+合并 commit `e5e8e33`（分支 `claude/audit-u6-assertions-dev-0903g`，5 个实现 commit + 2 个终审修复 commit）。
+落地相对本文件与既有注释字面有六条偏离，**方向都是「更严」或「更准」**。
+
+| # | 字面 | 实际落地 | 判据（哪条测试咬住它） |
+|---|---|---|---|
+| 1 | 6.5「按 `message_type` 与拦截原因统计」，`app/outbound/gate.py:50` 注释指向 `pending_approval.blocked_reason` | 数据源改为 **JSONL 镜像**，不查 `pending_approval` | 只查 `pending_approval` 会系统性漏掉两类：① 外发**放行**事件根本不入队；② 放行复发被拦时不入队（`app/outbound/delivery.py` 的 D5 死锁防线只对首道拦截入队）。而「某类消息是不是一直在被拦」恰恰要拿拦截数和放行数对照才答得出。`test_delivered_events_are_counted_separately` / `test_always_blocked_types_is_the_actionable_signal`。⛔ 未改 `gate.py` 那句注释（越界改 U4 的文件），只登记 |
+| 2 | 6.1「表不存在即通过、表存在则计数必须为 0」 | 多一条分支：**表存在但缺 `reason_type` 列 → 判失败** | 字面只写了两条分支，第三种情况（M2 建表时列名与本仓库常量不一致）会落进「查不到违例」从而静默通过。fail-closed：验不了红线不算守住了红线。`test_ai_score_rejection_assertion_fails_when_reason_column_missing` |
+| 3 | 6.6「三条断言 + 链校验接入测试套件与 CI」 | 除接入外，另加 `python -m app.audit.assertions` 巡检 CLI，退出码 0/1/**2** | CI 的库是空的，三条断言在那儿恒真——真正有数据可查的是 `.51`。退出码 2（路径不存在）单列是关键：指错路径的巡检若返回 0，读的人会以为红线守住了。`test_exit_two_when_db_missing` / `test_exit_two_when_mirror_missing`（终审已实跑真实 CLI 复核：全绿→0、`--db` 不存在→2、`--mirror` 不存在→2） |
+| 4 | 6.7「故意插入违例 → 对应断言必须失败」 | 除计划规定的三次注入外，**终审又跑了 5 次独立变异，抓出 2 处幸存缺口并当场封堵** | 详见下方「6.7 反证的实测台账」。这两处正是 6.7 要防的那种恒真，却躲过了计划自带的三次注入——**说明「反证文件存在」本身不等于「反证有效」**，判据只能是变异实测 |
+| 5 | 计划未提 | `pyproject.toml` 注册 `compliance` marker（3 行），超出 0903G opener 的 `git add` 白名单 | CI 的可归因步骤 `pytest -m compliance` 需要该 marker 注册，否则每次 CI 都刷 `PytestUnknownMarkWarning`。该文件不在并行泳道 0903H 的触碰面内，逐条显式 `git add`、⛔ 全程未用 `git add -A`。登记于此 |
+| 6 | 6.5「使『某类消息一直在被拦』可被发现」 | **⚠️ 撞上 TD-9，本单元未修，统计存在已知盲区** | TD-9（`docs/tech-debt.md:225`）：同一草稿的**第二次拦截**走 `queue.approve()` 早返回，且幂等键 `{content_hash}:{allowed}` 不含 reason → 撞 `effect_log` 已有行 → `idempotent_effect` 返回 `None` → 镜像被跳过，JSONL 里**一行都没有**。因此 6.5 对「放行复发被拦」这一整类系统性缺席——**恰恰是最该被看见的那批**。TD-9 原文已预言此事。修它要同时改已过审的 `approve()` 签名与本文件 5.4 字面规定的幂等键公式，属计划/契约层变更且触碰合规留痕语义，**Shao Peishen 尚未裁决，⛔ 本单元只登记不修** |
+
+**6.7 反证的实测台账**（本章的价值全在这张表——「0 命中」同时兼容「红线守住了」和「断言没生效」，只有变异能分开这两者）：
+
+| 变异（把断言改成恒真） | 结果 | 谁跑的 |
+|---|---|---|
+| 断言一 `ok=not rows` → `ok=True` | 🔴 `test_ai_score_rejection_is_detected` 等变红 | implementer |
+| 断言二 三参 `trim` → 单参 `trim()` | 🔴 `[tab]`/`[newline]`/`[carriage-return]`/`[mixed-whitespace]` 变红（`[empty]`/`[space]` 保持绿，符合 SQLite 单参语义） | implementer |
+| 断言三 白名单塞进 `handwriting_style` | 🔴 `test_unknown_criterion_key_is_detected` 变红 | implementer |
+| 断言三 比较条件改恒真 `WHERE 1 = 0 AND …` | 🔴 12 failed / 10 passed | controller（独立复核） |
+| `chain_assertion` 强制 `ok=True` | 🔴 2 failed / 5 passed | task-3 reviewer |
+| 拦截统计丢弃缺 `message_type` 的事件 | 🔴 `test_missing_type_and_reason_get_explicit_buckets` 变红 | task-4 reviewer |
+| **`REJECTION_TABLE`→`"rejection_records"` + `AI_SCORE_REASON`→`"ai_score_v2"`** | ⚠️ **原本全绿（43 + 771 全过）＝ 红线一被静默停用** → 补 `test_rejection_constants_are_pinned_to_the_red_line_wording` 后 🔴 1 failed / 44 passed | 终审发现，controller 复核封堵 |
+| **删掉 `criterion_key IS NULL OR` 守卫** | ⚠️ **原本全绿（45 全过）** → 补 `test_null_criterion_key_is_detected_by_the_real_assertion`（直接调生产函数）后 🔴 1 failed / 44 passed | 终审发现，controller 复核封堵 |
+
+后两行是本单元最值钱的两条：反证文件**自己**曾在两个维度上恒真。第一处的成因是夹具表用**被测的那三个常量**建的，没有任何东西钉住 `CLAUDE.md` 里的字面量 `rejection_record` / `reason_type` / `ai_score`；第二处的成因是替代测试自建表并手抄 WHERE 子句，**从不调用生产函数**。两者都已改为直接绑定生产代码。
+
+**终审 parked（真实但不承重，带裁定，⛔ 本单元不做）**：
+
+1. `app/audit/assertions.py` 与 `.github/workflows/ci.yml` 都指向 `docs/audit-and-outbound-ops.md` 讲巡检口径，但该文档尚未写这件事。裁定：写运维文档超出本单元范围，且两处指针正上方都已内嵌完整命令行，操作者不会卡住。留作 7.3 的后续补写。
+2. `--db` 指向一个存在但无 schema 的文件时，断言二/三抛 `sqlite3.OperationalError` → 退出码 1，与「发现违例」撞码。裁定：输出是 traceback，⛔ 不可能被读成「红线守住了」，与退出码 2 要防的「安静返回 0」不是一个量级的风险。
+
+**⏸ 留步（本单元不闭合，需 `.51` 上机）**：巡检 CLI 从未对着 `.51` 的真实 `data/demo.db` 与
+`data/audit/decisions.jsonl` 跑过。首次上机巡检属发版动作（生产服务器 `.51` 的发版决定为
+**不可代项**），登记在此，待 Shao Peishen 安排。
+
 
 ## 7. 边界守护与文档
 
