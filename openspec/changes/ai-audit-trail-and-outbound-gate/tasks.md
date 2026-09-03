@@ -4,7 +4,7 @@
 
 **每份 plan 的 Global Constraints 段**从 `CLAUDE.md`「工程铁律」逐字复制，并追加本变更的三条硬边界：不新增 `zhuopin_platform` 依赖、不跨仓库 import、不改 `effect_log` 与 `idempotent_effect`。
 
-**进度（2026-09-03，0903G）：51/53。未归档依据：第 7 章 7.1/7.2 未完（U7 的 CI 边界守护两项）。**
+**进度（2026-09-04，0903O）：53/53，全部勾完。归档交 0903Q（等 5.4 公式订正）** —— ⛔ 本泳道不跑 `openspec-archive-change`：0903Q 的 2.5 还要订正本文件 5.4 的公式，归档须在那之后做，否则归档进 `openspec/specs/` 的是待订正版本。落地偏离见文末「7.x 落地偏离登记」。
 
 ---
 
@@ -374,9 +374,24 @@
 交付单元：本变更的三条硬边界变成机器可查，人为破坏会被 CI 挡下。
 
 - [x] 7.1 CI 检查：`app/` 下禁止出现 `from zhuopin_platform` / `import zhuopin_platform`；禁止 `sys.path` 指向 OneDrive 路径的注入 → **`scripts/check_boundary.py`**（`.github/workflows/ci.yml` 的 `hooks` job 追加一步调用。判据比字面从严**三处**：① `zhuopin_platform` 按裸 token 扫全文而非只扫 import 语句，且**含非 `.py` 文件**——`app/web/index.html` 里的一行 fetch 也在扫描范围内；② `app/` 下任何 `sys.path` 访问均判违例，⛔ 不与「指向 OneDrive」合取（合取可被一个变量绕开）；③ 三个姊妹仓库 marker（`OneDrive` / `企业AI转型` / `zhuopin-ai-transformation`）**独立成判据**（规则 `7.1-path`），同样不与 `sys.path` 合取——⚠️ 这是全脚本误报风险最高的一条，`app/` 里照抄 CLAUDE.md「本项目本来就是企业AI转型的部门模块之一」会被判违例，正确处置是把那句话搬去 `docs/`。三条理由见脚本 `scan_app_tree()` docstring。另有三条**完整性**判据防止检查恒真：`app/` 目录不存在即违例（`7.1-missing`，与 `7.2-missing` 对称）、`app/` 下出现任何 symlink 即违例（`7.1-symlink`，目录软链是 `Path.rglob` 的盲区）、非 UTF-8 文件不再被静默跳过（兜底解码，⚠️ 已知限制：无 BOM 的 UTF-16 中文只保证 ASCII token 匹配，见 `_decode()` docstring）。反证 `tests/test_boundary_guard.py` 7.1 侧 28 条、全文件 48 条，实测）
-- [x] 7.2 CI 检查：`requirements.txt` 与 `pyproject.toml` 不含 `zhuopin_platform`；本变更的依赖文件 diff 必须为空 → **同上脚本**（diff 判据写死基线 `e65f685`，**只锁 `requirements.txt`**：`pyproject.toml` 自立项起有 6 行 U6 加的 pytest `markers`，纳入即恒假；`pyproject.toml` 的依赖侧改用结构性检查「不得声明任何依赖表」。反证 15 条）
+- [x] 7.2 CI 检查：`requirements.txt` 与 `pyproject.toml` 不含 `zhuopin_platform`；本变更的依赖文件 diff 必须为空 → **同上脚本**（diff 判据写死基线 `e65f685`，**只锁 `requirements.txt`**：`pyproject.toml` 自立项起有 6 行 U6 加的 pytest `markers`，纳入即恒假；`pyproject.toml` 的依赖侧改用结构性检查「不得声明任何依赖表」。另比字面从严一处：依赖声明文件同样扫三个姊妹仓库 marker（规则 `7.2-path`）——`requirements.txt` 里一行 `git+https://github.com/…/zhuopin-ai-transformation.git` 不含 `zhuopin_platform` 这个 token，只靠模块名扫不到。反证 7.2 侧 20 条、全文件 48 条，实测）
 - [x] 7.3 `docs/` 增一页说明留痕与门禁的运维口径：JSONL 路径与备份、链校验怎么手动跑、`CANDIDATE_OUTBOUND_ENABLED` 的开关流程与「不提供一键放行全部」的理由 → **`docs/audit-and-outbound-ops.md`**（2026-08-28 落地。编码约束在第四节，四种写法已用字节级实测逐条验证；链校验命令已在开发机实跑并贴输出。⏸ 三项留步待 `.51` 上机闭合，见该页第五节：备份任务是否已覆盖 `data/`、`.51` 上链校验首跑输出、`.51` 上按 4.1 实际创建一次开关文件——**U5 接线前需完成第 3 项**）
   - **⚠️ U1 发现、U7 承接（2026-08-27 Shao Peishen 拍板取方案 (b)，见第 1 章「遗留一」）：本页必须写入开关文件的编码约束。** 规定唯一允许的写法是 `[System.IO.File]::WriteAllText($path, 'true')`；**⛔ 禁止** PowerShell 的 `Out-File` / `>` / `>>`（默认 UTF-16LE）与记事本的"UTF-8"另存（带 BOM）。`_read_switch_file()` 不剥 BOM、不认 UTF-16，用错写法的症状是**开关静默不生效且不报错**（方向 fail-closed，拦住了但打不开）。他明确选择不改代码——改代码剥 BOM 属「在合规开关上放松」，是不可代项。**U5 接线前必须确认本条已落地**，否则总开关在 `.51` 上不具备可操作性
 - [x] 7.4 `06-企业AI转型资产借鉴清单.md` 追加本次借鉴记录：借的四条做法、自建的对应模块、**明确未引入依赖未拷贝代码** → **§10「本次借鉴记录」**（2026-08-28 追加。四条编排做法逐条给了自建落点行号，留痕侧另记 §10.2；两条判据实跑输出已贴：依赖 diff 零行、`grep zhuopin_platform app/` 退出码 1 零命中）
 - [x] 7.5 技术债登记：`operator_id` 现阶段不可信（鉴权空壳）；企微 OAuth SSO 待两侧共同决定，是 M2 处理真实简历前的阻塞项之一（另一半留痕已由本变更完成）→ **`docs/tech-debt.md` TD-6**（2026-08-28 登记，触发条件＝部署约束 5 的「M2 起处理真实简历前」）
 - [x] 7.6 技术债登记：JSONL 写入侧仅进程内锁，假设单进程部署；M2 迁 Postgres 时需重新处理并发写与 JSONL 的关系 → **`docs/tech-debt.md` TD-7**（2026-08-28 登记，触发条件＝M2 迁 Postgres 或 `.51` 部署形态转多进程，孰先触发）
+
+### 7.x 落地偏离登记
+
+U7（7.1/7.2）按 `docs/superpowers/plans/2026-09-03-ai-audit-trail-unitU7-boundary-ci.md` 实施，落地时相对该计划有六条偏离。**前四条方向都是「更严」或「修计划自己的缺陷」，后两条是只登记不处置的转交项。** 分支实测 786 → 834 passed。
+
+| # | 偏离 | 依据 |
+|---|---|---|
+| 1 | **计划里的用例基数 814 / 828 / 843 全部陈旧**，实测开工基线是 **786 passed, 1 skipped**。判据一律改用**增量**：Task 1 后 800、Task 2 后 815、终审修复波后 **834 passed, 1 skipped** | 无头 opener 明令「⛔ 不抄任何历史数字」，基线由本轮实跑取得。差值 28 来自本变更包之外的其他泳道，与 U7 无关 |
+| 2 | **`superpowers:subagent-driven-development` 未真正调到** —— `Skill()` 报 `Unknown skill`，插件 6.2.0 在磁盘上但本无头 session 的技能清单里没有 `superpowers:*` | opener 预案：「取不到 → 按磁盘 `SKILL.md` 手工走完协议」。已逐项走完：每 Task 全新子代理、两阶段 review（spec + quality）、终审（opus）、单次修复波、scoped 再审、`.superpowers/sdd/` 台账。`sdd-workspace` / `task-brief` / `review-package` 三个脚本均直接调磁盘版本 |
+| 3 | 🔴 **计划自身缺陷：`test_real_repository_passes_boundary_guard` 会让 CI 的 `test` job 必红。** 计划第 144 行专门论证了「`test` job 是默认 `fetch-depth: 1`，取不到基线 `e65f685` 会 `fatal: bad object`」，据此把 **CI step** 挂到了 `hooks`；但它自己在 Task 2.2 写的那条**测试**做的是一模一样的 git 调用，而该测试由 `test` job 的 `pytest -q` 收集执行 | 终审（opus）发现，controller 独立复核成立（`ci.yml:29` 的 `actions/checkout@v4` 确无 `with:`）。⛔ 不许从 CI 侧修（给 `test` job 加 `fetch-depth: 0` 会违反「纯追加、零删除零修改」硬约束），故修在测试里：树扫描恒跑，diff 判据先用只读的 `git cat-file -e` 探测基线可达性、不可达则 `pytest.skip` 并在 docstring 写明「权威判据在 `hooks` job」 |
+| 4 | **7.1 实际比 `tasks.md` 字面从严三处（计划的「已知的落地口径 ③」只列了两处），7.2 从严一处**；另新增三条**完整性**判据（`7.1-missing` / `7.1-symlink` / 非 UTF-8 兜底解码） | 终审实测出四条静默假绿并各配反证：非 UTF-8 文件被静默跳过（`.51` 是 Windows，PowerShell `Out-File` 默认写 UTF-16LE——**与 7.3 开关文件编码约束同源的坑**）、`app/` 目录不存在时空转全绿、目录 symlink 是 `Path.rglob` 的盲区、`SKIP_DIR_NAMES` 误匹配绝对路径祖先段。四条判据的从严说明已如实写进 7.1/7.2 的回勾正文 |
+| 5 | ⏸ **只登记不落档：这套检查有未声明的保质期。** `BASELINE_COMMIT` 钉死在本变更包立项 commit，但 CI step 对此后**每一次 push** 生效，判据是「`requirements.txt` diff 必须为空」⇒ **未来任何一次正当新增依赖，`hooks` job 会在所有分支上永久变红**，唯一出路是改常量或删掉这一步。`_scan_pyproject_dependency_tables`（「永不得声明任何依赖表」）同形。技术栈里写着 Postgres + pgvector、PaddleOCR/MinerU、BGE-M3、阶段二 FunASR/CosyVoice/LiveKit——不是会不会发生，是什么时候 | 计划对 `pyproject.toml` 的「恒假风险」推理得很细（口径 ①），却没把同一把尺子放到 `requirements.txt` 的**时间轴**上。建议进 `docs/tech-debt.md` TD-8（与 TD-6/TD-7 同批），触发条件＝「本变更包归档 或 首次正当新增依赖，孰先」，处置＝「diff 判据退休或改为 changed-files 范围判据」。⛔ **本泳道 opener 明令不碰 `docs/tech-debt.md`（0903Q 要改）**，故只登记不落档，**转交 0903Q / Shao Peishen** |
+| 6 | ⏸ **只登记不落档：扫描范围只覆盖 `app/`**，`tests/` 与 `scripts/` 是缺口 —— 而 `tests/` 才是跨仓库 import 最可能第一次出现的地方（「借个 fixture 来对一下」） | 忠于 `tasks.md` 7.1 的字面（「`app/` 下禁止…」）。扩范围会碰计划限定的四个路径之外的东西，本单元 ⛔ 不做。同上转交 |
+
+**反证是本单元的全部价值**（「零命中」同时兼容"边界守住了"和"检查根本没生效"两种解释）。实跑留痕：塞入 `app/_boundary_probe.py` → `[7.1-module] app/_boundary_probe.py:1`，**exit=1**；`rm` 后 → `边界守护：通过（基线=e65f685）`，**exit=0**。另有 7 条「改坏实现 → 对应用例必须红」的 mutation 反证，实际输出见 `.superpowers/sdd/2026-09-03-ai-audit-trail-unitU7-boundary-ci/`（git-ignored，收口时已从 worktree 搬回主检出）。
