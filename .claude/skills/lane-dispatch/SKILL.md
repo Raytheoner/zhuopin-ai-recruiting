@@ -85,6 +85,11 @@ bash docs/openers/run-lanes.sh --dry-run
 - 泳道数、条目数与你的编排一致
 - **每条都带「正文 NN 行」** —— 0 行即抽取失败，实跑必 NO-BODY
 - 无 `index.lock`（有锁会 `exit 14`，带锁开跑五条泳道会全灭）
+- 🔴 `.claude/settings.json` 的 `permissions.allow` 里有 `Bash(bash docs/openers/run-lanes.sh:*)` 与 `Bash(nohup bash docs/openers/run-lanes.sh:*)`
+  （2026-09-03 实证：CC Desktop 的 Auto Mode 分类器会拦「无人值守起会自主 commit/push 的子 session」，
+  看护者的 `nohup` 与 `run_in_background` 两条路都被拦，且看护者自己改 settings.json 也被拦——
+  安全配置只能 Shao Peishen 手工加）。看护者 opener 的前置自检必须 `grep run-lanes.sh .claude/settings.json`，
+  为 0 即停下报，⛔ 不起脚本。启动命令⛔ 不带 `cd … &&` 前缀，白名单按命令前缀匹配
 - 工作区没有本批相关的未提交改动
 
 然后给 Shao Peishen **一样东西：看护者 opener 的 4 行引用块**（2026-09-03 起走引用式，见 `kickoff` skill「引用式 Opener」）：
