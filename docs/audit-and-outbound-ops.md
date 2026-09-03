@@ -92,7 +92,7 @@ ChainVerification(ok=True, total=0, broken_at=None, error=None, tail_hash=None)
 
 ```powershell
 cd C:\apps\zhuopin-recruit-agent
-.\venv\Scripts\python.exe -c "from pathlib import Path; from app.audit.sinks import JsonlChainSink; from app.config import get_settings; p = Path(get_settings().audit_jsonl_path); print('path:', p.resolve(), '| exists:', p.exists()); print(JsonlChainSink(p).verify_chain())"
+.venv\Scripts\python.exe -c "from pathlib import Path; from app.audit.sinks import JsonlChainSink; from app.config import get_settings; p = Path(get_settings().audit_jsonl_path); print('path:', p.resolve(), '| exists:', p.exists()); print(JsonlChainSink(p).verify_chain())"
 ```
 
 ⏸ 留步：这条 `.51` 上的实跑输出本轮无法提供（不连服务器）。首次上机跑通后把输出
@@ -181,7 +181,7 @@ ChainVerification(ok=False, total=3, broken_at=3, error='第 3 行的 prev_hash 
 
 ```powershell
 cd C:\apps\zhuopin-recruit-agent
-.\venv\Scripts\python.exe -c "from app.config import is_candidate_outbound_enabled; print(is_candidate_outbound_enabled())"
+.venv\Scripts\python.exe -c "from app.config import is_candidate_outbound_enabled; print(is_candidate_outbound_enabled())"
 ```
 
 打印 `True` 才算开成功。打印 `False` 而你以为写的是 `true` → 100% 是编码写错了。
@@ -287,10 +287,13 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
 1. **1.3 备份**：`.51` 上是否已有覆盖 `C:\apps\zhuopin-recruit-agent\data\` 的
    备份任务，未确认；若无，需新增。
-2. **2.2 链校验**：`.51` 上的首次实跑输出未取得，本页只给了命令未给输出。
-3. **4.x 编码约束**：本页写的是约束本身（已在本机用字节级实测验证），但**尚未在
-   `.51` 上按 4.1 实际创建过开关文件**。U5 接线前需要有人上机执行一次 4.1 + 3.3
-   的验证命令，确认这条链路在真机上通。
+2. **2.2 链校验**：`.51` 上已取得首次实跑输出（2026-09-03，见下）——
+   `ModuleNotFoundError: No module named 'app.audit'`。**不是校验本身失败，是同一
+   部署缺口**：`app/audit/` 整个包都不在 `.51` 上，见第 3 项。链校验尚未真正跑通。
+3. **4.x 编码约束**：约束本身已验证有效——2026-09-03 在 `.51` 上按 4.1 实际写过
+   开关文件（`true`/`false` 各一次），`Get-Content` 读回内容与预期一致，编码路径
+   没有问题。**但 3.3 要求的应用层校验命令跑不通**：真正的阻塞不是编码，是 `.51`
+   上的代码本身落后于本功能的开发进度，见下方 2026-09-03 二次实跑记录。
 
    🔴 **验证必须走「开→验→关→再验」四步，⛔ 不是跑完 3.3 就完事**（2026-08-31 补）：
 
@@ -331,7 +334,27 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
    **根因已定位，与第四节的编码约束无关**：`Test-Path 'C:\apps\zhuopin-recruit-agent'`
    → `True`（目录存在），但 `Test-Path '...\venv\Scripts\python.exe'` → `False`——
-   **`.51` 该路径下没有 venv**，验证脚本本身跑不起来，不是开关文件被 BOM/UTF-16 坑了。
+   验证脚本本身跑不起来，不是开关文件被 BOM/UTF-16 坑了。
+
+   🔴 **2026-09-03 订正：上面那句「`.51` 该路径下没有 venv」是错的，venv 一直在。**
+   **真因是本页命令少写一个点** —— 目录名是 **`.venv`**（带点），本页原来写成 `.\venv\`。
+   `0831A` 的 `Test-Path` 诊断动作对，但跟着错的路径查，于是得出"没有 venv"。
+
+   三条独立证据：
+
+   1. `deploy-server.ps1:31`（建 venv 的真源）：`$venvPath = Join-Path $AppDir ".venv"`
+   2. `docs/findings/2026-08-20-51整机重启验证-重启前采集.md` —— 从 `.51` **实机**取的计划任务
+      `Execute` = `C:\apps\zhuopin-recruit-agent\.venv\Scripts\uvicorn.exe`
+   3. `.51:8095` 服务一直活着 ⇒ 必然有个可用的 Python 在跑
+
+   ⚠️ **同一个错在本页出现两处**，`§2.2 链校验`（本页第二节）的命令也是 `.\venv\`——
+   这很可能就是留步清单第 2 项「链校验实跑输出一直取不到」的同一个根因。
+   两处已于 2026-09-03 一并改为 `.venv\Scripts\python.exe`。
+
+   📌 **教训**：`0831A` 报回来的是 `CommandNotFoundException`，一个**环境缺口形态**的报错，
+   于是诊断方向整个偏到"服务器上缺东西"，没人回头核一遍命令字符串本身。
+   ⇒ 报错说"找不到 X"时，**先核 X 的拼写与真源是否一致**，再去查环境。
+   本例的真源（`deploy-server.ps1`）就在本仓库里，一条 grep 的事。
 
    **当前安全态已用另一种方式确认**：直接 `Get-Content` 开关文件（不经过应用层
    `is_candidate_outbound_enabled()`）读出原始内容是 `false`——**产线开关目前确实
@@ -339,8 +362,69 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    **不算闭合**：四步验证要证明的是"文件 → 应用层"这条链路通不通，而这条链路
    本身没被跑通过。
 
-   **U5 接线前还差**：① 确认 `.51` 上 venv 的真实位置或重新创建；② venv 就位后
-   补跑一次本节四步，取得真正来自 `is_candidate_outbound_enabled()` 的 True/False。
+   **U5 接线前还差**（2026-09-03 订正后）：venv 一直在，不需要创建或迁移——
+   只差**用改对的路径补跑一次本节四步**，取得真正来自 `is_candidate_outbound_enabled()`
+   的 True/False。顺带把 §2.2 链校验也用 `.venv\` 重跑一次，多半能一并闭合留步第 2 项。
+
+   **2026-09-03 实跑记录（路径订正后重跑）｜ ⏸ 仍未闭合（部署缺口，非路径/编码问题）**
+
+   执行人：`[Mac]0903A` session ｜ 依据：Shao Peishen 2026-09-03 明确指示
+
+   先证伪：`Test-Path '...\.venv\Scripts\python.exe'` → `True`（09-03 的路径订正确认有效）。
+
+   | 步 | 期望 | 实际 |
+   |---|---|---|
+   | 1（写 `true`） | —— | 静默成功 |
+   | 2（验证） | 打印 `True` | ❌ `ImportError: cannot import name 'is_candidate_outbound_enabled' from 'app.config'` |
+   | 3（写回 `false`） | —— | 静默成功，已在步骤 2 报错后**立即**执行 |
+   | 4（再验证，同步骤 2 命令） | 打印 `False` | ❌ 与步骤 2 报同一个 `ImportError`（同一根因，非偶发） |
+
+   **真实安全态已独立确认**（绕开报错的应用层入口，直接读开关文件原始内容）：
+
+   ```powershell
+   Get-Content 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Raw
+   ```
+
+   输出：`false`。**产线开关当前处于关闭态。**
+
+   **根因已定位，与路径拼写、编码均无关**：`.51` 上部署的 `app/config.py`
+   **压根不存在 `candidate_outbound` 相关的任何字段或函数**——不是命令跑错，
+   是**代码本身没有部署过去**：
+
+   | 检查 | 结果 |
+   |---|---|
+   | `.51` 上 `app\config.py` 最后修改时间 | `2026-08-19 21:24:39` |
+   | `.51` 上 `app\config.py` 行数 | 34 行（本仓库当前 186 行） |
+   | `.51` 上 `app\config.py` 是否含 `candidate_outbound` / `audit_jsonl_path` | 否，一处都没有 |
+   | `.51` 上 `app\audit\sinks.py` 是否存在 | `Test-Path` → `False` |
+   | 引入该功能的提交 | `4890fab`（加齐审计 JSONL 路径与外发总开关）／`eb338b0`／`49c5e4c`，均 **2026-08-27** |
+
+   即 `.51` 自 08-19 起未再同步过代码，而整个 `ai-audit-trail-and-outbound-gate`
+   功能（含开关文件读取逻辑、审计 JSONL 落盘）是 08-27 才落进仓库的——**`.51` 跑的
+   是这个功能诞生前八天的旧代码**，本节四步验证在这份部署上无论怎么改开关文件、
+   无论路径写不写对，都不可能通过。
+
+   §2.2 链校验顺带实跑（三层引号嵌套在 shell 层直接报语法错，改用
+   `-EncodedCommand` 绕开后取得的干净输出）：
+
+   ```
+   ModuleNotFoundError: No module named 'app.audit'
+   ```
+
+   与上面 `Test-Path` 的结论一致：`app/audit/` 整个包都不在 `.51` 上。
+
+   📌 **两轮误判的教训**：`0831A` 把"环境缺口形态的报错"诊断成"缺 venv"；
+   09-03 订正后仍把"命令跑不起来"归因为"文档路径拼写"——两次都对了"报错说
+   `.venv` 不存在" / "报错说 import 不到"这个表层现象，但都没有先问一句
+   "**目标机器上到底跑着哪个版本的代码**"。`Test-Path` 和 `Select-String`
+   两条命令就能把范围从"猜编码/猜路径"缩小到"看部署时间戳"，本可以更早查到。
+
+   **U5 接线前还差**（09-03 二次订正）：`.venv` 路径没问题，**真正缺的是一次
+   `.51` 完整重新部署**（把 08-27 至今的代码同步过去），使 `app/config.py` 与
+   `app/audit/sinks.py` 落地后，本节四步才有可能被真正跑通。
+   🔴 **`.51` 的发版决定是 `CLAUDE.md` 决策代理表的不可代项**，需 Shao Peishen
+   本人决定是否、以及何时执行这次重新部署——本 opener 的授权范围仅到"重跑验证"，
+   不含发版，故到此为止，不代为发起部署。
 
 ---
 
