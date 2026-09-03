@@ -64,16 +64,21 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
 
 1. 回到 `openspec/changes/<change>/tasks.md`，把本交付单元覆盖的章节条目 `- [ ]` 改成 `- [x]`
    **只有 final review 通过才勾**，写完代码不算完
-2. 调用 `superpowers:finishing-a-development-branch` 处理合并
-3. **验证合并真的发生了**：`git rev-list --count main..<分支名>` 必须是 `0`。
+2. 🔴 **先把 worktree 里 git-ignored 的产物搬回主工作区，再合并**（Shao Peishen 2026-09-03 定）：
+   `data/` 下本次拉取或生成的东西（`.51` 快照、回放落库、临时库）一律 `cp` 到主检出的同名路径
+   （如 `data/replay/`）。**worktree 随 finishing 流程删除时，git-ignored 的文件一起没**——
+   实证：`0903H` 拉回的 `.51` 一致快照（2.4 MB）随收口消失，findings 里的结论再也无法逐字节复核。
+   报告里写明搬了哪些文件、落在哪。
+3. 调用 `superpowers:finishing-a-development-branch` 处理合并
+4. **验证合并真的发生了**：`git rev-list --count main..<分支名>` 必须是 `0`。
 
-   不是 0 就说明第 2 步没跑或没跑完，**代码还挂在分支上**。
+   不是 0 就说明第 3 步没跑或没跑完，**代码还挂在分支上**。
 
    不是 0 时**先别下结论**，再跑一次 `git cherry -v main <分支名>`：
 
    - 全部行以 `-` 开头 → **是假阳性**，内容已经在 main 上，只是 main 被 rebase 重写过
      历史，commit 换了 hash，旧分支还指向旧 hash。此时该做的是删掉这个陈旧分支
-   - 有任何一行以 `+` 开头 → **是真的没合**，那几条就是漏掉的，去补第 2 步
+   - 有任何一行以 `+` 开头 → **是真的没合**，那几条就是漏掉的，去补第 3 步
 
    `git cherry` 按 patch-id 比对内容，能穿透 rebase；`rev-list --count` 只比 hash，
    不能。实证：2026-08-26 `claude/delivery-unit-c-run-build-22abbe` 的
@@ -84,7 +89,7 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
    tasks.md 勾满、review 通过、汇报也说"已完成"。**唯一的症状是 main 上什么都没有**，
    而没有任何东西会报错。实证：2026-08-19 `server-runtime-logging` 跑完全部 7 个 Task
    并通过终审，11 个提交在分支上挂了整整一轮，直到下一次会话查 git 才发现。
-4. 若该变更 tasks.md 已全部勾完，提示用户用 `openspec-archive-change` 收口，把 spec 折进 `openspec/specs/`
+5. 若该变更 tasks.md 已全部勾完，提示用户用 `openspec-archive-change` 收口，把 spec 折进 `openspec/specs/`
 
 ## 输出
 

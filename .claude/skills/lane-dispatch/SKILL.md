@@ -70,6 +70,9 @@ ls -t docs/superpowers/plans/*.md | head -6   # 哪些单元的 plan 已就绪
    `git cherry -v main <分支>`：全 `-` 是 rebase 假阳性，有 `+` 才是真没合。
    ⛔ 确认内容真在 main 上之前不许输出 `OPENER_DONE`
 3. **并行同伴的触碰区** —— 明确告诉它"另一条在改 X，你不要碰"
+4. **取数／回放类任务的产物去向**（Shao Peishen 2026-09-03 定）—— 凡会往 `data/` 下拉 `.51` 快照或落临时库的条目，
+   opener 里必须写死「收口前把 `data/` 产物 `cp` 到主工作区同名路径」。worktree 随 finishing 删除时
+   git-ignored 的文件一起没（实证 `0903H`），不写这条就等于默认丢
 
 ### ④ 核对并发车
 
@@ -84,7 +87,9 @@ bash docs/openers/run-lanes.sh --dry-run
 - 无 `index.lock`（有锁会 `exit 14`，带锁开跑五条泳道会全灭）
 - 工作区没有本批相关的未提交改动
 
-然后给 Shao Peishen **一样东西：看护者 opener 的完整正文，整块贴出来**。
+然后给 Shao Peishen **一样东西：看护者 opener 的 4 行引用块**（2026-09-03 起走引用式，见 `kickoff` skill「引用式 Opener」）：
+看护者正文写进 `docs/openers/MMDDZ-泳道批次看护.md`（编排文件里的「看护者 Opener」节改为只留指针），
+引用块第 4 行「读该文件全文并逐节执行；文件不存在或首行编号不一致即停」。
 
 > 🔴 **⛔ 不要另给发车命令，不要给任何裸 bash。已犯多次，这是本节最容易错的地方。**
 >
@@ -94,7 +99,7 @@ bash docs/openers/run-lanes.sh --dry-run
 >
 > 同理 ⛔ **不要写「去编排文件第 N 行整块复制」**。CLAUDE.md：每份指令必须是
 > 完整可整块复制的，不要让他拼接片段、更不要让他自己去文件里找。
-> **把 `[Mac]MMDDZ-泳道批次看护` 那一块的正文原样贴进回话里。**
+> **把 `[Mac]MMDDZ-泳道批次看护` 的 4 行引用块贴进回话里，正文在 `docs/openers/MMDDZ-泳道批次看护.md`。**
 
 贴出去之前，**把那块里的预期值改成本批的**——这些值是上一批的，不改就等于没核：
 

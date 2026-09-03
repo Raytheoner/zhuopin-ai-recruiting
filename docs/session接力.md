@@ -25,12 +25,12 @@ HR业务线-接力0903B
 
 | 项 | 现状 |
 |---|---|
-| main | `202cb5d`，**与 origin 同步（ahead 0）**——`0903Z` 在【六】10 推成 `dcf84e7..202cb5d`；【二】3 那次仍被 classifier 拒（见【三】#1） |
-| 工作区 | 未提交 3 处：本文、`OP-0820-全量编排.md`（脚本自动摘的泳道标注 + 号池补登）、`.claude/handoff/lanes-20260903-115028-看护报告.md`（新）。`0903J` 提交 |
+| main | `b86db65`，**与 origin 同步（ahead 0）**（`0903J` 推成；`0903Z` 发车前那次 push 被 classifier 拒、收尾那次成功，见【三】#1） |
+| 工作区 | 未提交（Cowork 侧 0903B 产出）：本文、`OP-0820-全量编排.md`、`CLAUDE.md`、kickoff / lane-dispatch / run-build 三个 skill、`docs/openers/0903K-*.md` `0903L-*.md`。`0903K` 提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
 | `.51` 代码 | ✅ **已发版 `d104249`**（`0903D` 2026-09-03 完成，`sync-to-server.sh`，冒烟 4 项与 §5-3 四步 + §2.2 链校验全过，见 `docs/audit-and-outbound-ops.md` §五第 2/3 项） |
 | pytest | main 侧 **786 passed / 1 skipped / 0 failed**（09-03 `0903Z` 独立复核；skipped 那条＝`REPLAY_LIVE` 门控的真回放）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
-| worktree | 只剩主工作区。G/H 的 worktree 由各自 finishing 流程自删（不是外部清理）；分支只剩 `claude/intake-ch8-replay-dev-0903h`（真未合 0，陈旧可删） |
+| worktree | 只剩主工作区，无多余分支（G/H 的 worktree 由各自 finishing 流程自删，不是外部清理；H 的陈旧分支 `0903J` 已删） |
 
 **变更包进度**
 
@@ -87,10 +87,17 @@ H 三段真实会话回放 18 轮全通、未溯源字段 0/18（`2239b90`）；
 superpowers 两条都**没调到**，均按磁盘 SKILL.md 手工走完（第 4 次靠运气）。
 🔴 回放实测**单轮 LLM 延迟均值 33.9 / 48.5 / 65.1 s，最大 132 s**——pilot 抱怨的"等待"有了第一个数，修复前无基线不可比。
 
-### ⑤ 下一步：先发 `[Mac]0903J` 收本批的尾（提交报告 + 编排标注 + 填 `m1-fabrication-rate` 首测表 + 推送），然后等拍板
+### ~~⑤ `0903J` 收尾~~ ✅ 已跑完（`b86db65`，已推）
 
-待拍板三件（见【三】#3 / #10 / #11）：TD-9 走不走 `openspec-propose`；8.4 与 U6 巡检 CLI 何时上 `.51`；`data/replay/` 快照丢失要不要立规矩。
-可发车但不急：**U7 剩 7.1/7.2**（CI 两条检查，做完 audit 包即可归档）。
+### ⑥ Shao Peishen 09-03 14:05 三条裁决 → 两条 opener 已派（可并行，触碰区零重叠）
+
+| 裁决 | 落点 |
+|---|---|
+| TD-9 **走 `openspec-propose`** | `[Mac]0903K`：立正式变更包（只出 proposal/specs/design/tasks，不写代码），顺带提交真源改动。正文 `docs/openers/0903K-TD9立变更包.md` |
+| 8.4 ＋ U6 巡检 **都要上 `.51`** | `[Mac]0903L`：再发一次版（main 当前 HEAD，含 U6）→ 巡检 CLI 对真实库跑 → 他在页面跑 8.4 → session 从库里取证回勾。🔴 发版不可代，本条裁决即授权。正文 `docs/openers/0903L-51二次发版与U6巡检与8.4取证.md` |
+| 回放类任务收口前**拷走 `data/` 产物** | ✅ 已落真源：`.claude/skills/run-build/SKILL.md` 收口第 2 步、`.claude/skills/lane-dispatch/SKILL.md` ③ 第 4 条。`0903K` 提交 |
+
+之后可发车：U7 剩 7.1/7.2（做完 audit 包归档）；TD-9 变更包立好后走 spec-to-plan → run-build。
 
 ---
 
@@ -100,14 +107,14 @@ superpowers 两条都**没调到**，均按磁盘 SKILL.md 手工走完（第 4 
 |---|---|---|
 | 1 | 🔴 **`git push` 被 auto mode classifier 拦** | 反复出现（08-28、08-30 两次记录在案）。09-03 `0903Z` 实测：发车前那次被**直接拒绝**（非挂起待点击），收尾那次成功——同一 session 内两次结果不同，机制仍不明。两条路：**(a)** 每次在能批准的 session 里点放行；**(b)** 给 `.claude/settings.json` 加 `"permissions": {"allow": ["Bash(git push:*)"]}`——项目级、可提交、对所有 session 生效。**(b) 是改权限，等 Shao Peishen 拍板** |
 | 2 | 🔴 **worktree 被未落档地清理，已发生两次** | 08-30 11:38 扫掉 u2/unitE/unitF/u1 四条（判据＝真未合 0，代码零损失）；**09-03 前 u5 也被移除**——而 08-30 那份报告刚评估过「u5 真未合 11，同样的清理不会碰它」。⇒ **判据变了或用了 `--force`，机制不明**。代码没丢（分支 `worktree-audit-u5-queue-and-wiring` 与 `19ab503`/`f899c98` 都在），丢的是 worktree 内 git-ignored 的 `.superpowers/sdd/` 台账。**要不要查清是谁在清、加个护栏？** |
-| 3 | **TD-9**：同一草稿第二次拦截零留痕 | U6（0903G）已**坐实**："放行后复发又被拦"路径系统性缺席。修复要改已过审的 `approve()` 签名 + 5.4 幂等键公式，属契约层变更。看护者建议**走一次正式 `openspec-propose`**，⛔ 不塞进泳道顺手改。**等 Shao Peishen 定** |
+| 3 | **TD-9**：同一草稿第二次拦截零留痕 | U6（0903G）已**坐实**："放行后复发又被拦"路径系统性缺席。修复要改已过审的 `approve()` 签名 + 5.4 幂等键公式，属契约层变更。**Shao Peishen 09-03 裁决：走 `openspec-propose`**，`0903K` 在立变更包 |
 | 4 | `.51` 留步清单**只剩一项** | §5-1 备份任务确认/新增（`0903D` 只做了一次性快照 `C:\apps\backups\20260903-1003`，不等于常态化备份任务）。§5-2 链校验与 §5-3 四步已于 09-03 闭合。见 `docs/audit-and-outbound-ops.md` 第五节 |
 | 5 | `.51` 整机重启 | 阻断已清、只差窗口。⚠️ 爆炸半径 **7 个服务**（含门户网关本体），`CBS RebootPending=True` + 已 85 天未重启，停机时长不可按常规估。opener＝编排文件 `[Mac] 0820-9R` |
 | 6 | 阶段 C 门户导航 | 需在 Win 笔记本上改门户 HTML。板块名「HR·招聘智能体」，外链 `http://192.168.100.51:8095/hr/recruit-agent/`。与 `.51` 服务无关，不影响运行中的服务 |
 | 7 | 决策代理人 | `CLAUDE.md` 框架已建，**2026-08-28 决定继续不设**。「可代」项在无代理人期间同样一律挂起等本人 |
 | 8 | 06 清单剩余 | 3.3 企微 webhook（无挂载点）、9.1/9.2/9.3 沟通线。7.1/7.4 合规条款已随 audit 包推进 |
-| 10 | 8.4 ＋ U6 巡检 CLI 上 `.51` | 8.4 要人在页面跑通"模糊回复→点选→带缺口确认"；U6 的巡检 CLI 从未对 `.51` 真实 `demo.db`/`decisions.jsonl` 跑过——且 U6 代码**还没部署到 `.51`**（现网是 `d104249`，早于 U6）。两件都要下次上 `.51` 时做，巡检要先再发一次版 |
-| 11 | `data/replay/` 快照随 worktree 自删 | H 拉回的 `.51` 一致快照（2.4 MB）随其 finishing 流程一起没了，分析结论已在 `2239b90` 的 findings 里，丢的是原始输入、无法逐字节复核。**要不要定规矩**：回放类任务收口前把 `data/` 产物拷到主工作区，或明确"临时缓存丢了重拉" |
+| 10 | 8.4 ＋ U6 巡检 CLI 上 `.51` | 8.4 要人在页面跑通"模糊回复→点选→带缺口确认"；U6 的巡检 CLI 从未对 `.51` 真实 `demo.db`/`decisions.jsonl` 跑过——且 U6 代码**还没部署到 `.51`**（现网是 `d104249`，早于 U6）。**Shao Peishen 09-03 裁决：都要上**，`0903L` 发版 + 巡检 + 8.4 取证 |
+| 11 | `data/replay/` 快照随 worktree 自删 | H 拉回的 `.51` 一致快照（2.4 MB）随其 finishing 流程一起没了，分析结论已在 `2239b90` 的 findings 里，丢的是原始输入、无法逐字节复核。**Shao Peishen 09-03 裁决：立规矩**，已写进 run-build / lane-dispatch 两个 skill（`0903K` 提交） |
 | 9 | 🧪 `claude -p -n` 是否真给 session 起名 | **未实测**。`run_lane()` 一直在传 `-n`，但那条注释原来引的"实证"已被推翻。留着无害，⛔ 不要写成"脚本这条路能保住编号"。5 分钟可验 |
 
 ---
@@ -143,6 +150,9 @@ superpowers 两条都**没调到**，均按磁盘 SKILL.md 手工走完（第 4 
 
 ## 五、绕不开的约束（每次都要记得）
 
+- 🔴 **正文 > 500 字的 opener 走引用式**（Shao Peishen 09-03 定）：正文写 `docs/openers/<MMDDX>-<主题短名>.md`，
+  聊天只贴 4 行引用块（头两行 + set_session_title + 「读该文件逐节执行，文件不存在即停」）。文件随任务提交＝留痕＋号池可 grep。
+  模板与理由见 `.claude/skills/kickoff/SKILL.md`「引用式 Opener」。
 - **给 Paul 的每条指令，代码块头两行固定**：`[Mac]MMDDX-<主题短名>` + 【设置】单行（五项 ｜ 分隔）。
   **CC 的 opener 第 3 行必须调 `set_session_title`**。`MMDD` 实跑 `TZ=Asia/Shanghai date +%m%d` 取
   ——本机在 EDT，照本机日期编会集体差一天且不报错。判据表见 `CLAUDE.md`。
