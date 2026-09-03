@@ -126,6 +126,41 @@ def deliver_candidate_message(
             blocked_reason=decision.reason or "",
         )
 
+    record_outbound_decision(
+        conn,
+        thread_id=thread_id,
+        message=message,
+        decision=decision,
+        recorder=recorder,
+    )
+    return decision
+
+
+def record_outbound_decision(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    message: CandidateOutboundMessage,
+    decision: GateDecision,
+    recorder: AuditRecorder,
+) -> None:
+    """
+    外发/拦截判定的留痕，**两个调用点共用的唯一一份实现**（design.md 决策 2）：
+    `deliver_candidate_message()` 与 `app/outbound/queue.py:approve()` 的被拦分支。
+
+    ⛔ 不要在别处重新手写一份——下面 `result is None` / `is False` 的区分是 2026-08-28
+    两轮 review 才收敛出的非显然结论，处理反了会让镜像被写重、腐蚀 hash-chain 的
+    唯一真源，而 `reconcile()` 的 id 集合差集**看不出**这种重复。
+
+    ⚠️ 本函数**不是** `effect_*` 节点、⛔ 不加 `@idempotent_effect`：`recorder.mirror()`
+    必须在装饰器 `commit` **之后**触发（`delivery-units.md` §3.4 第 2/4 条），
+    这也是 AST 守护 `test_no_effect_function_appends_jsonl` 的合规边界所在。
+
+    ⚠️ `content_hash` 在这里算一次、同时喂给 `_audit_event()` 与 `audit_business_key()`。
+    `_audit_event()` docstring 里"不在这里重新算一遍"防的是"两个调用点各算一遍"的
+    隐性耦合，⛔ 不是禁止一处算两处用。
+    """
+    content_hash = message.content_hash()
     event = _audit_event(thread_id, message, decision, content_hash)
     result = effect_record_outbound_audit(
         conn,
@@ -167,11 +202,11 @@ def deliver_candidate_message(
     if result is None:
         logger.warning(
             "外发留痕已存在（重放），跳过镜像 append（id=%s）。同一 id 被写第二次"
-            "通常意味着 deliver_candidate_message 用同一个 (thread_id, "
-            "business_key) 被重复调用，而确定性 id 分辨不出来。",
+            "通常意味着同一个 (thread_id, business_key) 被重复处理，"
+            "而确定性 id 分辨不出来。",
             event.id,
         )
-        return decision
+        return
 
     try:
         recorder.mirror(event)
@@ -182,5 +217,3 @@ def deliver_candidate_message(
             event.id,
             exc_info=True,
         )
-
-    return decision

@@ -356,3 +356,54 @@ def test_no_bypass_parameter_exists():
             ), names
             return
     raise AssertionError("没找到 deliver_candidate_message")
+
+
+def test_record_outbound_decision_is_callable_on_its_own(wired):
+    """
+    design.md 决策 2：留痕逻辑提炼成公共函数、两个调用点共用，⛔ 不许在
+    queue.py 里手写第二份。
+
+    这条钉住"它能被独立调用"这一件事本身——`queue.approve()` 的被拦分支
+    （Task 3）拿不到 channel、也不该经过 deliver_candidate_message 的分流逻辑，
+    它只需要留痕这一段。
+
+    为什么必须提炼而不是重写一份：`result is None` / `is False` 的区分是两轮
+    review 才收敛出的非显然结论（None=重放、不许再 append；False=真跑了、
+    只是这个事件类型在 SqliteSink 里没有真身，必须 append）。手写第二份等于给
+    这条不变式开一个可能读漏、写歪的第二入口。
+    """
+    from app.outbound.delivery import record_outbound_decision
+
+    conn, chain_path, recorder, _channel = wired
+    signed = _msg().with_confirmation("张三")
+    decision = compute_outbound_gate(signed, lambda: False)
+
+    record_outbound_decision(
+        conn, thread_id="job-7", message=signed, decision=decision, recorder=recorder
+    )
+
+    lines = _mirror_lines(chain_path)
+    assert len(lines) == 1
+    assert lines[0]["blocked_reason"] == decision.reason
+    assert lines[0]["confirmed_by"] == "张三"
+    # 它只留痕：⛔ 不投递、⛔ 不入队
+    assert queue.list_pending(conn) == []
+
+
+def test_record_outbound_decision_does_not_duplicate_on_replay(wired):
+    """
+    提炼不得削弱判重：同一条决策连调三次，镜像仍恰好一行（判据是 JSONL 行数，
+    ⛔ 不是 effect_log 计数——见 Global Constraint 6）。
+    """
+    from app.outbound.delivery import record_outbound_decision
+
+    conn, chain_path, recorder, _channel = wired
+    signed = _msg().with_confirmation("张三")
+    decision = compute_outbound_gate(signed, lambda: False)
+
+    for _ in range(3):
+        record_outbound_decision(
+            conn, thread_id="job-7", message=signed, decision=decision, recorder=recorder
+        )
+
+    assert len(_mirror_lines(chain_path)) == 1
