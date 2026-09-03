@@ -23,6 +23,8 @@ from app.audit.assertions import (
 from app.audit.criteria import CRITERION_KEY_WHITELIST
 from app.storage.db import get_connection, init_schema
 
+pytestmark = pytest.mark.compliance
+
 
 @pytest.fixture
 def conn(tmp_path):

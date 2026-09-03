@@ -414,3 +414,108 @@ def outbound_block_stats(mirror: "AuditSink") -> OutboundBlockStats:
         delivered_by_type=delivered,
         always_blocked_types=always_blocked,
     )
+
+
+# ── CLI 入口（6.6）──────────────────────────────────────────────────────
+#
+# 用途有两个，⛔ 不要合并理解：
+#   ① CI：断言接进 test job，红线破了直接红（见 .github/workflows/ci.yml）。
+#      ⚠️ CI 里的库是空的——三条断言在那儿**恒真**，所以 CI 的效力来自
+#      tests/test_audit_assertion_effectiveness.py 的反证，不是来自这个 CLI。
+#   ② .51 上机巡检：对着真实的 data/demo.db 与 data/audit/decisions.jsonl 跑，
+#      这才是断言真正有数据可查的地方。运维口径见 docs/audit-and-outbound-ops.md。
+#
+# ⛔ 不读 Settings：app/audit 包不 import app.config（__init__.py 的既有规矩），
+# 路径一律由参数传入。
+
+
+def format_report(results: Sequence[AssertionResult]) -> str:
+    """人可读的报告。**违例记录逐条列出**，⛔ 不许只报数字——CI 红了却要人
+    本地重跑一遍才知道红在哪，等于把排查成本转嫁给下一个人。"""
+    lines: list[str] = []
+    failed = [r for r in results if not r.ok]
+
+    for result in results:
+        mark = "✅" if result.ok else "❌"
+        lines.append(f"{mark} {result.name}")
+        if result.detail:
+            lines.append(f"     {result.detail}")
+        for violation in result.violations:
+            lines.append(f"     · {violation}")
+
+    lines.append("")
+    if failed:
+        lines.append(f"合规断言未通过：{len(failed)} / {len(results)} 条不成立。")
+    else:
+        lines.append(f"合规断言全部通过（{len(results)} 条）。")
+    return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """退出码契约：0 全绿 · 1 有违例 · 2 路径不存在。
+
+    ⚠️ **2 不能折成 0。** 一个指错路径的巡检命令若安静地返回 0，读的人会以为
+    "三条红线都守住了"，而它一行数据都没查过——比空表恒真更隐蔽的同一种谎。
+    """
+    import sys
+    from pathlib import Path
+
+    # 局部 import：这三个只有 CLI 路径用得到，模块被当库 import 时不该
+    # 顺带把 argparse 拖进来。
+    import argparse
+    import sqlite3 as _sqlite3
+
+    from app.audit.recorder import AuditRecorder
+    from app.audit.sinks import JsonlChainSink, SqliteSink
+
+    parser = argparse.ArgumentParser(
+        prog="python -m app.audit.assertions",
+        description="合规断言与对账巡检（tasks.md 第 6 章）",
+    )
+    parser.add_argument("--db", required=True, help="SQLite 库路径，如 data/demo.db")
+    parser.add_argument(
+        "--mirror", required=True, help="JSONL 镜像路径，如 data/audit/decisions.jsonl"
+    )
+    args = parser.parse_args(argv)
+
+    db_path = Path(args.db)
+    mirror_path = Path(args.mirror)
+    for label, path in (("数据库", db_path), ("JSONL 镜像", mirror_path)):
+        if not path.exists():
+            print(
+                f"{label}不存在：{path}。⛔ 巡检未执行——路径错了就是没查过，"
+                "不要把这种情况当成通过。",
+                file=sys.stderr,
+            )
+            return 2
+
+    conn = _sqlite3.connect(str(db_path))
+    try:
+        # 镜像 sink 先存局部变量再分别传给两处：⛔ 不要写成
+        # outbound_block_stats(recorder._mirror) 去掏私有属性——那是在给
+        # AuditRecorder 的内部结构加一个没人知道的调用方。
+        mirror_sink = JsonlChainSink(mirror_path)
+        recorder = AuditRecorder(store=SqliteSink(conn), mirror_sink=mirror_sink)
+
+        results = run_compliance_assertions(conn)
+        results.append(chain_assertion(recorder))
+        results.append(reconciliation_assertion(recorder))
+        print(format_report(results))
+
+        stats = outbound_block_stats(mirror_sink)
+        if stats.always_blocked_types:
+            # ⚠️ 只是**提示**，⛔ 不参与退出码：门禁刻意拦得更严，"某类一直
+            # 被拦"是需要人去看的信号，不是断言失败。把它算进红绿会让 CI 因
+            # 一个正常的观察期结论而长期红着。
+            print(
+                f"\n⚠️ 以下消息类型拦过、且一次都没发出去过：{stats.always_blocked_types}。"
+                "确认是不是新增类型忘了登记（design.md Risks 第 2 条）。"
+            )
+    finally:
+        conn.close()
+
+    return 0 if all(r.ok for r in results) else 1
+
+
+if __name__ == "__main__":  # pragma: no cover - 入口薄壳，行为由 main() 覆盖
+    raise SystemExit(main())

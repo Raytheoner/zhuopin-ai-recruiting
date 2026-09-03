@@ -19,6 +19,8 @@ from app.audit.recorder import AuditRecorder
 from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.storage.db import get_connection, init_schema
 
+pytestmark = pytest.mark.compliance
+
 
 @pytest.fixture(autouse=True)
 def _clear_chain_class_state():

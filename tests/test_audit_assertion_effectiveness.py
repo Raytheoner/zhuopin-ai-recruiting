@@ -34,6 +34,8 @@ from tests.test_audit_assertions import (
     insert_score,
 )
 
+pytestmark = pytest.mark.compliance
+
 
 @pytest.fixture
 def conn(tmp_path):

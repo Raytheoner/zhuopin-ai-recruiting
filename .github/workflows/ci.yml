@@ -49,6 +49,20 @@ jobs:
       - name: pytest
         run: python -m pytest -q
 
+      # 合规红线的可归因门禁。三条断言 + 链校验 + 对账已经在上一步的全量里
+      # 跑过一遍了，这里**故意再跑一遍**：红线被破坏时，CI 页面上要能看见一个
+      # 名字就叫「合规断言」的红色步骤，而不是让人从几百条用例里翻。
+      #
+      # ⚠️ 这些断言在 CI 的空库上**恒真**。CI 的效力不来自它们返回绿色，来自
+      # tests/test_audit_assertion_effectiveness.py 里那 22 条"造违例 → 必须
+      # 失败"的反证（tasks.md 6.7）。⛔ 不要把反证从这个标记里摘出去。
+      #
+      # 真实数据上的巡检在 .51 上手工跑：
+      #   python -m app.audit.assertions --db data/demo.db --mirror data/audit/decisions.jsonl
+      # 口径见 docs/audit-and-outbound-ops.md。
+      - name: 合规断言（红线守护）
+        run: python -m pytest -q -m compliance -v
+
   # 跟本地 pre-commit 用同一份 .pre-commit-config.yaml —— 单一真源。
   # 本地钩子能被 `git commit --no-verify` 绕过，这一层绕不过去。
   hooks:
