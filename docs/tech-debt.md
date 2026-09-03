@@ -186,3 +186,91 @@ JSONL 镜像的关系：镜像还留不留、留的话锁往哪放）；② 或�
 指向它的记录，链**当场断在那里**，而 `verify_chain()` 事后只能报告"第 N 行
 断了"——分不清是并发写还是有人篡改。**防篡改证据链失去证明力的方式，
 恰恰是它自己被写坏。** 且这个损坏不可事后修复：镜像是 append-only 的。
+
+---
+
+## TD-8 · 候选人外发门禁已就位，但生产里没有调用方
+
+**欠的是什么**：`app/outbound/delivery.py:deliver_candidate_message()` 是候选人
+拒信/邀约的受保护外发入口，U5 已把它连同待审批队列、两个 `effect_*` 节点与
+拦截/放行留痕全部建好。**但 M1 里没有任何地方生成拒信或邀约**——2026-08-30 实测
+`grep -rn "rejection_letter\|interview_invitation" app/` 在 `app/outbound/` 之外
+零命中，`deliver_candidate_message` 在 `app/outbound/` 之外也零调用方（只有
+`app/outbound/__init__.py` 的延迟导出）。采集图只发 `question` /
+`confirmation_prompt` 这类内部通知。
+
+**所以本单元交付的是"机制"不是"在跑的流程"**：门禁、队列、留痕全部有测试覆盖，
+但生产路径上一次都不会被执行到。与 U3 的 `audit_context` 同一形状。
+
+**触发条件**：M2 开始生成候选人信件时。那个单元**必须**走
+`deliver_candidate_message()`，⛔ 不得直接调 `effect_deliver_message` 或
+`channel.deliver` 发候选人信件——那会绕过整道闸，而合规红线「AI 只做排序推荐、
+不做自动淘汰」的技术保证就在这道闸上。
+
+**怎么还**：M2 的拒信/邀约生成单元接上这个入口，并把
+`is_candidate_outbound_enabled()` 作为 `outbound_enabled` 传进去。
+
+**不还的后果**：一整套门禁与审批留痕建好了却没人用，而真正发信的代码另起一条
+不受管的路径——比没有门禁更糟，因为审计会看到一个"门禁存在"的假象。
+
+**为什么现在只登记不做**：拒信/邀约的内容生成属 M2 范围
+（`delivery-units.md:26` 给 U5 的文件边界不含 agent 层）。
+
+⚠️ **本条不是"等 M2 再说"就完事**：U5 合并时 `CANDIDATE_OUTBOUND_ENABLED` 保持
+默认关闭（全拦），design 迁移计划要的"观察拦截留痕是否符合预期"这个观察期，
+在没有调用方之前**采不到任何样本**。观察期实际上从 M2 接线那一刻才开始计时。
+
+---
+
+## TD-9 · 同一草稿的第二次拦截永远不留痕（外发审计有洞）
+
+**欠的是什么**：一封候选人信件被门禁拦下入队后，人工点放行**又被总开关拦下**的
+那次尝试，**一条留痕都不会产生**。2026-08-30 实测（`worktree-audit-u5-queue-and-wiring`
+全分支终审）：
+
+```
+首次拦截            → ✅ 留痕 outbound_blocked / 消息自称需要人工确认
+放行被总开关拦下    → ❌ 零留痕
+最终成功放行        → ✅ 留痕 outbound_delivered / confirmed_by=张三
+```
+
+**违反的是**：`specs/outbound-approval-gate` 的「外发与拦截动作强制留痕」
+——`系统 SHALL 对每一次外发尝试留痕，无论结果是放行还是拦截`。
+Scenario「总开关关闭时已确认的消息」要求留痕原因记为"外发总开关关闭"，
+目前**只在草稿是全新的（没被拦过）时**才成立；从待审批队列走 `approve()`
+这条**真正的生产路径**上不成立。
+
+**两条成因叠加，缺一条都不足以解释**：
+
+1. `app/outbound/queue.py:approve()` 在 `decision.allowed` 为假时**早返回**，
+   压根不调用 `deliver`，于是 `deliver_candidate_message` 里那段留痕逻辑没机会跑。
+2. 就算把 ① 改成无条件调用也**仍然无效**：`effect_record_outbound_audit` 的
+   `business_key` = `{content_hash}:{allowed}`（`tasks.md` 5.4 **字面规定**），
+   只区分"拦截 vs 放行"、不区分**是哪一条拦截**。第二次拦截的键与首次完全相同
+   → 撞上 `effect_log` 已有行 → `idempotent_effect` 返回 `None` → 镜像被跳过。
+   实测日志可见：`外发留痕已存在（重放），跳过镜像 append（id=…:False）`。
+
+**影响面（已界定，别读得比实际严重）**：**闸门本身完好**——被拦的消息确实没发出去，
+`compute_outbound_gate` 的 fail-closed 判定一步没少。丢的**只是可观测性**：
+审计看不到"这封信被人试着放行过几次、每次为什么没成"。⛔ 但不能因此当小事：
+U6 的 6.5 要按拦截原因做分布统计，这个洞会让"一直发不出去的那批信"在报表里
+**系统性缺席**——恰恰是最该被看见的那批。
+
+**怎么还**（两处一起改，只改一处无效）：
+
+1. 幂等键改为 `{content_hash}:{allowed}:{reason}`。仍满足 5.4「同一草稿的拦截与
+   放行各留一条痕、重放不重复留痕」的原意——同一原因的重放键不变、照样短路，
+   不同原因才另起一条。**需同步改 `tasks.md` 5.4 的字面规定**。
+2. `queue.approve()` 被拦时也要留痕。它现在没有 `recorder` 依赖，需加参数——
+   **这会改动已过审的 Task 2 签名**。⚠️ 改的时候 ⛔ 不要顺手把"被拦时也入队"
+   一起加回去：`approve()` 里一行 `enqueue` 都没有**是 design D5 的死锁防线本身**
+   （平台侧踩过），有 `test_the_approve_path_contains_no_enqueue_call`（AST）与
+   `test_the_switch_off_path_never_calls_enqueue`（行为级 spy）两条测试钉着。
+
+**为什么现在只登记不做**：修复要同时改 `tasks.md` 5.4 字面规定的幂等键公式与
+Task 2 已过审的函数签名，属计划/契约层变更，且触碰合规路径上的留痕语义。
+2026-08-30 的 U5 续跑是**无人值守 session**，⛔ 不自行拍板重设计。
+
+**现网风险 = 0**：见 [TD-8](#td-8--候选人外发门禁已就位但生产里没有调用方)，
+本单元在生产里没有调用方，这条洞今天一次都不会被触发。**但它必须在 M2 接线
+之前修掉**——M2 一接上，观察期采到的拦截分布就是缺的。

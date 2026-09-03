@@ -17,6 +17,33 @@ import app.outbound.gate
 _PACKAGE_DIR = pathlib.Path(app.outbound.gate.__file__).parent
 _SOURCE_FILES = {path.name: path for path in sorted(_PACKAGE_DIR.glob("*.py"))}
 
+# U5（tasks 5.1）在同一个包目录里新增了 messages.py（候选人消息契约）与
+# queue.py（待审批队列的持久化读写）。这两个文件是刻意的例外，不是漏网之鱼：
+# queue.py 天生要 `import sqlite3`、写 `INSERT INTO`（design D5：待审批队列
+# 不复用 outbox，是独立的持久化落点）；messages.py 天生要 import
+# `app.channels.base.OutboundMessage`（`to_outbound_message()` 的返回形状）。
+#
+# U5（tasks 5.5）又新增了 delivery.py：它是 L4 编排层（判一次 → 分流 → 留痕 →
+# 提交后镜像），必然要 import `sqlite3`、`app.audit.*`（构造/写 DecisionEvent）
+# 与 `app.graph.nodes`（调用三个 effect_* 节点）——这些正是纯度检查要防的东西,
+# 但 delivery.py 本就不是纯度检查要保的对象：三条纯度检查测的是**门禁本身**
+# 有没有腐化成 fail-open 的形状（compute_outbound_gate 是否还纯、还 fail-closed），
+# delivery.py 从不判定、只编排既有判定结果，categorically 不在这条检查的管辖范围。
+#
+# ⚠️ 这是**排除清单**，不是白名单：纯度扫描面 = `_SOURCE_FILES` 减去这个显式
+# 登记的排除集合，⛔ 不是"只扫这几个文件"的手写允许清单。往 app/outbound/
+# 下新增任何模块（无论叫什么名字）都会自动落进三条纯度检查——这正是 review
+# round 1（第 14-16 行）要保的性质："新增模块也会自动进入扫描面"。只有显式
+# 写进 `_NON_GATE_MODULES` 的文件名会被豁免；忘了登记 = 新文件默认被纯度检查
+# 覆盖、大概率跑出违规，而不是默认被悄悄放过。方向反过来（fail-closed）。
+_NON_GATE_MODULES = {"messages.py", "queue.py", "delivery.py"}
+
+_GATE_PURITY_FILES = {
+    name: path
+    for name, path in _SOURCE_FILES.items()
+    if name not in _NON_GATE_MODULES
+}
+
 _BANNED_IMPORT_PREFIXES = (
     "app.config",
     "app.storage",
@@ -42,7 +69,7 @@ def test_gate_source_has_no_defaulted_attribute_reads():
     合理默认值"那种一行重构的机器判据。
     """
     offenders = []
-    for name, path in _SOURCE_FILES.items():
+    for name, path in _GATE_PURITY_FILES.items():
         for node in ast.walk(_tree(path)):
             if not isinstance(node, ast.Call):
                 continue
@@ -62,7 +89,7 @@ def test_outbound_package_imports_nothing_stateful():
     「逻辑上不依赖 U2/U3」——所以 app.audit 也在黑名单里。
     """
     offenders = []
-    for name, path in _SOURCE_FILES.items():
+    for name, path in _GATE_PURITY_FILES.items():
         for node in ast.walk(_tree(path)):
             if isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
@@ -92,6 +119,27 @@ def test_the_import_guard_actually_sees_every_module_in_the_package():
     assert set(_SOURCE_FILES) >= {"__init__.py", "contracts.py", "gate.py"}
 
 
+def test_gate_purity_scope_excludes_only_the_registered_non_gate_modules():
+    """
+    守着 `_NON_GATE_MODULES` 本身，两个方向都要防：
+
+    1) 排除集合被悄悄加大——比如以后哪个模块图省事被顺手塞进
+       `_NON_GATE_MODULES` 来避开纯度检查，而不是老老实实通过检查。逐字钉死
+       当前登记为 `{"messages.py", "queue.py", "delivery.py"}`（U5 tasks 5.5
+       新增了 delivery.py，2026-08-28 裁决登记），多一个就得有人主动改这行，
+       不能顺手加。
+    2) `gate.py` / `contracts.py` / `__init__.py` 被误排除出扫描面——断言
+       三者都还在 `_GATE_PURITY_FILES`（即 `_SOURCE_FILES` 减排除集合）里。
+
+    ⚠️ 与旧版 `test_gate_purity_scope_is_exactly_the_gate_owned_files` 的区别：
+    旧版拿 `_GATE_PURITY_FILES` 与算它时用的同一个字面量集合比较，是重言式，
+    在 `_GATE_PURITY_FILES` 是"白名单过滤"时永远不可能失败。改成排除清单后，
+    这条改成分别校验排除集合与扫描面结果，两者都是能失败的断言。
+    """
+    assert _NON_GATE_MODULES == {"messages.py", "queue.py", "delivery.py"}
+    assert {"__init__.py", "contracts.py", "gate.py"} <= set(_GATE_PURITY_FILES)
+
+
 def test_ai_label_source_is_the_jd_agent_constant():
     """
     tasks 4.4：**复用** app/agents/jd_agent.py 现有的 AI_LABEL_TEMPLATE
@@ -119,7 +167,7 @@ def test_gate_has_no_side_effect_vocabulary():
     """
     铁律 2：compute_* 无副作用。源码里出现这几个词就说明副作用爬进来了。
     """
-    for name, path in _SOURCE_FILES.items():
+    for name, path in _GATE_PURITY_FILES.items():
         source = path.read_text(encoding="utf-8")
         for forbidden in ("@idempotent_effect", "INSERT INTO", "conn.execute", "channel.deliver"):
             assert forbidden not in source, f"{name} 里出现了 {forbidden}"

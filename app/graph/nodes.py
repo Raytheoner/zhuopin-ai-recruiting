@@ -7,9 +7,13 @@ import sqlite3
 from app.agents.intake_agent import run_intake_turn
 from app.agents.intake_question import IntakeQuestion
 from app.agents.jd_agent import JDGenerationResult, generate_jd
+from app.audit.events import DecisionEvent
+from app.audit.recorder import AuditRecorder
 from app.channels.base import Channel, OutboundMessage
 from app.graph.state import IntakeState
 from app.llm.gateway import LLMGateway
+from app.outbound import queue
+from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
 from app.storage.idempotency import idempotent_effect
 
@@ -256,3 +260,75 @@ def effect_generate_and_persist_jd(
 def message_business_key(payload: dict) -> str:
     """给 effect_deliver_message 生成稳定的 business_key，同一轮同一内容只投递一次。"""
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+@idempotent_effect("effect_enqueue_pending_approval")
+def effect_enqueue_pending_approval(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    message: CandidateOutboundMessage,
+    blocked_reason: str,
+) -> str:
+    """
+    effect_* 节点：把一条被门禁拦下的候选人草稿写进待审批队列，独占、幂等。
+
+    `business_key` = 草稿内容哈希，于是幂等键是
+    `{thread_id}:effect_enqueue_pending_approval:{content_hash}`——与 U1 的
+    `(thread_id, content_hash)` 唯一索引**同粒度**（U1 偏离登记 2 就是为了这条
+    才把单列索引改成两列的）。两道防线粒度不一致时，宽的那道形同虚设。
+
+    不在这里 `conn.commit()` —— 理由同 `effect_persist_draft`：写入必须与
+    `effect_log` 记录由 `idempotent_effect` 装饰器在同一个事务里一次性提交。
+
+    ⛔ 本函数体内不 append JSONL（delivery-units.md §3.4 第 2 条）。留痕是
+    `effect_record_outbound_audit` 的事，镜像 append 更是在事务提交之后才发生。
+
+    ⚠️ **D5 死锁防线的另一半**（Task 2 交付了 `queue.approve()` 从不重新入队
+    那一半）：携带 `confirmed_by` 的消息**拒绝入队**。`queue.enqueue()` 本身
+    不检查这一列——它按 `(thread_id, content_hash)` 无条件 `ON CONFLICT DO
+    NOTHING`（Task 1 design），`content_hash()` 又刻意不含 `confirmed_by`，
+    所以底下这层完全看不出"这条已经签过名了"。签名消息本就是从队列里取出、
+    带着签名重走门禁的那一条（`queue.approve()`），它不该再被送回这个入队
+    节点——这道检查在 enqueue() 之前挡住它，不指望下面的表结构或唯一索引
+    替它把关。
+    """
+    if message.confirmed_by is not None:
+        raise ValueError(
+            f"携带 confirmed_by={message.confirmed_by!r} 的消息不能入队"
+            "（design D5 死锁防线：只有首次被门禁拦下、尚未签名的草稿才入队，"
+            "签名消息走的是 queue.approve() 的放行路径）"
+        )
+    return queue.enqueue(
+        conn, thread_id=thread_id, message=message, blocked_reason=blocked_reason
+    )
+
+
+@idempotent_effect("effect_record_outbound_audit")
+def effect_record_outbound_audit(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    recorder: AuditRecorder,
+    event: DecisionEvent,
+) -> bool:
+    """
+    effect_* 节点：外发/拦截动作的留痕，独占、幂等。
+
+    `business_key` = `{content_hash}:{allowed}`（tasks 5.4）——同一草稿的"拦截"
+    与"放行"各留一条痕。⛔ 只用 content_hash 的话，放行那条会命中拦截那条的
+    `effect_log` 被短路，于是**投递发生了却没有留痕**。
+
+    返回值是 `recorder.record()` 的返回值，对外发事件**恒为 `False`**：外发事件
+    在 `analysis_run` 里没有真身（它的真身是 `pending_approval`），
+    `SqliteSink.SUPPORTED_EVENT_TYPES` 只收 `ai_analysis`。
+    ⛔ **调用方不得把这个 `False` 当成"写失败"，更不得据此跳过镜像 append**——
+    镜像里那一行是外发留痕唯一的载体。调用点按自己写的 `event_type` 决定行为，
+    不从 `False` 反推原因（2026-08-28 对残留 B 的拍板）。
+
+    ⛔ 函数体内不 append JSONL：`recorder.mirror()` 由调用点在本节点**返回之后**
+    触发，那时装饰器已 `commit`（delivery-units.md §3.4 第 3 条）。
+    """
+    return recorder.record(conn, event)
