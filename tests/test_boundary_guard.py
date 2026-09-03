@@ -168,12 +168,131 @@ def test_syntax_error_file_does_not_crash_the_check(tmp_path: Path) -> None:
     assert scan_app_tree(root) == []
 
 
+# ── 反证（7.1）：非 UTF-8 文件不许被静默跳过 ──────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    ["utf-16", "utf-16-le", "utf-16-be", "gbk", "utf-8-sig"],
+    ids=["utf16-bom", "utf16le-nobom", "utf16be-nobom", "gbk", "utf8-bom"],
+)
+def test_non_utf8_file_is_still_scanned(tmp_path: Path, encoding: str) -> None:
+    """`.51` 是 Windows，PowerShell 的 `Out-File` / `>` 默认写 UTF-16LE。
+
+    旧实现把 `UnicodeDecodeError` 吞成 `None` 后 `continue`，于是在服务器上
+    顺手改一个 `app/` 下的文件，就能让这条边界对该文件**永久失明且不留痕迹**。
+    ⚠️ 只加 `errors="replace"` 修不好 UTF-16——ASCII 字符之间夹着的 `\\x00`
+    会让 `"zhuopin_platform" in line` 匹配不上，所以必须走兜底解码。
+    """
+    root = make_repo(tmp_path)
+    (root / "app" / "leak_bin.py").write_bytes("import zhuopin_platform\n".encode(encoding))
+    violations = scan_app_tree(root)
+    assert "7.1-module" in rules(violations), f"{encoding} 编码的违例被静默跳过了"
+
+
+@pytest.mark.parametrize("encoding", ["gbk", "utf-16"], ids=["gbk", "utf16-bom"])
+def test_chinese_marker_in_non_utf8_file_is_detected(tmp_path: Path, encoding: str) -> None:
+    """GBK 与带 BOM 的 UTF-16 走的是**正解**路径，中文 marker 在这两条上必须生效。
+
+    ⚠️ 已知限制（脚本 `_decode()` 的 docstring 里也写了）：**无 BOM 的
+    UTF-16 中文**落在 latin-1 兜底上，只保证 ASCII token 匹配，中文 marker
+    匹配不到。⛔ 不要把这条限制当成"已覆盖"。
+    """
+    root = make_repo(tmp_path)
+    (root / "app" / "cfg.py").write_bytes('REF = "../企业AI转型/资产"\n'.encode(encoding))
+    assert "7.1-path" in rules(scan_app_tree(root))
+
+
+def test_binary_file_is_not_a_false_positive(tmp_path: Path) -> None:
+    """兜底解码不能把二进制文件解成违例——误报是检查被拆掉的最常见死因。"""
+    root = make_repo(tmp_path)
+    (root / "app" / "logo.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00"
+    )
+    assert scan_app_tree(root) == []
+
+
+# ── 反证（7.1）：app/ 不存在不等于没有违例 ────────────────────────────────
+
+
+def test_missing_app_dir_is_a_violation(tmp_path: Path) -> None:
+    """把树挪到 `src/app/` 后旧实现返回 `[]` 并照打"边界守护：通过"。
+
+    仓库重构、或 CLI 从错误 cwd 起跑，7.1 就静默变成恒真。与 `7.2-missing`
+    对称补一条。
+    """
+    root = make_repo(tmp_path, app_files={"__init__.py": "", "leak.py": "import zhuopin_platform\n"})
+    (root / "src").mkdir()
+    (root / "app").rename(root / "src" / "app")
+    violations = run_all(root, skip_diff=True)
+    assert "7.1-missing" in rules(violations)
+
+
+# ── 反证（7.1）：symlink 必须被抓 ─────────────────────────────────────────
+
+
+def test_symlink_dir_into_sister_repo_is_detected(tmp_path: Path) -> None:
+    """目录软链是"不跨仓库引用"最字面的违反形态，而旧实现完全看不见它。
+
+    `Path.rglob` 默认 `recurse_symlinks=False`，且 symlink 目录过不了
+    `is_file()` —— 文件软链能抓到，目录软链零违例。
+    """
+    sister = tmp_path / "other_repo"
+    (sister / "audit").mkdir(parents=True)
+    (sister / "audit" / "sinks.py").write_text("import zhuopin_platform\n", encoding="utf-8")
+
+    root = make_repo(tmp_path / "repo")
+    (root / "app" / "sister").symlink_to(sister, target_is_directory=True)
+
+    violations = scan_app_tree(root)
+    assert "7.1-symlink" in rules(violations)
+    assert any(v.path == "app/sister" for v in violations)
+
+
+def test_symlink_file_is_detected(tmp_path: Path) -> None:
+    root = make_repo(tmp_path / "repo")
+    outside = tmp_path / "outside.py"
+    outside.write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "app" / "linked.py").symlink_to(outside)
+    assert "7.1-symlink" in rules(scan_app_tree(root))
+
+
+def test_clean_tree_has_no_symlink_violation(tmp_path: Path) -> None:
+    """从严判据的另一半：没有软链时 ⛔ 不许报。"""
+    assert "7.1-symlink" not in rules(scan_app_tree(make_repo(tmp_path)))
+
+
+# ── 反证（7.1）：跳过目录名只对 app/ 以内生效 ─────────────────────────────
+
+
+def test_skip_dir_names_do_not_match_ancestor_dirs(tmp_path: Path) -> None:
+    """把仓库放进一个名叫 `.mypy_cache` 的祖先目录里，扫描不许变成空转。
+
+    旧实现用 `SKIP_DIR_NAMES & set(path.parts)` 匹配**绝对路径**的全部路径段，
+    于是整个仓库被跳过，带着真实违例全绿。
+    """
+    root = make_repo(
+        tmp_path / ".mypy_cache" / "repo",
+        app_files={"__init__.py": "", "leak.py": "import zhuopin_platform\n"},
+    )
+    assert "7.1-module" in rules(scan_app_tree(root))
+
+
+def test_skip_dir_names_still_apply_inside_app(tmp_path: Path) -> None:
+    """`app/__pycache__/*.pyc` 仍然要跳过——否则 .pyc 里的字符串常量会误报。"""
+    root = make_repo(tmp_path)
+    cache = root / "app" / "__pycache__"
+    cache.mkdir()
+    (cache / "leak.cpython-314.pyc").write_bytes(b"import zhuopin_platform\n")
+    assert scan_app_tree(root) == []
+
+
 # ── 基线：干净的树必须全过 ────────────────────────────────────────────────
 
 
 def test_clean_tree_has_no_violations(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
-    assert run_all(root, skip_diff=True, runner=fake_git()) == []
+    assert run_all(root, skip_diff=True) == []
 
 
 # ── 反证三（7.2）：依赖声明里的 zhuopin_platform 必须被抓 ─────────────────
@@ -198,6 +317,42 @@ def test_missing_dependency_file_is_a_violation(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
     (root / "requirements.txt").unlink()
     assert "7.2-missing" in rules(scan_dependency_files(root))
+
+
+def test_unreadable_dependency_file_is_a_violation(tmp_path: Path) -> None:
+    """读不出内容 ⛔ 不许当成空文件——`_read_text(path) or ""` 那种写法等于全绿。"""
+    root = make_repo(tmp_path)
+    (root / "requirements.txt").unlink()
+    (root / "requirements.txt").mkdir()  # 存在但读不出（IsADirectoryError）
+    assert "7.2-unreadable" in rules(scan_dependency_files(root))
+
+
+def test_sister_repo_marker_in_requirements_is_detected(tmp_path: Path) -> None:
+    """VCS 直装姊妹仓库不含 `zhuopin_platform` 这个 token，只靠 diff 判据拦。
+
+    而 diff 判据钉死在立项 commit，是有保质期的；marker 判据没有。
+    """
+    root = make_repo(
+        tmp_path,
+        requirements=(
+            CLEAN_REQUIREMENTS
+            + "git+https://github.com/Raytheoner/zhuopin-ai-transformation.git@master\n"
+        ),
+    )
+    violations = scan_dependency_files(root)
+    assert "7.2-path" in rules(violations)
+
+
+def test_onedrive_marker_in_pyproject_is_detected(tmp_path: Path) -> None:
+    root = make_repo(
+        tmp_path,
+        pyproject=CLEAN_PYPROJECT + '\n[tool.ref]\npath = "~/OneDrive/Projects/企业AI转型"\n',
+    )
+    assert "7.2-path" in rules(scan_dependency_files(root))
+
+
+def test_clean_dependency_files_have_no_path_violation(tmp_path: Path) -> None:
+    assert "7.2-path" not in rules(scan_dependency_files(make_repo(tmp_path)))
 
 
 # ── 反证四（7.2）：pyproject 声明依赖必须被抓 ─────────────────────────────
@@ -258,9 +413,46 @@ def test_git_failure_is_a_violation_not_a_pass(tmp_path: Path) -> None:
 # ── 真实仓库：今天必须是绿的 ──────────────────────────────────────────────
 
 
-def test_real_repository_passes_boundary_guard() -> None:
-    """反证证明"会红"，这条证明"今天不该红"。两条都要有。"""
-    violations = run_all(REPO_ROOT, baseline=BASELINE_COMMIT)
+def test_real_repository_tree_passes_boundary_guard() -> None:
+    """反证证明"会红"，这条证明"今天不该红"。两条都要有。
+
+    **树扫描部分恒跑**（`skip_diff=True`）——它只读工作区文件，不需要 git 历史，
+    在浅克隆的 CI runner 上同样成立。diff 判据拆到下一条去，理由见那条。
+    """
+    violations = run_all(REPO_ROOT, skip_diff=True)
+    assert violations == [], "\n".join(v.render() for v in violations)
+
+
+def _baseline_commit_is_reachable() -> bool:
+    """只读探测：本地对象库里有没有基线 commit。"""
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"{BASELINE_COMMIT}^{{commit}}"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def test_real_repository_dependency_diff_is_empty() -> None:
+    """真实仓库的依赖 diff 判据。取不到基线 commit 就 skip。
+
+    ⚠️ **这个 skip 不构成新的静默绿，理由必须留在这里，否则下一个人会以为
+    是在掩盖失败：** 权威判据不在本测试里，而在 `.github/workflows/ci.yml`
+    的 `hooks` job 上——那一步直接跑 `python scripts/check_boundary.py`，
+    该 job 的 checkout 带 `fetch-depth: 0`，基线 commit 必然可达；而
+    `check_dependency_diff()` 已经把"git 取不到基线"判成违例（见
+    `test_git_failure_is_a_violation_not_a_pass`），⇒ 硬判据在那里不会被跳过。
+
+    本条 skip 只针对 `test` job：它的 checkout **不带 `with:`**，即默认
+    `fetch-depth: 1`，浅克隆里 `e65f6857…` 这个 object 根本不存在
+    （实测 `git clone --depth 1` 后该 `git diff` 退出码 128
+    `fatal: Invalid revision range`）。⛔ 不从 CI 侧加 `fetch-depth: 0` 修，
+    因为本单元对 `ci.yml` 的硬约束是"纯追加、零删除零修改"。
+    """
+    if not _baseline_commit_is_reachable():
+        pytest.skip("浅克隆，基线 commit 不可达；硬判据在 hooks job（fetch-depth: 0）")
+    violations = check_dependency_diff(REPO_ROOT, baseline=BASELINE_COMMIT)
     assert violations == [], "\n".join(v.render() for v in violations)
 
 

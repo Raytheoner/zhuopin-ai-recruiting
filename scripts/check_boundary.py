@@ -7,8 +7,10 @@ import、不拷贝参考文件**。`06-企业AI转型资产借鉴清单.md` §10
 用两条命令人工核验过一次，但那只是**那一刻**的结论——本脚本把同样的两条判据
 变成 CI 每次都跑的机器检查。
 
-⚠️ 判据刻意比 tasks.md 的字面更严，三处，都在下面各自的函数 docstring 里
-说明了理由。放宽任何一处之前先读那段。
+⚠️ 判据刻意比 tasks.md 的字面更严，**三处**（token 扫全文含非 `.py` 文件、
+`app/` 下任何 `sys.path` 访问、三个姊妹仓库 marker 独立成判据），另有若干条
+**完整性**判据（`7.1-missing` / `7.1-symlink` / `7.2-missing` / 非 UTF-8 兜底
+解码）防止检查恒真。理由都写在各自的函数 docstring 里，放宽之前先读那段。
 
 用法（退出码 0 = 全过，1 = 有违例，2 = 用法错误）：
 
@@ -20,13 +22,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import subprocess
 import sys
 import tomllib
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Sequence
 
 # ── 判据常量（改这里，⛔ 不要把字面量散到各个函数里）────────────────────────
 
@@ -68,23 +71,104 @@ class Violation:
         return f"[{self.rule}] {where}: {self.message}"
 
 
-def _iter_files(base: Path) -> Iterable[Path]:
-    if not base.exists():
-        return
-    for path in sorted(base.rglob("*")):
-        if not path.is_file():
-            continue
-        if SKIP_DIR_NAMES & set(path.parts):
-            continue
-        yield path
+def _walk(base: Path) -> tuple[list[Path], list[Path]]:
+    """遍历 `base`，返回 `(普通文件, symlink 条目)`。
+
+    ⚠️ **两处都是为了不产生静默的扫描盲区：**
+
+    1. `SKIP_DIR_NAMES` 只对 **`base` 以内**的目录名生效。旧实现用
+       `SKIP_DIR_NAMES & set(path.parts)` 匹配的是**绝对路径**的全部路径段——
+       把仓库放在一个名叫 `.mypy_cache` 的祖先目录下（CI 缓存目录里 clone
+       就会这样），扫描产出零文件，带着真实违例全绿。
+    2. ⛔ **不跟随 symlink**（`os.walk(followlinks=False)`）。跟随会让一个
+       指回姊妹仓库的软链把整个外部仓库拖进扫描范围，且可能成环；这里的做法
+       是**不跟随、但把 symlink 本身报成违例**，见 `scan_app_tree()` 第 4 条。
+       Python 3.13+ 的 `Path.rglob` 默认也不跟随，且 symlink 目录过不了
+       `is_file()` —— 于是旧实现对目录软链**完全不可见**。
+    """
+    files: list[Path] = []
+    links: list[Path] = []
+    if not base.is_dir():
+        return files, links
+
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        here = Path(dirpath)
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIR_NAMES)
+        for name in dirnames:
+            path = here / name
+            if path.is_symlink():
+                links.append(path)
+        for name in sorted(filenames):
+            path = here / name
+            if path.is_symlink():
+                links.append(path)
+            # symlink 指向的普通文件照旧读内容（多一条判据不吃亏）；
+            # 指向目录或断链的 `is_file()` 为假，只留 symlink 违例。
+            if path.is_file():
+                files.append(path)
+    return files, sorted(links)
+
+
+def _decode(raw: bytes) -> str:
+    """尽力把字节解成文本；**⛔ 不许在解不动时静默返回空**。
+
+    ⚠️ 旧实现把 `UnicodeDecodeError` 吞成 `None`、调用方直接 `continue`，
+    于是 `app/` 下任何非 UTF-8 文件对这条边界**永久失明且不留痕迹**。这不是
+    假想的触发条件：部署目标 `.51` 是 Windows，PowerShell 的 `Out-File` / `>`
+    默认写 **UTF-16LE**，在服务器上顺手改一个 `app/` 下的文件即可复现
+    （GBK 代码页的旧账见 `ci.yml` 顶部注释）。
+
+    ⚠️ **两个坑，踩中任何一个这条修法都是白修：**
+
+    1. **只加 `errors="replace"` 修不好 UTF-16。** UTF-16LE 的 ASCII 文本按
+       UTF-8 解，每个字符之间夹着 `\\x00`，`"zhuopin_platform" in line`
+       匹配不上。
+    2. **无 BOM 的 UTF-16 根本不会抛 `UnicodeDecodeError`。** 纯 ASCII 正文
+       编成 UTF-16 后只有 ASCII 字节和 NUL，而 NUL 是**合法的 UTF-8**——
+       `raw.decode("utf-8")` 直接成功，返回一串夹着 NUL 的字符串。所以
+       "解码失败才兜底"是不够的，**出口统一剔 NUL** 才拦得住。
+
+    ⚠️ **已知限制（⛔ 不要假装它全覆盖）**：latin-1 兜底只保证 **ASCII
+    token**（`zhuopin_platform` / `OneDrive` / `zhuopin-ai-transformation`）
+    能匹配；`FORBIDDEN_PATH_MARKERS` 里的中文 marker `企业AI转型` 在兜底路径
+    （无 BOM 的 UTF-16 中文、以及既非 UTF-8 也非 GBK 的编码）上匹配不到。
+    UTF-8、带 BOM 的 UTF-16、GBK 三种走正解路径，中文 marker 正常生效。
+    """
+    return _decode_bytes(raw).replace("\x00", "")
+
+
+def _decode_bytes(raw: bytes) -> str:
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        # UTF-16 带 BOM（Windows PowerShell `Out-File` 的默认形态）：BOM 定字节序，
+        # 能正解，中文 marker 在这条路径上照常生效。
+        try:
+            return raw.decode("utf-16")
+        except UnicodeError:
+            pass
+    try:
+        # 无 BOM 的 UTF-16（大端小端都有可能，⛔ 不能靠 `decode("utf-16")` 猜——
+        # 猜反了得到的是一串看似成功的 CJK 乱码）在这里就"成功"了，靠 `_decode()`
+        # 出口那步剔 NUL 还原成可匹配的 ASCII。
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    if b"\x00" not in raw:
+        # 中文 Windows 的老代码页。GBK 正解得到的中文能匹配中文 marker。
+        try:
+            return raw.decode("gbk")
+        except UnicodeDecodeError:
+            pass
+    # 兜底：latin-1 不会抛异常，ASCII token 仍可匹配（中文 marker 不保证）。
+    return raw.decode("latin-1", errors="replace")
 
 
 def _read_text(path: Path) -> str | None:
-    """读不成 UTF-8 文本的（图片等二进制）返回 None，由调用方跳过。"""
+    """返回文本；只有**读不到**（OSError）才返回 None，编码问题一律兜底解。"""
     try:
-        return path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
+        raw = path.read_bytes()
+    except OSError:
         return None
+    return _decode(raw)
 
 
 def _sys_path_mutation_lines(source: str, filename: str = "<app>") -> list[int]:
@@ -138,12 +222,61 @@ def scan_app_tree(root: Path) -> list[Violation]:
        OneDrive 字样，照样把姊妹仓库挂进来）。`app/` 今天 `sys.path` 零命中
        （已实测），从严不会产生任何存量误报，收紧的成本是零。
 
-    3. **扫全部文件不只 `.py`。** `index.html` 里的一行 fetch 也能跨仓库。
+    3. **三个姊妹仓库 marker（`FORBIDDEN_PATH_MARKERS`）独立成判据
+       （`7.1-path`），不与 `sys.path` 合取。** tasks.md 7.1 的字面只禁
+       "`sys.path` **指向 OneDrive 路径**的注入"，本实现把 marker 拆出来单算：
+       `app/` 下任何文件任何一行出现这三个词即违例。跨仓库耦合不止 `sys.path`
+       一条路（一行 `open("…/OneDrive/…/企业AI转型/…")` 同样是耦合）。
+       ⚠️ **这是全脚本误报风险最高的一条**：CLAUDE.md 自己就写着"本项目本来
+       就是**企业AI转型**的部门模块之一"，谁在 `app/` 的 docstring 里照抄这句
+       交代出身，CI 就会指控他跨仓库耦合。真出现时的正确处置是**把那句话搬去
+       `docs/`**，⛔ 不是给这条加白名单。
+
+    上面 1 顺带**扫全部文件不只 `.py`**——`index.html` 里的一行 fetch 也能
+    跨仓库；`sys.path` 那条走 AST，只对 `.py` 生效。
+
+    另有两条**完整性**判据，不是"从严"而是防止本检查恒真：
+
+    4. **`app/` 下出现任何 symlink 即违例（`7.1-symlink`）。** 一个软链进姊妹
+       仓库（`app/sister -> …/企业AI转型`）是"不跨仓库引用、不拷贝参考文件"
+       最字面的违反形态，而 `Path.rglob` 对**目录**软链完全不可见。今天 `app/`
+       下零存量 symlink（已实测），从严的误报成本是零。
+    5. **`app/` 目录不存在即违例（`7.1-missing`）**，与 `7.2-missing` 对称。
+       仓库重构或 CLI 从错误 cwd 起跑时，"没有文件可扫"会被读成"没有违例"。
     """
     violations: list[Violation] = []
     app_dir = root / "app"
 
-    for path in _iter_files(app_dir):
+    if not app_dir.is_dir():
+        return [
+            Violation(
+                rule="7.1-missing",
+                path="app",
+                line=0,
+                message=(
+                    "app/ 目录不存在，7.1 无从核验（仓库重构、改名，"
+                    "或 CLI 从错误的 cwd 起跑？）。⛔ 空扫描不等于没有违例"
+                ),
+            )
+        ]
+
+    files, links = _walk(app_dir)
+
+    for link in links:
+        violations.append(
+            Violation(
+                rule="7.1-symlink",
+                path=link.relative_to(root).as_posix(),
+                line=0,
+                message=(
+                    f"app/ 下出现 symlink（指向 {os.readlink(link)!r}）。"
+                    "⛔ 禁止任何软链——软链进姊妹仓库既绕过内容扫描"
+                    "（不跟随 symlink），本身也是跨仓库引用"
+                ),
+            )
+        )
+
+    for path in files:
         text = _read_text(path)
         if text is None:
             continue
@@ -199,6 +332,11 @@ def scan_dependency_files(root: Path) -> list[Violation]:
     另加一条 `pyproject.toml` 的**结构性**检查：不得声明任何运行时依赖表。
     理由见 `check_dependency_diff()` —— diff 判据只锁 `requirements.txt`，
     若不补这条，往 `[project] dependencies` 里加一行依赖就能整条溜过去。
+
+    `FORBIDDEN_PATH_MARKERS` 也在依赖文件上跑一遍（`7.2-path`）：一行
+    `git+https://github.com/Raytheoner/zhuopin-ai-transformation.git@master`
+    不含 `zhuopin_platform` 这个 token，只靠 diff 判据拦——而 diff 判据是有
+    保质期的（钉死基线），marker 判据没有。
     """
     violations: list[Violation] = []
 
@@ -214,7 +352,19 @@ def scan_dependency_files(root: Path) -> list[Violation]:
                 )
             )
             continue
-        text = _read_text(path) or ""
+        text = _read_text(path)
+        if text is None:
+            # ⛔ 旧写法 `_read_text(path) or ""` 会把读不到的依赖文件当成空文件，
+            # 于是"读不出来"＝"全绿"。读不到本身就是违例。
+            violations.append(
+                Violation(
+                    rule="7.2-unreadable",
+                    path=name,
+                    line=0,
+                    message="依赖声明文件读不出内容，无法核验边界（权限？是目录？）",
+                )
+            )
+            continue
         for lineno, line in enumerate(text.splitlines(), start=1):
             if FORBIDDEN_MODULE in line:
                 violations.append(
@@ -225,6 +375,20 @@ def scan_dependency_files(root: Path) -> list[Violation]:
                         message=f"依赖声明里出现 {FORBIDDEN_MODULE!r}",
                     )
                 )
+            for marker in FORBIDDEN_PATH_MARKERS:
+                if marker in line:
+                    violations.append(
+                        Violation(
+                            rule="7.2-path",
+                            path=name,
+                            line=lineno,
+                            message=(
+                                f"依赖声明里出现姊妹仓库路径特征 {marker!r}"
+                                "（VCS 直装 / 本地路径依赖？）。"
+                                "⛔ 不跨仓库引用，读取参考 + 本仓库自建实现"
+                            ),
+                        )
+                    )
 
     violations.extend(_scan_pyproject_dependency_tables(root))
     return violations
@@ -234,9 +398,19 @@ def _scan_pyproject_dependency_tables(root: Path) -> list[Violation]:
     path = root / "pyproject.toml"
     if not path.exists():
         return []
+    text = _read_text(path)
+    if text is None:
+        return [
+            Violation(
+                rule="7.2-pyproject",
+                path="pyproject.toml",
+                line=0,
+                message="读不出内容，无法核验依赖表",
+            )
+        ]
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (tomllib.TOMLDecodeError, OSError) as exc:
+        data = tomllib.loads(text)
+    except (tomllib.TOMLDecodeError, ValueError) as exc:
         return [
             Violation(
                 rule="7.2-pyproject",
