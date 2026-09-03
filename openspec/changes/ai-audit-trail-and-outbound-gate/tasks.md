@@ -271,7 +271,7 @@
 - [x] 5.1 `queue.py`：`pending_approval` 的读写与状态机（`pending` → `approved` / `abandoned`）；放行不 `DELETE` 而是改状态并记 `confirmed_by` 与 `resolved_at`；查询只返回 `pending`
 - [x] 5.2 `queue.approve(id, confirmed_by)`：带 `confirmed_by` 重走门禁。**死锁防线（平台侧踩过）**：仅首道拦截（无 `confirmed_by`）才入队；放行复发被总开关拦下时不重复入队、状态保持 `pending`，可在开关开启后再次放行
 - [x] 5.3 `effect_enqueue_pending_approval`：沿用现有 `idempotent_effect` 装饰器（**不改装饰器、不改 `effect_log`**）。**幂等策略**：`business_key` = 草稿内容哈希（复用 `message_business_key()` 的做法），幂等键 `{thread_id}:effect_enqueue_pending_approval:{content_hash}`；叠加 1.3 的 `content_hash` 唯一索引作第二道防线。函数体内不 `commit`，由装饰器统一提交
-- [x] 5.4 `effect_record_outbound_audit`：沿用 `idempotent_effect`。**幂等策略**：`business_key` = `{content_hash}:{allowed}`，同一草稿的"拦截"与"放行"各留一条痕、重放不重复留痕
+- [x] 5.4 `effect_record_outbound_audit`：沿用 `idempotent_effect`。**幂等策略**：`business_key` = `{content_hash}:{allowed}:{reason}`，同一草稿的"拦截"与"放行"各留一条痕、**不同原因的两次拦截也各留一条**、重放不重复留痕。⚠️ 公式经变更包 `outbound-retry-audit-trace`（TD-9）订正，原为 `{content_hash}:{allowed}`——只到 `{allowed}` 时"首次被拦"与"放行时被总开关拦下"两次的键逐字相同（`content_hash` 不含 `confirmed_by`），第二次尝试一条痕都不产生。
 - [x] 5.5 外发路径接线：`compute_outbound_gate` 判定 → 按结果分流到 `effect_enqueue_pending_approval` 或既有 `effect_deliver_message`，两条路径都走 `effect_record_outbound_audit`。**不改 `effect_deliver_message` 内部逻辑、不改 `Channel` Protocol**
 - [x] 5.6 测试端到端拦截：一封无 `confirmed_by` 的拒信 → 未投递、入队为 `pending`、留痕含拦截原因与判定字段原始取值
 - [x] 5.7 测试端到端放行：队列 `approve` + 总开关开启 → 投递发生、队列转 `approved`、留痕动作类型为「已发送」且含 `confirmed_by`

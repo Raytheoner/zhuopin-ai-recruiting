@@ -282,3 +282,12 @@ Task 2 已过审的函数签名，属计划/契约层变更，且触碰合规路
 U6 是无人值守 session，修复要动已过审的 `approve()` 签名与 5.4 字面规定的幂等键公式，
 属**不可代**范围，故只登记。判据与影响面见
 `openspec/changes/ai-audit-trail-and-outbound-gate/tasks.md` 的「6.x 落地偏离登记」第 6 行。
+
+**销账（2026-09-04）**：已于变更包 `outbound-retry-audit-trace` 修复，落码 commit
+`5d59021`（幂等键并入 reason）、`6d189c5`（留痕提炼为公共函数）、
+`ea8f099`（`approve()` 被拦时留痕）。回归：`tests/test_outbound_end_to_end.py::
+test_approving_into_a_closed_switch_leaves_its_own_trail`（不同原因两条痕）、
+`::test_replaying_the_same_blocked_approval_leaves_no_second_trail`（同原因重放仍一条）、
+`tests/test_outbound_block_stats.py::test_a_second_block_on_the_same_draft_gets_its_own_bucket`
+（6.5 统计能看见第二次拦截）。
+⚠️ 上面的成因分析 ⛔ 保留原文，不改写——它是"为什么当时只登记不修"的历史记录。
