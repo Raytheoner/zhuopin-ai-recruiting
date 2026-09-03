@@ -460,10 +460,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     import sys
     from pathlib import Path
 
-    # 局部 import：这三个只有 CLI 路径用得到，模块被当库 import 时不该
-    # 顺带把 argparse 拖进来。
+    # 局部 import：这两个只有 CLI 路径用得到，模块被当库 import 时不该
+    # 顺带把 argparse 拖进来。sqlite3 本身模块级已 import，这里不重复引入。
     import argparse
-    import sqlite3 as _sqlite3
 
     from app.audit.recorder import AuditRecorder
     from app.audit.sinks import JsonlChainSink, SqliteSink
@@ -489,7 +488,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 2
 
-    conn = _sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path))
     try:
         # 镜像 sink 先存局部变量再分别传给两处：⛔ 不要写成
         # outbound_block_stats(recorder._mirror) 去掏私有属性——那是在给

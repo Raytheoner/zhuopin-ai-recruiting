@@ -15,6 +15,8 @@
 且断言失败时 violations 非空（spec：任一条不成立时判定为失败**并指出违例记录**）。
 """
 
+import sqlite3
+
 import pytest
 
 from app.audit.assertions import (
@@ -42,6 +44,34 @@ def conn(tmp_path):
     c = get_connection(str(tmp_path / "audit.db"))
     init_schema(c)
     return c
+
+
+# ── 反证零：三个常量必须钉在红线原话的字面量上 ──────────────────────────
+#
+# ⚠️ 这条不是可有可无的补充，是本文件成立的前提。下面「反证一」的 fixture
+# 表（tests/test_audit_assertions.py:create_rejection_table）与 INSERT 语句
+# 全部拿 REJECTION_TABLE / REJECTION_REASON_COLUMN / AI_SCORE_REASON 这三个
+# 常量去拼 SQL——如果只靠"常量名字对不对"，整份反证就是同义反复：把
+# REJECTION_TABLE 从 "rejection_record" 改成 "rejection_records"、把
+# AI_SCORE_REASON 从 "ai_score" 改成 "ai_score_v2"，fixture 表和 INSERT 会
+# 跟着改名字，下面的用例照样全绿、compliance 全绿、全量 771 条也全绿——
+# 而现网数据库里那张真正叫 rejection_record 的表、真正写
+# reason_type='ai_score' 的行，会被 assert_no_ai_score_rejections 判成
+# "表不存在（M1 现状）"，红线从此失守且没人知道（见 assertions.py:41-43
+# 的注释：这三行本就是留给 M2 建表时改的，改错的路径是真实存在的）。
+
+
+def test_rejection_constants_are_pinned_to_the_red_line_wording():
+    """常量取值本身必须等于 CLAUDE.md 合规红线的原话，不只是「内部自洽」。
+
+    原话：「审计断言：rejection_record 中 reason_type='ai_score' 的记录数
+    恒为 0」。这条用例不碰数据库——它要抓的不是"断言逻辑错了"，是"常量被
+    静默改名"，而后者恰恰是 assert_no_ai_score_rejections 自身测不出来的：
+    只要三个常量互相一致，该函数无论指向哪张表都会正常工作、正常报绿。
+    """
+    assert REJECTION_TABLE == "rejection_record"
+    assert REJECTION_REASON_COLUMN == "reason_type"
+    assert AI_SCORE_REASON == "ai_score"
 
 
 # ── 反证一：AI 评分理由的拒绝记录（6.1 + 合规红线）─────────────────────
@@ -136,6 +166,61 @@ def test_unknown_criterion_key_is_detected(conn):
 
     assert result.ok is False
     assert result.violations[0]["criterion_key"] == novel_key
+
+
+def test_null_criterion_key_not_in_semantics_requires_is_null_guard():
+    """assert_no_unlisted_criterion_key 的 WHERE 子句里有一句
+    `criterion_key IS NULL OR ...`，注释给的理由是"SQL 的 NOT IN 对 NULL
+    求值为 NULL、不是 TRUE，一条 NULL 的 key 会从 NOT IN 底下溜过去"——
+    但这只是一句带理由的注释，没有反证守着，删掉这半句 43 条 compliance
+    用例照样全绿（reviewer 实测确认）。这条用例把这半句钉住。
+
+    ⚠️ 打不进真实的 criterion_score.criterion_key：这一列是 `TEXT NOT
+    NULL`（app/storage/db.py），经验证 `PRAGMA ignore_check_constraints`
+    只关 CHECK、管不到 NOT NULL——直接试过：
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute("INSERT INTO criterion_score (..., criterion_key, ...)"
+                     " VALUES (..., NULL, ...)")
+    仍然报 `sqlite3.IntegrityError: NOT NULL constraint failed:
+    criterion_score.criterion_key`。Python sqlite3 驱动没有别的旁路能在
+    不改表结构的前提下把 NULL 写进一个 NOT NULL 列，所以这条反证退到能
+    触达的层次：在一张**允许 NULL** 的临时表上，直接对比"带 IS NULL 守卫"
+    与"裸 NOT IN"两条 SQL 的查询结果，证明这半句守卫确实在做事——而不是
+    通过真实的 assert_no_unlisted_criterion_key() 调用（它硬编码查
+    criterion_score，改不了目标表）。
+    """
+    raw = sqlite3.connect(":memory:")
+    try:
+        raw.execute("CREATE TABLE fixture_criterion_key (criterion_key TEXT)")
+        raw.executemany(
+            "INSERT INTO fixture_criterion_key (criterion_key) VALUES (?)",
+            [("skill_match",), (None,), ("facial_expression",)],
+        )
+        raw.commit()
+
+        whitelist = sorted(CRITERION_KEY_WHITELIST)
+        placeholders = ", ".join("?" * len(whitelist))
+
+        guarded = raw.execute(
+            "SELECT criterion_key FROM fixture_criterion_key "
+            f"WHERE criterion_key IS NULL OR criterion_key NOT IN ({placeholders})",
+            whitelist,
+        ).fetchall()
+        bare = raw.execute(
+            "SELECT criterion_key FROM fixture_criterion_key "
+            f"WHERE criterion_key NOT IN ({placeholders})",
+            whitelist,
+        ).fetchall()
+
+        assert (None,) in guarded, "带 IS NULL 守卫的查询必须捕到 NULL 行"
+        assert "facial_expression" in {row[0] for row in guarded}
+        assert (None,) not in bare, (
+            "裸 NOT IN 必须漏掉 NULL 行——这正是要证明的那半句缺陷本身。"
+            "如果这一断言失败，说明 SQLite 的 NOT IN 三值逻辑变了，"
+            "assertions.py 里那句注释与本反证要一起重新核实。"
+        )
+    finally:
+        raw.close()
 
 
 # ── 反证三：空 evidence_ref（6.2 + 工程铁律 4）─────────────────────────
