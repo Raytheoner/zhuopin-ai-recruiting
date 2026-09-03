@@ -7,6 +7,7 @@
 
 ⛔ **本模块不自行 `commit`**：写入会被包进 `effect_enqueue_pending_approval`，
 必须与装饰器追加的 `effect_log` 行落在同一个事务里（工程铁律 1）。
+（例外：`approve()` 的被拦分支经 `record_outbound_decision()` 间接触发装饰器 commit，见该函数 docstring）
 """
 
 from __future__ import annotations
