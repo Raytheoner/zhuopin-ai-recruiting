@@ -373,8 +373,8 @@
 
 交付单元：本变更的三条硬边界变成机器可查，人为破坏会被 CI 挡下。
 
-- [ ] 7.1 CI 检查：`app/` 下禁止出现 `from zhuopin_platform` / `import zhuopin_platform`；禁止 `sys.path` 指向 OneDrive 路径的注入
-- [ ] 7.2 CI 检查：`requirements.txt` 与 `pyproject.toml` 不含 `zhuopin_platform`；本变更的依赖文件 diff 必须为空
+- [x] 7.1 CI 检查：`app/` 下禁止出现 `from zhuopin_platform` / `import zhuopin_platform`；禁止 `sys.path` 指向 OneDrive 路径的注入 → **`scripts/check_boundary.py`**（`.github/workflows/ci.yml` 的 `hooks` job 追加一步调用。判据比字面从严两处：token 扫全文而非只扫 import 语句、`app/` 下任何 `sys.path` 访问均判违例——理由见脚本 `scan_app_tree()` docstring。反证 `tests/test_boundary_guard.py` 14 条）
+- [x] 7.2 CI 检查：`requirements.txt` 与 `pyproject.toml` 不含 `zhuopin_platform`；本变更的依赖文件 diff 必须为空 → **同上脚本**（diff 判据写死基线 `e65f685`，**只锁 `requirements.txt`**：`pyproject.toml` 自立项起有 6 行 U6 加的 pytest `markers`，纳入即恒假；`pyproject.toml` 的依赖侧改用结构性检查「不得声明任何依赖表」。反证 15 条）
 - [x] 7.3 `docs/` 增一页说明留痕与门禁的运维口径：JSONL 路径与备份、链校验怎么手动跑、`CANDIDATE_OUTBOUND_ENABLED` 的开关流程与「不提供一键放行全部」的理由 → **`docs/audit-and-outbound-ops.md`**（2026-08-28 落地。编码约束在第四节，四种写法已用字节级实测逐条验证；链校验命令已在开发机实跑并贴输出。⏸ 三项留步待 `.51` 上机闭合，见该页第五节：备份任务是否已覆盖 `data/`、`.51` 上链校验首跑输出、`.51` 上按 4.1 实际创建一次开关文件——**U5 接线前需完成第 3 项**）
   - **⚠️ U1 发现、U7 承接（2026-08-27 Shao Peishen 拍板取方案 (b)，见第 1 章「遗留一」）：本页必须写入开关文件的编码约束。** 规定唯一允许的写法是 `[System.IO.File]::WriteAllText($path, 'true')`；**⛔ 禁止** PowerShell 的 `Out-File` / `>` / `>>`（默认 UTF-16LE）与记事本的"UTF-8"另存（带 BOM）。`_read_switch_file()` 不剥 BOM、不认 UTF-16，用错写法的症状是**开关静默不生效且不报错**（方向 fail-closed，拦住了但打不开）。他明确选择不改代码——改代码剥 BOM 属「在合规开关上放松」，是不可代项。**U5 接线前必须确认本条已落地**，否则总开关在 `.51` 上不具备可操作性
 - [x] 7.4 `06-企业AI转型资产借鉴清单.md` 追加本次借鉴记录：借的四条做法、自建的对应模块、**明确未引入依赖未拷贝代码** → **§10「本次借鉴记录」**（2026-08-28 追加。四条编排做法逐条给了自建落点行号，留痕侧另记 §10.2；两条判据实跑输出已贴：依赖 diff 零行、`grep zhuopin_platform app/` 退出码 1 零命中）

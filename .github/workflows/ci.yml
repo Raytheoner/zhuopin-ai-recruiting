@@ -83,6 +83,20 @@ jobs:
       - name: 全仓库跑一遍钩子
         run: pre-commit run --all-files --show-diff-on-failure
 
+      # 本包三条硬边界（delivery-units.md §4 约定 7）的机器化：不新增
+      # zhuopin_platform 依赖、不跨仓库 import、不拷贝参考文件。
+      # 挂在 hooks job 而不是 test job，两个理由：
+      #   ① 这个 job 的 checkout 已经是 fetch-depth: 0 —— 7.2 的依赖 diff
+      #      要按变更包立项 commit e65f685 比，浅克隆取不到那个 object，
+      #      会以 `fatal: bad object` 失败；
+      #   ② ⛔ 不动 test job 的 pytest / 合规断言两个步骤（U6 刚定型）。
+      #
+      # ⚠️ 这一步在健康的仓库里恒绿。它的效力不来自绿色，来自
+      # tests/test_boundary_guard.py 里那些"造违例 → 必须失败"的反证。
+      # ⛔ 不要把反证删掉只留这一步。
+      - name: 边界守护（禁止 zhuopin_platform 与跨仓库注入）
+        run: python scripts/check_boundary.py
+
   # 需求契约的机器门禁。CLI 版本与本地全局安装的一致（@fission-ai/openspec@1.9.0），
   # 不用 latest —— 校验规则漂移会让「昨天绿今天红」变成无从解释的事。
   #
