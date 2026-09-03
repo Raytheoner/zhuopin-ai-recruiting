@@ -118,6 +118,7 @@ def test_approving_the_queued_letter_delivers_it_and_leaves_a_second_trail(wired
             recorder=recorder,
             outbound_enabled=lambda: True,
         ),
+        recorder=recorder,
     )
     conn.commit()
 
@@ -176,10 +177,15 @@ def test_replaying_the_whole_flow_repeats_no_side_effect(wired):
     assert counts["effect_deliver_message"] == 1
     assert counts["effect_record_outbound_audit"] == 1
 
-    # 第四样：镜像行数。id 由生产代码的构成规则重算（delivery.py:_audit_event），
+    # 第四样：镜像行数。id 由生产代码的构成规则重算（delivery.py:audit_business_key），
     # 与被断言的对象同源，⛔ 但与 REPLAYS 无关。
+    from app.outbound.delivery import audit_business_key
+    from app.outbound.gate import compute_outbound_gate
+
+    allowed = compute_outbound_gate(signed, lambda: True)
     expected_id = (
-        f"job-7:effect_record_outbound_audit:{signed.content_hash()}:True"
+        f"job-7:effect_record_outbound_audit:"
+        f"{audit_business_key(signed.content_hash(), allowed)}"
     )
     lines = _mirror(chain_path)
     by_id = Counter(line["id"] for line in lines)
@@ -222,6 +228,113 @@ def test_the_intake_graph_cannot_reach_the_candidate_gate():
     assert "app.outbound.delivery" in imported_names(
         "from app.outbound.delivery import deliver_candidate_message\n"
     )
+
+
+def test_approving_into_a_closed_switch_leaves_its_own_trail(wired):
+    """
+    ⭐ TD-9 的正面回归（tasks 1.7 / spec Scenario「从待审批队列放行时被总开关拦下，
+    与首次入队的拦截分别留痕」）。
+
+    2026-09-04 在 main 上实测：approve() 被总开关拦下时镜像行数原地不动（1 → 1），
+    因为它在 `if not decision.allowed: return decision` 就走了，`deliver` 从未被调用
+    （TD-9 成因①），而且就算调了也会被旧幂等键吞掉（成因②）。两条成因缺一条修不好。
+
+    ⚠️ 首次拦截的原因 ⛔ 不许硬编码文案：默认 CandidateOutboundMessage 的
+    `requires_confirmation` 为 True（红线要求），实际命中的是
+    `REASON_CONFIRMATION_REQUIRED`「消息自称需要人工确认」，不是 tasks 散文里写的
+    「等待人工确认」。这里一律用第一次调用返回的 decision.reason 与 REASON_* 常量。
+
+    判据是 **JSONL 镜像行数**（Global Constraint 6），⛔ 不是 effect_log 计数。
+    """
+    from app.outbound.gate import REASON_OUTBOUND_DISABLED
+
+    conn, chain_path, recorder, channel = wired
+    first = deliver_candidate_message(
+        conn, thread_id="job-7", message=_msg(), channel=channel,
+        recorder=recorder, outbound_enabled=lambda: True,
+    )
+    approval_id = queue.list_pending(conn)[0]["id"]
+    assert len(_mirror(chain_path)) == 1  # 首次拦截那一条，先钉住基线
+
+    decision = queue.approve(
+        conn,
+        approval_id,
+        confirmed_by="张三",
+        outbound_enabled=lambda: False,
+        deliver=lambda m: pytest.fail("总开关关闭时 ⛔ 不得投递"),
+        recorder=recorder,
+    )
+    conn.commit()
+
+    assert decision.allowed is False
+    assert decision.reason == REASON_OUTBOUND_DISABLED
+    assert channel.delivered == []
+
+    lines = _mirror(chain_path)
+    assert len(lines) == 2, f"放行被拦下必须新增一条痕，实得 {len(lines)} 行：{lines}"
+    assert [l["event_type"] for l in lines] == [OUTBOUND_BLOCKED, OUTBOUND_BLOCKED]
+    assert lines[1]["blocked_reason"] == REASON_OUTBOUND_DISABLED
+    assert lines[0]["blocked_reason"] == first.reason
+    assert first.reason != REASON_OUTBOUND_DISABLED
+    # spec 逐字：两条记录各自可按 id 分别被检索到
+    assert lines[0]["id"] != lines[1]["id"]
+    # ⛔ 除留痕外一个状态都不许动（design D5）
+    assert queue.get(conn, approval_id)["status"] == "pending"
+    assert len(queue.list_pending(conn)) == 1
+
+
+def test_replaying_the_same_blocked_approval_leaves_no_second_trail(wired):
+    """
+    tasks 1.8 / spec Scenario 末句：同一次"放行被总开关拦下"的尝试被重放
+    （LangGraph 恢复时节点从头整个重跑，铁律 1），只产生一条留痕、不产生第二条。
+
+    ⚠️ 这条与 test_approving_into_a_closed_switch_leaves_its_own_trail 是一对：
+    那条证明"不同原因 → 两条痕"，这条证明"同一原因重放 → 仍是一条"。少了这条，
+    Task 1 把 reason 并进幂等键的改动就可能滑向"每次调用都写一行"的另一个极端。
+
+    🔴 判据是 **JSONL 镜像行数**（Global Constraint 6）。⛔ 不许改成断言 effect_log
+    计数——重放时 idempotent_effect 返回 None、函数体根本没跑，effect_log 恒为一条，
+    对"镜像被写重了没有"零分辨力（U5 终审踩过的假绿）。
+
+    ⚠️ 断言的量与构造的量刻意来自不同的源：构造侧重放 REPLAYS 次，断言侧是常量 2
+    （首次拦截 1 条 + 放行被拦 1 条），2 来自领域规则不是从 REPLAYS 推的。
+    ⛔ 不许写成任何由 REPLAYS 导出的值。
+    """
+    from collections import Counter
+
+    from app.outbound.gate import REASON_OUTBOUND_DISABLED
+
+    conn, chain_path, recorder, channel = wired
+    deliver_candidate_message(
+        conn, thread_id="job-7", message=_msg(), channel=channel,
+        recorder=recorder, outbound_enabled=lambda: True,
+    )
+    approval_id = queue.list_pending(conn)[0]["id"]
+
+    REPLAYS = 3
+    assert REPLAYS > 1, "重放次数必须 > 1，否则这条测试什么也没测"
+    for _ in range(REPLAYS):
+        decision = queue.approve(
+            conn,
+            approval_id,
+            confirmed_by="张三",
+            outbound_enabled=lambda: False,
+            deliver=lambda m: pytest.fail("总开关关闭时 ⛔ 不得投递"),
+            recorder=recorder,
+        )
+        assert decision.reason == REASON_OUTBOUND_DISABLED
+    conn.commit()
+
+    lines = _mirror(chain_path)
+    assert len(lines) == 2, f"预期镜像恰好 2 行（首次拦截 + 放行被拦），实得 {len(lines)} 行"
+    by_id = Counter(line["id"] for line in lines)
+    assert set(by_id.values()) == {1}, (
+        f"同一个 event.id 被写了多次，外发留痕的唯一真源被腐蚀：{list(by_id.items())}"
+    )
+    switch_lines = [l for l in lines if l["blocked_reason"] == REASON_OUTBOUND_DISABLED]
+    assert len(switch_lines) == 1
+    # 队列状态在整个重放过程中一动不动
+    assert queue.get(conn, approval_id)["status"] == "pending"
 
 
 def test_internal_notifications_still_deliver_unconditionally(tmp_path):

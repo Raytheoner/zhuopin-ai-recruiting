@@ -7,6 +7,7 @@
 
 ⛔ **本模块不自行 `commit`**：写入会被包进 `effect_enqueue_pending_approval`，
 必须与装饰器追加的 `effect_log` 行落在同一个事务里（工程铁律 1）。
+（例外：`approve()` 的被拦分支经 `record_outbound_decision()` 间接触发装饰器 commit，见该函数 docstring）
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from app.outbound.gate import compute_outbound_gate
 from app.outbound.messages import CandidateOutboundMessage
 
 if TYPE_CHECKING:
+    from app.audit.recorder import AuditRecorder
     from app.outbound.gate import GateDecision
 
 # 队列状态。⛔ 应用层**不**再写一份取值校验：U1 已把它做成数据库 CHECK
@@ -168,6 +170,7 @@ def approve(
     confirmed_by: str,
     outbound_enabled: Callable[[], bool],
     deliver: Callable[[CandidateOutboundMessage], None],
+    recorder: "AuditRecorder",
 ) -> "GateDecision":
     """
     人工放行：把草稿取回来、带上确认人标识**重新走门禁**，两道闸都过才投递。
@@ -179,7 +182,12 @@ def approve(
 
     被拦时状态保持 `pending`：总开关开启后可以再次放行（spec 逐字）。
 
-    ⛔ 不自行 `commit`：调用方（`effect_*` 或测试）负责事务边界。
+    ⛔ 本函数自身不 `commit`。⚠️ 但被拦分支调用的 `record_outbound_decision()`
+    内部会走 `effect_record_outbound_audit`，而 `idempotent_effect` 装饰器在函数体
+    成功后 `conn.commit()`（`app/storage/idempotency.py:75`）——这与
+    `deliver_candidate_message` 的既有行为同构，不是新增的事务管理者。
+    这条路径上此前只做过读（`get()` / `compute_outbound_gate()`），`mark_resolved`
+    的 CAS 在早返回之后根本没执行，没有半截事务会被这次 commit 意外提交。
 
     ⚠️ **先 `mark_resolved`（CAS），确认拿到行的所有权后才 `deliver`**（review
     发现 1）：`mark_resolved` 的 `UPDATE ... WHERE status = 'pending'` 本身就是
@@ -203,6 +211,24 @@ def approve(
     signed = to_message(row).with_confirmation(confirmed_by)
     decision = compute_outbound_gate(signed, outbound_enabled)
     if not decision.allowed:
+        # TD-9：这里以前是光秃秃的 `return decision`，于是「人工点了放行、却被
+        # 总开关拦下」这一次尝试**一条痕都不产生**——审计分辨不出"从未尝试放行"
+        # 与"尝试过但被拦下"，而 6.5 的拦截统计会让"一直发不出去的那批信"
+        # 系统性缺席。
+        #
+        # ⚠️ **函数体内延迟 import，⛔ 不许提到模块顶部**（design.md 决策 2）：
+        # `app/graph/nodes.py` 顶部已有 `from app.outbound import queue`，方向不能
+        # 反过来；模块顶部再 import delivery 会构成 queue → delivery → nodes → queue
+        # 的模块级循环导入。函数体内的 import 在两个模块都完成初始化之后才执行。
+        from app.outbound.delivery import record_outbound_decision
+
+        record_outbound_decision(
+            conn,
+            thread_id=row["thread_id"],
+            message=signed,
+            decision=decision,
+            recorder=recorder,
+        )
         return decision
 
     claimed = mark_resolved(conn, approval_id_, status=STATUS_APPROVED, confirmed_by=confirmed_by)

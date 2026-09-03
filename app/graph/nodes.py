@@ -317,9 +317,18 @@ def effect_record_outbound_audit(
     """
     effect_* 节点：外发/拦截动作的留痕，独占、幂等。
 
-    `business_key` = `{content_hash}:{allowed}`（tasks 5.4）——同一草稿的"拦截"
-    与"放行"各留一条痕。⛔ 只用 content_hash 的话，放行那条会命中拦截那条的
-    `effect_log` 被短路，于是**投递发生了却没有留痕**。
+    `business_key` = `{content_hash}:{allowed}:{reason}`（tasks 5.4，经变更包
+    `outbound-retry-audit-trace` 订正；原为 `{content_hash}:{allowed}`）——同一草稿
+    的"拦截"与"放行"各留一条痕，**不同原因的两次拦截也各留一条**。
+    ⛔ 只用 content_hash 的话，放行那条会命中拦截那条的 `effect_log` 被短路，
+    于是**投递发生了却没有留痕**；只到 `{allowed}` 的话，"首次被拦"与"放行时被
+    总开关拦下"两次的键逐字相同（content_hash 不含 confirmed_by），第二次尝试
+    **一条痕都不产生**——这正是 TD-9。
+
+    ⚠️ 现在有**两个调用点**共用同一条公式：`app/outbound/delivery.py` 的
+    `deliver_candidate_message()` 与 `app/outbound/queue.py` 的 `approve()`，
+    两者都经由 `app.outbound.delivery.audit_business_key()` 求值，
+    ⛔ 不许任何调用点自己再拼一遍这个字符串。
 
     返回值是 `recorder.record()` 的返回值，对外发事件**恒为 `False`**：外发事件
     在 `analysis_run` 里没有真身（它的真身是 `pending_approval`），

@@ -37,6 +37,29 @@ from app.outbound.messages import CandidateOutboundMessage
 logger = logging.getLogger(__name__)
 
 
+def audit_business_key(content_hash: str, decision: GateDecision) -> str:
+    """
+    外发留痕幂等键与 `DecisionEvent.id` 的**唯一**求值处（design.md 决策 1）。
+
+    公式 `{content_hash}:{allowed}:{reason}`。⛔ 不许在别处再拼一遍这个字符串——
+    两个调用点（`deliver_candidate_message` 与 `queue.approve`）各写一份，迟早会
+    被改错其中一半而没人发现，而失败是**静默的**：键分叉之后，同一次尝试会按两种
+    粒度判重，第二次拦截要么被吞、要么被写重。
+
+    ⚠️ `reason` 归一化为空串：`decision.reason` 在 `allowed=True` 时恒为 `None`
+    （`app/outbound/gate.py` 放行分支的构造），放行事件的 key 形如
+    `{content_hash}:True:`（末尾空段）。⛔ 不为放行分支单独省略 `:{reason}` 段——
+    两条分支必须共用同一个求值表达式。
+
+    ⚠️ 为什么 `reason` 必须进键（TD-9 成因②）：旧公式 `{content_hash}:{allowed}`
+    只区分"拦截 vs 放行"、不区分**是哪一条拦截**。`content_hash()` 刻意不含
+    `confirmed_by`，于是"首次未签名被拦"与"放行后被总开关拦下"两次的 content_hash
+    与 allowed 全都相同 → 键逐字相同 → 第二次撞 effect_log 被 `idempotent_effect`
+    短路 → 镜像 append 被跳过 → **一条痕都不产生**。
+    """
+    return f"{content_hash}:{decision.allowed}:{decision.reason or ''}"
+
+
 def _audit_event(
     thread_id: str,
     message: CandidateOutboundMessage,
@@ -52,7 +75,8 @@ def _audit_event(
     调用点必须自己保持一致"的隐性耦合（review round 2 minor 2）。
     """
     return DecisionEvent(
-        id=f"{thread_id}:effect_record_outbound_audit:{content_hash}:{decision.allowed}",
+        id=f"{thread_id}:effect_record_outbound_audit:"
+        f"{audit_business_key(content_hash, decision)}",
         event_type=OUTBOUND_DELIVERED if decision.allowed else OUTBOUND_BLOCKED,
         thread_id=thread_id,
         message_type=message.message_type,
@@ -102,11 +126,46 @@ def deliver_candidate_message(
             blocked_reason=decision.reason or "",
         )
 
+    record_outbound_decision(
+        conn,
+        thread_id=thread_id,
+        message=message,
+        decision=decision,
+        recorder=recorder,
+    )
+    return decision
+
+
+def record_outbound_decision(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    message: CandidateOutboundMessage,
+    decision: GateDecision,
+    recorder: AuditRecorder,
+) -> None:
+    """
+    外发/拦截判定的留痕，**两个调用点共用的唯一一份实现**（design.md 决策 2）：
+    `deliver_candidate_message()` 与 `app/outbound/queue.py:approve()` 的被拦分支。
+
+    ⛔ 不要在别处重新手写一份——下面 `result is None` / `is False` 的区分是 2026-08-28
+    两轮 review 才收敛出的非显然结论，处理反了会让镜像被写重、腐蚀 hash-chain 的
+    唯一真源，而 `reconcile()` 的 id 集合差集**看不出**这种重复。
+
+    ⚠️ 本函数**不是** `effect_*` 节点、⛔ 不加 `@idempotent_effect`：`recorder.mirror()`
+    必须在装饰器 `commit` **之后**触发（`delivery-units.md` §3.4 第 2/4 条），
+    这也是 AST 守护 `test_no_effect_function_appends_jsonl` 的合规边界所在。
+
+    ⚠️ `content_hash` 在这里算一次、同时喂给 `_audit_event()` 与 `audit_business_key()`。
+    `_audit_event()` docstring 里"不在这里重新算一遍"防的是"两个调用点各算一遍"的
+    隐性耦合，⛔ 不是禁止一处算两处用。
+    """
+    content_hash = message.content_hash()
     event = _audit_event(thread_id, message, decision, content_hash)
     result = effect_record_outbound_audit(
         conn,
         thread_id=thread_id,
-        business_key=f"{content_hash}:{decision.allowed}",
+        business_key=audit_business_key(content_hash, decision),
         recorder=recorder,
         event=event,
     )
@@ -143,11 +202,11 @@ def deliver_candidate_message(
     if result is None:
         logger.warning(
             "外发留痕已存在（重放），跳过镜像 append（id=%s）。同一 id 被写第二次"
-            "通常意味着 deliver_candidate_message 用同一个 (thread_id, "
-            "business_key) 被重复调用，而确定性 id 分辨不出来。",
+            "通常意味着同一个 (thread_id, business_key) 被重复处理，"
+            "而确定性 id 分辨不出来。",
             event.id,
         )
-        return decision
+        return
 
     try:
         recorder.mirror(event)
@@ -158,5 +217,3 @@ def deliver_candidate_message(
             event.id,
             exc_info=True,
         )
-
-    return decision
