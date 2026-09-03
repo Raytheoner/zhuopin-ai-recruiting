@@ -21,12 +21,12 @@ HR业务线-接力0903B
 
 ---
 
-## 一、状态快照（2026-09-03 09:50）
+## 一、状态快照（2026-09-03 11:20）
 
 | 项 | 现状 |
 |---|---|
-| main | `aa57782`，**ahead origin 4**（`git push` 反复被 auto mode classifier 拦，见【三】#1） |
-| 工作区 | 干净（`0903D` 已把 Cowork 产出一并提交）。本行之后的改动由 `0903E` 提交 |
+| main | `2b0536d`，🔴 **ahead origin 17**（U5 合并后一口气堆到 17，全部没推；`git push` 反复被 auto mode classifier 拦，见【三】#1） |
+| 工作区 | 干净（`0903E` 后只有本文 Cowork 侧的状态更新未提交，下一个 CC opener 顺带提交） |
 | `.51` 代码 | ✅ **已发版 `d104249`**（`0903D` 2026-09-03 完成，`sync-to-server.sh`，冒烟 4 项与 §5-3 四步 + §2.2 链校验全过，见 `docs/audit-and-outbound-ops.md` §五第 2/3 项） |
 | pytest | main 侧 **675 passed / 0 failed**（08-30 实测）。⛔ 别把这个数抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
@@ -72,7 +72,7 @@ opener 全文在该会话里；若 CC 侧还没跑，去 0903B 会话复制整�
 - 影响面：3 位 pilot 业务经理会看到 `m1-intake-quality-fixes` 60/69 的新行为（这是设计目的，
   第 8 章"真实会话回放与上线"本来就要它上 `.51`）
 
-### ~~③ `0903D` 报「§5-3 已闭合」后，再发 `[Mac]0903E` U5 收口~~ ✅ 已跑完（合并 commit `06a55d2c`）
+### ~~③ `0903D` 报「§5-3 已闭合」后，再发 `[Mac]0903E` U5 收口~~ ✅ 已跑完（合并 commit `06a55d2c`，pytest 675→720）
 
 结果：`finishing-a-development-branch` 把 `worktree-audit-u5-queue-and-wiring` 合回 `main`
 （`--no-ff`，merge commit `06a55d2c`）。`git rev-list --count main..<分支>` = 0，确认真合
@@ -80,13 +80,21 @@ opener 全文在该会话里；若 CC 侧还没跑，去 0903B 会话复制整�
 第 5 章 9/9 已回勾，**未归档**（第 6 章 0/7、第 7 章 4/6 未完，见 `tasks.md` 顶部进度行）。
 分支已 `git branch -d` 删除（worktree 本就已不在）。
 
+### ④ Shao Peishen 09-03 11:30 回「全做，开泳道」→ **第七批已编排，等 `[Mac]0903Z` 发车**
+
+编排在 `docs/openers/OP-0820-全量编排.md`「第七批（2026-09-03）」：**2 条泳道、4 条 opener**
+（审计：`0903F` U6 plan → `0903G` U6 run-build；回放：`0903H` 第 8 章数据与回放 → `0903I` 文档回填），
+看护者 `0903Z` 先推 main（他已同意推送）再发车，跑完再推一次。dry-run 预期行数：F 39 / G 56 / H 64 / I 23。
+明令不进泳道：TD-9（等拍板）、8.4（要人上页面）、8.9、§5-1 备份任务、`settings.json` 加 push 白名单。
+跑完看 `.claude/handoff/lanes-<时间戳>-看护报告.md`，按报告的「下一步建议」续。
+
 ---
 
 ## 三、待决策 / 悬置
 
 | # | 事项 | 状态 |
 |---|---|---|
-| 1 | 🔴 **`git push` 被 auto mode classifier 拦** | 反复出现（08-28、08-30 两次记录在案）。main 现 ahead 1。两条路：**(a)** 每次在能批准的 session 里点放行；**(b)** 给 `.claude/settings.json` 加 `"permissions": {"allow": ["Bash(git push:*)"]}`——项目级、可提交、对所有 session 生效。**(b) 是改权限，等 Shao Peishen 拍板** |
+| 1 | 🔴 **`git push` 被 auto mode classifier 拦** | 反复出现（08-28、08-30 两次记录在案）。**main 现 ahead 17**，本地单点风险已不可忽视。两条路：**(a)** 每次在能批准的 session 里点放行；**(b)** 给 `.claude/settings.json` 加 `"permissions": {"allow": ["Bash(git push:*)"]}`——项目级、可提交、对所有 session 生效。**(b) 是改权限，等 Shao Peishen 拍板** |
 | 2 | 🔴 **worktree 被未落档地清理，已发生两次** | 08-30 11:38 扫掉 u2/unitE/unitF/u1 四条（判据＝真未合 0，代码零损失）；**09-03 前 u5 也被移除**——而 08-30 那份报告刚评估过「u5 真未合 11，同样的清理不会碰它」。⇒ **判据变了或用了 `--force`，机制不明**。代码没丢（分支 `worktree-audit-u5-queue-and-wiring` 与 `19ab503`/`f899c98` 都在），丢的是 worktree 内 git-ignored 的 `.superpowers/sdd/` 台账。**要不要查清是谁在清、加个护栏？** |
 | 3 | **TD-9**：同一草稿第二次拦截零留痕 | 违反 spec「每一次外发尝试都留痕」。要动 5.4 幂等键公式 + 已过审的 `approve()` 签名，属**契约层变更需过审**。闸门完好不会误发，丢的只是可观测性，现网风险 0（TD-8 记明生产无调用方）。**修 or 等 U6 一并处理？** |
 | 4 | `.51` 留步清单**只剩一项** | §5-1 备份任务确认/新增（`0903D` 只做了一次性快照 `C:\apps\backups\20260903-1003`，不等于常态化备份任务）。§5-2 链校验与 §5-3 四步已于 09-03 闭合。见 `docs/audit-and-outbound-ops.md` 第五节 |
