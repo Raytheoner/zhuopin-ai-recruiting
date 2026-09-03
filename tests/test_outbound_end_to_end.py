@@ -176,10 +176,15 @@ def test_replaying_the_whole_flow_repeats_no_side_effect(wired):
     assert counts["effect_deliver_message"] == 1
     assert counts["effect_record_outbound_audit"] == 1
 
-    # 第四样：镜像行数。id 由生产代码的构成规则重算（delivery.py:_audit_event），
+    # 第四样：镜像行数。id 由生产代码的构成规则重算（delivery.py:audit_business_key），
     # 与被断言的对象同源，⛔ 但与 REPLAYS 无关。
+    from app.outbound.delivery import audit_business_key
+    from app.outbound.gate import compute_outbound_gate
+
+    allowed = compute_outbound_gate(signed, lambda: True)
     expected_id = (
-        f"job-7:effect_record_outbound_audit:{signed.content_hash()}:True"
+        f"job-7:effect_record_outbound_audit:"
+        f"{audit_business_key(signed.content_hash(), allowed)}"
     )
     lines = _mirror(chain_path)
     by_id = Counter(line["id"] for line in lines)

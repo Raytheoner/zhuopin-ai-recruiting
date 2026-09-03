@@ -37,6 +37,29 @@ from app.outbound.messages import CandidateOutboundMessage
 logger = logging.getLogger(__name__)
 
 
+def audit_business_key(content_hash: str, decision: GateDecision) -> str:
+    """
+    外发留痕幂等键与 `DecisionEvent.id` 的**唯一**求值处（design.md 决策 1）。
+
+    公式 `{content_hash}:{allowed}:{reason}`。⛔ 不许在别处再拼一遍这个字符串——
+    两个调用点（`deliver_candidate_message` 与 `queue.approve`）各写一份，迟早会
+    被改错其中一半而没人发现，而失败是**静默的**：键分叉之后，同一次尝试会按两种
+    粒度判重，第二次拦截要么被吞、要么被写重。
+
+    ⚠️ `reason` 归一化为空串：`decision.reason` 在 `allowed=True` 时恒为 `None`
+    （`app/outbound/gate.py` 放行分支的构造），放行事件的 key 形如
+    `{content_hash}:True:`（末尾空段）。⛔ 不为放行分支单独省略 `:{reason}` 段——
+    两条分支必须共用同一个求值表达式。
+
+    ⚠️ 为什么 `reason` 必须进键（TD-9 成因②）：旧公式 `{content_hash}:{allowed}`
+    只区分"拦截 vs 放行"、不区分**是哪一条拦截**。`content_hash()` 刻意不含
+    `confirmed_by`，于是"首次未签名被拦"与"放行后被总开关拦下"两次的 content_hash
+    与 allowed 全都相同 → 键逐字相同 → 第二次撞 effect_log 被 `idempotent_effect`
+    短路 → 镜像 append 被跳过 → **一条痕都不产生**。
+    """
+    return f"{content_hash}:{decision.allowed}:{decision.reason or ''}"
+
+
 def _audit_event(
     thread_id: str,
     message: CandidateOutboundMessage,
@@ -52,7 +75,8 @@ def _audit_event(
     调用点必须自己保持一致"的隐性耦合（review round 2 minor 2）。
     """
     return DecisionEvent(
-        id=f"{thread_id}:effect_record_outbound_audit:{content_hash}:{decision.allowed}",
+        id=f"{thread_id}:effect_record_outbound_audit:"
+        f"{audit_business_key(content_hash, decision)}",
         event_type=OUTBOUND_DELIVERED if decision.allowed else OUTBOUND_BLOCKED,
         thread_id=thread_id,
         message_type=message.message_type,
@@ -106,7 +130,7 @@ def deliver_candidate_message(
     result = effect_record_outbound_audit(
         conn,
         thread_id=thread_id,
-        business_key=f"{content_hash}:{decision.allowed}",
+        business_key=audit_business_key(content_hash, decision),
         recorder=recorder,
         event=event,
     )
