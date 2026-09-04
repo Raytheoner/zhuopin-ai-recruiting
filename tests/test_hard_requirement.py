@@ -105,6 +105,26 @@ def test_education_without_a_recognizable_level_yields_no_rule():
         ) == []
 
 
+def test_education_negated_or_bounded_phrasing_is_not_a_hard_gate():
+    """"学历不限，X优先" 一类否定/上限表述⛔ 不得凭空造出 blocking=True 门槛。
+
+    覆盖 final review 复现的四种表述：裸别名匹配对"不限""以下""优先""亦可"
+    没有任何否定或上限守卫，命中即造出一条硬门槛——这比经验年限漏判更坏，
+    经验年限漏判是丢了一条规则（安全方向），这里是**造出**一条规则，而且
+    这条规则将来会原样念给被拒的候选人听。
+    """
+    for text in (
+        "学历不限，本科优先",
+        "本科以下",
+        "大专以下学历亦可",
+        "不限，硕士优先",
+    ):
+        assert _by_field(
+            extract_hard_requirements(_profile(education_requirement=text)),
+            "education_requirement",
+        ) == []
+
+
 def test_experience_lower_bound():
     rules = _by_field(extract_hard_requirements(_profile()), "experience_years")
     assert len(rules) == 1

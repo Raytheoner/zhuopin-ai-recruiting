@@ -182,10 +182,14 @@ def test_confirming_a_profile_writes_the_rule_draft(conn):
         "SELECT field, operator, value, blocking FROM hard_requirement "
         "WHERE job_id = 'job-1' AND profile_version = 3"
     ).fetchall()
-    values = {(r[0], r[2]) for r in rows}
-    assert ("education_requirement", "本科") in values
-    assert ("experience_years", "3") in values
-    assert ("core_skills", "C 语言") in values
+    tuples = {tuple(r) for r in rows}
+    # blocking 是 app/graph/nodes.py 里 `1 if rule.blocking else 0` 的唯一
+    # bool→int 落点——两个方向都要钉住，否则一次回归就能把所有非阻断的
+    # 工具链/MCU/诊断栈偏好项悄悄写成 1，人工复核时全部读成硬门槛。
+    assert ("education_requirement", "education_gte", "本科", 1) in tuples
+    assert ("experience_years", "gte", "3", 1) in tuples
+    assert ("core_skills", "contains", "C 语言", 1) in tuples
+    assert ("mcu_family", "contains", "英飞凌 Aurix", 0) in tuples
     # 合规红线：主观描述⛔ 不得落进这张表。
     assert not any("沟通" in r[2] for r in rows)
 
