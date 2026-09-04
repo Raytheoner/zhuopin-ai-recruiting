@@ -13,8 +13,15 @@ from pydantic import BaseModel, ValidationError
 
 from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
+from app.agents.jd_grounding import verify_jd_grounding
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
+from app.graph.jd_nodes import (
+    JDNotGeneratedError,
+    effect_mark_jd_human_written,
+    effect_update_jd_text,
+    jd_edit_business_key,
+)
 from app.graph.nodes import (
     MAX_REVISIONS,
     effect_abandon_profile,
@@ -59,6 +66,12 @@ class AbandonRequest(BaseModel):
     # ⛔ 可选，不强制填：强制填理由的表单只会得到"1"和"。"。留痕的必填项是
     # 决策人 / 决策类型 / 时间 / 画像版本，理由是加分项。
     reason: str | None = None
+
+
+class JDEditRequest(BaseModel):
+    # HR 编辑后的**完整**文案正文。服务端会剥掉其中任何 AI 标识行再重贴一行
+    # 唯一的标识——⛔ 前端不要自己拼标识，也不要指望这里原样保存。
+    text: str
 
 
 def _render_index(root_path: str) -> str:
@@ -202,6 +215,51 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         """
         if _job_status(job_id) == "abandoned":
             raise HTTPException(status_code=409, detail=_ABANDONED_DETAIL)
+
+    def _latest_version_or_404(job_id: str) -> int:
+        row = conn.execute(
+            "SELECT MAX(version) FROM job_profile WHERE job_id=?", (job_id,)
+        ).fetchone()
+        if row is None or row[0] is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        return int(row[0])
+
+    def _jd_payload(job_id: str, version: int) -> dict:
+        """JD 的统一回执。confirm / GET / 编辑 / 标记四个出口共用同一个形状。
+
+        **溯源清单在这里现算，⛔ 不落库。** verify_jd_grounding 是确定性纯函数，
+        两个入参（文案与画像字段）都在同一行 profile_json 里，重算与读缓存必然
+        同值；而落库要改 app/graph/nodes.py 的既有节点 effect_generate_and_persist_jd，
+        那超出本交付单元的边界。附带的好处是 JD 被编辑之后清单自动跟着变——
+        缓存反而会在这里过期。
+
+        ⛔ 清单只是观测（design.md 决策 12），本函数与它的调用方都不得据此拦截、
+        重生成或降级。
+        """
+        row = conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id = ? AND version = ?",
+            (job_id, version),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        persisted = json.loads(row[0])
+
+        jd_text = persisted.get("_jd_text")
+        if jd_text is None:
+            raise HTTPException(
+                status_code=409, detail="这个岗位还没有生成 JD，请先确认画像"
+            )
+
+        authorship = persisted.get("_jd_authorship")
+        return {
+            "job_id": job_id,
+            "version": version,
+            "jd_text": jd_text,
+            "needs_manual": persisted.get("_jd_needs_manual", False),
+            "human_written": bool(authorship),
+            "authorship": authorship,
+            "ungrounded_terms": verify_jd_grounding(jd_text, persisted),
+        }
 
     @router.post("/api/jobs")
     def create_job(req: CreateJobRequest):
@@ -350,18 +408,9 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         # 不能直接用 effect_generate_and_persist_jd() 的返回值：重放命中
         # effect_log 时 idempotent_effect 会短路返回 None（没有真的执行函数体）。
         # 无论是本次真跑了还是被短路了，profile_json 里此刻都已经是最终状态，
-        # 统一从这里读回去构造响应，两条路径读到的是同一份持久化结果。
-        persisted_row = conn.execute(
-            "SELECT profile_json FROM job_profile WHERE job_id = ? AND version = ?",
-            (job_id, version),
-        ).fetchone()
-        persisted = json.loads(persisted_row[0])
-
-        return {
-            "job_id": job_id,
-            "jd_text": persisted["_jd_text"],
-            "needs_manual": persisted.get("_jd_needs_manual", False),
-        }
+        # 统一从 _jd_payload() 读回去构造响应，两条路径读到的是同一份持久化结果。
+        # 回执形状与 GET/编辑/标记三个端点完全一致，前端只写一套渲染逻辑。
+        return _jd_payload(job_id, version)
 
     @router.post("/api/jobs/{job_id}/revise")
     def revise(job_id: str, request: Request, req: ReviseRequest):
@@ -448,6 +497,67 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             feedback=reason or None,
         )
         return {"job_id": job_id, "status": "abandoned"}
+
+    @router.get("/api/jobs/{job_id}/jd")
+    def get_jd(job_id: str):
+        return _jd_payload(job_id, _latest_version_or_404(job_id))
+
+    @router.post("/api/jobs/{job_id}/jd")
+    def edit_jd(job_id: str, req: JDEditRequest):
+        """常规编辑（tasks 7.5）。
+
+        ⛔ 这条路径**去不掉** AI 标识：effect_update_jd_text 无条件重贴。
+        要去标识只有 POST /jd/human-written 一条路，且必须留痕。
+        """
+        _reject_if_abandoned(job_id)
+        version = _latest_version_or_404(job_id)
+
+        text = req.text.strip()
+        if not text:
+            # 空正文不是一次编辑，是一次误操作（多半是前端把 textarea 清空了）。
+            # 放过去会得到一份只剩 AI 标识、没有正文的 JD，而 HR 看到的是"保存成功"。
+            raise HTTPException(status_code=422, detail="文案正文不能为空")
+
+        try:
+            effect_update_jd_text(
+                conn,
+                thread_id=job_id,
+                business_key=jd_edit_business_key(version, text),
+                version=version,
+                edited_text=text,
+            )
+        except JDNotGeneratedError as exc:
+            raise HTTPException(
+                status_code=409, detail="这个岗位还没有生成 JD，请先确认画像"
+            ) from exc
+        return _jd_payload(job_id, version)
+
+    @router.post("/api/jobs/{job_id}/jd/human-written")
+    def mark_jd_human_written(job_id: str, request: Request):
+        """「标记为人工撰写」（tasks 7.5）——**唯一**能去掉 AI 标识的路径，且留痕。
+
+        ⛔ 这里刻意**没有**终态守卫：重复 POST 应当幂等地返回 200（双击、
+        客户端超时重发都会打到这里），由 effect_mark_jd_human_written 的幂等键
+        短路，留痕里保留第一个按下按钮的人。理由同 abandon()。
+        """
+        _reject_if_abandoned(job_id)
+        version = _latest_version_or_404(job_id)
+        try:
+            effect_mark_jd_human_written(
+                conn,
+                thread_id=job_id,
+                business_key=str(version),
+                version=version,
+                # 决策人由鉴权层给（部署约束 3 的空壳接入点）。SSO 落地后这里
+                # 一行不改，reviewer_of 自动返回真实的企微 userid。
+                reviewer=reviewer_of(request),
+                marked_at=sqlite_utc_now(),
+            )
+        except JDNotGeneratedError as exc:
+            raise HTTPException(
+                status_code=409, detail="这个岗位还没有生成 JD，请先确认画像"
+            ) from exc
+        return _jd_payload(job_id, version)
 
     @router.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
