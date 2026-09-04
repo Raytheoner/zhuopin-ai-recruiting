@@ -364,3 +364,31 @@ def test_is_subjective_covers_the_documented_examples():
     assert not is_subjective("C 语言")
     assert not is_subjective("UDS（ISO 14229）")
     assert not is_subjective("AUTOSAR MCAL 配置")
+
+
+# ── fix round 1：word-list 过滤覆盖面缺口（functional_safety / autosar_experience）──
+#
+# reviewer 发现：_extract_autosar 与 _extract_functional_safety 同样从不可控的
+# 画像自由文本构造 value/human_readable，却没有接 is_subjective 过滤，而且两者
+# 都恒为 blocking=True——比 core_skills/mcu_family 等字段风险更高。且这两个
+# 字段一旦漏判，只能靠 assert_no_subjective_requirements 在确认时整体报错，
+# 与 extract_hard_requirements 自己声明的"形状不对的部分静默跳过，保守方向是
+# 少一条规则而不是整个确认失败"相矛盾。
+
+
+def test_subjective_functional_safety_yields_no_rule():
+    rules = _by_field(
+        extract_hard_requirements(_profile(functional_safety="需要良好的沟通能力")),
+        "functional_safety",
+    )
+    assert rules == []
+
+
+def test_subjective_autosar_entry_is_filtered_but_legitimate_entry_survives():
+    rules = _by_field(
+        extract_hard_requirements(
+            _profile(autosar_experience=["CP", "需要良好的沟通能力"])
+        ),
+        "autosar_experience",
+    )
+    assert [r.value for r in rules] == ["CP"]

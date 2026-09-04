@@ -159,6 +159,7 @@ def assert_no_subjective_requirements(rules: list[HardRequirement]) -> None:
                     "（合规红线：主观描述不得进入硬门槛规则，只能作为软技能关键词）"
                 )
 
+
 _LIST_FIELD_SENTENCE: dict[str, str] = {
     "mcu_family": "MCU 平台经验：{value}（加分项，不阻断）",
     "diag_stack": "诊断/总线协议栈经验：{value}（加分项，不阻断）",
@@ -344,6 +345,9 @@ def _extract_functional_safety(value) -> list[HardRequirement]:
     text = _text(value)
     if _is_no_requirement(text):
         return []
+    # 合规红线，同 _extract_core_skills 的过滤理由：静默跳过而不抛。
+    if is_subjective(text):
+        return []
     return [
         HardRequirement(
             field="functional_safety",
@@ -359,6 +363,9 @@ def _extract_autosar(value) -> list[HardRequirement]:
     rules: list[HardRequirement] = []
     for layer in _iter_strings(value):
         if _is_no_requirement(layer):
+            continue
+        # 合规红线，同 _extract_core_skills 的过滤理由：静默跳过而不抛。
+        if is_subjective(layer):
             continue
         rules.append(
             HardRequirement(
