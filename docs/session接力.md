@@ -21,16 +21,16 @@ HR业务线-接力0903B
 
 ---
 
-## 一、状态快照（2026-09-04 上午，`0904A` 双归档后）
+## 一、状态快照（2026-09-04 13:40，第九批 + 0904F 跑完后）
 
 | 项 | 现状 |
 |---|---|
-| main | `7faf682`，**与 origin 同步（ahead 0）**。白名单三条已生效（push + run-lanes 两种前缀）。⚠️ 工作区多出 `.claude/settings.local.json`（CC 本机「总是允许」记录，未跟踪）——下一个 opener 把它加进 `.gitignore`，⛔ 不提交 |
-| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`（第九批 + 号池）、`docs/openers/0904Z-泳道批次看护.md`。`0904Z`【二】提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
+| main | `27f19df`，**与 origin 同步（ahead 0）**。`settings.local.json` 已进 `.gitignore` |
+| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`（第十批 + 号池）、`docs/openers/0904Y-泳道批次看护.md`。`0904Y`【二】提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
 | `.51` 代码 | ✅ **已发版 `3f59842`（含 TD-9 修复）**（`0904Z` 2026-09-04 三次发版，Shao Peishen 本人点 Run 按钮执行 `sync-to-server.sh`（AI 直接调用被 Auto Mode 分类器拦截），冒烟 4 项全过：首页 200／相对资源无 404／`app.log` 无异常／`record_outbound_decision` 符号数 2，见 `docs/audit-and-outbound-ops.md` §五「2026-09-04 三次发版记录」） |
-| pytest | main 侧 **842 passed / 1 skipped / 0 failed**（09-04 `0903Y` 独立复核）。⛔ 别抄进 opener 当基线，见【四】 |
+| pytest | main 侧 **1008 passed / 1 skipped / 0 failed**（09-04 `0904Z` 独立复核）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
-| worktree | `wt-U7` 已证伪后删（`0904A`）。只剩 `.claude/worktrees/td9-outbound-retry-audit-trace`（真未合 0，含 TDD 台账，留着无害，不删） |
+| worktree | 三个已合入的遗留（`intake-unit6-approval` / `unit7-jd-grounding-export` / `td9-outbound-retry-audit-trace`，真未合均 0，含 TDD 台账，留着无害，不删） |
 
 **变更包进度**
 
@@ -38,10 +38,10 @@ HR业务线-接力0903B
 |---|---|---|
 | ~~`ai-audit-trail-and-outbound-gate`~~ | **53/53 ✅ 已归档** | `openspec/changes/archive/2026-09-04-ai-audit-trail-and-outbound-gate`；specs 折进 `ai-decision-audit` + `outbound-approval-gate` |
 | `m1-intake-quality-fixes` | **68/69** | 8.4 ✅（Shao Peishen 09-03 页面实跑，job `51b225f1`，0903L 取证）；只剩 **8.9**（归档，须 `m1-job-profile-intake` 先归档） |
-| ~~`outbound-retry-audit-trace`~~ | **15/15 ✅ 已归档** | `archive/2026-09-04-outbound-retry-audit-trace`；delta 已合进 `outbound-approval-gate/spec.md`。⚠️ **TD-9 修复代码尚未上 `.51`**（现网 `b86db65`） |
-| `m1-job-profile-intake` | 33/71（D 类 28 条真没做） | 归档前必须清 D 类。最大一块＝**第 6 章确认断点 8 条，含现网真实缺陷 6.1：确认页从不渲染画像本身，经理是在看不见画像的情况下点的「确认」**。8.9 归档链被它挡着 |
+| ~~`outbound-retry-audit-trace`~~ | **15/15 ✅ 已归档** | `archive/2026-09-04-outbound-retry-audit-trace`；delta 已合进 `outbound-approval-gate/spec.md`；修复已随 `3f59842` 上 `.51` |
+| `m1-job-profile-intake` | **45/72** | 第 6 章确认断点 ✅（`be6322a`，含 6.1 缺陷修复、human_review 表、断言四）；第 7 章 JD 溯源与导出 ✅（`6ae57bf`）；9.6 规格已更新（`27f19df`，0904F）待修。剩 27 条未勾：第十批清 9.6 / 1.2b+5.8+5.9 / 8.1+8.2+8.4 / 账目对齐 4 条；余下要定时基础设施或人工评估或已移出 |
 
-**已跑完的批次**：第四批（0827B/C）、第五批（0828A/C/D/B）、第六批（0830A）、第七批（0903F/G/H/I）、**第八批（0903N/O/P/Q，撞上 Anthropic 529 事故重跑两次后收敛，报告 `lanes-20260904-002413-看护报告.md`）**。
+**已跑完的批次**：第四批（0827B/C）、第五批（0828A/C/D/B）、第六批（0830A）、第七批（0903F/G/H/I）、第八批（0903N/O/P/Q）、**第九批（0904B/C/D/E，报告 `lanes-20260904-093026-看护报告.md`）**。
 看护报告都在 `.claude/handoff/lanes-*-看护报告.md`。
 
 ---
@@ -110,14 +110,21 @@ Shao Peishen 亲自跑 `scripts/allow_run_lanes.py` 加白名单后解除。supe
 
 ### ~~⑧ `0904A`~~ ✅ 跑完（`7faf682`）：两包归档、TD-10 登记、wt-U7 删；三处真源改动一并入库
 
-### ⑨ 第九批已编排（Shao Peishen 09-04 「继续；发」）→ 等 `[Mac]0904Z` 发车
+### ~~⑨ 第九批~~ ✅ 跑完（B/C/D/E 全合入，pytest 842→1008，`.51` 三次发版 `3f59842` 含 TD-9 修复）＋ `0904F` 9.6 规格更新完
 
-单泳道「确认」4 条**串行**（C 与 E 都写 `index.html` / `server.py` / 同一份 `tasks.md`）：
-`0904B` 第 6 章确认断点 plan（6.x D 类 8 条 + 1.4 human_review 表 + 9.3 留痕断言）→ `0904C` build 回勾→42/71 →
-`0904D` 第 7 章 JD 溯源与导出 plan（7.3/7.5/7.7）→ `0904E` build 回勾→45/71。⛔ 都不归档（D 类还剩 15 条）。
-看护者 `0904Z` 的【三】先做 **`.51` 三次发版**（TD-9 修复 `7faf682`，他已回「发」；requirements 无变动只 sync），发完再发车；【二】顺手把 `settings.local.json` 加进 `.gitignore`。
-dry-run 预期 B 28 / C 26 / D 20 / E 23 行。正文 `docs/openers/0904Z-泳道批次看护.md`。
-明令不进泳道：6.8/5.6（无定时基础设施，plan 里留步）；1.2b/5.8 硬门槛表（另一单元）；§5-1 备份任务。
+结果：第 6 章确认断点 9 条 + 1.4 + 9.3 合入（`be6322a`），第 7 章 7.3/7.5/7.7 合入（`6ae57bf`），45/72。
+过程：Auto Mode 分类器**在白名单齐全时仍拦** `nohup run-lanes.sh` 与 `sync-to-server.sh`——推翻 09-03「白名单能解决」的归因；
+唯一验证有效的路径＝把命令贴成 bash 块、Shao Peishen 在 CC Desktop 点 Run（已写进 lane-dispatch skill）。C/E 各撞一次预算上限（$25）跳过全分支终审。
+C 发现断言四豁免线用 `created_at` 有洞 → Shao Peishen 裁决「现在修」→ `0904F` 出了规格（tasks 9.6）。
+
+### ⑩ 第十批已编排 → 等 `[Mac]0904Y` 发车（启动命令由 Shao Peishen 点 Run）
+
+三泳道并行（写代码的文件集合两两不交；唯一共同写者 intake `tasks.md` 各改不同章节、经 worktree merge 合回）：
+断言 `0904G` 账目对齐（1.3/2.6/1.6b/8.3 核证据回勾）→ `0904H` 9.6 plan → `0904I` 9.6 build；
+硬门槛 `0904J` plan → `0904K` build（1.2b 建表 + 5.8 规则草案提取 + 5.9 主观描述拦截）；
+Web `0904L` plan → `0904M` build（8.1 列表 / 8.2 详情与版本历史 / 8.4 needs_manual 队列）。
+dry-run 预期 3 泳道 7 条：G16 / H20 / I21 / J20 / K21 / L19 / M23 行。正文 `docs/openers/0904Y-泳道批次看护.md`。
+跑完后 intake 包若只剩「要定时基础设施 / 人工评估 / 已移出」的条目，下一步是把这些按 08-20 四类法再判一次、再决定归档。
 
 ---
 
