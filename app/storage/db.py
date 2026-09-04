@@ -212,6 +212,49 @@ CREATE TABLE IF NOT EXISTS human_review (
 -- ⛔ 不要再单独建一条 (job_id) 的索引。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_human_review_decision
     ON human_review (job_id, profile_version, decision_type);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 硬门槛规则草案（m1-job-profile-intake tasks 1.2b / 5.8 / 5.9）。
+-- 新表，走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只
+-- 服务"老库缺列"这一种情况，新表不需要它。.51 上 data/demo.db 的既有 job 与
+-- 既有表一行不改，无数据迁移。
+--
+-- ⛔ **本表只存规则、不执行规则。** 合规红线「AI 只做排序推荐，不做自动淘汰」
+-- 意味着这里没有任何一行会自己把候选人筛掉；blocking 是给人看的标注，不是
+-- 执行开关。本变更包内⛔ 不得出现读本表做判定/打分/淘汰的代码路径。
+--
+-- ⛔ job_id 上刻意不加外键。与 human_review.job_id、effect_log.thread_id 同一
+-- 形态：规则草案按 thread 记事实，把它的可写性绑在业务表上，"草案写不进去"
+-- 就会变成"画像确认整个失败"。
+--
+-- ⛔ 不设代理主键 id。天然键就是规则本身——同一版画像里"同字段同运算符同值"
+-- 出现两次就是 bug，而不是两条合法数据。复合主键同时充当去重的第二道防线
+-- （第一道是 effect_log 里 {job_id}:effect_confirm_profile:{version} 那把键）。
+--
+-- operator 的 CHECK 取值与 app/agents/hard_requirement.py 的 OPERATORS 常量
+-- 逐字同源。⛔ 改一处必须同步改另一处，否则新运算符会在业务经理点确认的那
+-- 一刻炸成 IntegrityError。
+--
+-- human_readable 的 CHECK 是 spec「每条规则附一句人类可读的说明（用于将来向
+-- 候选人解释淘汰原因）」在存储层的落点：说明为空的规则等于没有说明。trim 的
+-- 第二参数显式列出空格/制表/换行/回车——SQLite 的单参 trim() 只剥空格（与
+-- criterion_score.evidence_ref、human_review.reviewer 的 CHECK 同一理由）。
+CREATE TABLE IF NOT EXISTS hard_requirement (
+    job_id TEXT NOT NULL,
+    profile_version INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    operator TEXT NOT NULL CHECK (
+        operator IN ('gte', 'education_gte', 'contains', 'equals', 'is_true')
+    ),
+    value TEXT NOT NULL,
+    blocking INTEGER NOT NULL CHECK (blocking IN (0, 1)),
+    human_readable TEXT NOT NULL CHECK (
+        human_readable IS NOT NULL
+        AND trim(human_readable, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (job_id, profile_version, field, operator, value)
+);
 """
 
 
