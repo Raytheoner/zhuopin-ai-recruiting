@@ -1,4 +1,4 @@
-**进度：42/71**（2026-09-04 第 6 章确认断点交付单元合入）
+**进度：45/71**（2026-09-04 交付单元 7「JD 溯源与导出」合入）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -198,16 +198,29 @@
 
 - [x] 7.1 JD 生成 Agent（纯函数），输入为冻结画像 → **已实现**（同 0.7），见 `app/agents/jd_agent.py` 的 `generate_jd`：纯函数（只调 gateway，不写库），入参就是已通过 `JobProfile.model_validate` 的画像对象。副作用（落库）单独放在 `effect_generate_and_persist_jd` 里。测试 `tests/test_jd_agent.py`
 - [x] 7.2 画像未冻结时拒绝生成 → **已实现**，见 `app/web/server.py:152-154`：最新消息不是 `confirmation_prompt` 时返回 409「画像还在追问中，未到可确认状态」；且 JD **只在 `/confirm` 这一条路径上生成**，而该路径里 `effect_confirm_profile`（冻结）严格排在 `effect_generate_and_persist_jd`（生成）之前。测试 `tests/test_web_api.py`
-- [ ] 7.3 **溯源校验**：断言文案中的技术要求都能追溯到画像字段，不得凭空出现
+- [x] 7.3 **溯源校验**：断言文案中的技术要求都能追溯到画像字段，不得凭空出现
       ⚠️ 目前**只有 prompt 里一句要求**（`JD_SYSTEM_PROMPT`："文案中出现的技术要求必须能追溯到画像字段，不得凭空新增"），**没有任何校验代码、没有任何测试**——"提示词说了、模型没做"正是 `m1-intake-quality-fixes` 记录过的事故模式。
       ⚠️ **不要与 `m1-intake-quality-fixes` 第 7 章混为一谈**：那一章做的是**画像字段**对**用户原话**的溯源（`intake-field-grounding`），本条是 **JD 文案**对**画像字段**的溯源，两者对象不同，不能算已覆盖。保持未勾
 - [x] 7.4 AI 生成内容标识注入（文案内显式提示 + 元数据记录模型与时间） → **已完成（2026-08-26 Shao Peishen 判定）**：文案内显式标识与生成时间已实现（`app/agents/jd_agent.py` 的 `AI_LABEL_TEMPLATE` + `_compose_with_label`，测试见 `tests/test_jd_agent.py`）。《AI 生成合成内容标识办法》要求的**对外标识**这一层已达成。
       ⤷ **括号里"元数据记录模型"这半条未实现，已移出**到 `ai-audit-trail-and-outbound-gate`（见文末「已移出」清单）。JD 落库时（`app/graph/nodes.py:183-197`）只写 `_jd_text` / `_jd_needs_manual`，不记模型标识——"这份 JD 是哪个模型哪一版生成的"目前答不出来。该包的 `analysis_run` 正是做模型标识持久化的，同向，不另起
-- [ ] 7.5 标识保护：常规编辑不可删除；提供"标记为人工撰写"显式操作并留痕
+- [x] 7.5 标识保护：常规编辑不可删除；提供"标记为人工撰写"显式操作并留痕
       ⚠️ 完全未实现——JD 目前根本没有编辑功能，也就无所谓"编辑时保护"；"标记为人工撰写"操作与其留痕都不存在。保持未勾
 - [x] 7.6 **歧视性表述拦截**：性别/年龄/婚育/地域/民族/健康状况关键词检测，命中则重新生成，连续 2 次转人工 → **已实现**（同 0.7），见 `app/agents/jd_agent.py`：`DISCRIMINATORY_PATTERNS` **六类逐个对上**，`generate_jd` 命中即重新生成、连续 2 次仍命中则 `needs_manual=True` 并回传 `blocked_categories`；前端 `index.html:265-267` 提示已转人工。测试 `tests/test_jd_agent.py`
-- [ ] 7.7 纯文本一键复制导出
+- [x] 7.7 纯文本一键复制导出
       ⚠️ 未实现——前端只有 `send-btn` 与 `confirm-btn` 两个按钮，JD 用 `textContent` 平铺在 `#jd-output` 里，**没有复制按钮、没有 clipboard 调用**（全文件 grep `clipboard` 零命中，仅有一处无关注释提到"复制"）。用户只能手工选中。⚠️ 0.8 那条勾选里写的"JD 展示与复制"，实际只交付了"展示"。保持未勾
+
+### 7.x 落地偏离登记
+
+2026-09-04 交付单元 7（plan `docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export.md`）实施时与计划正文的偏离，逐条如下。⛔ 每条都是**加强**而非放宽，无一处为让测试通过而放宽断言。
+
+1. **`AI_LABEL_PREFIX` 用字面量而非从模板 `split` 求值**。计划正文残留一句旧说法要求"两次 split"，与其上方代码块矛盾。按代码块的字面量写法执行——split 写法在模板措辞变化时会静默退化成"整个模板头"，而守卫断言照样是绿的（无症状故障）。
+2. **`app/graph/jd_nodes.py` 不 import `AI_LABEL_PREFIX`**。计划 Task 3 的 import 段列了它，但正文紧随的 ⚠️ 要求删掉（该常量只在测试里用到，import 会触发 F401）。按 ⚠️ 执行。
+3. **`tests/test_jd_nodes.py` 由计划的 13 条增至 14 条**。变异验证发现：把「去标识」与「写留痕」拆成两条 UPDATE 两次 commit 后，计划原有 13 条**全绿**——即工程铁律 1 的「幂等记录与业务写同事务」这条不变式**没有测试覆盖**。补 `test_crash_between_label_removal_and_authorship_write_leaves_no_orphan_state`（模拟两次写之间崩溃），该变异随即变红。⛔ 未放宽任何既有断言。
+4. **`tests/test_jd_agent.py` 增 2 条 `@pytest.mark.compliance`**。计划自带的两条用例测不出关键差异：`test_enforce_does_not_stack_labels` 两次都传同一个 `generated_at`，把 `enforce_ai_label` 退化成"检查式跳过"仍全绿；`test_strip_keeps_text_that_merely_mentions_ai` 的样本只含裸字 "AI"，把 `strip_ai_label` 判据从"整行以前缀开头"放宽成"行内含前缀"仍全绿。补测后两个变异都变红。
+5. **`test_marking_human_written_asks_for_confirmation_first` 的判定范围收紧**。计划写法 `INDEX_HTML.split("jd-human-btn")[-1]` 会把文件更后面 `abandon-btn` 处理器里另一处无关的 `window.confirm` 纳入判定——去掉「标记为人工撰写」的二次确认，这条测试照样绿。收紧到该处理器本身后变异变红，且反向验证确认 `abandon-btn` 那处的 confirm 顶替不了它。
+6. **`index.html` 里 `if (!text) return;` 写成 `if (text.length === 0) return;`**。计划的字面量与既有用例 `test_selection_and_free_text_compose_one_message` 的否定断言冲突（会让该既有用例永久变红）。语义未变。
+7. **⏸ 留步：计划 Task 5 Step 5 的「手工浏览器验证」未做浏览器点击部分**。本轮为 `run-lanes.sh` 无头启动、无人值守、无 GUI。替代做法：(a)-(d) 四条用**真实服务 + 真实 LLM**（`app.main:app` + `.env` 的 DeepSeek key，走完整多轮追问→确认→JD 生成→编辑→标记人工撰写）逐条 curl 核对通过；(e) 未溯源术语用 TestClient + 既有 fixture 假响应核对通过。**按钮真的可点、剪贴板真的写入这两件事未验证**，⛔ 不得记作"手工验证通过"。
+8. **⏸ 留步：全分支终审（final whole-branch review）未跑**。Task 1–4 各自的两阶段 task review（spec 合规 + 代码质量）已全部跑完并通过，Task 5 只跑到实现 + 变异验证 + 一轮 fix，**未做独立的 task review，也未做终审**——本轮 session 预算耗尽。合入依据是：全量 1008 passed / 1 skipped（基线 907）、`-m compliance` 59 passed、每个 Task 的关键不变式都有变异验证背书。**下一轮应补一次针对本单元 6 个 commit 的终审。**
 
 ## 8. 最小 Web 界面
 
