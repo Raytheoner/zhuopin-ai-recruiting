@@ -23,6 +23,7 @@ from app.graph.jd_nodes import (
     jd_edit_business_key,
 )
 from app.graph.nodes import (
+    DECISION_REVISION_REQUESTED,
     MAX_REVISIONS,
     effect_abandon_profile,
     effect_confirm_profile,
@@ -37,6 +38,7 @@ from app.observability.middleware import (
     unhandled_exception_handler,
 )
 from app.schemas.job_profile import JobProfile, field_label, field_labels
+from app.storage import job_queries
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -558,6 +560,71 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
                 status_code=409, detail="这个岗位还没有生成 JD，请先确认画像"
             ) from exc
         return _jd_payload(job_id, version)
+
+    # ── 会话之外的只读视图（tasks 8.1 / 8.2 / 8.4）────────────────────────
+    #
+    # ⛔ 这一段里三个端点全是 GET，且不许有别的：列表、详情、队列都只是把已经
+    # 落库的事实读出来摆好。加写入就越过了本交付单元的边界，也会让"这几个页面
+    # 可以放心给业务经理点"这个前提不再成立。
+    #
+    # ⚠️ MAX_REVISIONS 与 DECISION_REVISION_REQUESTED 由这里**传进**查询层，
+    # 不在 app/storage/job_queries.py 里重抄：那两个名字的真源是
+    # app/graph/nodes.py，而 storage 层 import graph 层是层次倒置
+    # （graph 已经在 import storage/idempotency.py）。
+
+    def _job_row_payload(row: dict, counts: dict, message_types: dict) -> dict:
+        """列表与队列共用同一个行形状。两处各拼一份的话，将来加一个字段必然
+        只加在其中一处，而两个页面显示不一致这件事没有测试会自己发现。"""
+        profile = row["profile"]
+        jd = job_queries.jd_state(profile)
+        revisions = counts.get(row["job_id"], 0)
+        reasons = job_queries.derive_needs_manual_reasons(
+            job_status=row["status"],
+            profile=profile,
+            revision_count=revisions,
+            max_revisions=MAX_REVISIONS,
+        )
+        return {
+            "job_id": row["job_id"],
+            "title": job_queries.display_title(row),
+            "status": row["status"],
+            "stage_label": job_queries.stage_label(
+                job_status=row["status"],
+                latest_version=row["latest_version"],
+                latest_message_type=message_types.get(row["job_id"]),
+                jd=jd,
+            ),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "latest_version": row["latest_version"],
+            "revision_count": revisions,
+            # ⛔ 只回 JD 的三个布尔状态，不回正文：正文有专门的、合规上已过审的
+            # 展示位（GET /api/jobs/{job_id}/jd）。多一个渲染正文的地方就多一个
+            # 会漏掉 AI 生成标识的地方。
+            "jd": jd,
+            "needs_manual": bool(reasons),
+            "needs_manual_reasons": reasons,
+        }
+
+    def _job_rows_with_context() -> tuple[list[dict], dict, dict]:
+        """列表与队列都要的三次查询。⛔ 不做逐 job 的 N+1 查询。"""
+        return (
+            job_queries.latest_profile_rows(conn),
+            job_queries.revision_counts(
+                conn, revision_decision_type=DECISION_REVISION_REQUESTED
+            ),
+            job_queries.latest_message_types(conn),
+        )
+
+    @router.get("/api/jobs")
+    def list_jobs() -> dict:
+        """8.1 岗位列表与状态视图。只读。
+
+        ⛔ 不分页：M1 的量级是"日均新增岗位个位数"（design.md 非目标：不追求
+        高并发），加分页只会多一套前后端要对齐的状态。量级变了再说。
+        """
+        rows, counts, message_types = _job_rows_with_context()
+        return {"jobs": [_job_row_payload(row, counts, message_types) for row in rows]}
 
     @router.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
