@@ -340,3 +340,137 @@ def test_cannot_revise_a_frozen_profile(tmp_path):
 
     resp = client.post(f"api/jobs/{job_id}/revise", json={"feedback": "再改一下"})
     assert resp.status_code == 409
+
+
+# ── 范围追加（控制器裁决）：/reply 补 approved 终态守卫 ──────────────────
+
+
+def test_reply_rejects_an_approved_job_and_creates_no_new_draft(tmp_path):
+    """spec 6.4「确认后冻结」：画像 approved 之后，/reply 不能再悄悄产出一版
+    新草案。少了这道守卫，/reply 会绕过 confirm/revise 已有的终态守卫，把一个
+    已冻结的岗位重新拖回 drafting 语义——human_review 里那条 approved 留痕
+    会与后续被 /reply 改动的画像内容直接矛盾。"""
+    client, job_id, _payload = _start_job(tmp_path, extra_responses=[JD_RESPONSE])
+    assert client.post(f"api/jobs/{job_id}/confirm").status_code == 200
+
+    versions_before = _rows(
+        tmp_path,
+        "SELECT version FROM job_profile WHERE job_id = ? ORDER BY version",
+        (job_id,),
+    )
+
+    resp = client.post(f"api/jobs/{job_id}/reply", json={"message": "再改改"})
+    assert resp.status_code == 409
+
+    versions_after = _rows(
+        tmp_path,
+        "SELECT version FROM job_profile WHERE job_id = ? ORDER BY version",
+        (job_id,),
+    )
+    assert versions_after == versions_before, "/reply 在 approved 状态下产生了新草案版本"
+
+
+# ── tasks 6.7：放弃分支 ──────────────────────────────────────────────────
+
+
+def test_abandon_sets_status_and_keeps_every_byte_of_content(tmp_path):
+    """tasks 6.7 原话：置 abandoned，**保留内容**。
+
+    放弃不是撤销——事后要能查明"当时放弃的是哪一版画像、内容长什么样"。
+    """
+    client, job_id, _payload = _start_job(tmp_path)
+    before = _rows(
+        tmp_path, "SELECT profile_json FROM job_profile WHERE job_id = ?", (job_id,)
+    )
+
+    resp = client.post(f"api/jobs/{job_id}/abandon", json={"reason": "岗位取消了"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "abandoned"
+
+    assert (
+        _rows(tmp_path, "SELECT profile_json FROM job_profile WHERE job_id = ?", (job_id,))
+        == before
+    ), "放弃动作动了画像内容"
+    assert _rows(tmp_path, "SELECT status FROM job WHERE id = ?", (job_id,)) == [("abandoned",)]
+    assert _rows(
+        tmp_path, "SELECT status FROM job_profile WHERE job_id = ?", (job_id,)
+    ) == [("abandoned",)]
+
+
+def test_abandon_records_the_decision_with_the_reason(tmp_path):
+    client, job_id, _payload = _start_job(tmp_path)
+    client.post(f"api/jobs/{job_id}/abandon", json={"reason": "岗位取消了"})
+
+    assert _rows(
+        tmp_path,
+        "SELECT decision_type, feedback, profile_version FROM human_review WHERE job_id = ?",
+        (job_id,),
+    ) == [("abandoned", "岗位取消了", 1)]
+
+
+def test_abandon_without_a_reason_is_allowed(tmp_path):
+    """⛔ 不强制填理由：强制填理由的表单会得到"1"和"。"。留痕的必填项是
+    决策人、决策类型、时间、画像版本——理由是加分项，不是门槛。"""
+    client, job_id, _payload = _start_job(tmp_path)
+    assert client.post(f"api/jobs/{job_id}/abandon").status_code == 200
+    assert _rows(
+        tmp_path, "SELECT feedback FROM human_review WHERE job_id = ?", (job_id,)
+    ) == [(None,)]
+
+
+def test_abandon_is_idempotent(tmp_path):
+    """重复 POST（双击、客户端超时重发、反向代理重试）只留一条痕。"""
+    client, job_id, _payload = _start_job(tmp_path)
+    assert client.post(f"api/jobs/{job_id}/abandon").status_code == 200
+    assert client.post(f"api/jobs/{job_id}/abandon").status_code == 200
+
+    assert _rows(
+        tmp_path, "SELECT COUNT(*) FROM human_review WHERE job_id = ?", (job_id,)
+    ) == [(1,)]
+
+
+def test_abandoned_job_cannot_be_replied_to_or_confirmed(tmp_path):
+    """放弃是终态。少了这道守卫，"放弃"就只是一个影响显示的标签——
+    岗位能被 /reply 复活、再被确认，而 human_review 里那条 abandoned 留痕
+    会与最终 approved 的状态直接矛盾。"""
+    client, job_id, _payload = _start_job(tmp_path)
+    client.post(f"api/jobs/{job_id}/abandon")
+
+    assert client.post(f"api/jobs/{job_id}/reply", json={"message": "再改改"}).status_code == 409
+    assert client.post(f"api/jobs/{job_id}/confirm").status_code == 409
+    assert client.post(f"api/jobs/{job_id}/revise", json={"feedback": "改"}).status_code == 409
+
+
+def test_abandon_human_review_row_count_equals_effect_log_count_per_thread(tmp_path):
+    """铁律 1 的 reviewer 判据，放弃分支那一份：**同一 thread、同一
+    business_key 重放**，effect_abandon_profile 的 effect_log 条数必须与
+    human_review 条数按 thread 恒等。只调一次 /abandon 测不出重放是否幂等——
+    这里直接调用 effect_abandon_profile 三次，模拟 LangGraph 恢复时节点从头
+    重跑。"""
+    from app.graph.nodes import effect_abandon_profile
+    from app.storage.db import get_connection, init_schema
+
+    conn = get_connection(str(tmp_path / "idem.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', 'x', 'drafting')")
+    conn.execute(
+        "INSERT INTO job_profile (id, job_id, version, status, profile_json) "
+        "VALUES ('j1-v1', 'j1', 1, 'drafting', '{}')"
+    )
+    conn.commit()
+
+    for _ in range(3):
+        effect_abandon_profile(
+            conn, thread_id="j1", business_key="1", reviewer="tester", feedback="重复放弃"
+        )
+
+    effects = conn.execute(
+        "SELECT COUNT(*) FROM effect_log "
+        "WHERE thread_id = ? AND node_name = 'effect_abandon_profile'",
+        ("j1",),
+    ).fetchone()[0]
+    reviews = conn.execute(
+        "SELECT COUNT(*) FROM human_review WHERE job_id = ? AND decision_type = 'abandoned'",
+        ("j1",),
+    ).fetchone()[0]
+    assert effects == reviews == 1

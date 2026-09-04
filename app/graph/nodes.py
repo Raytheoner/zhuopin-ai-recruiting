@@ -334,6 +334,45 @@ def revision_count(conn: sqlite3.Connection, job_id: str) -> int:
     ).fetchone()[0]
 
 
+@idempotent_effect("effect_abandon_profile")
+def effect_abandon_profile(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    reviewer: str,
+    feedback: str | None = None,
+) -> None:
+    """
+    effect_* 节点：把岗位与当前画像版本置为 abandoned，独占、幂等。
+    business_key = 被放弃的那一版画像 version。
+
+    ⛔ **内容一字不改**（tasks 6.7 原话"置 abandoned，保留内容"）：不删
+    job_profile 行、不清 profile_json、不动 conversation。放弃不是撤销——
+    事后要能查明"当时放弃的是哪一版画像、内容长什么样"。
+
+    ⛔ 不与 effect_confirm_profile / effect_request_revision 合并（理由见
+    effect_request_revision 的 docstring）。
+
+    不在这里 conn.commit() —— 理由同 effect_persist_draft：两条 UPDATE 与
+    human_review 留痕、effect_log 记录必须由 idempotent_effect 装饰器在同一个
+    事务里一次性提交（工程铁律 1）。
+    """
+    conn.execute(
+        "UPDATE job_profile SET status = 'abandoned' WHERE job_id = ? AND version = ?",
+        (thread_id, int(business_key)),
+    )
+    conn.execute("UPDATE job SET status = 'abandoned' WHERE id = ?", (thread_id,))
+    _record_human_review(
+        conn,
+        job_id=thread_id,
+        profile_version=int(business_key),
+        decision_type=DECISION_ABANDONED,
+        reviewer=reviewer,
+        feedback=feedback,
+    )
+
+
 @idempotent_effect("effect_generate_and_persist_jd")
 def effect_generate_and_persist_jd(
     conn: sqlite3.Connection,

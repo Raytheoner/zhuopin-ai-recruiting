@@ -17,6 +17,7 @@ from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.nodes import (
     MAX_REVISIONS,
+    effect_abandon_profile,
     effect_confirm_profile,
     effect_generate_and_persist_jd,
     effect_request_revision,
@@ -52,6 +53,12 @@ class ConfirmRequest(BaseModel):
 class ReviseRequest(BaseModel):
     # 业务经理"以自然语言描述要改什么"（spec Scenario：提出修改意见）。
     feedback: str
+
+
+class AbandonRequest(BaseModel):
+    # ⛔ 可选，不强制填：强制填理由的表单只会得到"1"和"。"。留痕的必填项是
+    # 决策人 / 决策类型 / 时间 / 画像版本，理由是加分项。
+    reason: str | None = None
 
 
 def _render_index(root_path: str) -> str:
@@ -212,6 +219,11 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         _reject_if_abandoned(job_id)
+        # 范围追加（控制器裁决，2026-09-04）：approved 也是终态，⛔ 不能再靠
+        # /reply 悄悄产出一版新草案——那与 spec 6.4「确认后冻结」直接矛盾。
+        # 用 confirm/revise 已有的同一个状态码与同一段文案（_APPROVED_DETAIL）。
+        if _job_status(job_id) == "approved":
+            raise HTTPException(status_code=409, detail=_APPROVED_DETAIL)
         message = _run_turn(job_id, req.message)
         return {"job_id": job_id, "message": message}
 
@@ -412,6 +424,30 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         # 不受影响——它有幂等键，重复提交只记一条。
         message = _run_turn(job_id, feedback)
         return {"job_id": job_id, "message": message}
+
+    @router.post("/api/jobs/{job_id}/abandon")
+    def abandon(job_id: str, request: Request, req: AbandonRequest | None = None):
+        """放弃分支（tasks 6.7）：置 abandoned，内容一字不改。
+
+        ⛔ 这里刻意**没有**终态守卫：重复 POST 应当幂等地返回 200（双击、
+        客户端超时重发都会打到这里），由 effect_abandon_profile 的幂等键短路。
+        返回 409 会让一次无害的重试在业务经理眼里变成一个错误。
+        """
+        row = conn.execute(
+            "SELECT MAX(version) FROM job_profile WHERE job_id=?", (job_id,)
+        ).fetchone()
+        if row is None or row[0] is None:
+            raise HTTPException(status_code=404, detail="no profile draft yet")
+
+        reason = (req.reason or "").strip() if req else ""
+        effect_abandon_profile(
+            conn,
+            thread_id=job_id,
+            business_key=str(row[0]),
+            reviewer=reviewer_of(request),
+            feedback=reason or None,
+        )
+        return {"job_id": job_id, "status": "abandoned"}
 
     @router.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
