@@ -840,9 +840,12 @@
       // #job-detail 只活在 #view-list 里面；从「转人工队列」点进来时
       // #view-list 还是 display:none，不先切过去的话 #job-detail 被设成
       // display:block 也是白设——它的祖先容器仍然是隐藏的，点击看起来像
-      // 什么都没发生。showView 用的还是按钮 + style.display 这一套
+      // 什么都没发生。⛔ 这里只调 switchView，不调 showView：showView 会
+      // 顺带触发 loadJobList()（一次多余的 GET api/jobs + 把整份岗位列表
+      // 铺到详情上方），而这里只是要换一下"哪个容器可见"，不是要用户
+      // "进入岗位列表页"。switchView 用的还是按钮 + style.display 这一套
       // （Global Constraints 第 11 条），不是新开一条路由。
-      showView("list");
+      switchView("list");
       const box = document.getElementById("job-detail");
       box.style.display = "block";
       box.textContent = "正在读取画像详情…";
@@ -930,12 +933,22 @@
 
     const VIEW_LOADERS = { intake: null, list: loadJobList, queue: loadQueue };
 
-    function showView(name) {
+    // 只切容器可见性 + 导航按钮的高亮状态，⛔ 不触发任何数据加载。
+    // 二审 finding：loadJobDetail 之前调用 showView("list") 切视图时，会
+    // 顺带把 showView 自带的 loadJobList() 也点着了——那是一次多余的
+    // GET api/jobs，加载完还会把整份岗位列表重新铺在 #job-detail 上方，
+    // 而用户只是想看一条详情。切视图与拉数据是两件事，只在真正需要"进入
+    // 一个视图并刷新它的数据"时（导航按钮）才该绑在一起。
+    function switchView(name) {
       ["intake", "list", "queue"].forEach((key) => {
         document.getElementById("view-" + key).style.display =
           key === name ? "block" : "none";
         document.getElementById("nav-" + key).classList.toggle("active", key === name);
       });
+    }
+
+    function showView(name) {
+      switchView(name);
       const loader = VIEW_LOADERS[name];
       // 每次切过去都重新拉一次，⛔ 不缓存：列表与队列是别人（HR、另一个业务
       // 经理）也会改动的数据，缓存住只会让人对着一份过期的队列做决定。

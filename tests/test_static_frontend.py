@@ -711,23 +711,61 @@ def test_view_rendering_never_writes_raw_english_status_fields_into_dom():
 def test_loading_detail_from_the_queue_switches_to_the_list_view_first():
     """
     源码级证据（⛔ 不是交互级证据）：断言 loadJobDetail() 函数体内
-    `showView("list")` 的调用位置在 `job-detail` 被设为可见之前。真正的
-    "点一下按钮、看见详情展开"这件事，本仓库没有浏览器，验证不了。
+    `switchView("list")` 的调用位置在 `job-detail` 被设为可见之前。真正的
+    "点一下按钮、看见详情展开、且没有多余的列表刷新"这件事，本仓库没有
+    浏览器，验证不了。
+
+    三审 finding：loadJobDetail 原先调的是 showView("list")，而 showView
+    会顺带触发 loadJobList()（VIEW_LOADERS 里挂着的那个）——那是一次多余
+    的 GET api/jobs，加载完还会把整份岗位列表铺在 #job-detail 上方，用户
+    只是想看一条详情，却先看到一整页别的岗位。修法是把"切视图"和"切视图
+    并刷新数据"拆成两个函数：switchView() 只管 style.display / active
+    class，showView() 是 switchView() + 触发 VIEW_LOADERS 里的 loader。
+    loadJobDetail 改调前者，三个导航按钮仍然调后者（行为不变，点击导航
+    仍然刷新数据）。这里同时钉住三件事：
+      1. loadJobDetail 调用的是 switchView("list")，⛔ 不是 showView(——
+         防止将来有人为了"图省事"把它改回 showView，重新引入这次要修的
+         副作用；
+      2. showView 仍然会去查 VIEW_LOADERS 并调用查到的 loader——防止
+         "拆分时手滑，把导航按钮的刷新行为也一起拆没了"；
+      3. 视图切换仍然发生在 #job-detail 被设为可见**之前**（时序不变）。
     """
     match = re.search(r"async function loadJobDetail\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
     assert match, "index.html 里找不到 loadJobDetail()"
     body = match.group(0)
 
-    assert 'showView("list")' in body, (
+    assert 'switchView("list")' in body, (
         "loadJobDetail() 里没有切回列表视图——从「转人工队列」点「查看画像"
         "详情」时，#job-detail 的祖先容器 #view-list 仍是 display:none，"
         "点击会看起来像什么都没发生。"
     )
+    assert "showView(" not in body, (
+        "loadJobDetail() 里出现了 showView(——这会顺带触发 loadJobList()，"
+        "多打一次 GET api/jobs，还会把整份岗位列表铺在详情上方。这里只应该"
+        "切视图（switchView），不应该连带刷新列表数据。"
+    )
 
-    switch_at = body.index('showView("list")')
+    switch_at = body.index('switchView("list")')
     reveal_at = body.index('getElementById("job-detail")')
     assert switch_at < reveal_at, (
-        "showView(\"list\") 必须在拿到 #job-detail 并把它设为可见**之前**"
+        'switchView("list") 必须在拿到 #job-detail 并把它设为可见**之前**'
         "调用，否则视图切换的时序不对，#job-detail 依然可能被切走的视图"
         "盖住。"
     )
+
+
+def test_show_view_still_dispatches_its_loader_for_nav_buttons():
+    """
+    三审 finding 的另一半：拆出 switchView() 之后，showView()（三个导航
+    按钮仍在用）必须继续触发 VIEW_LOADERS 里挂着的 loader——否则点导航
+    切到「岗位列表」/「转人工队列」会变成只换了个空容器、数据不刷新，
+    这是比原来的 bug 更糟的退化。
+    """
+    match = re.search(r"function showView\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 showView()"
+    body = match.group(0)
+
+    assert "VIEW_LOADERS" in body, (
+        "showView() 不再查 VIEW_LOADERS 了——导航按钮切视图时不会再刷新数据。"
+    )
+    assert "loader()" in body
