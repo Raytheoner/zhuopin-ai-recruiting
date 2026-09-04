@@ -56,29 +56,50 @@ _NO_REQUIREMENT_VALUES: frozenset[str] = frozenset(
     {"", "无", "无要求", "不限", "不限制", "未指定", "没有要求", "无特殊要求"}
 )
 
-# 学历"非门槛"表述——命中且没有显式下限句式时，不产出规则。
+# 学历判定是**子句级**的，不是整段字符串级的（final review round 2）：
+# "本科以上优先" 这种最常见的招聘偏好写法，"以上"和"优先"落在**同一个子句**
+# 里，全字符串级的"出现'以上'就当门槛真实存在"会被它直接击穿——round 1 的
+# `"以上" not in text` 逃生舱就是这个洞，被复现证伪。
 #
-# 误差预算的方向与 _EXPERIENCE_UPPER_BOUND_MARKERS 相反但同样不对称：这里
-# 判得太宽（把一句其实在陈述门槛的话误判成"非门槛"）代价只是少一条规则，
-# 人工复核时能补回来；判得太窄（漏掉"不限"/"优先"这类否定词，让 _education_floor
-# 的裸别名匹配去凭空造出一条 blocking=True 的门槛）比经验年限的漏判更坏——
-# 那是**造出**一条规则，而不是丢了一条规则，且这条规则将来会原样念给被拒的
-# 候选人听（合规：AI 只做排序推荐，不做自动淘汰；本模块给的 blocking 标注
-# 是人看的，但造错了人也会被带偏）。
+# 判定分三层，逐层收窄：
 #
-# "学历不限，本科优先" 与 "本科及以上，硕士优先" 都含"优先"，但前者没有门槛、
-# 后者有——区分信号不是"优先"本身，是文本里有没有"X 及以上/以上"这种显式
-# 下限句式：有 → 那就是门槛本身在说话，其余词（含"优先"）只是同句追加信息，
-# 不该反过来否定它；没有 → 任意一个非门槛词命中，就说明这段话根本没在陈述
-# 门槛，返回 None。
-_EDUCATION_NON_GATE_MARKERS: tuple[str, ...] = (
-    "以下",
+# 1）**整段一票否决**：只要全文出现"没有要求"类表述，直接判 None——一句话
+#    已经明说"不限"，任何子句里的"以上"都不能反过来把它变回门槛（这是
+#    round 1 遗留缺陷的根子：`"学历不限，如有本科以上学历者优先考虑"` 明明
+#    说了不限，`"以上"` 却让整段免检）。
+# 2）**逐子句丢弃**：按 ，,、;；。及空白切子句。子句里出现偏好词
+#    （"优先"/"亦可"/"最好"/"更佳"/"加分"/"可放宽"）或上限词（"以下"/
+#    "以内"）就整个丢弃这个子句——偏好和上限都不是门槛。
+# 3）**子句内二次确认**：活下来的子句里，学历别名必须**同时**伴一个显式
+#    下限词（"以上"/"起步"/"最低"）才算门槛；裸学历词（"本科学历"这种，
+#    没有"以上"陪着）不算——只是提到这个词，不等于设了门槛。
+#
+# 误差预算方向与其余词表一致、不对称：子句被误丢弃，代价是少一条规则，
+# 人工复核补得回来；偏好子句被误升格成门槛，代价是造出一条不可逆的
+# blocking=True 硬门槛，这条规则将来会原样念给被拒的候选人听——所以三层
+# 判定宁可"丢子句"判得宽，也不能让偏好/上限漏网变成门槛。
+_EDUCATION_NO_REQUIREMENT_MARKERS: tuple[str, ...] = (
     "不限",
-    "优先",
-    "最好",
-    "亦可",
-    "更佳",
+    "不限制",
+    "无要求",
+    "无学历要求",
 )
+
+_EDUCATION_PREFERENCE_MARKERS: tuple[str, ...] = (
+    "优先",
+    "亦可",
+    "最好",
+    "更佳",
+    "加分",
+    "可放宽",
+)
+
+_EDUCATION_UPPER_BOUND_MARKERS: tuple[str, ...] = ("以下", "以内")
+
+_EDUCATION_FLOOR_MARKERS: tuple[str, ...] = ("以上", "起步", "最低")
+
+# 子句切分边界：中英文逗号/顿号/分号/句号与空白。
+_EDUCATION_CLAUSE_SPLIT = re.compile(r"[，,、;；。\s]+")
 
 # 年限上限的常见表述。命中即不产出下限规则——上限不是门槛，是偏好。
 #
@@ -225,18 +246,31 @@ def _is_no_requirement(text: str) -> bool:
 def _education_floor(text: str) -> str | None:
     """学历要求自由文本 → 学历档位下限。识别不出来就返回 None（不产出规则）。
 
-    ⛔ 先判"非门槛"，再判别名——"学历不限，本科优先"不能被裸别名匹配当成
-    "本科门槛"提取出来。"以上"（"及以上"）是显式下限句式的信号：出现了它，
-    说明这段话确实在陈述门槛，_EDUCATION_NON_GATE_MARKERS 里的其余词（含
-    "优先"）只是同句追加信息，不参与否定；没出现它，任意一个非门槛词命中
-    就返回 None（详见该常量上方注释的误差预算方向）。
+    子句级判定，理由与三层规则见 `_EDUCATION_NO_REQUIREMENT_MARKERS` 上方
+    注释。取跨子句中**最低**的门槛——沿用 `_EDUCATION_LEVELS` 低到高的
+    既有顺序，与 `test_education_takes_the_lowest_level_mentioned` 同一
+    保守方向：门槛取高了会把合格的人挡在外面。
     """
-    if "以上" not in text and any(
-        marker in text for marker in _EDUCATION_NON_GATE_MARKERS
-    ):
+    if any(marker in text for marker in _EDUCATION_NO_REQUIREMENT_MARKERS):
         return None
-    for level, aliases in _EDUCATION_LEVELS:
-        if any(alias in text for alias in aliases):
+
+    found_levels: set[str] = set()
+    for clause in _EDUCATION_CLAUSE_SPLIT.split(text):
+        if not clause:
+            continue
+        if any(marker in clause for marker in _EDUCATION_PREFERENCE_MARKERS):
+            continue
+        if any(marker in clause for marker in _EDUCATION_UPPER_BOUND_MARKERS):
+            continue
+        if not any(marker in clause for marker in _EDUCATION_FLOOR_MARKERS):
+            continue
+        for level, aliases in _EDUCATION_LEVELS:
+            if any(alias in clause for alias in aliases):
+                found_levels.add(level)
+                break
+
+    for level, _aliases in _EDUCATION_LEVELS:
+        if level in found_levels:
             return level
     return None
 

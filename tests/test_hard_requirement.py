@@ -125,6 +125,55 @@ def test_education_negated_or_bounded_phrasing_is_not_a_hard_gate():
         ) == []
 
 
+def test_education_preference_clause_is_not_promoted_to_a_gate():
+    """final review round 2：round 1 的 `"以上" not in text` 逃生舱是整段级的，
+
+    "本科以上优先" 这类最常见的招聘偏好写法里，"以上"和"优先"落在**同一个
+    子句**，整段级判定会被直接击穿。这组用例是 re-reviewer 探针复现的九句，
+    加上四句自查补充的边界样例——子句级判定必须逐句区分"门槛子句"与
+    "偏好/上限子句"，⛔ 不能靠整段扫一遍某个词。
+    """
+    no_gate_cases = (
+        "本科以上优先",
+        "本科以上学历优先",
+        "硕士以上优先，本科亦可",
+        "学历不限，如有本科以上学历者优先考虑",
+        "本科、硕士以上学历不限，能力优先",
+        "大专以上学历优先，条件优秀者可放宽",
+        "以上学历均不限",
+        # 自查补充：子句边界的压力样例。
+        "本科学历",  # 裸学历词，没有显式下限词陪着，不算门槛
+    )
+    for text in no_gate_cases:
+        assert (
+            _by_field(
+                extract_hard_requirements(_profile(education_requirement=text)),
+                "education_requirement",
+            )
+            == []
+        ), f"{text!r} 不该产出门槛"
+
+    gated_cases = (
+        ("本科及以上", "本科"),
+        ("本科及以上，硕士优先", "本科"),
+        ("硕士及以上", "硕士"),
+        ("大专及以上", "大专"),
+        # 自查补充：门槛子句与偏好子句顺序颠倒，结果不该变。
+        ("硕士优先，本科及以上", "本科"),
+        # 自查补充：整句没有子句分隔符，仍要能识别出门槛。
+        ("本科及以上学历要求", "本科"),
+        # 自查补充："以上"以外的下限词（起步/最低）同样要被认作门槛。
+        ("本科起步", "本科"),
+    )
+    for text, expected in gated_cases:
+        rules = _by_field(
+            extract_hard_requirements(_profile(education_requirement=text)),
+            "education_requirement",
+        )
+        assert [r.value for r in rules] == [expected], f"{text!r} 应产出 {expected!r}"
+        assert rules[0].blocking is True
+
+
 def test_experience_lower_bound():
     rules = _by_field(extract_hard_requirements(_profile()), "experience_years")
     assert len(rules) == 1
