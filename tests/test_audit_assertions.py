@@ -324,3 +324,107 @@ def test_exemption_count_follows_the_decision_moment_not_the_draft_time(conn):
 
     assert result.ok and result.violations == ()
     assert "豁免 1 条" in result.detail, result.detail
+
+
+# ── Task 3：节点名同源与关联写法反例 ──────────────────────────────────
+
+
+def test_terminal_status_effect_nodes_match_the_real_effect_nodes(conn):
+    """守卫：TERMINAL_STATUS_EFFECT_NODES 的字面量必须与 nodes.py 里两个
+    @idempotent_effect(...) 落进 effect_log.node_name 的值一致。
+
+    ⛔ 不许改成 `assert TERMINAL_STATUS_EFFECT_NODES["approved"] ==
+       "effect_confirm_profile"` 这种字面量对字面量——那是同义反复，
+       nodes.py 那边改了名字它照样绿，而断言四会因为关联恒空把整库判成
+       "查不到决策时刻"，巡检变成一片假红，没人能从红里读出真实缺口。
+
+    做法：真的跑一遍那两个 effect_* 节点，回读 effect_log.node_name。
+    ⛔ 本用例只 import 与调用 nodes.py，不修改它（本单元只改 assertions.py）。
+    """
+    from app.audit.assertions import TERMINAL_STATUS_EFFECT_NODES
+    from app.graph.nodes import effect_abandon_profile, effect_confirm_profile
+
+    _seed_terminal_profile(conn, job_id="j1", version=1, status="drafting")
+    effect_confirm_profile(
+        conn,
+        thread_id="j1",
+        business_key="1",
+        profile_dict={},
+        reviewer="someone",
+    )
+
+    _seed_terminal_profile(conn, job_id="j2", version=1, status="drafting")
+    effect_abandon_profile(
+        conn,
+        thread_id="j2",
+        business_key="1",
+        reviewer="someone",
+    )
+
+    logged = dict(
+        conn.execute("SELECT thread_id, node_name FROM effect_log").fetchall()
+    )
+    assert logged["j1"] == TERMINAL_STATUS_EFFECT_NODES["approved"]
+    assert logged["j2"] == TERMINAL_STATUS_EFFECT_NODES["abandoned"]
+
+
+def test_effect_key_string_form_would_miss_what_cast_finds(conn):
+    """特征化：把关联写成拼 effect_key 字符串去比，会漏掉 CAST 能匹配上的行。
+
+    这条钉的是 assertions.py::_DECISION_MOMENT_SQL 里那句 ⛔ 注释背后的事实，
+    直接对 SQLite 跑，不经过断言函数：
+
+      业务上 business_key 恒为 str(version)，规范十进制下三种写法都命中；
+      一旦不是规范写法（"02" / " 2" / "2.0"），只有**字符串**相等那种写法会漏。
+      漏匹配在 fail-closed 下不是"少报"，是把本该豁免的历史行**报成违例**（假红）。
+
+    ⚠️ 诚实说明：列 vs 列的裸比（e.business_key = p.version）在 SQLite 里会被
+    套上 NUMERIC 亲和性，行为与 CAST 一致——所以"把 CAST 删掉就会红"这种测试
+    是写不出来的，⛔ 不要硬写一条恒绿的同义反复来充数。显式写 CAST 的价值是
+    把"这里按数值比"钉在代码里，不依赖读者记得亲和性规则。
+    """
+    conn.execute("DELETE FROM effect_log")
+    conn.execute(
+        "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+        "VALUES ('j1:effect_confirm_profile:02', 'j1', 'effect_confirm_profile', "
+        "'02', '2026-08-01 10:00:01')"
+    )
+    _seed_terminal_profile(conn, job_id="j1", version=2, status="approved")
+
+    cast_hits = conn.execute(
+        "SELECT COUNT(*) FROM job_profile p, effect_log e "
+        "WHERE e.thread_id = p.job_id AND CAST(e.business_key AS INTEGER) = p.version"
+    ).fetchone()[0]
+    string_hits = conn.execute(
+        "SELECT COUNT(*) FROM job_profile p, effect_log e "
+        "WHERE e.effect_key = p.job_id || ':' || e.node_name || ':' || p.version"
+    ).fetchone()[0]
+
+    assert cast_hits == 1
+    assert string_hits == 0, (
+        "拼 effect_key 字符串去比会漏匹配——⛔ 不要把 _DECISION_MOMENT_SQL 改成这种写法"
+    )
+
+
+def test_non_canonical_business_key_is_still_matched_by_the_assertion(conn):
+    """黑盒：business_key 写法不规范时，断言仍按数值匹配上决策时刻并正确豁免。
+
+    这是上一条的行为面：若哪天有人把 _DECISION_MOMENT_SQL 改成拼字符串，
+    这一行会匹配不上、落进 fail-closed，被报成违例——本用例当场变红。
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    _seed_terminal_profile(
+        conn, job_id="j1", version=2, status="approved", created_at="2026-08-01 10:00:00"
+    )
+    conn.execute(
+        "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+        "VALUES ('j1:effect_confirm_profile:0002', 'j1', 'effect_confirm_profile', "
+        "'0002', '2026-08-01 10:00:01')"
+    )
+    conn.commit()
+
+    result = assert_every_decision_has_human_review(conn)
+
+    assert result.ok, result.violations
+    assert "豁免 1 条" in result.detail, result.detail
