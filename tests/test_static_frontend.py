@@ -443,6 +443,38 @@ def test_reask_prefix_is_not_duplicated_inline_alongside_the_badge():
     )
 
 
+def test_confirmation_branch_renders_the_profile_summary():
+    """tasks 6.1：确认页必须渲染画像本身。
+
+    修复前 index.html 全文 grep `profile` 零命中——payload 里画像躺着，
+    界面上一个字都没有。这条断言盯着"前端真的读了那份数据"。
+    """
+    assert "profile_summary" in INDEX_HTML
+    assert "renderProfileSummary" in INDEX_HTML
+
+
+def test_profile_summary_is_rendered_with_textcontent_only():
+    """⛔ 画像内容是 LLM 自由生成的文本，innerHTML 会把它变成一条注入通道。"""
+    assert "innerHTML" not in INDEX_HTML
+
+
+def test_all_three_approval_actions_have_an_entry():
+    """spec：页面展示画像摘要与"确认/修改/放弃"三个操作。"""
+    for element_id in ("confirm-btn", "revise-btn", "abandon-btn"):
+        assert f'id="{element_id}"' in INDEX_HTML
+
+
+def test_revise_and_abandon_use_relative_paths():
+    """部署约束 1：接口调用一律相对路径。
+
+    test_index_html_has_no_absolute_paths 已经全局扫过一遍字符串字面量，
+    这条是针对本次两个新调用点的定点复核——两条一起红比只有一条红更好排查。
+    """
+    assert "api/jobs/${jobId}/revise" in INDEX_HTML
+    assert "api/jobs/${jobId}/abandon" in INDEX_HTML
+    assert "/api/jobs/${jobId}/revise" not in INDEX_HTML.replace("`api/jobs", "`X")
+
+
 def test_reask_badge_is_gated_by_is_reask_flag():
     """
     上面那条可区分性测试只锁"徽标节点/class/样式存在"，锁不住"只在
