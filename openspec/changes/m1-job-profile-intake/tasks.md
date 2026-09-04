@@ -1,4 +1,4 @@
-**进度：45/71**（2026-09-04 交付单元 7「JD 溯源与导出」合入）
+**进度：45/72**（2026-09-04 交付单元 7「JD 溯源与导出」合入 + 9.6 新增「断言四豁免线改用决策时刻」待修）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -241,6 +241,21 @@
 - [x] 9.3 审计断言：每个画像都能追溯到 `analysis_run`；每次人工决策都有 `human_review` 记录 → **`human_review` 那一半已实现**：`app/audit/assertions.py` 断言四 `assert_every_decision_has_human_review`，已注册进 `COMPLIANCE_ASSERTIONS`（3 条 → 4 条），反证在 `tests/test_audit_assertion_effectiveness.py`。⚠️ `analysis_run` 那一半随 1.3/2.6 已移出到 `ai-audit-trail-and-outbound-gate`，不在本包
 - [x] 9.4 灰度：1 位业务经理试用 2 个真实岗位 → **已由 0.11 完成，且覆盖面更大**：3 位业务经理各跑 1 个真实岗位（姚祖怡·供应链总监、底层软件工程师岗、非标产品采购员岗），反馈汇总见 `docs/m1-demo-pilot-feedback.md`。⚠️ 与原文的差异是"3 人 × 1 岗"而非"1 人 × 2 岗"——样本人数更多、同一人的连续两次体验没覆盖到；灰度目的（真实用户在真实岗位上跑通并给出反馈）已达成
 - [x] 9.5 编写运行手册（部署、配置、故障排查、回滚） → **已实现**，四项逐个对上：`05-发布运行手册.md`（部署 + 配置，含 §「回滚」一节：本服务不影响任何现有流程，停用即回滚，无数据迁移负担）+ `docs/deploy-51-server.md`（故障排查，含 `.env` 非 UTF-8、scp 中文文件名两个真实故障的处置）
+- [ ] 9.6 **断言四豁免线改用决策发生时刻**（2026-09-04 Shao Peishen 裁决「现在修」，源自 6.x 落地偏离登记 Task 8 parked 条目）：修 `app/audit/assertions.py:273-338` 的 `assert_every_decision_has_human_review`
+      - 豁免判定与「违例」查询（第 309-320 行附近的 `for status, decision in ...` 循环）改用 `effect_log.applied_at` 关联，不再用 `job_profile.created_at`：
+        - 关联 key = `effect_key = f"{job_id}:{node_name}:{version}"`（与 `app/storage/idempotency.py:32` 的幂等键格式同源）
+        - 新增映射 `TERMINAL_STATUS_EFFECT_NODES = {"approved": "effect_confirm_profile", "abandoned": "effect_abandon_profile"}`，与既有 `TERMINAL_STATUS_DECISIONS` 并列放在同一处，注释写明与 `app/graph/nodes.py` 两个 `@idempotent_effect(...)`（:233、:337）字面量逐字同源、改一处要同步改
+        - `job_profile.version`（INTEGER）与 `effect_log.business_key`（TEXT）比较必须显式转换（如 `CAST(e.business_key AS INTEGER) = p.version`），不要依赖 SQLite 隐式仿射转换——这是本次修复的关键正确性点，单测要专门覆盖类型转换，不能只测巧合对上的场景
+        - 若某条终态 `job_profile` 行查不到对应 `effect_log` 行（无该 effect_key 的记录），按**未豁免**处理（fail-closed），不得默认豁免——单测覆盖这一分支
+      - 豁免计数（第 322-327 行附近的 `exempted` 查询，用于 detail 文案「豁免 N 条」）同步改成同一套 `effect_log` 关联逻辑，不能继续用 `created_at`，否则违例判定与豁免计数用两套时间基准会自相矛盾
+      - `HUMAN_REVIEW_ENFORCED_FROM`（第 264 行）**不改名、不改取值**，只更新其上方注释：把"早于此刻创建的画像版本豁免"改为"早于此刻**做出决策**（`effect_log.applied_at`，非画像草案创建时刻）的画像版本豁免"
+      - 测试覆盖至少四种场景（对应 spec `job-profile-approval` 新增 Scenario「留痕豁免线按决策发生时刻判定」）：
+        1. 草案创建于豁免线之前、确认动作发生在豁免线之后、缺 `human_review` → 报违例（这是本次要修的真实缺口，回归测试须能在改动前失败、改动后通过）
+        2. 草案创建与确认动作均发生在豁免线之前、缺 `human_review` → 豁免，不报违例（既有行为不变）
+        3. 某终态 `job_profile` 行无对应 `effect_log` 记录、缺 `human_review` → 报违例（fail-closed 分支）
+        4. 豁免计数（detail 文案里的数字）在场景 1/2 混合存在时与「只豁免真正发生在线前的决策」这条口径一致
+      - 参考实现位置：`app/graph/nodes.py:233`（`effect_confirm_profile`）与 `:337`（`effect_abandon_profile`）、`app/storage/idempotency.py:32`（幂等键格式）、`app/storage/db.py:59-65`（`effect_log` 表结构）
+      - ⛔ 不改 `app/audit/assertions.py` 之外的任何代码文件；不改 `human_review` 表结构；不改 `HUMAN_REVIEW_ENFORCED_FROM` 的取值
 
 ---
 

@@ -69,6 +69,34 @@
 
 **为什么**：业务经理的耐心是稀缺资源。一个追问到第 8 轮的机器人，下次就没人用了。宁可产出一份标注了缺口的画像，让人在确认环节一次性补齐。
 
+### 决策七：断言四（human_review 留痕巡检）的豁免线改用 effect_log.applied_at，不用 job_profile.created_at
+
+**背景**：`app/audit/assertions.py` 的 `assert_every_decision_has_human_review`（断言四）用 `HUMAN_REVIEW_ENFORCED_FROM` 划一条豁免线，原实现拿 `job_profile.created_at`（画像草案创建时刻）跟这条线比。但 `effect_confirm_profile` / `effect_abandon_profile` 是就地 `UPDATE status`，从不推进 `created_at`——凡是在豁免线之前创建、豁免线之后才被确认/放弃的草案，永远落在豁免侧，日后若漏写 `human_review`，断言完全看不见。2026-09-04 Shao Peishen 裁决「现在修」，见 `tasks.md` 6.x 落地偏离登记 Task 8 parked 条目。
+
+**做法**：豁免判定改用该行**终态决策实际提交的时刻**——即写这条决策的 `effect_*` 节点在 `idempotent_effect` 装饰器里落 `effect_log` 那一刻的 `applied_at`（工程铁律 1 的产物：业务写与 `effect_log` 行同一事务提交，`applied_at` 就是决策真实发生的时刻，不是新造的机制）。
+
+关联 key（本次核实清楚，不留给实现阶段猜）：
+
+- `effect_key = f"{job_id}:{node_name}:{version}"`，与 `app/storage/idempotency.py::idempotent_effect`（:32）的幂等键格式逐字同源
+- `job_id` = `job_profile.job_id`（同时是 `effect_confirm_profile`/`effect_abandon_profile` 调用时的 `thread_id`，见 `app/web/server.py` 的调用点）
+- `version` = `job_profile.version`（INTEGER 列），落进 `effect_log.business_key`（TEXT 列）时是 `str(version)`（见 `app/web/server.py` 各处 `business_key=str(version)`）——**两列类型不同，比较时必须显式转换**（如 `CAST(e.business_key AS INTEGER) = p.version`），不要依赖 SQLite 的隐式仿射转换，否则在某些取值下静默匹配不上却不报错
+- `node_name` 按终态 `status` 二选一，新增一张与既有 `TERMINAL_STATUS_DECISIONS` 并行的映射：
+  ```python
+  TERMINAL_STATUS_EFFECT_NODES: dict[str, str] = {
+      "approved": "effect_confirm_profile",
+      "abandoned": "effect_abandon_profile",
+  }
+  ```
+  这张表与 `app/graph/nodes.py` 里两个 `@idempotent_effect(...)`（:233、:337）的字面量参数逐字同源，改一处必须同步改另一处——与 `DECISION_APPROVED`/`DECISION_ABANDONED` 那组常量已有的纪律（`nodes.py:20-24` 的注释）相同。
+
+**查不到 effect_log 行怎么处理（fail-closed）**：若某条终态 `job_profile` 行按上述 key 在 `effect_log` 里查不到对应行（例如非经由 `effect_*` 节点写入的历史/测试数据），一律**按未豁免处理**——查不到决策时刻不能反过来当作"证明它发生在豁免线之前"。这与断言四本身"表不存在 → 判失败"的 fail-closed 取向一致：宁可多报一条需要人核实的违例，不可漏判。
+
+**豁免计数同步改口径**：现有 `exempted` 计数（detail 文案「豁免 N 条」的来源，`app/audit/assertions.py:322-327` 附近）目前也是拿 `created_at` 与豁免线比，必须换成与上面同一套 `effect_log` 关联逻辑，否则"违例判定"与"豁免计数"用两套不同的时间基准，报出来的数字会自相矛盾。
+
+**替代方案**：给 `job_profile` 加一列记录终态转移时刻（如 `terminal_at`）。否决——`effect_log.applied_at` 已经是这个事实的真源，另加一列是给同一个事实开第二个真源，且需要一次数据回填迁移；现有数据不缺这个信息，只是断言没在用它。
+
+**`HUMAN_REVIEW_ENFORCED_FROM` 常量去留**：**不改名、不挪值**。这个名字说的是"人工决策留痕的强制线"，从未绑定"以草案创建时刻判定"这个语义——错的是紧邻它的比较逻辑（拿错了时间戳去比），不是这个名字本身。结论：保留常量与取值 `"2026-09-04 00:00:00"`，只需要更新它上方的注释，把"早于此刻创建的画像版本豁免"改为"早于此刻**做出决策**（`effect_log.applied_at`，非画像草案创建时刻）的画像版本豁免"，消除本次修复前遗留的隐藏歧义。
+
 ## Risks / Trade-offs
 
 - **节点重跑导致重复副作用** → 幂等键 + `effect_log` 唯一索引；W7 安排专项测试，用"强制中断并恢复"的方式验证每个 `effect_*` 节点
