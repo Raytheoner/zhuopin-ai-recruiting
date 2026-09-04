@@ -558,3 +558,125 @@ def test_ungrounded_terms_are_shown_as_advice_not_a_blocker():
     """决策 12：只观测不拦截。⛔ 前端不得因为有未溯源术语就禁用复制或保存。"""
     assert "jd-grounding" in INDEX_HTML
     assert "ungrounded_terms" in INDEX_HTML
+
+
+# ── 交付单元 8：会话之外的三个只读视图（tasks 8.1 / 8.2 / 8.4）───────────────
+
+
+def test_three_views_and_their_nav_buttons_exist():
+    for element_id in (
+        "nav-intake", "nav-list", "nav-queue",
+        "view-intake", "view-list", "view-queue",
+        "job-list", "job-detail", "queue-list",
+    ):
+        assert f'id="{element_id}"' in INDEX_HTML, f"缺少 #{element_id}"
+
+
+def test_view_endpoints_are_fetched_with_relative_paths():
+    """部署约束 1：挂到任意子路径下都要能工作，靠 <base href> 解析。
+    带开头 "/" 的路径会打到门户根上去。"""
+    for path in ("api/jobs", "api/queues/needs-manual"):
+        assert f'"{path}"' in INDEX_HTML or f"`{path}`" in INDEX_HTML
+
+    for absolute in ('"/api/jobs', "`/api/jobs", '"/api/queues', "`/api/queues"):
+        assert absolute not in INDEX_HTML
+
+
+def test_view_code_issues_no_write_requests():
+    """本单元只读（Global Constraints 第 7 条）。前端只许 GET。
+
+    既有的写请求（POST /reply、/confirm、/revise、/abandon、/jd…）都显式带
+    method: "POST"，本测试数一遍 POST 出现次数，⛔ 新增视图不许再添一个。
+    """
+    post_count = INDEX_HTML.count('method: "POST"')
+    assert post_count == 7, (
+        f'index.html 里 method: "POST" 出现了 {post_count} 次，预期 7 次'
+        "（reply/create 共用 1、confirm 1、revise 1、abandon 1、jd 编辑 1、"
+        "jd 标记人工 1、jd 保存 1）。交付单元 8 的三个视图是只读的，"
+        "⛔ 不许新增写请求；确实需要新增写入时，先回到 CLAUDE.md 的合规红线"
+        "「AI 只做排序推荐，不做自动淘汰」重新论证。"
+    )
+
+
+def test_queue_page_has_no_batch_action_buttons():
+    """合规红线在前端的落点：队列只展示、不处置。"""
+    for forbidden in ("批量确认", "批量放弃", "批量处理", "一键确认", "全部确认"):
+        assert forbidden not in INDEX_HTML
+
+
+def test_detail_view_does_not_render_jd_body_text():
+    """Global Constraints 第 5 条：详情页只给 JD 状态徽标，不给正文。
+    渲染正文就要自己保证 AI 生成标识不被裁掉，而正文已经有专门的展示位。"""
+    match = re.search(r"function renderVersionBlock\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 renderVersionBlock()"
+
+    body = match.group(0)
+    assert "jd_text" not in body
+    assert "带 AI 生成标识" in body
+
+
+def test_view_rendering_never_uses_innerhtml():
+    """岗位标题与画像字段值是 LLM 自由生成的文本，innerHTML 是一条注入路径。
+    这条与既有的 renderProfileSummary / renderQuestionBlock 是同一条纪律。"""
+    assert "innerHTML" not in _WITHOUT_LINE_COMMENTS
+
+
+def test_view_switch_reloads_data_instead_of_caching():
+    """列表与队列是别人（HR、另一个业务经理）也会改动的数据。缓存住只会让人
+    对着一份过期的队列做决定。"""
+    match = re.search(r"function showView\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 showView()"
+    assert "loader()" in match.group(0)
+
+
+# ── 控制器追加：Task 1 / Task 3 两位 reviewer 共同标记的 ⚠️ ────────────────
+#
+# API 回执里刻意同时带着英文原始字段（status / decision_type /
+# latest_profile_status）与中文对应字段（stage_label / decision_label /
+# status_label）：英文字段只给逻辑用，绝不给展示用。这条断言把这条纪律焊死
+# 在机器判据上——只扫本交付单元新增的那段 JS（从下面这个注释到文件末尾），
+# 不牵连既有代码：既有代码今天没有用到这三个字段，扫全文件只会让这条测试
+# 对不相关的历史代码变化过度敏感。
+
+
+def _view_rendering_js() -> str:
+    marker = "会话之外的三个只读视图（tasks 8.1 / 8.2 / 8.4）"
+    parts = INDEX_HTML.split(marker, 1)
+    assert len(parts) == 2, (
+        "index.html 里找不到交付单元 8 新增视图代码段的标记注释——"
+        "三个只读视图的前端代码可能还没写，或者标记注释被改掉了。"
+    )
+    return parts[1]
+
+
+def test_view_rendering_never_writes_raw_english_status_fields_into_dom():
+    """⛔ 界面上不得出现英文 snake_case 字段名或英文 status 值（Global
+    Constraints 第 13 条）。Task 1 / Task 3 的 reviewer 都标记过同一个 ⚠️：
+    API 回执里 status / decision_type / latest_profile_status 是给逻辑用的
+    原始字段，从来不是给展示用的——真正要渲染的是它们各自的中文对应字段
+    stage_label / decision_label / status_label。
+
+    这条测试机械地把这条纪律焊在代码上：本单元新增的渲染代码里，一次都不
+    允许出现对这三个英文字段的属性访问（点号或方括号形式），无论是直接传
+    给 el()/textContent，还是先赋值给变量再用——只要访问了就有可能被
+    渲染，宁可整体禁止访问。
+    """
+    section = _view_rendering_js()
+    section_without_comments = "\n".join(
+        line.split("//", 1)[0] for line in section.splitlines()
+    )
+
+    for field in ("status", "decision_type", "latest_profile_status"):
+        dotted = re.search(rf"\.{re.escape(field)}\b", section_without_comments)
+        bracketed = re.search(
+            rf"""\[\s*["']{re.escape(field)}["']\s*\]""", section_without_comments
+        )
+        assert not dotted, (
+            f"新视图代码里出现了对英文字段 .{field} 的属性访问——"
+            f"只允许渲染它的中文对应字段（stage_label / decision_label / "
+            f"status_label 之一）。"
+        )
+        assert not bracketed, (
+            f"新视图代码里出现了对英文字段 [\"{field}\"] 的属性访问——"
+            f"只允许渲染它的中文对应字段。"
+        )

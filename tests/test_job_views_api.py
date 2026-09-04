@@ -662,3 +662,50 @@ def test_queue_contains_exactly_the_needs_manual_jobs_and_is_server_side_state(t
     fresh_ids = {job["job_id"] for job in fresh_client.get("/api/queues/needs-manual").json()["jobs"]}
 
     assert fresh_ids == expected
+
+
+# ── 控制器追加：三个视图端点 + 静态资源在任意前缀下都真的能跑 ────────────────
+#
+# 上面的 test_*_is_mounted_under_the_configured_root_path 几条各自只验了一个
+# 端点在一个前缀（/hr/recruit-agent）下工作。那证明不了"任意子路径"——都用
+# 同一个真实部署前缀，硬编码成那一个值也会让它们全部通过。这条测试故意跑两个
+# 前缀：一个是真实部署前缀，另一个是随手起的、更深、与部署无关的前缀
+# （/zp-7f3a9c/nested/deep），只有两个都过，才说明挂载机制本身是通用的，
+# 不是碰巧只对 /hr/recruit-agent 生效（部署约束 1：验收标准是挂到任意子路径
+# 下都能正常工作）。
+
+
+def test_all_view_endpoints_and_assets_work_under_any_root_path(tmp_path):
+    from app.web.server import STATIC_DIR
+
+    for index, prefix in enumerate(("/hr/recruit-agent", "/zp-7f3a9c/nested/deep")):
+        # 两个前缀分别用独立的子目录起独立的 db 文件，避免共用一份
+        # tmp_path / "views.db" 而互相脏读。
+        sub_dir = tmp_path / f"prefix-{index}"
+        sub_dir.mkdir()
+        client, conn = _make_app(sub_dir, root_path=prefix)
+        _seed_job(conn, "j1")
+        _seed_version(conn, "j1", 1, {"job_title": "A"})
+
+        index_resp = client.get(f"{prefix}/")
+        assert index_resp.status_code == 200
+        assert f'<base href="{prefix}/">' in index_resp.text
+
+        assert client.get(f"{prefix}/api/jobs").status_code == 200
+        assert client.get(f"{prefix}/api/jobs/j1/profile").status_code == 200
+        assert client.get(f"{prefix}/api/queues/needs-manual").status_code == 200
+
+        # 静态资源要在前缀下可用，且不硬编码文件名——文件名从磁盘上真实的
+        # static 目录现读，index.html 改名或将来加/删静态文件都不需要跟着改
+        # 这条测试。
+        static_files = [path.name for path in STATIC_DIR.iterdir() if path.is_file()]
+        assert static_files, "static 目录下没有任何文件，挂载点无从验证"
+        for filename in static_files:
+            resp = client.get(f"{prefix}/static/{filename}")
+            assert resp.status_code == 200, f"{filename} 在前缀 {prefix} 下 404 了"
+
+        # 反向证明：配了前缀之后，不带前缀的路径必须不是 200——否则前缀就是
+        # 摆设，没有真的生效（与既有的 test_*_is_mounted_under_the_configured_
+        # root_path 系列同一个判据）。
+        assert client.get("/api/jobs").status_code == 404
+        assert client.get("/api/queues/needs-manual").status_code == 404
