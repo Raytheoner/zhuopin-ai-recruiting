@@ -1,4 +1,4 @@
-**进度：50/72**（2026-09-04 `0904I` 回勾 9.6「断言四豁免线改用决策发生时刻」——豁免线由 `job_profile.created_at` 改判 `effect_log.applied_at`，查不到决策时刻按未豁免处理（fail-closed），违例判定与豁免计数共用同一段 `_DECISION_MOMENT_SQL`；4 commits `c8f54be`→`b32038e`，rebase 后 `6ed67da`；全量 1008 → **1015 passed, 1 skipped**。落地偏离与 ⏸ 留步一条见 9.6 条目下的登记）
+**进度：53/72**（2026-09-04 `0904K` 回勾 1.2b/5.8/5.9「硬门槛规则草案」——建表 `hard_requirement`（只存不执行，`blocking` 是标注不是开关）；提取是确定性纯函数 `app/agents/hard_requirement.py`，⛔ 不调模型；落库在既有 `effect_confirm_profile` 体内，与画像冻结、`human_review` 同一事务、同一连接，⛔ 不新增 `effect_*` 节点；主观描述两道防线（`soft_skill_keywords` 结构性排除 + 词表过滤，落库前 `assert_no_subjective_requirements` 命中即抛）。8 commits `401d01c`→`8efc645`；全量 1008 → **1061 passed, 1 skipped**。落地偏离三条与 parked 技术债三条见 5.8/5.9 条目下的登记）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -86,7 +86,7 @@
 
 - ~~[ ] 1.1 Postgres 建库，启用 pgvector 扩展（M1 不用，但一次建好省得后面停机）~~ ⚰️ **已作废**，原因：M1 选型改为 SQLite（`app/storage/db.py`），本条要交付的行为在 M1 一次都没被用到。Postgres + pgvector 仍在技术栈里（`CLAUDE.md` 技术栈一节），但届时是随 **M2 迁移变更包**按 M2 的表结构重新立项，不是照着这条做——保留它只会让人以为 M1 欠了一笔其实不存在的债
 - [x] 1.2 建表 `job`、`job_profile`（含 version/status） → **已用 SQLite 实现**，见 `app/storage/db.py` 的 `SCHEMA`：`job`（id/title/department/status/created_at）、`job_profile`（含 `version` 与 `status`，另有 `unspecified_fields` 等 6 个后加列，由 `apply_column_migrations` 幂等补齐）。测试 `tests/test_db.py` / `tests/test_db_migration.py`
-- [ ] 1.2b 建表 `hard_requirement`（**2026-08-20 从原 1.2 拆出**）—— 该表至今不存在，且它是 5.8「硬门槛规则提取」的载体，两条一起做才有意义。拆出来是因为原 1.2 一句话里三张表两张已建、一张没建，整条勾或整条不勾都是错的
+- [x] 1.2b 建表 `hard_requirement`（**2026-08-20 从原 1.2 拆出**）—— 该表至今不存在，且它是 5.8「硬门槛规则提取」的载体，两条一起做才有意义。拆出来是因为原 1.2 一句话里三张表两张已建、一张没建，整条勾或整条不勾都是错的
 - [x] 1.3 建表 `analysis_run`（模型标识/版本/prompt版本/temperature/输入哈希/原始响应/token用量）
       ⤷ **已移出**到 `ai-audit-trail-and-outbound-gate`，见文末「已移出」清单
       ✅ **2026-09-04 回勾：已由 `ai-audit-trail-and-outbound-gate` U1 / commit `74fddbf` 交付**，见 `app/storage/db.py:84-112` 的 `CREATE TABLE IF NOT EXISTS analysis_run`。本条括号里的七项字段逐项对上：模型标识 = `configured_model`(:98) + `response_model`(:99) + `system_fingerprint`(:100)（配置侧与响应侧分两列，兑现铁律 5 的"取回响应实际 model"）、prompt 版本 `prompt_version`(:101)、`temperature`(:102)、输入哈希 `input_hash`(:103)、原始响应 `raw_response`(:105)、token 用量 `token_usage`(:106)；另多出 `rubric_snapshot` / `latency_ms` / 索引 `idx_analysis_run_application`。测试 `tests/test_db_audit_schema.py`。该包已归档：`openspec/changes/archive/2026-09-04-ai-audit-trail-and-outbound-gate/tasks.md` 1.x
@@ -148,9 +148,23 @@
 - [ ] 5.6 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
       ⚠️ 完全未实现，且本仓库**没有任何定时/后台任务基础设施**（Web 通道是同步请求/响应）。`JobStatus.ABANDONED` 只是枚举值，无写入路径。保持未勾
 - [x] 5.7 画像产出与 Schema 校验接线 → **已实现**，见 `app/web/server.py:161-204`：确认时先 `JobProfile.model_validate` 再落 approved（顺序刻意——校验失败时画像不能已被标成 approved，否则既拿不到 JD 又回不去追问）；失败返回 422 并逐字段说明「期望什么、当前值是什么」，不让 `ValidationError` 裸奔成 500。测试 `tests/test_web_api.py`
-- [ ] 5.8 硬门槛规则提取：字段/运算符/值/是否阻断 + 一句人类可读说明
+- [x] 5.8 硬门槛规则提取：字段/运算符/值/是否阻断 + 一句人类可读说明
       ⚠️ 完全未实现——没有 `hard_requirement` 表（见 1.2b）、没有运算符/阻断建模。画像里只有 `core_skills[].required`（布尔）与 `soft_skill_keywords`，表达不了"运算符 + 值 + 是否阻断"。保持未勾
-- [ ] 5.9 **主观描述拦截**：断言"沟通能力强"这类表述不得进入 `hard_requirement`，只留在软技能关键词
+- [x] 5.9 **主观描述拦截**：断言"沟通能力强"这类表述不得进入 `hard_requirement`，只留在软技能关键词
+
+  **落地偏离登记（3 条，均为 controller 授权，方向一致：修复朝计划自述的意图走，结果更保守）**
+  1. **年限上限词表**（Task 2 review）：计划文本内联 `if "以下" in text or "以内" in text`，实测「不超过3年/少于3年/不到3年/3年封顶」被反向解析成 `gte 3`——把「最多 3 年」翻成「至少 3 年」，方向完全相反。改为具名常量 `_EXPERIENCE_UPPER_BOUND_MARKERS`（8 个标记）。
+  2. **主观词过滤覆盖面**（Task 3 review）：计划只把 `is_subjective` 接进 `_extract_core_skills` / `_extract_non_blocking_list`；`_extract_autosar` 与 `_extract_functional_safety` 同样从画像自由文本建规则、且恒为 `blocking=True`，主观词写进这两个字段会一路走到落库前断言 → **整条确认事务硬失败**，与模块自述「保守方向是少一条规则而不是整个确认失败」相悖。补齐这两处静默跳过。
+  3. **学历门槛改子句级判定**（整支 final review，两轮）：计划的 `_education_floor` 对层级别名做全串子串匹配，无否定/上限守卫，「学历不限，本科优先」「本科以下」「本科以上优先」都会**凭空生成** `blocking=True` 的学历门槛——这是模块自述里唯一被称为不可逆的方向（「门槛取高了会把合格的人挡在外面，而这条规则将来要用来向候选人解释淘汰原因」）。第一轮加「以上」逃逸口仍被「X以上优先」击穿（9 条对抗串里 5 条照旧凭空造门槛，含明写「不限」仍产出 `blocking=True`）；第二轮改为子句级：全文 `不限` 否决 → 按 `，、；。` 切子句 → 丢弃含 `优先/亦可/最好/更佳/加分/可放宽` 的子句 → 丢弃含 `以下/以内` 的子句 → 存活子句里「层级别名 + 及以上/以上/起步/最低」才算下限 → 取最低档。
+     ⚠️ 第二轮**超出了 `subagent-driven-development` 协议「整支 review 只允许一轮修复」的规定**。controller 判断：在合规相邻产物里放行一条凭空生成的 blocking 门槛，代价高于再跑一轮，且修复面已精确定位、收敛。此处显式登记该越界。
+
+  **反证与变异实跑（controller 亲跑，非委派）**
+  - 5.9 反证：`core_skills` 塞「沟通能力强」「有责任心」→ 提取 6 条规则，无一含「沟通」/「责任心」；画像 `soft_skill_keywords` 原样保留；落库前断言放行。
+  - 变异 A 删掉两处 `is_subjective` 拦截 → 2 failed；变异 B `assert_no_subjective_requirements` 首行 return → 3 failed；变异 C 清空 `SUBJECTIVE_TERMS` → 4 failed；变异 D 给 `_record_hard_requirements` 加自己的 `conn.commit()` 拆事务 → `test_rules_land_in_the_same_transaction_as_the_confirmation` 变红（6 行孤儿规则残留）。四次变异全部变红，复原后工作区与 HEAD 无差异。
+  - 恒等式（铁律 1）：正常确认 `hard_requirement=6 / effect_log=1`，重放 x2 仍 6/1（被 `effect_log` 短路）；空 `reviewer` → `IntegrityError` 回滚到 0/0、`job.status` 仍 `drafting`（规则行先写、证明被回滚而非从未写）；主观规则绕过提取 → `SubjectiveRequirementError` 穿透，同样回滚到 0/0。
+  - 学历守卫对抗集 22 条：15 条应无门槛全部 `None`，7 条应有门槛全部正确；**凭空造门槛 0 条，丢失门槛 0 条**。
+
+  **⏸ 本单元刻意不做（登记，非漏跑）**：规则的**执行**（拿 `hard_requirement` 去筛简历）属简历筛选环节，合规上必须先有人工确认节点；规则的**启停开关**（UI/API）属 Web 泳道，表结构已能承载（一条规则一行、`blocking` 独立），加开关不需改表。
       ⚠️ 保持未勾，且**不能靠 5.2 的 prompt 约束替代**：`hard_requirement` 表根本不存在（1.2b/5.8），"不得进入"这条断言目前**无处可断**。现状只有 `SYSTEM_PROMPT` 里一句"不能因为用户说你决定就自己写进 profile_patch"和 `tests/test_intake_agent.py:378` 那个**只断言 prompt 文本里含某几个关键词**的测试——那验的是提示词写了什么，不是行为。随 5.8 一起做
 
 ## 6. 确认断点（capability: job-profile-approval）
