@@ -1,4 +1,4 @@
-**进度：45/72**（2026-09-04 交付单元 7「JD 溯源与导出」合入 + 9.6 新增「断言四豁免线改用决策时刻」待修）
+**进度：49/72**（2026-09-04 交付单元 7「JD 溯源与导出」合入 + 9.6 新增「断言四豁免线改用决策时刻」待修 + 0904G 账目对齐回勾 1.3 / 2.6 / 1.6b / 8.3 四条——**行为均由其他交付单元已落地**，本次无任何代码改动）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -87,15 +87,17 @@
 - ~~[ ] 1.1 Postgres 建库，启用 pgvector 扩展（M1 不用，但一次建好省得后面停机）~~ ⚰️ **已作废**，原因：M1 选型改为 SQLite（`app/storage/db.py`），本条要交付的行为在 M1 一次都没被用到。Postgres + pgvector 仍在技术栈里（`CLAUDE.md` 技术栈一节），但届时是随 **M2 迁移变更包**按 M2 的表结构重新立项，不是照着这条做——保留它只会让人以为 M1 欠了一笔其实不存在的债
 - [x] 1.2 建表 `job`、`job_profile`（含 version/status） → **已用 SQLite 实现**，见 `app/storage/db.py` 的 `SCHEMA`：`job`（id/title/department/status/created_at）、`job_profile`（含 `version` 与 `status`，另有 `unspecified_fields` 等 6 个后加列，由 `apply_column_migrations` 幂等补齐）。测试 `tests/test_db.py` / `tests/test_db_migration.py`
 - [ ] 1.2b 建表 `hard_requirement`（**2026-08-20 从原 1.2 拆出**）—— 该表至今不存在，且它是 5.8「硬门槛规则提取」的载体，两条一起做才有意义。拆出来是因为原 1.2 一句话里三张表两张已建、一张没建，整条勾或整条不勾都是错的
-- [ ] 1.3 建表 `analysis_run`（模型标识/版本/prompt版本/temperature/输入哈希/原始响应/token用量）
+- [x] 1.3 建表 `analysis_run`（模型标识/版本/prompt版本/temperature/输入哈希/原始响应/token用量）
       ⤷ **已移出**到 `ai-audit-trail-and-outbound-gate`，见文末「已移出」清单
+      ✅ **2026-09-04 回勾：已由 `ai-audit-trail-and-outbound-gate` U1 / commit `74fddbf` 交付**，见 `app/storage/db.py:84-112` 的 `CREATE TABLE IF NOT EXISTS analysis_run`。本条括号里的七项字段逐项对上：模型标识 = `configured_model`(:98) + `response_model`(:99) + `system_fingerprint`(:100)（配置侧与响应侧分两列，兑现铁律 5 的"取回响应实际 model"）、prompt 版本 `prompt_version`(:101)、`temperature`(:102)、输入哈希 `input_hash`(:103)、原始响应 `raw_response`(:105)、token 用量 `token_usage`(:106)；另多出 `rubric_snapshot` / `latency_ms` / 索引 `idx_analysis_run_application`。测试 `tests/test_db_audit_schema.py`。该包已归档：`openspec/changes/archive/2026-09-04-ai-audit-trail-and-outbound-gate/tasks.md` 1.x
 - [x] 1.4 建表 `human_review`（决策人/决策类型/时间/关联画像版本，预留 batch_id 供 M2 批量确认用） → **已实现**，见 `app/storage/db.py` 的 `SCHEMA`：`human_review(id/job_id/profile_version/decision_type/reviewer/feedback/batch_id/decided_at)`，两条 CHECK（decision_type 三值白名单、reviewer 非空白）+ 唯一索引 `idx_human_review_decision`。新表走 CREATE TABLE IF NOT EXISTS，⛔ 未进 `_ADDED_COLUMNS`。测试 `tests/test_human_review_schema.py`
 - [x] 1.5 建表 `effect_log`（幂等键唯一索引） → **已用 SQLite 实现**，见 `app/storage/db.py`：`effect_log(effect_key PRIMARY KEY, thread_id, node_name, business_key, applied_at)` + `CREATE UNIQUE INDEX idx_effect_log_key`。幂等键格式与写入路径见 4.2
 - [ ] 1.5b 建表 `wecom_callback`（回调落库）（**2026-08-20 从原 1.5 拆出**）
       ⤷ **已移出**到阶段二·企微通道，见文末「已移出」清单
 - [x] 1.6 接入 LangGraph checkpointer → **已用 SqliteSaver 实现**，见 `app/graph/build.py:124-126`：checkpointer 拿一个**指向同一个数据库文件但完全独立**的连接（方向 A，修 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` 的事务归属冲突），checkpoint 按 `thread_id` 分区落盘。原文写的「Postgres checkpointer」推迟到 M2 迁移（同 1.1）
-- [ ] 1.6b 跨进程重启恢复的自动化验证（**2026-08-20 从原 1.6 的"验证进程重启后能按 thread_id 恢复"拆出**）—— 现有 `tests/test_graph_idempotency.py::test_graph_replay_from_scratch_does_not_duplicate_effects` 验的是**同进程内同 thread_id 重复 invoke** 不重复产生副作用，**不是**进程重启后按 thread_id 续上。checkpoint 确实落在 SQLite 文件里、结构上重启可恢复，但这件事至今没有任何测试断言过。6.3 的「挂起状态重启后可恢复」指向的是同一个缺口
-      ⚠️ **2026-09-04 补**：这条要的覆盖实际已经落地，见 `tests/test_suspend_recovery.py::test_a_brand_new_process_recovers_the_suspended_thread`（真开一个新操作系统进程，只给数据库路径，断言按 thread_id 读回 checkpoint）。**保持未勾，等 Shao Peishen 确认**——本次交付指令逐条列了要回勾的九条（6.1/6.3/6.4/6.5/6.6/6.7/6.9 + 1.4 + 9.3），未列出 1.6b，回勾与否不由代理人代拍
+- [x] 1.6b 跨进程重启恢复的自动化验证（**2026-08-20 从原 1.6 的"验证进程重启后能按 thread_id 恢复"拆出**）—— 现有 `tests/test_graph_idempotency.py::test_graph_replay_from_scratch_does_not_duplicate_effects` 验的是**同进程内同 thread_id 重复 invoke** 不重复产生副作用，**不是**进程重启后按 thread_id 续上。checkpoint 确实落在 SQLite 文件里、结构上重启可恢复，但这件事至今没有任何测试断言过。6.3 的「挂起状态重启后可恢复」指向的是同一个缺口
+      ✅ **2026-09-04 回勾：已由 0904C / commit `4e055b1` 交付**，见 `tests/test_suspend_recovery.py:125 test_a_brand_new_process_recovers_the_suspended_thread`——真开一个新操作系统进程，只给数据库路径，断言按 thread_id 读回 checkpoint，正是本条要的"进程重启后按 thread_id 续上"（区别于 `test_graph_idempotency.py` 的同进程重复 invoke）。
+      📌 回勾授权来源：本条曾于同日标注「保持未勾，等 Shao Peishen 确认」，理由是 0904C 的交付指令逐条列了九条（6.1/6.3/6.4/6.5/6.6/6.7/6.9 + 1.4 + 9.3）未含 1.6b，代理人不自行代拍。0904G「intake 账目对齐」的指令**显式把 1.6b 列为要核证据回勾的四条之一**，该等待条件已满足，故本次回勾。⛔ 未改变任何代码或行为，只是账目对齐
 - [ ] 1.7 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
       ⤷ **已移出**到 M2 Postgres 迁移，见文末「已移出」清单
 
@@ -108,8 +110,10 @@
 - [x] 2.4 结构化输出：`json_schema` 优先、`json_object` + Pydantic 本地校验降级，两条路径都实现 → **已实现**，见 `app/llm/gateway.py:273-325` 的 `_call_model`：`_to_strict_json_schema` 把 pydantic schema 转成 strict 形态走 `json_schema`；`_has_free_form_object` 命中自由 dict 字段（如 `_IntakeTurnSchema.profile_patch`）时降级为 `json_object` 并把 schema 写进 system prompt。两条路径末端都过 `schema.model_validate`（:258）
 - [ ] 2.5 校验失败重试至多 2 次，仍失败转 `needs_manual`，**不产出半成品**
       ⚠️ 重试与"不产出半成品"两半**已实现**（`max_retries=2`、`attempts = max_retries + 1`、失败抛 `SchemaExtractionFailed` 而不返回半成品），但**"转 `needs_manual`" 完全没有实现**——`JobStatus.NEEDS_MANUAL` 只是个枚举值，没有任何代码写它，也没有队列承接（见 8.4）。保持未勾
-- [ ] 2.6 每次调用自动写 `analysis_run`，无需业务代码显式调用
+- [x] 2.6 每次调用自动写 `analysis_run`，无需业务代码显式调用
       ⤷ **已移出**到 `ai-audit-trail-and-outbound-gate`，见文末「已移出」清单
+      ✅ **2026-09-04 回勾：已由 `ai-audit-trail-and-outbound-gate` U3 / commit `883a4df` 交付**。注入点唯一一处：`app/main.py:40` 模块级构造 `RecorderAuditHook(_audit_recorder, _audit_conn)`，`app/main.py:43` 的 `_gateway_factory()` 把它作为 `audit_hook` 传进 `LLMGateway`（原先接的 `NoopAuditHook` 已退回测试专用，见 `app/llm/gateway.py:144`）。"调用即写、业务代码零改动"两半都有断言：`tests/test_audit_end_to_end.py::test_one_scoring_call_lands_every_reproducibility_field` 不 mock 任何一层留痕，一次 `extract_structured` 走完 `LLMGateway → RecorderAuditHook → AuditRecorder → SqliteSink`，直接 `SELECT * FROM analysis_run` 逐字段核对；`tests/test_main_wiring.py::test_importing_app_main_wires_a_real_recorder_hook` 起子进程真 import `app.main`，断言 `_gateway_factory()._audit_hook` 是 `RecorderAuditHook` 且两次调用同一对象（防每次新建连接）。
+      ⚠️ 已交付的是**通道**，不是"留痕可按业务标识检索"：生产三个调用点（`intake_agent.py:972` / `jd_agent.py:69` / `scripts/compare_models.py:115`）目前一个都不传 `audit_context`，写进去的 `application_id` / `job_id` / `thread_id` 全是 NULL。接业务侧另属一单元，登记在 `docs/tech-debt.md` TD-1
 
 ## 3. 地基：企业微信通道
 
@@ -229,7 +233,9 @@
 
 - [ ] 8.1 岗位列表与状态视图 —— 无列表接口（只有 `GET /api/jobs/{job_id}` 查单个）、无列表页
 - [ ] 8.2 画像详情页（含版本历史与生成快照）—— `job_profile` 逐版落库了，但没有任何页面或接口把版本历史读出来
-- [ ] 8.3 JD 查看与复制 —— 查看已有（`#jd-output`），复制没有（同 7.7）
+- [x] 8.3 JD 查看与复制 —— 查看已有（`#jd-output`），复制没有（同 7.7）
+      ✅ **2026-09-04 回勾：缺的那半（复制）已由交付单元 7 / commit `77f78a1` 交付**，见 `app/web/static/index.html`：`#jd-copy-btn`「复制全文」按钮(:82) + `#jd-copy-hint` 结果提示(:85)，处理函数 `copyJdText()`(:470-508) 先走 `navigator.clipboard.writeText`，再用 `textarea` + `execCommand("copy")` 兜底（demo 挂明文 `http://…:8095`，非安全上下文里 `navigator.clipboard` 直接不存在且不抛异常，只写前半段按钮会一声不响地什么都不做）。复制的是落库原文 `currentJdText`，含 AI 生成标识，与 7.7 同一处实现。查看侧 `#jd-output`(:78) 本就在
+      ⚠️ 本条只覆盖 JD 的查看与复制这一件事，**不代表第 8 章"会话之外的视图"这个整体已补上**——8.1 / 8.2 / 8.4 仍是三条独立缺口，章首现状说明按那三条读
 - [ ] 8.4 `needs_manual` 队列（HR 处理转人工的岗位）—— 无队列。前端只在单次 JD 生成 `needs_manual` 时提示一句，页面一关就没了；`JobStatus.NEEDS_MANUAL` 至今无人写入（同 2.5）
 
 ## 9. 验收与交付
@@ -270,6 +276,8 @@
 |---|---|---|
 | 1.3 | 建表 `analysis_run` | 该包 proposal 的 What Changes 明确写「新增 SQLite 表 `analysis_run`（一次 AI 调用的完整可复现快照）与 `criterion_score`」，字段比本条列的更全（多 rubric 快照、`evidence_ref`） |
 | 2.6 | 每次调用自动写 `analysis_run` | 同上。调用点**已经在本包里就位**了——`app/llm/gateway.py:245` 的 `self._audit_hook.record(...)`，目前接的是 `NoopAuditHook`（只打 debug 日志）。该包的工作就是把这个钩子换成真实实现，属**接线**不属新建 |
+
+✅ **2026-09-04：这两条已随 `ai-audit-trail-and-outbound-gate` 归档交付**（`openspec/changes/archive/2026-09-04-ai-audit-trail-and-outbound-gate/`，1.3 → U1 commit `74fddbf`，2.6 → U3 commit `883a4df`），本文件对应条目已回勾并附证据行。移出登记保留原样不删——它记录的是"为什么当时不在本包做"，与"后来做完了"是两件事。
 
 ⚠️ 连带关系：`docs/tech-debt.md` 的 **TD-1** 已登记「`job_profile` 的 `turn_started_at` /
 `llm_latency_ms` 两列是过渡形态，`analysis_run` 落地即删」。这两列是本包之后由
