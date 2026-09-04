@@ -15,7 +15,13 @@ from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
-from app.graph.nodes import effect_confirm_profile, effect_generate_and_persist_jd
+from app.graph.nodes import (
+    MAX_REVISIONS,
+    effect_confirm_profile,
+    effect_generate_and_persist_jd,
+    effect_request_revision,
+    revision_count,
+)
 from app.middleware.auth import AuthMiddleware, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
@@ -41,6 +47,11 @@ class ConfirmRequest(BaseModel):
     # 缺省 false = 未知情 = 不放行。⛔ 绝不能缺省 true：那等于系统替业务经理
     # 做了"我知道有缺口"这个声明（合规红线：人工确认节点必须是真的人在确认）。
     acknowledged_gaps: bool = False
+
+
+class ReviseRequest(BaseModel):
+    # 业务经理"以自然语言描述要改什么"（spec Scenario：提出修改意见）。
+    feedback: str
 
 
 def _render_index(root_path: str) -> str:
@@ -161,6 +172,30 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         latest = channel.latest(job_id)
         return {"type": latest.type, "payload": _response_payload(latest)}
 
+    # 终态说明文案。⛔ 不要在这里写"请联系管理员"这类无动作的话——业务经理
+    # 需要知道**下一步能做什么**，而不是知道自己撞墙了。
+    _ABANDONED_DETAIL = "这个岗位已经放弃，内容保留但不再流转；如需重开请新建一个岗位。"
+    _APPROVED_DETAIL = (
+        "这个岗位的画像已经确认冻结，不能再修改；"
+        "如需变更请新建一个岗位（画像冻结后不可原地修改，改动一律走新版本）。"
+    )
+
+    def _job_status(job_id: str) -> str:
+        row = conn.execute("SELECT status FROM job WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        return row[0]
+
+    def _reject_if_abandoned(job_id: str) -> None:
+        """放弃是终态：⛔ 不允许继续作答、也不允许再确认。
+
+        少了这道守卫，一个已放弃的岗位可以被 POST /reply 复活、再被确认——
+        "放弃"就变成了一个只影响显示的标签，而 human_review 里那条 abandoned
+        留痕会与最终 approved 的状态直接矛盾。
+        """
+        if _job_status(job_id) == "abandoned":
+            raise HTTPException(status_code=409, detail=_ABANDONED_DETAIL)
+
     @router.post("/api/jobs")
     def create_job(req: CreateJobRequest):
         job_id = str(uuid.uuid4())
@@ -176,11 +211,13 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         job = conn.execute("SELECT id FROM job WHERE id=?", (job_id,)).fetchone()
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
+        _reject_if_abandoned(job_id)
         message = _run_turn(job_id, req.message)
         return {"job_id": job_id, "message": message}
 
     @router.post("/api/jobs/{job_id}/confirm")
     def confirm(job_id: str, request: Request, req: ConfirmRequest | None = None):
+        _reject_if_abandoned(job_id)
         row = conn.execute(
             "SELECT profile_json, status FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
             (job_id,),
@@ -313,6 +350,68 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "jd_text": persisted["_jd_text"],
             "needs_manual": persisted.get("_jd_needs_manual", False),
         }
+
+    @router.post("/api/jobs/{job_id}/revise")
+    def revise(job_id: str, request: Request, req: ReviseRequest):
+        """修改分支（tasks 6.5 / 6.6）：记一笔留痕，然后把修改意见当作用户
+        这一轮的原话重跑一次采集。
+
+        ⛔ 留痕先于重跑，且顺序不可换：先跑再记的话，_run_turn 抛异常时这次
+        修改就查不到了；先记再跑，_run_turn 失败后重试会命中同一个幂等键，
+        留痕不重复、采集照常补上（自愈）。
+        """
+        status = _job_status(job_id)
+        if status == "abandoned":
+            raise HTTPException(status_code=409, detail=_ABANDONED_DETAIL)
+        if status == "approved":
+            raise HTTPException(status_code=409, detail=_APPROVED_DETAIL)
+
+        row = conn.execute(
+            "SELECT MAX(version) FROM job_profile WHERE job_id=?", (job_id,)
+        ).fetchone()
+        if row is None or row[0] is None:
+            raise HTTPException(status_code=404, detail="no profile draft yet")
+        version = row[0]
+
+        latest_message = channel.latest(job_id)
+        if latest_message is None or latest_message.type != "confirmation_prompt":
+            raise HTTPException(status_code=409, detail="画像还在追问中，直接回复即可，不必走修改")
+
+        feedback = req.feedback.strip()
+        if not feedback:
+            raise HTTPException(
+                status_code=422, detail="请写明要改什么，修改意见不能为空"
+            )
+
+        already = revision_count(conn, job_id)
+        if already >= MAX_REVISIONS:
+            # tasks 6.6：超限**不是失败**，是换一条路。⛔ 不在这里改任何状态：
+            # needs_manual 队列是第 8 章的事，本单元不铺那条线。确认这条路
+            # 仍然开着（spec：由 HR 直接编辑画像后提交确认）。
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        f"这个岗位的画像已经改过 {already} 次，达到上限 {MAX_REVISIONS} 次。"
+                        "请由 HR 直接编辑画像后再提交确认。"
+                    ),
+                    "revision_count": already,
+                    "max_revisions": MAX_REVISIONS,
+                },
+            )
+
+        effect_request_revision(
+            conn,
+            thread_id=job_id,
+            business_key=str(version),
+            reviewer=reviewer_of(request),
+            feedback=feedback,
+        )
+        # 重跑一轮采集。retry 语义与 POST /reply 完全一致（同一个 _run_turn）：
+        # 重复提交会各自产生一版草案，这是既有行为，本单元不改。留痕那一半
+        # 不受影响——它有幂等键，重复提交只记一条。
+        message = _run_turn(job_id, feedback)
+        return {"job_id": job_id, "message": message}
 
     @router.get("/api/jobs/{job_id}")
     def get_job(job_id: str):

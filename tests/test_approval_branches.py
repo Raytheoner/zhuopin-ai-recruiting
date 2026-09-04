@@ -209,3 +209,134 @@ def test_review_and_status_share_one_transaction(tmp_path):
     assert conn.execute("SELECT status FROM job").fetchone()[0] == "drafting"
     assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM human_review").fetchone()[0] == 0
+
+
+# ── tasks 6.5 / 6.6：修改分支 ────────────────────────────────────────────
+
+
+def test_revise_records_the_decision_and_reruns_the_turn(tmp_path):
+    """修改 = 记一笔留痕 + 把修改意见当作用户这一轮的原话重跑一次采集。"""
+    client, job_id, _payload = _start_job(
+        tmp_path, extra_responses=[COMPLETE_PROFILE_RESPONSE]
+    )
+    resp = client.post(f"api/jobs/{job_id}/revise", json={"feedback": "人数改成 3 个"})
+    assert resp.status_code == 200
+    assert resp.json()["message"]["type"] == "confirmation_prompt"
+
+    rows = _rows(
+        tmp_path,
+        "SELECT decision_type, feedback, profile_version FROM human_review WHERE job_id = ?",
+        (job_id,),
+    )
+    assert rows == [("revision_requested", "人数改成 3 个", 1)]
+
+
+def test_revise_keeps_every_draft_version(tmp_path):
+    """tasks 6.5 后半：**保留每一版草案**（新 version，⛔ 不覆盖旧行）。"""
+    client, job_id, _payload = _start_job(
+        tmp_path, extra_responses=[COMPLETE_PROFILE_RESPONSE]
+    )
+    client.post(f"api/jobs/{job_id}/revise", json={"feedback": "人数改成 3 个"})
+
+    versions = _rows(
+        tmp_path, "SELECT version, status FROM job_profile WHERE job_id = ? ORDER BY version", (job_id,)
+    )
+    assert versions == [(1, "drafting"), (2, "drafting")]
+
+
+def test_revise_sends_the_previous_profile_back_to_the_model(tmp_path):
+    """tasks 6.5 前半：**基于原画像 + 修改意见**重新产出，不是从零重来。"""
+    client, scripted = make_app_with_scripted_client(
+        tmp_path, [COMPLETE_PROFILE_RESPONSE, COMPLETE_PROFILE_RESPONSE]
+    )
+    job_id = client.post("api/jobs", json={"message": "要个做 ECU 底层软件的"}).json()["job_id"]
+    client.post(f"api/jobs/{job_id}/revise", json={"feedback": "人数改成 3 个"})
+
+    last_call = json.dumps(scripted.chat.completions.calls[-1], ensure_ascii=False)
+    assert "底层软件工程师" in last_call, "上一版画像没有随 prompt 一起送进去"
+    assert "人数改成 3 个" in last_call, "修改意见没有进 prompt"
+
+
+def test_revise_rejects_blank_feedback(tmp_path):
+    """"以自然语言描述要改什么"——没写内容就不是一次修改意见。"""
+    client, job_id, _payload = _start_job(tmp_path)
+    assert client.post(f"api/jobs/{job_id}/revise", json={"feedback": "   "}).status_code == 422
+
+
+def test_revise_retried_at_the_same_version_records_one_review(tmp_path):
+    """幂等键 = {job_id}:effect_request_revision:{version}。"""
+    from app.graph.nodes import effect_request_revision
+    from app.storage.db import get_connection, init_schema
+
+    conn = get_connection(str(tmp_path / "idem.db"))
+    init_schema(conn)
+    for _ in range(3):
+        effect_request_revision(
+            conn, thread_id="j1", business_key="1", reviewer="tester", feedback="改一下"
+        )
+
+    assert conn.execute("SELECT COUNT(*) FROM human_review").fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_request_revision'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_revision_limit_blocks_the_sixth_request(tmp_path):
+    """tasks 6.6：修改次数达到 5 次 → 提示转人工，⛔ 不再受理第 6 次。"""
+    from app.graph.nodes import MAX_REVISIONS
+    from app.storage.db import get_connection
+
+    assert MAX_REVISIONS == 5
+
+    client, job_id, _payload = _start_job(tmp_path)
+    conn = get_connection(_db_path(tmp_path))
+    for version in range(1, MAX_REVISIONS + 1):
+        conn.execute(
+            "INSERT INTO human_review "
+            "(id, job_id, profile_version, decision_type, reviewer) VALUES (?, ?, ?, ?, ?)",
+            (f"{job_id}-v{version}-revision_requested", job_id, version,
+             "revision_requested", "tester"),
+        )
+    conn.commit()
+    conn.close()
+
+    resp = client.post(f"api/jobs/{job_id}/revise", json={"feedback": "再改一次"})
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["revision_count"] == 5 and detail["max_revisions"] == 5
+    assert "HR" in detail["message"], "超限提示必须说清下一步是转人工编辑"
+
+
+def test_revision_limit_still_allows_confirming(tmp_path):
+    """超限只关掉"再改一次"这条路，⛔ 不把人锁死在页面上。
+
+    spec：「系统提示转人工，由 HR 直接编辑画像后提交确认」——确认这条路必须还在。
+    """
+    from app.graph.nodes import MAX_REVISIONS
+    from app.storage.db import get_connection
+
+    client, job_id, _payload = _start_job(tmp_path, extra_responses=[JD_RESPONSE])
+    conn = get_connection(_db_path(tmp_path))
+    for version in range(1, MAX_REVISIONS + 1):
+        conn.execute(
+            "INSERT INTO human_review "
+            "(id, job_id, profile_version, decision_type, reviewer) VALUES (?, ?, ?, ?, ?)",
+            (f"{job_id}-v{version}-revision_requested", job_id, version,
+             "revision_requested", "tester"),
+        )
+    conn.commit()
+    conn.close()
+
+    assert client.post(f"api/jobs/{job_id}/confirm").status_code == 200
+
+
+def test_cannot_revise_a_frozen_profile(tmp_path):
+    """决策四：画像冻结后不可修改，如需变更必须创建新版本（＝新建岗位）。"""
+    client, job_id, _payload = _start_job(tmp_path, extra_responses=[JD_RESPONSE])
+    client.post(f"api/jobs/{job_id}/confirm")
+
+    resp = client.post(f"api/jobs/{job_id}/revise", json={"feedback": "再改一下"})
+    assert resp.status_code == 409
