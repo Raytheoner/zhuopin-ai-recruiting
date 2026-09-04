@@ -293,3 +293,34 @@ def test_human_review_assertion_exempts_rows_decided_before_the_cutoff(conn):
     result = assert_every_decision_has_human_review(conn)
     assert result.ok
     assert "1" in result.detail and "豁免" in result.detail
+
+
+def test_exemption_count_follows_the_decision_moment_not_the_draft_time(conn):
+    """场景 4：豁免计数与"只豁免真正发生在线前的决策"这条口径一致。
+
+    ⛔ 违例判定与豁免计数必须用**同一套** effect_log 关联。一边 applied_at
+    一边 created_at，报出来的数字会自相矛盾——巡检看到"0 违例 / 豁免 2 条"，
+    没法判断这个绿色是"都留痕了"还是"都被误豁免了"。
+
+    造数据：两行都在豁免线**之前**创建，但决策时刻一前一后。
+      j1  线前创建 · 线前确认 · 无留痕 → 豁免（计入 N）
+      j2  线前创建 · 线后确认 · 有留痕 → 不豁免、也不违例（不计入 N）
+    旧口径（按 created_at）会把两行都算成豁免，报 "豁免 2 条"。
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    _seed_terminal_profile(
+        conn, job_id="j1", status="approved", created_at="2026-08-01 10:00:00"
+    )
+    _seed_effect_log(conn, job_id="j1", applied_at="2026-08-01 10:00:01")
+
+    _seed_terminal_profile(
+        conn, job_id="j2", status="approved", created_at="2026-08-02 10:00:00"
+    )
+    _seed_effect_log(conn, job_id="j2", applied_at="2026-09-04 09:00:00")
+    _seed_review(conn, job_id="j2", decision_type="approved")
+
+    result = assert_every_decision_has_human_review(conn)
+
+    assert result.ok and result.violations == ()
+    assert "豁免 1 条" in result.detail, result.detail

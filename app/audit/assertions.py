@@ -355,6 +355,7 @@ def assert_every_decision_has_human_review(
         )
 
     violations: list[dict[str, Any]] = []
+    exempted = 0
     # ⛔ 按 sorted 遍历而不是按 dict 顺序：违例清单的顺序要稳定，否则两次巡检
     # 的输出 diff 里会混进无意义的行序变化。
     for status, decision in sorted(TERMINAL_STATUS_DECISIONS.items()):
@@ -378,21 +379,28 @@ def assert_every_decision_has_human_review(
         )
         violations.extend({**row, "expected_decision": decision} for row in rows)
 
-    exempted = _rows(
-        conn,
-        f"SELECT COUNT(*) AS n FROM {JOB_PROFILE_TABLE} "
-        "WHERE status IN ('approved', 'abandoned') AND created_at < ?",
-        (HUMAN_REVIEW_ENFORCED_FROM,),
-    )[0]["n"]
+        # 豁免计数走**同一段** _DECISION_MOMENT_SQL：与上面的违例判定共用一套
+        # 时间基准，两个数字才不会自相矛盾（Global Constraint 4）。
+        # decided_at IS NOT NULL 是必须的——NULL 在上面按"未豁免"处理了，
+        # 这里若漏掉，同一行会既被判违例又被算成豁免。
+        exempted += _rows(
+            conn,
+            "SELECT COUNT(*) AS n FROM ("
+            f"  SELECT {_DECISION_MOMENT_SQL} AS decided_at"
+            f"  FROM {JOB_PROFILE_TABLE} p WHERE p.status = ?"
+            ") t WHERE t.decided_at IS NOT NULL AND t.decided_at < ?",
+            (node_name, status, HUMAN_REVIEW_ENFORCED_FROM),
+        )[0]["n"]
 
     return AssertionResult(
         name=ASSERTION_HUMAN_REVIEW_PRESENT,
         ok=not violations,
         violations=tuple(violations),
         detail=(
-            f"豁免 {exempted} 条早于 {HUMAN_REVIEW_ENFORCED_FROM} 的历史画像版本"
-            "（留痕上线之前确认的，不可能有记录）。"
+            f"豁免 {exempted} 条决策发生在 {HUMAN_REVIEW_ENFORCED_FROM} 之前的"
+            "历史画像版本（留痕上线之前确认/放弃的，不可能有记录）。"
             "⚠️ 这些行**不代表红线守住了**，只代表它们产生于留痕存在之前。"
+            "⛔ 查不到决策时刻的终态行不在此列——它们按未豁免处理，缺留痕即违例。"
         ),
     )
 
