@@ -4,6 +4,11 @@ import hashlib
 import json
 import sqlite3
 
+from app.agents.hard_requirement import (
+    HardRequirement,
+    assert_no_subjective_requirements,
+    extract_hard_requirements,
+)
 from app.agents.intake_agent import run_intake_turn
 from app.agents.intake_question import IntakeQuestion
 from app.agents.jd_agent import JDGenerationResult, generate_jd
@@ -65,6 +70,55 @@ def _record_human_review(
             feedback,
         ),
     )
+
+
+def _record_hard_requirements(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    profile_version: int,
+    profile_dict: dict,
+) -> list[HardRequirement]:
+    """从画像提取硬门槛规则草案并落库（tasks 5.8）。
+
+    ⛔ **本函数不 commit、不开事务**，只能在某个 effect_* 节点的函数体内被调用，
+    与该节点的业务写落在同一个事务里、由 idempotent_effect 装饰器统一提交一次
+    （工程铁律 1）。分开提交会出现"画像已冻结但规则草案缺席"，而更糟的是：
+    幂等记录一旦先落，重试会被判定为"已执行"，那份草案**永远不会补上**。
+
+    ⛔ **提取是确定性纯函数，这里不调模型**（工程铁律 2）。草案要能被人复核、
+    被回放对比，一次模型调用就把它变成不可复算的东西。
+
+    ⛔ **本函数只写规则，不执行规则**（合规红线：AI 只做排序推荐，不做自动淘汰）。
+    blocking 列是给人看的标注，本变更包内没有任何代码读它去筛人。
+
+    落库前过一道 assert_no_subjective_requirements()：它是合规红线「主观描述不得
+    进入硬门槛规则」的最后一道机器判据。命中就让 SubjectiveRequirementError 穿透
+    出去、整条确认事务回滚——宁可让业务经理看到一次失败，也不让一条"沟通能力强"
+    的门槛落库。
+
+    ⛔ INSERT 不加 OR IGNORE：extract 已经按天然键去重，主键冲突只可能是去重逻辑
+    有洞或同一版被写了两次，两种都必须响，⛔ 不许静默吞掉。
+    """
+    rules = extract_hard_requirements(profile_dict)
+    assert_no_subjective_requirements(rules)
+    for rule in rules:
+        conn.execute(
+            "INSERT INTO hard_requirement "
+            "(job_id, profile_version, field, operator, value, blocking, "
+            "human_readable, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (
+                job_id,
+                profile_version,
+                rule.field,
+                rule.operator,
+                rule.value,
+                1 if rule.blocking else 0,
+                rule.human_readable,
+            ),
+        )
+    return rules
 
 
 def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeState:
@@ -261,6 +315,12 @@ def effect_confirm_profile(
     confirm）传的 business_key 就是被冻结的 version（与 effect_persist_draft
     用 int(business_key) 推 version 是同一条约定）。⛔ 不另加一个 version 参数
     ——同一个事实有两个入参，迟早会有一个调用点把它们传得不一致。
+
+    2026-09-04（tasks 5.8/5.9）：硬门槛规则草案（`hard_requirement`）也进**同一个
+    事务**，由 `_record_hard_requirements()` 写。提取本身是 `app/agents/
+    hard_requirement.py` 里的确定性纯函数，⛔ 不调模型。草案只**存**规则、不
+    **执行**规则——本变更包内没有任何代码读 `blocking` 去淘汰候选人（合规红线：
+    AI 只做排序推荐，不做自动淘汰）。
     """
     conn.execute(
         "UPDATE job_profile SET status = 'approved', profile_json = ? "
@@ -268,6 +328,20 @@ def effect_confirm_profile(
         (json.dumps(profile_dict, ensure_ascii=False), thread_id, thread_id),
     )
     conn.execute("UPDATE job SET status = 'approved' WHERE id = ?", (thread_id,))
+    # 2026-09-04（tasks 5.8/5.9）：硬门槛规则草案也进**同一个事务**。它回答的是
+    # "按这一版画像，哪些条件是可自动判定的门槛"（spec「硬门槛规则草案提取」）。
+    # ⛔ 不新增一个 effect_extract_hard_requirements 节点：多一个节点就多一个
+    # 幂等键，而两个幂等键意味着"画像已 approved、规则草案却缺席"是一个可达
+    # 状态——将来筛简历时没人会发现草案缺了，只会以为这个岗位本来就没门槛。
+    # ⛔ 放在 _record_human_review 之前：规则草案是这次确认的产物，人工留痕是
+    # 这次确认的凭据，顺序调过来不会出错，但保持"先产物后凭据"与
+    # effect_abandon_profile 的写法一致。
+    _record_hard_requirements(
+        conn,
+        job_id=thread_id,
+        profile_version=int(business_key),
+        profile_dict=profile_dict,
+    )
     _record_human_review(
         conn,
         job_id=thread_id,

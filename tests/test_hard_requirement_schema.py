@@ -13,10 +13,12 @@
 ⛔ 本表只**存**规则、不**执行**规则（合规红线：AI 只做排序推荐，不做自动淘汰）。
 """
 
+import json
 import sqlite3
 
 import pytest
 
+from app.graph.nodes import effect_confirm_profile
 from app.storage.db import _ADDED_COLUMNS, get_connection, init_schema
 
 _EXPECTED_COLUMNS = {
@@ -127,3 +129,133 @@ def test_different_profile_versions_keep_their_own_rules(conn):
         "WHERE job_id = 'job-1' ORDER BY profile_version"
     ).fetchall()
     assert [tuple(r) for r in rows] == [(1, "本科"), (2, "硕士")]
+
+
+# ── tasks 5.8 落库：与画像确认同一事务 ──────────────────────────────────
+
+_PROFILE = {
+    "job_title": "嵌入式软件工程师",
+    "department": "电子研发部",
+    "headcount": 1,
+    "education_requirement": "本科及以上",
+    "experience_years": "3-5年",
+    "core_skills": [
+        {"name": "C 语言", "required": True},
+        {"name": "沟通能力强", "required": True},
+    ],
+    "soft_skill_keywords": ["沟通能力强"],
+    "functional_safety": "ASIL-B",
+    "autosar_experience": ["CP"],
+    "mcu_family": ["英飞凌 Aurix"],
+    "diag_stack": [],
+    "toolchain": [],
+    "sop_projects": [],
+    "unspecified_fields": [],
+}
+
+
+def _seed_job(c: sqlite3.Connection, job_id: str = "job-1", version: int = 3) -> None:
+    c.execute(
+        "INSERT INTO job (id, title, status) VALUES (?, '嵌入式软件工程师', 'drafting')",
+        (job_id,),
+    )
+    c.execute(
+        "INSERT INTO job_profile (id, job_id, version, status, profile_json) "
+        "VALUES (?, ?, ?, 'drafting', ?)",
+        (f"{job_id}-v{version}", job_id, version, json.dumps(_PROFILE, ensure_ascii=False)),
+    )
+    c.commit()
+
+
+def test_confirming_a_profile_writes_the_rule_draft(conn):
+    _seed_job(conn)
+
+    effect_confirm_profile(
+        conn,
+        thread_id="job-1",
+        business_key="3",
+        profile_dict=_PROFILE,
+        reviewer="manager-001",
+    )
+
+    rows = conn.execute(
+        "SELECT field, operator, value, blocking FROM hard_requirement "
+        "WHERE job_id = 'job-1' AND profile_version = 3"
+    ).fetchall()
+    values = {(r[0], r[2]) for r in rows}
+    assert ("education_requirement", "本科") in values
+    assert ("experience_years", "3") in values
+    assert ("core_skills", "C 语言") in values
+    # 合规红线：主观描述⛔ 不得落进这张表。
+    assert not any("沟通" in r[2] for r in rows)
+
+
+def test_rules_land_in_the_same_transaction_as_the_confirmation(conn):
+    """工程铁律 1：effect_log 那一条与业务写同生共死。
+
+    reviewer 为空会撞上 human_review 的 CHECK。它在 hard_requirement 写入
+    **之后**执行，所以这条用例真正验的是"前面写的规则被回滚掉了"——而不是
+    "根本没写过"。
+    """
+    _seed_job(conn)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        effect_confirm_profile(
+            conn,
+            thread_id="job-1",
+            business_key="3",
+            profile_dict=_PROFILE,
+            reviewer="   ",
+        )
+
+    assert conn.execute("SELECT count(*) FROM hard_requirement").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM human_review").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM effect_log").fetchone()[0] == 0
+    assert conn.execute("SELECT status FROM job WHERE id='job-1'").fetchone()[0] == "drafting"
+
+
+def test_replaying_the_confirmation_does_not_duplicate_rules(conn):
+    """LangGraph 恢复时节点从头整个重跑——第二次必须被 effect_log 短路。"""
+    _seed_job(conn)
+    kwargs = dict(
+        thread_id="job-1", business_key="3", profile_dict=_PROFILE, reviewer="manager-001"
+    )
+
+    effect_confirm_profile(conn, **kwargs)
+    first = conn.execute("SELECT count(*) FROM hard_requirement").fetchone()[0]
+    effect_confirm_profile(conn, **kwargs)
+    second = conn.execute("SELECT count(*) FROM hard_requirement").fetchone()[0]
+
+    assert first > 0
+    assert first == second
+
+
+def test_a_profile_with_no_gateable_content_confirms_cleanly(conn):
+    """一条规则都提不出来⛔ 不算失败：确认照常成立，只是草案为空。"""
+    _seed_job(conn, job_id="job-2", version=1)
+    empty = {
+        "job_title": "储备干部",
+        "department": "综合管理部",
+        "headcount": 1,
+        "education_requirement": "不限",
+        "experience_years": "不限",
+        "core_skills": [],
+        "soft_skill_keywords": ["沟通能力强"],
+        "functional_safety": "无",
+        "autosar_experience": [],
+        "mcu_family": [],
+        "diag_stack": [],
+        "toolchain": [],
+        "sop_projects": [],
+        "unspecified_fields": [],
+    }
+
+    effect_confirm_profile(
+        conn, thread_id="job-2", business_key="1", profile_dict=empty, reviewer="manager-001"
+    )
+
+    assert conn.execute("SELECT status FROM job WHERE id='job-2'").fetchone()[0] == "approved"
+    assert (
+        conn.execute("SELECT count(*) FROM hard_requirement WHERE job_id='job-2'").fetchone()[0]
+        == 0
+    )
