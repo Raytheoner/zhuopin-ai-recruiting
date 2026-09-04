@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 
 import pytest
@@ -674,6 +675,24 @@ def test_queue_contains_exactly_the_needs_manual_jobs_and_is_server_side_state(t
 # 不是碰巧只对 /hr/recruit-agent 生效（部署约束 1：验收标准是挂到任意子路径
 # 下都能正常工作）。
 
+# 二审 Important finding I3：上一版拿 STATIC_DIR.iterdir() 现读磁盘文件名，
+# 证明的是"磁盘上的文件在前缀下能被访问到"，证明不了"index.html 页面里
+# 实际引用的资源在前缀下能解析到"——如果将来有人加一个
+# `<script src="/static/foo.js">`（绝对路径，会打到域根而不是这个前缀），
+# 只要那个文件确实存在，旧版这条测试照样绿，完全漏掉这个真实场景。
+# 改成直接解析渲染后的 HTML 里 <link href=…> / <script src=…> / <img src=…>
+# 三种标签的资源引用，逐个在前缀下 GET，断言 200；磁盘现读那条判据继续保留
+# （两条判据角度不同，不是互相替代）。
+_ASSET_TAG_RE = re.compile(
+    r"""<(?:link|script|img)\b[^>]*?\b(?:href|src)\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+# 页面今天是纯内联单文件，预期解析不出任何标签资源引用。即便如此也要留一条
+# 更宽的扫描——不限定标签名，只认"href/src 属性值以 / 开头"这个模式——防止
+# 解析集合为空时这条测试整个失去意义：将来任何标签、任何属性写成了绝对路径
+# 引用，这里都要能红，而不是因为凑巧没有命中上面那个窄标签正则就悄悄放过。
+_ANY_ABSOLUTE_HREF_OR_SRC_RE = re.compile(r"""\b(?:href|src)\s*=\s*["'](/[^"']*)["']""")
+
 
 def test_all_view_endpoints_and_assets_work_under_any_root_path(tmp_path):
     from app.web.server import STATIC_DIR
@@ -703,6 +722,37 @@ def test_all_view_endpoints_and_assets_work_under_any_root_path(tmp_path):
         for filename in static_files:
             resp = client.get(f"{prefix}/static/{filename}")
             assert resp.status_code == 200, f"{filename} 在前缀 {prefix} 下 404 了"
+
+        # 从渲染后的 HTML 本身解析资源引用（而不是从磁盘反推），逐个在这个
+        # 前缀下 GET。今天页面全内联，预期这里解析出空列表；一旦将来真的加了
+        # 一个 <link>/<script src>/<img>，这段代码自动开始覆盖它，不需要
+        # 谁记得回来改测试。
+        assets = _ASSET_TAG_RE.findall(index_resp.text)
+        absolute_assets = [a for a in assets if a.startswith("/")]
+        assert not absolute_assets, (
+            f"index.html 里有绝对路径的资源引用 {absolute_assets}——"
+            f"挂到前缀 {prefix} 下会被解析到域根，而不是这个前缀（部署约束 1）。"
+        )
+        for asset in assets:
+            if asset.startswith(("http://", "https://", "//")):
+                continue  # 外部资源不归本前缀管，不在本测试范围内
+            resp = client.get(f"{prefix}/{asset}")
+            assert resp.status_code == 200, f"{asset} 在前缀 {prefix} 下解析失败"
+
+        if not assets:
+            # 解析集合为空时，用不限定标签名的宽扫描再确认一遍：整份 HTML
+            # 里没有任何 href/src 属性写成了绝对路径——即使今天没有真实资产
+            # 可测，这条断言仍然会对"未来加了一个绝对路径引用"这件事敏感。
+            # ⛔ 排除 <base href="…">：那是部署约束 1 要求的、故意写成绝对
+            # 路径的那一个例外（前缀本身就是从域根开始算的），不是本条要挡
+            # 的"资源引用写成了绝对路径"。
+            html_without_base_tag = re.sub(r"<base\b[^>]*>", "", index_resp.text)
+            stray_absolute = _ANY_ABSOLUTE_HREF_OR_SRC_RE.search(html_without_base_tag)
+            assert not stray_absolute, (
+                f"没有解析到任何 <link>/<script src>/<img> 资源标签，但页面里"
+                f"存在一个绝对路径的 href/src 属性：{stray_absolute.group(0)!r}"
+                "——需要确认这是不是一个被上面的标签正则漏掉的资源引用。"
+            )
 
         # 反向证明：配了前缀之后，不带前缀的路径必须不是 200——否则前缀就是
         # 摆设，没有真的生效（与既有的 test_*_is_mounted_under_the_configured_

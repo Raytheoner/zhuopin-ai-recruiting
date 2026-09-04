@@ -652,31 +652,82 @@ def _view_rendering_js() -> str:
 def test_view_rendering_never_writes_raw_english_status_fields_into_dom():
     """⛔ 界面上不得出现英文 snake_case 字段名或英文 status 值（Global
     Constraints 第 13 条）。Task 1 / Task 3 的 reviewer 都标记过同一个 ⚠️：
-    API 回执里 status / decision_type / latest_profile_status 是给逻辑用的
-    原始字段，从来不是给展示用的——真正要渲染的是它们各自的中文对应字段
-    stage_label / decision_label / status_label。
+    API 回执里 status / decision_type / latest_profile_status / ungrounded_fields
+    是给逻辑用的原始字段，从来不是给展示用的——真正要渲染的是它们各自的
+    中文对应字段 stage_label / decision_label / status_label /
+    ungrounded_field_labels。ungrounded_fields 这一条是二审 Critical
+    finding C1 补的：`renderVersionBlock()` 曾经直接渲染过它，是本章要修的
+    真实事故，不是假设风险。
 
-    这条测试机械地把这条纪律焊在代码上：本单元新增的渲染代码里，一次都不
-    允许出现对这三个英文字段的属性访问（点号或方括号形式），无论是直接传
-    给 el()/textContent，还是先赋值给变量再用——只要访问了就有可能被
-    渲染，宁可整体禁止访问。
+    2026-09-04 二审 finding I2：上一版这条测试只挡点号访问（`.status`）与
+    方括号访问（`["status"]`），挡不住**解构**——`const { status } = job;`
+    或 `{ status: raw }` 这类改名解构一次都不含前两种字符形态，却照样把
+    原始英文字段的值读进了一个新变量，随后完全可能被渲染。方括号/点号/
+    解构三种读取方式的共同点是：**这个英文标识符本身，作为一个独立的词，
+    出现在代码里**。所以这里改成用词边界（`\\b`）扫整段代码找这个词本身，
+    不再关心它是通过哪种语法被读出来的——只要这个词出现在非注释代码里，
+    就判定有被渲染的风险，宁可整体禁止出现。
+
+    `\\bstatus\\b` 不会误伤 `status_label`：`_` 是词字符，`status` 与
+    `_label` 之间没有词边界，正则不会在那里断词。`ungrounded_fields` 同理
+    不会误伤新增的 `ungrounded_field_labels`（两个字符串在 "field(s)" 这个
+    位置就分叉了，一个是复数 `fields`，一个是单数 `field_labels`，前者作为
+    连续子串根本不出现在后者内部）。
     """
     section = _view_rendering_js()
     section_without_comments = "\n".join(
         line.split("//", 1)[0] for line in section.splitlines()
     )
 
-    for field in ("status", "decision_type", "latest_profile_status"):
-        dotted = re.search(rf"\.{re.escape(field)}\b", section_without_comments)
-        bracketed = re.search(
-            rf"""\[\s*["']{re.escape(field)}["']\s*\]""", section_without_comments
+    for field in ("status", "decision_type", "latest_profile_status", "ungrounded_fields"):
+        hit = re.search(rf"\b{re.escape(field)}\b", section_without_comments)
+        assert not hit, (
+            f"新视图代码里出现了英文原始字段 {field} 本身（点号访问、方括号访问、"
+            f"解构赋值、或改名解构都会命中这条断言）——只允许渲染它的中文对应"
+            f"字段（stage_label / decision_label / status_label / "
+            f"ungrounded_field_labels 之一）。"
         )
-        assert not dotted, (
-            f"新视图代码里出现了对英文字段 .{field} 的属性访问——"
-            f"只允许渲染它的中文对应字段（stage_label / decision_label / "
-            f"status_label 之一）。"
-        )
-        assert not bracketed, (
-            f"新视图代码里出现了对英文字段 [\"{field}\"] 的属性访问——"
-            f"只允许渲染它的中文对应字段。"
-        )
+
+
+# ── 二审 Important finding I1：从「转人工队列」点「查看画像详情」不能哑火 ──
+#
+# #job-detail 只活在 #view-list 里面（#view-queue 是它的旁支，不是祖先）。
+# renderJobCard() 造的"查看画像详情"按钮在列表页和队列页共用同一个
+# loadJobDetail()。从队列页点这个按钮时，如果 loadJobDetail 只是把
+# #job-detail 设成 display:block 而不先把 #view-list 切到可见，#job-detail
+# 的祖先容器 #view-list 仍然是 display:none——设置生效了，但整棵子树连着
+# 父容器一起被隐藏，用户在屏幕上什么都看不见，点击像是"哑火"了。
+#
+# 这与 plan 原文（task-5-brief.md Step 4）逐字一致的写法里就带着这个缺陷；
+# 控制器裁定这里必须偏离计划修掉它，理由是 Global Constraints 第 11 条
+# "视图切换用按钮 + style.display" 的本意是"按钮点了要真的切到看得见的地方"，
+# 一个静默什么都不做的按钮不满足这条约束的意图。
+#
+# 我们不能真的点一下按钮验证（无浏览器），这条测试只能停在源码层面：钉住
+# loadJobDetail() 的函数体里，`showView("list")` 这一句出现在把 #job-detail
+# 设为 display:block 那一句**之前**——这是源码级证据，不是交互级证据。
+
+
+def test_loading_detail_from_the_queue_switches_to_the_list_view_first():
+    """
+    源码级证据（⛔ 不是交互级证据）：断言 loadJobDetail() 函数体内
+    `showView("list")` 的调用位置在 `job-detail` 被设为可见之前。真正的
+    "点一下按钮、看见详情展开"这件事，本仓库没有浏览器，验证不了。
+    """
+    match = re.search(r"async function loadJobDetail\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 loadJobDetail()"
+    body = match.group(0)
+
+    assert 'showView("list")' in body, (
+        "loadJobDetail() 里没有切回列表视图——从「转人工队列」点「查看画像"
+        "详情」时，#job-detail 的祖先容器 #view-list 仍是 display:none，"
+        "点击会看起来像什么都没发生。"
+    )
+
+    switch_at = body.index('showView("list")')
+    reveal_at = body.index('getElementById("job-detail")')
+    assert switch_at < reveal_at, (
+        "showView(\"list\") 必须在拿到 #job-detail 并把它设为可见**之前**"
+        "调用，否则视图切换的时序不对，#job-detail 依然可能被切走的视图"
+        "盖住。"
+    )

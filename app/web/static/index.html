@@ -812,8 +812,14 @@
         "本轮问出 " + version.asked_question_count + " 个问题",
         "本轮写入字段 " + (snapshot.written_fields || []).length + " 个",
       ];
-      if ((snapshot.ungrounded_fields || []).length > 0) {
-        snapshotParts.push("未溯源字段：" + snapshot.ungrounded_fields.join("、"));
+      // ⛔ 只渲染中文名，与上面 unspecified_field_labels 同一条纪律：
+      // ungrounded_fields 是英文 snake_case 业务字段名，渲染它就是 Global
+      // Constraints 第 13 条要挡的那个故障现象。服务端已经把
+      // ungrounded_field_labels 算好下发（与 unspecified_field_labels 用
+      // 同一个 field_labels()），⛔ 不读 snapshot.ungrounded_fields。
+      const ungroundedLabels = snapshot.ungrounded_field_labels || [];
+      if (ungroundedLabels.length > 0) {
+        snapshotParts.push("未溯源字段：" + ungroundedLabels.join("、"));
       }
       block.appendChild(el("div", "snapshot", snapshotParts.join(" ｜ ")));
 
@@ -831,6 +837,12 @@
     }
 
     async function loadJobDetail(targetJobId) {
+      // #job-detail 只活在 #view-list 里面；从「转人工队列」点进来时
+      // #view-list 还是 display:none，不先切过去的话 #job-detail 被设成
+      // display:block 也是白设——它的祖先容器仍然是隐藏的，点击看起来像
+      // 什么都没发生。showView 用的还是按钮 + style.display 这一套
+      // （Global Constraints 第 11 条），不是新开一条路由。
+      showView("list");
       const box = document.getElementById("job-detail");
       box.style.display = "block";
       box.textContent = "正在读取画像详情…";

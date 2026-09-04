@@ -272,6 +272,7 @@ def profile_versions(conn: sqlite3.Connection, job_id: str) -> list[dict]:
         except (TypeError, ValueError):
             profile = {}
         unspecified = [name for name in _loads_list(row[4]) if isinstance(name, str)]
+        ungrounded = [name for name in _loads_list(row[5]) if isinstance(name, str)]
         versions.append(
             {
                 "version": row[0],
@@ -292,6 +293,11 @@ def profile_versions(conn: sqlite3.Connection, job_id: str) -> list[dict]:
                     "turn_started_at": row[9],
                     "completed_at": row[2],
                     "ungrounded_fields": _loads_list(row[5]),
+                    # ⛔ ungrounded_fields 本身是英文 snake_case 业务字段名
+                    # （app/graph/state.py:83-85），只给逻辑用；界面渲染走这个
+                    # 中文对应字段，与上面 unspecified_field_labels 同一条纪律
+                    # （两处都是 field_labels() 翻的同一份 FIELD_LABELS）。
+                    "ungrounded_field_labels": field_labels(ungrounded),
                     "written_fields": _loads_list(row[6]),
                 },
                 "jd": jd_state(profile),

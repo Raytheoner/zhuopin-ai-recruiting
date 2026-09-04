@@ -316,6 +316,33 @@ def test_profile_versions_tolerates_legacy_rows_with_null_snapshot_columns(conn)
     assert snapshot["llm_latency_ms"] is None
 
 
+def test_profile_versions_translates_ungrounded_fields_to_chinese_labels(conn):
+    """二审 Critical finding C1：`ungrounded_fields` 是内部英文 snake_case
+    业务字段名（app/graph/state.py:83-85），⛔ 不得直接给前端渲染。
+
+    修法与它的姐妹字段 unspecified_field_labels 完全同构：这里补
+    ungrounded_field_labels，用同一个 field_labels() 翻译，⛔ 不新造一份
+    映射表——两份译法迟早会在某个字段上不一致，而不一致没有任何症状。
+    这条测试钉住这个新键存在、顺序与原始英文列表一一对应、且是中文。
+    """
+    _insert_job(conn, "j1")
+    _insert_version(
+        conn, "j1", 1, {"job_title": "工程师"},
+        ungrounded=["mcu_family", "functional_safety"],
+    )
+
+    version = job_queries.profile_versions(conn, "j1")[0]
+
+    # 原始英文列表（给逻辑用）依旧原样保留，本单元只读不改既有键。
+    assert version["snapshot"]["ungrounded_fields"] == ["mcu_family", "functional_safety"]
+    labels = version["snapshot"]["ungrounded_field_labels"]
+    assert labels == ["MCU 平台", "功能安全等级"]
+    # 界面只认中文名（Global Constraints 第 13 条）：翻译结果里不能再带
+    # 英文原始字段名的任何一个子串。
+    for raw, label in zip(version["snapshot"]["ungrounded_fields"], labels):
+        assert raw not in label
+
+
 def test_decision_records_are_chronological_and_labelled_in_chinese(conn):
     _insert_job(conn, "j1")
     _insert_version(conn, "j1", 1, {})
