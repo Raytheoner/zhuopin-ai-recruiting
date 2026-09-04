@@ -29,6 +29,17 @@
   textarea { width: 100%; box-sizing: border-box; padding: 8px; }
   button { margin-top: 8px; padding: 8px 16px; cursor: pointer; }
   #jd-output { white-space: pre-wrap; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-top: 16px; display: none; }
+  #jd-panel { display: none; margin-top: 16px; }
+  #jd-panel #jd-output { display: block; margin-top: 0; }
+  .jd-actions { margin-top: 8px; }
+  .jd-actions button { margin: 0 8px 0 0; }
+  .jd-hint { font-size: 13px; color: #6c757d; margin-left: 4px; }
+  #jd-editor { display: none; margin-top: 8px; }
+  /* 未溯源提示是**提醒**不是拦截（design 决策 12）：用中性的黄，⛔ 不用
+     gap-warning 那套红色——红色会让人以为文案被系统拦下了。 */
+  .jd-grounding { background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; padding: 10px 14px; border-radius: 8px; margin-top: 10px; font-size: 14px; }
+  /* 人工撰写徽标：AI 标识没了之后，界面上必须还看得出这份文案的作者是谁。 */
+  .jd-authorship { font-size: 13px; color: #0f5132; background: #d1e7dd; border: 1px solid #badbcc; border-radius: 6px; padding: 6px 10px; margin-top: 10px; }
   .gap-warning { background: #f8d7da; border: 2px solid #dc3545; color: #58151c; padding: 14px 16px; border-radius: 8px; margin: 16px 0 8px; }
   .gap-warning h3 { margin: 0 0 8px; font-size: 15px; }
   .gap-warning ul { margin: 0 0 10px; padding-left: 20px; }
@@ -63,7 +74,22 @@
     <button id="revise-submit">提交修改意见</button>
   </div>
 
-  <div id="jd-output"></div>
+  <div id="jd-panel">
+    <div id="jd-output"></div>
+    <div id="jd-grounding" class="jd-grounding" style="display:none;"></div>
+    <div id="jd-authorship" class="jd-authorship" style="display:none;"></div>
+    <div class="jd-actions">
+      <button id="jd-copy-btn">复制全文</button>
+      <button id="jd-edit-btn">编辑文案</button>
+      <button id="jd-human-btn">标记为人工撰写</button>
+      <span id="jd-copy-hint" class="jd-hint"></span>
+    </div>
+    <div id="jd-editor">
+      <textarea id="jd-editor-input" rows="12"></textarea>
+      <button id="jd-save-btn">保存文案</button>
+      <button id="jd-cancel-btn">取消</button>
+    </div>
+  </div>
 
   <script>
     // 全部请求用相对路径（不带开头的 "/"），配合 <head> 里的 <base href> 解析，
@@ -71,6 +97,12 @@
     let jobId = null;
     // 当前这一轮的问题块容器。Task 2 的发送逻辑从这里读勾选结果。
     let activeQuestions = null;
+
+    // 服务端回执里的 jd_text 原文（含 AI 标识）。复制与编辑都从这里取，
+    // ⛔ 不从 DOM 的 textContent 反取——那是渲染结果，可能被样式或将来的
+    // 截断逻辑改过，而复制出去的东西必须与落库的一字不差（合规红线：
+    // AI 生成的 JD 须带标识）。
+    let currentJdText = "";
 
     // 追问要往气泡里塞 DOM 节点（选项控件），不能再只走 textContent。
     // 拆成"建气泡"与"填文本"两步，纯文本的调用点行为逐字不变。
@@ -233,6 +265,7 @@
         document.getElementById(id).style.display = "none";
       });
       document.getElementById("confirm-btn").style.display = "none";
+      document.getElementById("jd-panel").style.display = "none";
     }
 
     function renderGapWarning(fields, labels) {
@@ -396,6 +429,139 @@
       renderMessage(data.message);
     });
 
+    // ── JD 面板（tasks 7.3 / 7.5 / 7.7）────────────────────────────────
+    //
+    // ⛔ 这一段里**没有**任何拼接或剥离 AI 标识的代码，而且不许有：标识由服务端
+    // 贴、由服务端在「标记为人工撰写」时去掉并留痕。前端自己动手就等于开了一条
+    // 不留痕的去标识路径（合规红线：《AI 生成合成内容标识办法》）。
+
+    function renderJd(data) {
+      currentJdText = data.jd_text || "";
+      document.getElementById("jd-panel").style.display = "block";
+      document.getElementById("jd-output").textContent = currentJdText;
+      document.getElementById("jd-copy-hint").textContent = "";
+
+      // 未溯源术语只提示，⛔ 不禁用任何按钮、不挡任何操作（design 决策 12：
+      // 本批只观测不拦截）。这是给 HR 的一句"这几个词画像里没有，核对一下"。
+      const grounding = document.getElementById("jd-grounding");
+      const terms = data.ungrounded_terms || [];
+      if (terms.length) {
+        grounding.textContent =
+          "以下技术要求在岗位画像里找不到出处，发布前请核对：" + terms.join("、");
+        grounding.style.display = "block";
+      } else {
+        grounding.style.display = "none";
+      }
+
+      // 标识去掉之后，界面上仍然要看得出这份文案是谁声明为人工撰写的。
+      const authorship = document.getElementById("jd-authorship");
+      const humanBtn = document.getElementById("jd-human-btn");
+      if (data.human_written && data.authorship) {
+        authorship.textContent =
+          "已标记为人工撰写：" + data.authorship.marked_by + "，" + data.authorship.at;
+        authorship.style.display = "block";
+        humanBtn.style.display = "none";
+      } else {
+        authorship.style.display = "none";
+        humanBtn.style.display = "inline-block";
+      }
+    }
+
+    async function copyJdText() {
+      const hint = document.getElementById("jd-copy-hint");
+      const text = currentJdText;
+      if (!text) {
+        hint.textContent = "还没有可复制的文案。";
+        return;
+      }
+
+      let ok = false;
+      // 现代 API 只在安全上下文（https 或 localhost）里存在。
+      if (window.isSecureContext && navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(text);
+          ok = true;
+        } catch (err) {
+          ok = false;
+        }
+      }
+      if (!ok) {
+        // ⚠️ 这条兜底不是装饰：demo 挂在明文 http://…:8095 上，那里
+        // navigator.clipboard **根本不存在**（undefined，不抛异常），
+        // 只写上面那半段的话，复制按钮在服务器上会一声不响地什么都不做。
+        const scratch = document.createElement("textarea");
+        scratch.value = text;
+        scratch.setAttribute("readonly", "");
+        scratch.style.position = "fixed";
+        scratch.style.top = "-1000px";
+        document.body.appendChild(scratch);
+        scratch.select();
+        try {
+          ok = document.execCommand("copy");
+        } catch (err) {
+          ok = false;
+        }
+        document.body.removeChild(scratch);
+      }
+      hint.textContent = ok
+        ? "已复制纯文本全文（含 AI 生成标识）"
+        : "复制失败，请手动选中下方文案复制";
+    }
+
+    async function submitJd(url, init) {
+      const resp = await fetch(url, init);
+      const data = await resp.json();
+      if (!resp.ok) {
+        const detail = data && data.detail;
+        appendTurn(
+          "assistant",
+          "⚠️ " + (typeof detail === "string" ? detail : "操作失败，请稍后重试。")
+        );
+        return null;
+      }
+      renderJd(data);
+      return data;
+    }
+
+    document.getElementById("jd-copy-btn").addEventListener("click", copyJdText);
+
+    document.getElementById("jd-edit-btn").addEventListener("click", () => {
+      document.getElementById("jd-editor-input").value = currentJdText;
+      document.getElementById("jd-editor").style.display = "block";
+      document.getElementById("jd-editor-input").focus();
+    });
+
+    document.getElementById("jd-cancel-btn").addEventListener("click", () => {
+      document.getElementById("jd-editor").style.display = "none";
+    });
+
+    document.getElementById("jd-save-btn").addEventListener("click", async () => {
+      const text = document.getElementById("jd-editor-input").value.trim();
+      if (text.length === 0) return;
+      const data = await submitJd(`api/jobs/${jobId}/jd`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      });
+      if (data) {
+        document.getElementById("jd-editor").style.display = "none";
+      }
+    });
+
+    document.getElementById("jd-human-btn").addEventListener("click", async () => {
+      // 去掉 AI 生成标识是一次不可撤销的合规声明，二次确认不是多余的一步。
+      // ⛔ 不做成"点一下就去掉"。
+      if (
+        !window.confirm(
+          "标记为人工撰写会去掉文案里的 AI 生成标识，并记下是谁、什么时候标记的。" +
+            "只有在你已经大幅改写过这份文案时才这样做。确定吗？"
+        )
+      ) {
+        return;
+      }
+      await submitJd(`api/jobs/${jobId}/jd/human-written`, { method: "POST" });
+    });
+
     async function doConfirm(acknowledged) {
       // 无缺口时发的仍然是不带 body 的 POST，与改动前逐字一致——6.10 要求
       // "无缺口时确认流程与今天完全一致，不多一步点击"。
@@ -431,9 +597,7 @@
         return;
       }
       document.getElementById("gap-warning").style.display = "none";
-      const output = document.getElementById("jd-output");
-      output.style.display = "block";
-      output.textContent = data.jd_text;
+      renderJd(data);
       if (data.needs_manual) {
         appendTurn("assistant", "⚠️ JD 多次触发歧视性表述检测，已转人工处理，请核对下方内容。");
       }
