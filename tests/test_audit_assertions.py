@@ -224,6 +224,32 @@ def _seed_review(conn, job_id="j1", version=1, decision_type="approved"):
     conn.commit()
 
 
+def _seed_effect_log(
+    conn,
+    job_id="j1",
+    version=1,
+    node_name="effect_confirm_profile",
+    applied_at=None,
+):
+    """造一条 effect_log 行，代表"这一版画像在 applied_at 那一刻进入了终态"。
+
+    ⛔ effect_key 必须用 f"{thread_id}:{node_name}:{business_key}" 这个格式拼
+    （与 app/storage/idempotency.py:32 逐字同源），不要手写字面量——手写的话，
+    幂等键格式哪天变了，这些 fixture 会继续绿着，而断言四会在现网静默失效。
+
+    ⛔ business_key 存 str(version)：现网就是 TEXT 列存 str(version)
+    （app/web/server.py:384、:495），fixture 存 INTEGER 会把"两列类型不同"
+    这个本次要修的关键点从测试里抹掉。
+    """
+    effect_key = f"{job_id}:{node_name}:{version}"
+    conn.execute(
+        "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+        "VALUES (?, ?, ?, ?, COALESCE(?, datetime('now')))",
+        (effect_key, job_id, node_name, str(version), applied_at),
+    )
+    conn.commit()
+
+
 def test_human_review_assertion_passes_when_every_decision_left_a_trace(conn):
     from app.audit.assertions import assert_every_decision_has_human_review
 
@@ -244,15 +270,26 @@ def test_human_review_assertion_ignores_drafts(conn):
     assert assert_every_decision_has_human_review(conn).ok
 
 
-def test_human_review_assertion_exempts_rows_written_before_the_cutoff(conn):
-    """.51 上的历史行（留痕上线之前确认的）豁免，但**豁免条数必须报出来**。
+def test_human_review_assertion_exempts_rows_decided_before_the_cutoff(conn):
+    """场景 2：草案创建与确认动作**均**发生在豁免线之前 → 豁免，行为与既有一致。
 
+    .51 上的历史行（留痕上线之前确认的）豁免，但**豁免条数必须报出来**。
     ⛔ 静默跳过是不行的：那样"0 违例"这个绿色会同时兼容"都留痕了"和
     "全被豁免了"，而这两者的处置完全相反。
+
+    2026-09-04（tasks 9.6）：本用例原先只造 created_at。豁免线改按决策发生
+    时刻判定后，必须同时造出那一刻的 effect_log 行——不造就落进 fail-closed
+    分支（"查不到决策时刻 = 未豁免"），那是场景 3 在测的东西。
     """
     from app.audit.assertions import assert_every_decision_has_human_review
 
     _seed_terminal_profile(conn, status="approved", created_at="2026-08-01 10:00:00")
+    _seed_effect_log(
+        conn,
+        node_name="effect_confirm_profile",
+        applied_at="2026-08-01 10:00:01",
+    )
+
     result = assert_every_decision_has_human_review(conn)
     assert result.ok
     assert "1" in result.detail and "豁免" in result.detail

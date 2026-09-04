@@ -260,11 +260,58 @@ TERMINAL_STATUS_DECISIONS: dict[str, str] = {
     "abandoned": "abandoned",
 }
 
-# 留痕上线日（UTC，与 datetime('now') 同格式）。早于此刻创建的画像版本豁免。
+# 终态 → 写下这条决策的 effect_* 节点名。⛔ 与 app/graph/nodes.py 两个
+# @idempotent_effect(...) 的字面量参数（:233 effect_confirm_profile、
+# :337 effect_abandon_profile）逐字同源，改一处必须同步改另一处——纪律与上面
+# TERMINAL_STATUS_DECISIONS ↔ nodes.py 的 DECISION_* 常量（nodes.py:20-24）相同。
+# 端到端守卫见 tests/test_audit_assertions.py::test_terminal_status_effect_nodes_match_the_real_effect_nodes
+TERMINAL_STATUS_EFFECT_NODES: dict[str, str] = {
+    "approved": "effect_confirm_profile",
+    "abandoned": "effect_abandon_profile",
+}
+
+# 留痕上线日（UTC，与 datetime('now') 同格式）。早于此刻**做出决策**
+# （effect_log.applied_at，非画像草案创建时刻）的画像版本豁免。
+#
+# ⛔ 不要改回拿 job_profile.created_at 比：effect_confirm_profile /
+#    effect_abandon_profile 都是就地 UPDATE status，从不推进 created_at。
+#    拿 created_at 比，等于让"线前创建、线后确认"的草案永久落在豁免侧——
+#    它日后漏写 human_review，断言完全看不见（design.md 决策七）。
 HUMAN_REVIEW_ENFORCED_FROM = "2026-09-04 00:00:00"
 
 _REQUIRED_HUMAN_REVIEW_COLUMNS = frozenset(
     {"job_id", "profile_version", "decision_type", "reviewer"}
+)
+
+# 「这一版画像进入终态那一刻」的标量子查询。嵌进任何以 p 为 job_profile 别名的
+# 查询，带**一个** ? 占位符（node_name），结果为 NULL 表示查不到决策时刻。
+#
+# 为什么是 effect_log.applied_at：铁律 1 要求业务写与 effect_log 行在同一个事务里
+# 提交，所以 applied_at 就是决策真实发生的时刻，不是新造的机制。
+#
+# 关联 key 与 app/storage/idempotency.py:32 的幂等键
+# f"{thread_id}:{node_name}:{business_key}" 同源，这里按三列展开：
+#   thread_id   = job_profile.job_id   （app/web/server.py:383、:494）
+#   node_name   = TERMINAL_STATUS_EFFECT_NODES[status]
+#   business_key= str(version)         （app/web/server.py:384、:495）
+#
+# ⛔ CAST 不许去掉：business_key 是 TEXT 列、version 是 INTEGER 列，这里是按
+#    **数值**比。（诚实说明：列 vs 列的裸比在 SQLite 里会被套上 NUMERIC 亲和性、
+#    行为恰好一致，所以删掉 CAST 测试不会红——写 CAST 是为了把"按数值比"这个
+#    意图钉在代码里，不依赖读者记得亲和性规则。）
+# ⛔ 更不要改写成拼 effect_key 字符串去比
+#    （p.job_id || ':' || ? || ':' || p.version）——那是**字符串**相等，
+#    business_key 一旦不是规范十进制写法（"02" / " 2" / "2.0"）就静默漏匹配，
+#    而漏匹配在 fail-closed 下会把本该豁免的历史行报成违例。反例见
+#    tests/test_audit_assertions.py::test_effect_key_string_form_would_miss_what_cast_finds
+#
+# MIN(...)：effect_key 是主键、正常至多一行；取 MIN 有两个作用——万一有多行时取
+# **最早**那次决策（保守方向），以及避免写成 JOIN 把 job_profile 行乘出来。
+_DECISION_MOMENT_SQL = (
+    "(SELECT MIN(e.applied_at) FROM effect_log e "
+    "  WHERE e.thread_id = p.job_id "
+    "    AND e.node_name = ? "
+    "    AND CAST(e.business_key AS INTEGER) = p.version)"
 )
 
 ASSERTION_HUMAN_REVIEW_PRESENT = "每一个进入终态的画像版本都有对应的 human_review 记录"
@@ -275,11 +322,15 @@ def assert_every_decision_has_human_review(
 ) -> AssertionResult:
     """合规红线「淘汰必须有人工确认节点并留痕」+ spec「决策留痕」的机器判据。
 
-    四条分支，处置各不相同：
-      表不存在        → **失败**（本包建的表，缺表 = 留痕路径没上线）
-      表存在、缺列    → **失败**（fail-closed：验不了红线不算守住了红线）
-      有终态无留痕    → 失败，violations 逐条给出 job_id 与 version
-      全部有留痕      → 通过，detail 里报出被豁免的历史行条数
+    豁免线按**决策发生时刻**（effect_log.applied_at）判定，不是按画像草案
+    创建时刻——见 HUMAN_REVIEW_ENFORCED_FROM 上方注释与 design.md 决策七。
+
+    五条分支，处置各不相同：
+      表不存在              → **失败**（本包建的表，缺表 = 留痕路径没上线）
+      表存在、缺列          → **失败**（fail-closed：验不了红线不算守住了红线）
+      查不到决策时刻        → **按未豁免处理**（fail-closed），缺留痕即违例
+      决策发生在豁免线之后、无留痕 → 失败，violations 逐条给出 job_id 与 version
+      全部有留痕            → 通过，detail 里报出被豁免的历史行条数
     """
     if not _table_exists(conn, HUMAN_REVIEW_TABLE):
         return AssertionResult(
@@ -307,15 +358,23 @@ def assert_every_decision_has_human_review(
     # ⛔ 按 sorted 遍历而不是按 dict 顺序：违例清单的顺序要稳定，否则两次巡检
     # 的输出 diff 里会混进无意义的行序变化。
     for status, decision in sorted(TERMINAL_STATUS_DECISIONS.items()):
+        node_name = TERMINAL_STATUS_EFFECT_NODES[status]
         rows = _rows(
             conn,
-            f"SELECT p.job_id, p.version, p.status, p.created_at FROM {JOB_PROFILE_TABLE} p "
-            "WHERE p.status = ? AND p.created_at >= ? AND NOT EXISTS ("
+            "SELECT t.job_id, t.version, t.status, t.created_at, t.decided_at FROM ("
+            "  SELECT p.job_id AS job_id, p.version AS version, p.status AS status,"
+            "         p.created_at AS created_at,"
+            f"         {_DECISION_MOMENT_SQL} AS decided_at"
+            f"  FROM {JOB_PROFILE_TABLE} p WHERE p.status = ?"
+            ") t "
+            # decided_at IS NULL = 查不到这一版的决策时刻 → fail-closed，按未豁免处理。
+            # ⛔ 不得反过来当成"证明它发生在豁免线之前"（design.md 决策七）。
+            "WHERE (t.decided_at IS NULL OR t.decided_at >= ?) AND NOT EXISTS ("
             f"  SELECT 1 FROM {HUMAN_REVIEW_TABLE} h "
-            "  WHERE h.job_id = p.job_id AND h.profile_version = p.version "
+            "  WHERE h.job_id = t.job_id AND h.profile_version = t.version "
             "    AND h.decision_type = ?"
             ")",
-            (status, HUMAN_REVIEW_ENFORCED_FROM, decision),
+            (node_name, status, HUMAN_REVIEW_ENFORCED_FROM, decision),
         )
         violations.extend({**row, "expected_decision": decision} for row in rows)
 

@@ -357,6 +357,52 @@ def test_missing_human_review_table_fails_closed(conn):
     assert result.ok is False and result.violations
 
 
+def test_pre_cutoff_draft_confirmed_after_cutoff_is_not_exempt(conn):
+    """场景 1（本次要修的真实缺口）：草案创建于豁免线之前、确认动作发生在
+    豁免线之后、缺 human_review → 必须报违例。
+
+    修复前这条是**红**的：旧实现拿 job_profile.created_at 与豁免线比，
+    而 effect_confirm_profile 是就地 UPDATE status、从不推进 created_at，
+    所以这一行会被判成"历史行"永久豁免——日后漏写留痕，断言完全看不见
+    （design.md 决策七 / spec Scenario「留痕豁免线按决策发生时刻判定」）。
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+    from tests.test_audit_assertions import _seed_effect_log, _seed_terminal_profile
+
+    _seed_terminal_profile(conn, status="approved", created_at="2026-08-01 10:00:00")
+    _seed_effect_log(
+        conn,
+        node_name="effect_confirm_profile",
+        applied_at="2026-09-04 09:00:00",
+    )
+
+    result = assert_every_decision_has_human_review(conn)
+
+    assert result.ok is False
+    assert result.violations, "断言失败时必须指出违例记录，⛔ 不许只报一个 False"
+    assert result.violations[0]["job_id"] == "j1"
+    assert result.violations[0]["decided_at"] == "2026-09-04 09:00:00"
+
+
+def test_terminal_row_without_effect_log_is_not_exempt(conn):
+    """场景 3（fail-closed）：终态行在 effect_log 里查不到对应决策时刻 →
+    按**未豁免**处理，缺留痕就报违例。
+
+    ⛔ 不得反过来把"查不到"当成"证明它发生在豁免线之前"。这与断言四
+    "表不存在 → 判失败"的取向一致：宁可多报一条需要人核实的违例，不可漏判。
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+    from tests.test_audit_assertions import _seed_terminal_profile
+
+    _seed_terminal_profile(conn, status="abandoned", created_at="2026-08-01 10:00:00")
+
+    result = assert_every_decision_has_human_review(conn)
+
+    assert result.ok is False
+    assert result.violations[0]["job_id"] == "j1"
+    assert result.violations[0]["decided_at"] is None
+
+
 def test_missing_reviewer_column_fails_closed(conn):
     """缺列 → 失败：验不了红线不算守住了红线（与断言一的缺列分支同一处置）。"""
     from app.audit.assertions import assert_every_decision_has_human_review
