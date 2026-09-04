@@ -428,3 +428,53 @@ def test_non_canonical_business_key_is_still_matched_by_the_assertion(conn):
 
     assert result.ok, result.violations
     assert "豁免 1 条" in result.detail, result.detail
+
+
+def test_abandoned_terminal_rows_are_exempted_and_counted_with_their_own_effect_node(conn):
+    """9.6 全分支 review Important 项：终态循环遍历 approved / abandoned 两个
+    status，但在本用例之前，没有任何一条用例造出「abandoned 终态行 + 匹配的
+    effect_log」——两条独立变异因此都能在 43 条既有测试下全绿：
+
+      变异 a：`exempted +=` 退化成 `exempted =`
+        → 循环第二轮（abandoned）把第一轮（approved）累的计数覆盖掉，
+          少报豁免数。本用例造两行（一 approved、一 abandoned）都该被豁免，
+          `exempted =` 会把最终计数压成 1，"豁免 2 条" 断言当场落空。
+
+      变异 b：`node_name = TERMINAL_STATUS_EFFECT_NODES[status]`
+        写死成 `TERMINAL_STATUS_EFFECT_NODES["approved"]`
+        → abandoned 行的决策时刻永远用 effect_confirm_profile 去关联，而
+          本用例的 abandoned 行只有 effect_abandon_profile 那条 effect_log，
+          关联查不到 → decided_at 为 NULL → 按 fail-closed 落成"未豁免"→
+          NOT EXISTS human_review 为真 → 整行判违例，result.ok 变假。
+
+    造数据：两行都在豁免线之前创建、在豁免线之前做出决策，且都不配
+    human_review（本就该被豁免，不该有留痕）：
+      j1  approved · 线前创建 · 线前 effect_confirm_profile
+      j2  abandoned · 线前创建 · 线前 effect_abandon_profile
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    _seed_terminal_profile(
+        conn, job_id="j1", status="approved", created_at="2026-08-01 10:00:00"
+    )
+    _seed_effect_log(
+        conn,
+        job_id="j1",
+        node_name="effect_confirm_profile",
+        applied_at="2026-08-01 10:00:01",
+    )
+
+    _seed_terminal_profile(
+        conn, job_id="j2", status="abandoned", created_at="2026-08-01 10:00:00"
+    )
+    _seed_effect_log(
+        conn,
+        job_id="j2",
+        node_name="effect_abandon_profile",
+        applied_at="2026-08-01 10:00:01",
+    )
+
+    result = assert_every_decision_has_human_review(conn)
+
+    assert result.ok, result.violations
+    assert "豁免 2 条" in result.detail, result.detail

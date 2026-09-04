@@ -381,8 +381,10 @@ def assert_every_decision_has_human_review(
 
         # 豁免计数走**同一段** _DECISION_MOMENT_SQL：与上面的违例判定共用一套
         # 时间基准，两个数字才不会自相矛盾（Global Constraint 4）。
-        # decided_at IS NOT NULL 是必须的——NULL 在上面按"未豁免"处理了，
-        # 这里若漏掉，同一行会既被判违例又被算成豁免。
+        # （诚实说明：decided_at IS NOT NULL 删掉不会让任何测试变红——SQLite
+        # 里 NULL < '...' 求值为 NULL，WHERE 本就会把这类行滤掉，带不带这个
+        # 守卫 COUNT 结果相同。写出来是为了把"NULL 不算豁免"这个意图钉在
+        # 代码里，不依赖读者记得 SQL 的三值逻辑。）
         exempted += _rows(
             conn,
             "SELECT COUNT(*) AS n FROM ("
