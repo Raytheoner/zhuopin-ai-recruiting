@@ -11,11 +11,16 @@ test_extraction_is_deterministic 是这条约束的机器判据。
 
 import copy
 
+import pytest
+
 from app.agents.hard_requirement import (
     EXTRACTABLE_FIELDS,
     OPERATORS,
     HardRequirement,
+    SubjectiveRequirementError,
+    assert_no_subjective_requirements,
     extract_hard_requirements,
+    is_subjective,
 )
 
 
@@ -241,3 +246,121 @@ def test_empty_and_malformed_profile_never_raises():
     assert extract_hard_requirements({}) == []
     assert extract_hard_requirements({"core_skills": "不是列表"}) == []
     assert extract_hard_requirements({"core_skills": [None, 42, {"required": True}]}) == []
+
+
+# ── tasks 5.9：主观描述拦截 ──────────────────────────────────────────────
+#
+# 合规红线（逐字）：主观描述（"沟通能力强"）不得进入硬门槛规则，只能作为软技能
+# 关键词。下面这组用例就是这条红线的机器判据——在此之前它"无处可断"（tasks 5.9
+# 原话），只有一个断言 prompt 文本含某几个关键词的测试，那验的是提示词写了什么，
+# 不是行为。
+
+
+def test_soft_skill_keywords_field_is_structurally_excluded():
+    """第一道防线：整个字段进不来，不靠词表兜底。"""
+    assert "soft_skill_keywords" not in EXTRACTABLE_FIELDS
+
+
+def test_subjective_description_in_core_skills_is_filtered_out():
+    """第二道防线：模型把主观描述塞进 core_skills 是真实会发生的。"""
+    profile = _profile(
+        core_skills=[
+            {"name": "沟通能力强", "required": True},
+            {"name": "有责任心", "required": True},
+            {"name": "C 语言", "required": True},
+        ]
+    )
+    rules = _by_field(extract_hard_requirements(profile), "core_skills")
+    assert [r.value for r in rules] == ["C 语言"]
+
+
+def test_subjective_description_stays_in_the_profile_as_soft_skills():
+    """spec：这类描述只作为软技能关键词保留在画像中。
+
+    "保留"= 提取过程一个字节都不改画像（画像冻结后不可变，改动走新版本）。
+    """
+    profile = _profile(soft_skill_keywords=["沟通能力强", "有责任心"])
+    before = copy.deepcopy(profile)
+    rules = extract_hard_requirements(profile)
+
+    assert profile["soft_skill_keywords"] == ["沟通能力强", "有责任心"]
+    assert profile == before
+    assert all("沟通" not in r.value for r in rules)
+
+
+def test_assert_rejects_a_hand_built_subjective_rule():
+    """反证：绕过提取直接构造一条违规规则，落库前的断言必须报违例。"""
+    rogue = HardRequirement(
+        field="core_skills",
+        operator="contains",
+        value="沟通能力强",
+        blocking=True,
+        human_readable="必会技能：沟通能力强（不满足则不通过硬门槛）",
+    )
+    with pytest.raises(SubjectiveRequirementError) as exc:
+        assert_no_subjective_requirements([rogue])
+    assert "沟通" in str(exc.value)
+
+
+def test_assert_rejects_a_rule_on_the_soft_skill_field_itself():
+    """字段本身就是软技能关键词时，即便值看起来中性也必须被拒。"""
+    rogue = HardRequirement(
+        field="soft_skill_keywords",
+        operator="contains",
+        value="跨部门推动",
+        blocking=False,
+        human_readable="软技能：跨部门推动",
+    )
+    with pytest.raises(SubjectiveRequirementError):
+        assert_no_subjective_requirements([rogue])
+
+
+def test_assert_passes_on_a_clean_rule_set():
+    assert_no_subjective_requirements(extract_hard_requirements(_profile()))
+
+
+def test_extraction_output_always_passes_the_assert():
+    """提取与断言必须自洽：正常路径永远不该在落库前被自己的断言拦下。"""
+    profile = _profile(
+        core_skills=[
+            {"name": "沟通能力强", "required": True},
+            {"name": "抗压能力强", "required": True},
+            {"name": "AUTOSAR MCAL 配置", "required": True},
+        ],
+        soft_skill_keywords=["有责任心", "团队合作"],
+    )
+    assert_no_subjective_requirements(extract_hard_requirements(profile))
+
+
+def test_the_guard_is_not_vacuous(monkeypatch):
+    """有效性测试：把词表清空后，同一份画像必须能产出一条被断言抓到的规则。
+
+    没有这一条，上面所有绿灯都可能只是因为断言什么都没查（与
+    tests/test_audit_assertion_effectiveness.py 同一思路）。
+    """
+    import app.agents.hard_requirement as module
+
+    monkeypatch.setattr(module, "SUBJECTIVE_TERMS", ())
+    monkeypatch.setattr(module, "SUBJECTIVE_FIELDS", frozenset())
+    # ⚠️ 必须按 core_skills 过滤：extract 返回的是**整份**草案（学历/年限/平台
+    # 等等都在里面），不过滤的话这条断言比的是全量列表，永远不等。
+    leaked = _by_field(
+        module.extract_hard_requirements(
+            _profile(core_skills=[{"name": "沟通能力强", "required": True}])
+        ),
+        "core_skills",
+    )
+    assert [r.value for r in leaked] == ["沟通能力强"]
+
+    monkeypatch.undo()
+    with pytest.raises(SubjectiveRequirementError):
+        assert_no_subjective_requirements(leaked)
+
+
+def test_is_subjective_covers_the_documented_examples():
+    """CLAUDE.md 与 spec 里点名的两个例子必须被识别。"""
+    assert is_subjective("沟通能力强")
+    assert is_subjective("有责任心")
+    assert not is_subjective("C 语言")
+    assert not is_subjective("UDS（ISO 14229）")
+    assert not is_subjective("AUTOSAR MCAL 配置")

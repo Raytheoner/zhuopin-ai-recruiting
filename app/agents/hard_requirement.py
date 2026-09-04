@@ -78,6 +78,87 @@ _EXPERIENCE_UPPER_BOUND_MARKERS: tuple[str, ...] = (
 # 等于用工具品牌筛人）。
 _NON_BLOCKING_LIST_FIELDS: tuple[str, ...] = ("mcu_family", "diag_stack", "toolchain")
 
+# 主观描述词表（合规红线：主观描述不得进入硬门槛规则，只能作为软技能关键词）。
+#
+# ⚠️ **误判方向是刻意选的**：误拦一个真技能 = 少一条硬门槛规则（无害，人复核
+# 草案时补得回来）；漏拦一个主观描述 = 触红线（"沟通能力强"变成筛人条件，且
+# 将来会被拿去向候选人解释淘汰原因）。所以宁可宽一点。
+# 已知会被误拦的技术词：含"稳定性"的（如"系统稳定性调优"）、含"意识"的（如
+# "功能安全意识"）。这是接受的代价，⛔ 不要为了它们把词条删掉。
+#
+# ⛔ 反过来，⛔ 不许加"主动"/"积极"这类单独出现的词：ECU 领域有"主动安全"这
+# 类真实技术术语，加进来会把合法技能整片误拦掉。要拦就用"积极主动"这种成词。
+SUBJECTIVE_TERMS: tuple[str, ...] = (
+    "沟通",
+    "协调",
+    "责任心",
+    "有担当",
+    "抗压",
+    "团队合作",
+    "上进",
+    "事业心",
+    "执行力",
+    "亲和力",
+    "情商",
+    "性格",
+    "稳定性",
+    "踏实",
+    "细心",
+    "耐心",
+    "悟性",
+    "学习能力",
+    "逻辑思维",
+    "自驱",
+    "积极主动",
+    "意识",
+    "能力强",
+)
+
+# 结构上就不该出现在硬门槛里的字段。spec：这类描述只作为软技能关键词保留在
+# 画像中。EXTRACTABLE_FIELDS 里本来就没有它，这份集合是给
+# assert_no_subjective_requirements() 用的第二道——挡住绕过提取直接构造的规则。
+SUBJECTIVE_FIELDS: frozenset[str] = frozenset({"soft_skill_keywords"})
+
+
+class SubjectiveRequirementError(ValueError):
+    """有主观描述混进了硬门槛规则草案。
+
+    这是**合规红线**被触碰，不是一个可以 except 掉继续跑的错误：调用方
+    （app/graph/nodes.py 的 effect_confirm_profile）让它穿透出去，整条确认
+    事务回滚，宁可让业务经理看到一次失败，也不让一条"沟通能力强"的门槛落库。
+    """
+
+
+def is_subjective(text: str) -> bool:
+    """文本里是否含主观描述。⛔ 空白与 None 一律判为不主观（交给别的校验去管）。"""
+    if not isinstance(text, str):
+        return False
+    return any(term in text for term in SUBJECTIVE_TERMS)
+
+
+def assert_no_subjective_requirements(rules: list[HardRequirement]) -> None:
+    """落库前的最后一道机器判据（tasks 5.9）。命中即抛，⛔ 不静默过滤。
+
+    ⛔ 这里刻意**不**修复、不剔除、不降级——静默过滤会让"提取逻辑漏了一处"
+    这个真实缺陷永远不现形。提取阶段该滤的已经滤掉了（_extract_core_skills /
+    _extract_non_blocking_list），能走到这里还命中的，只可能是提取逻辑本身
+    有洞或有人绕过提取直接构造规则，两种都必须响。
+    """
+    for rule in rules:
+        if rule.field in SUBJECTIVE_FIELDS:
+            raise SubjectiveRequirementError(
+                f"字段 {rule.field!r} 属于软技能关键词，不得进入硬门槛规则"
+                "（合规红线：主观描述不得进入硬门槛规则，只能作为软技能关键词）"
+            )
+        for text in (rule.value, rule.human_readable):
+            if is_subjective(text):
+                hit = next(term for term in SUBJECTIVE_TERMS if term in text)
+                raise SubjectiveRequirementError(
+                    f"硬门槛规则里出现主观描述（命中词 {hit!r}）："
+                    f"field={rule.field!r} value={rule.value!r}"
+                    "（合规红线：主观描述不得进入硬门槛规则，只能作为软技能关键词）"
+                )
+
 _LIST_FIELD_SENTENCE: dict[str, str] = {
     "mcu_family": "MCU 平台经验：{value}（加分项，不阻断）",
     "diag_stack": "诊断/总线协议栈经验：{value}（加分项，不阻断）",
@@ -235,6 +316,12 @@ def _extract_core_skills(value) -> list[HardRequirement]:
         name = _text(item.get("name"))
         if not name or _is_no_requirement(name):
             continue
+        # 合规红线：主观描述不得进入硬门槛规则。业务经理和模型把"沟通能力强"
+        # 写进 core_skills 是真实会发生的——SYSTEM_PROMPT 只是提示词，不是行为
+        # 约束。⛔ 这里静默跳过而不抛：画像里有主观描述本身完全合法，它只是
+        # 不该变成门槛。落库前的 assert_no_subjective_requirements() 才是抛的那道。
+        if is_subjective(name):
+            continue
         required = bool(item.get("required"))
         sentence = (
             f"必会技能：{name}（不满足则不通过硬门槛）"
@@ -289,6 +376,8 @@ def _extract_non_blocking_list(field: str, value) -> list[HardRequirement]:
     rules: list[HardRequirement] = []
     for name in _iter_strings(value):
         if _is_no_requirement(name):
+            continue
+        if is_subjective(name):
             continue
         rules.append(
             HardRequirement(
