@@ -185,11 +185,11 @@ def test_unlisted_criterion_assertion_passes_for_every_whitelisted_key(conn):
 def test_run_compliance_assertions_returns_all_three(conn):
     results = run_compliance_assertions(conn)
 
-    assert len(results) == 3
-    assert len(COMPLIANCE_ASSERTIONS) == 3
+    assert len(results) == 4
+    assert len(COMPLIANCE_ASSERTIONS) == 4
     assert all(isinstance(r, AssertionResult) for r in results)
     # 名字必须两两不同：报告里靠 name 定位是哪条红线破了。
-    assert len({r.name for r in results}) == 3
+    assert len({r.name for r in results}) == 4
     assert all(r.ok for r in results)
 
 
@@ -198,3 +198,61 @@ def test_assertion_result_is_frozen():
     result = AssertionResult(name="x", ok=True)
     with pytest.raises(Exception):
         result.ok = False  # type: ignore[misc]
+
+
+# ── 9.3：每次人工决策都有 human_review 记录 ─────────────────────────────
+
+
+def _seed_terminal_profile(conn, job_id="j1", version=1, status="approved", created_at=None):
+    conn.execute(
+        "INSERT INTO job (id, title, status) VALUES (?, 'x', ?)", (job_id, status)
+    )
+    conn.execute(
+        "INSERT INTO job_profile (id, job_id, version, status, profile_json, created_at) "
+        "VALUES (?, ?, ?, ?, '{}', COALESCE(?, datetime('now')))",
+        (f"{job_id}-v{version}", job_id, version, status, created_at),
+    )
+    conn.commit()
+
+
+def _seed_review(conn, job_id="j1", version=1, decision_type="approved"):
+    conn.execute(
+        "INSERT INTO human_review (id, job_id, profile_version, decision_type, reviewer) "
+        "VALUES (?, ?, ?, ?, 'someone')",
+        (f"{job_id}-v{version}-{decision_type}", job_id, version, decision_type),
+    )
+    conn.commit()
+
+
+def test_human_review_assertion_passes_when_every_decision_left_a_trace(conn):
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    _seed_terminal_profile(conn, status="approved")
+    _seed_review(conn, decision_type="approved")
+    _seed_terminal_profile(conn, job_id="j2", status="abandoned")
+    _seed_review(conn, job_id="j2", decision_type="abandoned")
+
+    result = assert_every_decision_has_human_review(conn)
+    assert result.ok and result.violations == ()
+
+
+def test_human_review_assertion_ignores_drafts(conn):
+    """drafting 不是终态，没有人做过决策，当然不该有留痕。"""
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    _seed_terminal_profile(conn, status="drafting")
+    assert assert_every_decision_has_human_review(conn).ok
+
+
+def test_human_review_assertion_exempts_rows_written_before_the_cutoff(conn):
+    """.51 上的历史行（留痕上线之前确认的）豁免，但**豁免条数必须报出来**。
+
+    ⛔ 静默跳过是不行的：那样"0 违例"这个绿色会同时兼容"都留痕了"和
+    "全被豁免了"，而这两者的处置完全相反。
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    _seed_terminal_profile(conn, status="approved", created_at="2026-08-01 10:00:00")
+    result = assert_every_decision_has_human_review(conn)
+    assert result.ok
+    assert "1" in result.detail and "豁免" in result.detail
