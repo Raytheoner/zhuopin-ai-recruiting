@@ -1,4 +1,4 @@
-**进度：49/72**（2026-09-04 交付单元 7「JD 溯源与导出」合入 + 9.6 新增「断言四豁免线改用决策时刻」待修 + 0904G 账目对齐回勾 1.3 / 2.6 / 1.6b / 8.3 四条——**行为均由其他交付单元已落地**，本次无任何代码改动）
+**进度：50/72**（2026-09-04 `0904I` 回勾 9.6「断言四豁免线改用决策发生时刻」——豁免线由 `job_profile.created_at` 改判 `effect_log.applied_at`，查不到决策时刻按未豁免处理（fail-closed），违例判定与豁免计数共用同一段 `_DECISION_MOMENT_SQL`；4 commits `c8f54be`→`b32038e`，rebase 后 `6ed67da`；全量 1008 → **1015 passed, 1 skipped**。落地偏离与 ⏸ 留步一条见 9.6 条目下的登记）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -247,7 +247,7 @@
 - [x] 9.3 审计断言：每个画像都能追溯到 `analysis_run`；每次人工决策都有 `human_review` 记录 → **`human_review` 那一半已实现**：`app/audit/assertions.py` 断言四 `assert_every_decision_has_human_review`，已注册进 `COMPLIANCE_ASSERTIONS`（3 条 → 4 条），反证在 `tests/test_audit_assertion_effectiveness.py`。⚠️ `analysis_run` 那一半随 1.3/2.6 已移出到 `ai-audit-trail-and-outbound-gate`，不在本包
 - [x] 9.4 灰度：1 位业务经理试用 2 个真实岗位 → **已由 0.11 完成，且覆盖面更大**：3 位业务经理各跑 1 个真实岗位（姚祖怡·供应链总监、底层软件工程师岗、非标产品采购员岗），反馈汇总见 `docs/m1-demo-pilot-feedback.md`。⚠️ 与原文的差异是"3 人 × 1 岗"而非"1 人 × 2 岗"——样本人数更多、同一人的连续两次体验没覆盖到；灰度目的（真实用户在真实岗位上跑通并给出反馈）已达成
 - [x] 9.5 编写运行手册（部署、配置、故障排查、回滚） → **已实现**，四项逐个对上：`05-发布运行手册.md`（部署 + 配置，含 §「回滚」一节：本服务不影响任何现有流程，停用即回滚，无数据迁移负担）+ `docs/deploy-51-server.md`（故障排查，含 `.env` 非 UTF-8、scp 中文文件名两个真实故障的处置）
-- [ ] 9.6 **断言四豁免线改用决策发生时刻**（2026-09-04 Shao Peishen 裁决「现在修」，源自 6.x 落地偏离登记 Task 8 parked 条目）：修 `app/audit/assertions.py:273-338` 的 `assert_every_decision_has_human_review`
+- [x] 9.6 **断言四豁免线改用决策发生时刻**（2026-09-04 Shao Peishen 裁决「现在修」，源自 6.x 落地偏离登记 Task 8 parked 条目）：修 `app/audit/assertions.py:273-338` 的 `assert_every_decision_has_human_review`
       - 豁免判定与「违例」查询（第 309-320 行附近的 `for status, decision in ...` 循环）改用 `effect_log.applied_at` 关联，不再用 `job_profile.created_at`：
         - 关联 key = `effect_key = f"{job_id}:{node_name}:{version}"`（与 `app/storage/idempotency.py:32` 的幂等键格式同源）
         - 新增映射 `TERMINAL_STATUS_EFFECT_NODES = {"approved": "effect_confirm_profile", "abandoned": "effect_abandon_profile"}`，与既有 `TERMINAL_STATUS_DECISIONS` 并列放在同一处，注释写明与 `app/graph/nodes.py` 两个 `@idempotent_effect(...)`（:233、:337）字面量逐字同源、改一处要同步改
@@ -262,6 +262,12 @@
         4. 豁免计数（detail 文案里的数字）在场景 1/2 混合存在时与「只豁免真正发生在线前的决策」这条口径一致
       - 参考实现位置：`app/graph/nodes.py:233`（`effect_confirm_profile`）与 `:337`（`effect_abandon_profile`）、`app/storage/idempotency.py:32`（幂等键格式）、`app/storage/db.py:59-65`（`effect_log` 表结构）
       - ⛔ 不改 `app/audit/assertions.py` 之外的任何代码文件；不改 `human_review` 表结构；不改 `HUMAN_REVIEW_ENFORCED_FROM` 的取值
+      - **落地偏离登记（2026-09-04 `0904I` run-build，4 commits `c8f54be`→`b32038e`，rebase 后 `6ed67da`）**：
+        1. **「单测要专门覆盖类型转换」这条按原文写不出来**。原文要求单测覆盖「不显式 CAST 就错」的反例。SQLite 实测：`e.business_key`（TEXT 列）与 `p.version`（INTEGER 列）做**列 vs 列**裸比时，引擎会给 TEXT 侧套 NUMERIC 亲和性，`"02"` / `" 2"` / `"2.0"` 全部照常命中——把 CAST 删掉，43 条测试**全绿**（controller 亲跑变异验证，见 plan「关于 Global Constraint 2」）。⛔ 因此没有硬写一条恒绿的同义反复测试来充数。**显式 CAST 仍照原文写了**（把"按数值比"的意图钉在代码里，不依赖读者记得亲和性规则）。真正会静默出错的写法是把关联改成拼 `effect_key` 字符串去比（字符串相等，非规范 `business_key` 会漏匹配，在 fail-closed 下把本该豁免的历史行报成**假红**）——这条已由 `test_effect_key_string_form_would_miss_what_cast_finds`（特征化）与 `test_non_canonical_business_key_is_still_matched_by_the_assertion`（黑盒，实测变异变红）两条守住。
+        2. **超出原文、额外补的三道守卫**：① `test_terminal_status_effect_nodes_match_the_real_effect_nodes`——真的调用 `nodes.py` 两个 `effect_*` 节点、回读 `effect_log.node_name` 比对，⛔ 不是字面量对字面量（实测把 `nodes.py:233` 的节点名改一个字，该测试变红）；② `test_abandoned_terminal_rows_are_exempted_and_counted_with_their_own_effect_node`——终审发现 `abandoned` 分支原先**无任何行为覆盖**，两条变异（`exempted +=`→`=`、`TERMINAL_STATUS_EFFECT_NODES[status]`→`["approved"]`）都能全绿存活，此用例同时封住两条（各自实测变红）；③ 场景 3 的 fail-closed 反转变异（「查不到 `effect_log` 即违例」改成「即豁免」）实测让 `test_terminal_row_without_effect_log_is_not_exempt` 与 `test_missing_human_review_is_caught` 双双变红。
+        3. **⏸ 留步（需人核实，非代码缺陷）**：本次改动会让 `.51` 上「留痕上线前确认、既无 `effect_log` 也无 `human_review`」的历史 `approved` 行，从"被 `created_at` 豁免"翻转为 fail-closed 违例——巡检 CLI 会从绿变 `EXIT=1` 并列出 N 条。这是 `design.md` 决策七的**预期结果**（宁可多报），⛔ 正确处置是逐条核实，**不是**把 `HUMAN_REVIEW_ENFORCED_FROM` 往后挪（`assertions.py` 注释已明令）。本轮无 `.51` 访问权限，未实跑现网库，条数未知。`docs/audit-and-outbound-ops.md` 尚未写入这条口径（不在本轮 opener 的 `git add` 白名单内，未改）。
+        4. **未修的 deferred minor 一条**：`effect_log` 查询没有 `_table_exists` 守卫，缺表时 `OperationalError` 会逃出 `run_compliance_assertions`，打断该函数「全部跑完再返回、⛔ 不短路」的不变式。终审判 DEFER：同模块对 `job_profile` / `criterion_score` 同样无守卫（既有形态），且 `effect_log` 与 `job_profile` 一起写在 `db.py` SCHEMA 里无条件 `CREATE IF NOT EXISTS`，"`human_review` 在、`effect_log` 不在"无现实产生路径；补守卫还要先定"守到了该 pass 还是 fail"（pass 即 fail-open 洞），不宜在合并窗口里临时拍。
+        5. **`superpowers:subagent-driven-development` 技能在本无头 session 未注册**（`Skill` 调用返回 `Unknown skill`），按磁盘 `SKILL.md` v6.2.0 手工走完协议：每 Task 全新 subagent → 两阶段 review（spec 合规 + 代码质量）→ 全分支终审 → 一轮 fix wave → 一次 scoped 复审。台账落在 worktree 的 `.superpowers/sdd/`（git-ignored，随 worktree 删除消失）。
 
 ---
 
