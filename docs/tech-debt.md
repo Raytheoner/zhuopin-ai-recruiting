@@ -346,3 +346,53 @@ test_approving_into_a_closed_switch_leaves_its_own_trail`（不同原因两条�
 被彻底遗忘，一个岗位就这么无声无息地停在半路。⚠️ 挂起状态**本身不丢**
 （`tests/test_suspend_recovery.py` 已验 7 天），丢的只是提醒——所以这条债的代价是
 流程变慢，不是数据损坏。
+
+---
+
+## TD-JD-1｜JD 溯源用的是闭集术语词表
+
+**登记**：2026-09-04，交付单元 7「JD 溯源与导出」（tasks 7.3）合入时。
+
+**是什么**：`app/agents/jd_grounding.JD_TECHNICAL_TERMS` 是一份人工维护的闭集词表
+（45 个词条）。`verify_jd_grounding()` 只在这个集合里找未溯源的术语，**词表外的
+编造看不见**。
+
+**为什么这样做**：自动抽术语要么靠模型（`m1-intake-quality-fixes/design.md` 决策 11
+否决过：判官自己会编，且不可复算），要么靠分词（引入新依赖，且中英混排的 ECU 术语
+切不准）。闭集词表是确定性的、可评审的、可复算的。
+
+**后果**：`ungrounded_terms` 这个数字是**下界不是精确值**——返回空列表 ⛔ 不等于
+"文案没有编造"。与决策 11 声明的"本批要的是一个下界"口径一致。
+
+**触发扩表的条件**：真实使用中出现词表没覆盖到的编造。⛔ 不要为了"更全"而预先
+猛加词条——两个字母以内的纯拉丁词条（TI / AP / CP / IO）归一化后会命中大量无关词
+的内部片段，噪声会淹没真正的编造。
+
+---
+
+## TD-JD-2｜「标记为人工撰写」的留痕不在 `human_review` 表里
+
+**登记**：2026-09-04，交付单元 7（tasks 7.5）合入时。
+
+**是什么**：「标记为人工撰写」是**唯一**能去掉 AI 生成标识的路径，它的留痕
+（谁、何时）落在 `profile_json._jd_authorship` 这个内部键里，**不在 `human_review`
+表里**。
+
+**为什么这样做**：`human_review.decision_type` 的 CHECK 只认
+`approved` / `revision_requested` / `abandoned` 三个值，而这三个字面量在
+`app/storage/db.py`、`app/graph/nodes.py` 的 `DECISION_*` 常量、
+`app/audit/assertions.py` 的 `TERMINAL_STATUS_DECISIONS` 三处逐字同源；SQLite 又
+**改不了已有表的 CHECK**，`app/storage/db.py` 的加列机制（`_ADDED_COLUMNS`）只能加列
+不能改约束，`.51` 上的老库会静默保留旧 CHECK。留痕走内部键与 `_gap_acknowledgement`
+同一条路（design.md 决策 8：走内部键，不建新表）。
+
+**后果**：`app/audit/assertions.py` 的**断言四**（每次人工决策都有 `human_review`
+记录）**查不到这类决策**。去标识这个动作本身有留痕、且与去标识写在同一次 UPDATE 里
+（结构上不可能出现"标识没了但查不到谁去的"），但它不进统一的审计口径。
+
+**怎么还**：一个独立变更——改表（重建 `human_review` 并迁移数据）+ 改三处同源字面量
++ 改断言四。⛔ 不在交付单元 7 里顺手做。
+
+**不还的后果**：审计那天要回答"谁把这份 JD 的 AI 标识去掉了"，得去翻
+`profile_json` 而不是查审计表；断言四的"每次人工决策都有记录"这句话对这一类决策
+不成立，而**没有任何东西会报错**。

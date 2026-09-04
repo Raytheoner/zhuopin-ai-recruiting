@@ -1,4 +1,5 @@
 import re
+import pytest
 from pathlib import Path
 
 INDEX_HTML = Path("app/web/static/index.html").read_text(encoding="utf-8")
@@ -490,3 +491,70 @@ def test_reask_badge_is_gated_by_is_reask_flag():
     assert 'block.classList.add("reask");' in guarded_body
     assert 'badge.className = "reask-badge";' in guarded_body
     assert "badge.textContent = REASK_PREFIX;" in guarded_body
+
+
+# ── JD 面板：复制导出与标识保护（tasks 7.7 / 7.5）──────────────────────
+#
+# 弱断言（本仓库没有 JS 测试运行器，单文件前端无构建）：只保证这几条不可退回的
+# 约束没被改掉。真正的验证是 Step 5 的手工跑通。
+
+
+def test_copy_uses_native_apis_only_and_has_a_plain_http_fallback():
+    """部署约束 4 / 7.7：⛔ 不引第三方剪贴板库。
+
+    execCommand 兜底不是装饰：demo 走的是明文 http://…:8095，
+    **navigator.clipboard 在非安全上下文里根本不存在**（不是抛异常，是 undefined），
+    只写现代 API 的话复制按钮在服务器上会一声不响地什么都不做。
+    """
+    assert "navigator.clipboard" in INDEX_HTML
+    assert "isSecureContext" in INDEX_HTML
+    assert 'document.execCommand("copy")' in INDEX_HTML
+    assert "<script src" not in INDEX_HTML  # 单文件原生 JS，无外链脚本
+
+
+@pytest.mark.compliance
+def test_frontend_never_constructs_or_strips_the_ai_label():
+    """合规红线：AI 标识由服务端贴、由服务端去。
+
+    前端一旦自己拼或自己剥，标识就有了一条不经过 effect_mark_jd_human_written、
+    因而**不留痕**的去除路径——那正是《AI 生成合成内容标识办法》要禁止的。
+    判据是标识前缀这个字符串在 index.html 里一次都不出现。
+    """
+    assert "【AI 生成】" not in INDEX_HTML
+
+
+def test_copy_copies_the_persisted_text_including_the_label():
+    """复制的内容必须是服务端回执里的 jd_text 原文（含标识），
+    ⛔ 不许从 DOM 里另取一份可能被样式或截断改过的文本。"""
+    assert "currentJdText" in INDEX_HTML
+
+
+def test_jd_panel_wires_all_three_endpoints_with_relative_paths():
+    assert "api/jobs/${jobId}/jd`" in INDEX_HTML
+    assert "api/jobs/${jobId}/jd/human-written`" in INDEX_HTML
+
+
+def test_marking_human_written_asks_for_confirmation_first():
+    """去掉 AI 标识是一次不可撤销的合规声明，⛔ 不做成"点一下就去掉"。
+
+    判定范围收紧到 jd-human-btn 事件处理器的函数体本身。之前用
+    `INDEX_HTML.split("jd-human-btn")[-1]` 取"最后一次出现之后的全部内容"，
+    把文件里更靠后、与本按钮无关的 abandon-btn 处理器里那句 window.confirm
+    也算了进来——删掉 jd-human-btn 自己的二次确认，测试照样绿，是一条对
+    真正要守的东西完全不敏感的摆设。这里改成只在这个处理器自己的花括号
+    范围内找 window.confirm，别处的 window.confirm 不再能顶替它。
+    """
+    match = re.search(
+        r'document\.getElementById\("jd-human-btn"\)\.addEventListener\("click", async \(\) => \{'
+        r"(.*?)\n {4}\}\);",
+        INDEX_HTML,
+        re.DOTALL,
+    )
+    assert match, "jd-human-btn 的点击处理器不见了，或者写法变得不再匹配这个模式"
+    assert "window.confirm" in match.group(1)
+
+
+def test_ungrounded_terms_are_shown_as_advice_not_a_blocker():
+    """决策 12：只观测不拦截。⛔ 前端不得因为有未溯源术语就禁用复制或保存。"""
+    assert "jd-grounding" in INDEX_HTML
+    assert "ungrounded_terms" in INDEX_HTML
