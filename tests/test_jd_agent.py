@@ -1,6 +1,8 @@
 import json
 from dataclasses import dataclass
 
+import pytest
+
 from app.agents.jd_agent import (
     AI_LABEL_PREFIX,
     AI_LABEL_TEMPLATE,
@@ -158,6 +160,17 @@ def test_strip_keeps_text_that_merely_mentions_ai():
     assert strip_ai_label(text) == text
 
 
+@pytest.mark.compliance
+def test_strip_keeps_a_line_that_contains_the_prefix_but_is_not_a_label_line():
+    """判据必须是"整行以前缀开头"，⛔ 不是"行内含前缀"。这条对抗样本真正嵌有
+    `AI_LABEL_PREFIX` 这个子串（不是裸字"AI"），但不在行首——如果判据被放宽成
+    "in"，这一整行会被当成标识行吃掉，而它其实只是正文里提到了这个说法。"""
+    text = "参考同类岗位【AI 生成】风格撰写"
+    assert AI_LABEL_PREFIX in text
+    assert not text.startswith(AI_LABEL_PREFIX)
+    assert strip_ai_label(text) == text
+
+
 def test_extract_reads_back_the_generation_time():
     assert extract_label_generated_at(_LABELLED) == _TS
 
@@ -187,6 +200,19 @@ def test_enforce_does_not_stack_labels():
     twice = enforce_ai_label(once, generated_at=_TS)
     assert once == twice
     assert once.count(AI_LABEL_PREFIX) == 1
+
+
+@pytest.mark.compliance
+def test_enforce_reattaches_rather_than_checking_and_skipping():
+    """7.5 的核心不变式：enforce_ai_label 是"无条件剥离再重贴"，不是"文本里
+    已有标识就原样返回"。用**不同**的 generated_at 对一段已带旧标识的文本调用，
+    结果必须换成新时间戳、旧标识那一行必须消失——check-and-return 式的实现会
+    原样返回旧标识，这条会当场变红。"""
+    new_ts = "2026-09-05T09:00:00+00:00"
+    result = enforce_ai_label(_LABELLED, generated_at=new_ts)
+    assert new_ts in result
+    assert _TS not in result
+    assert result.count(AI_LABEL_PREFIX) == 1
 
 
 def test_enforce_on_empty_body_yields_the_label_alone():
