@@ -107,8 +107,21 @@ def test_experience_lower_bound():
 
 
 def test_experience_upper_bound_is_not_a_hard_gate():
-    """"3 年以下" 是上限，不是下限。⛔ 不得把它当成 gte 3 提取出来。"""
-    for text in ("3 年以下", "5年以内"):
+    """"3 年以下" 是上限，不是下限。⛔ 不得把它当成 gte 3 提取出来。
+
+    覆盖 fix round 1 reviewer 复现的四种漏判表述（"不超过3年" "少于3年"
+    "不到3年" "3年封顶"），加上原有的两种（"以下" "以内"）。
+    """
+    for text in (
+        "3 年以下",
+        "5年以内",
+        "不超过3年",
+        "少于3年",
+        "不到3年",
+        "3年封顶",
+        "最多3年",
+        "不足3年",
+    ):
         assert _by_field(
             extract_hard_requirements(_profile(experience_years=text)),
             "experience_years",

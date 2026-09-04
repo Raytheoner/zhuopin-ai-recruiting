@@ -56,6 +56,24 @@ _NO_REQUIREMENT_VALUES: frozenset[str] = frozenset(
     {"", "无", "无要求", "不限", "不限制", "未指定", "没有要求", "无特殊要求"}
 )
 
+# 年限上限的常见表述。命中即不产出下限规则——上限不是门槛，是偏好。
+#
+# 误差预算刻意不对称：漏掉一个上限词，会把「最多 3 年」的偏好反向翻译成
+# 「至少 3 年」的硬门槛，直接挡掉本该合格的候选人（方向性错误，不可逆）；
+# 而把某个短语误判成上限词，代价只是少产出一条规则，人工复核时能补回来
+# （spec「画像形状不可信时也不许抛」同一方向：宁可少一条规则）。所以这份
+# 词表宁可判得宽，也不要漏。
+_EXPERIENCE_UPPER_BOUND_MARKERS: tuple[str, ...] = (
+    "以下",
+    "以内",
+    "不超过",
+    "不足",
+    "少于",
+    "不到",
+    "封顶",
+    "最多",
+)
+
 # 可迁移经验字段：提成规则但不阻断（换个 MCU 平台族两周能上手，把它设成阻断
 # 等于用工具品牌筛人）。
 _NON_BLOCKING_LIST_FIELDS: tuple[str, ...] = ("mcu_family", "diag_stack", "toolchain")
@@ -106,10 +124,17 @@ def _experience_floor(text: str) -> str | None:
     """年限要求自由文本 → 年限下限（字符串形式的整数）。
 
     "3-5年" → "3"；"5 年以上" → "5"；"3 年以下" → None。
-    ⛔ 含"以下/以内"的是上限，绝不能当成下限——那会把一条"最多 3 年"的偏好
-    翻译成"至少 3 年"的门槛，方向完全相反。
+    ⛔ 含 `_EXPERIENCE_UPPER_BOUND_MARKERS` 中任一词的是上限，绝不能当成
+    下限——那会把一条"最多 3 年"的偏好翻译成"至少 3 年"的门槛，方向完全相反。
+
+    误差预算刻意不对称：漏掉一个上限词会把招聘门槛方向反转（本应放行的候选人
+    被挡在外面）；而把某个词误判成上限词，代价只是少产出一条规则、留给人工
+    复核时补上。两种错误不等价，所以词表宁可判得宽一些（详见
+    `2026-09-04-m1-job-profile-intake-unit-hard-requirement` fix round 1 的
+    reviewer 复现：`"不超过3年"` `"少于3年"` `"不到3年"` `"3年封顶"` 这类常见
+    表述如果漏判，会被当成 `gte` 下限提取出来）。
     """
-    if "以下" in text or "以内" in text:
+    if any(marker in text for marker in _EXPERIENCE_UPPER_BOUND_MARKERS):
         return None
     match = re.search(r"\d+", text)
     return match.group(0) if match else None
