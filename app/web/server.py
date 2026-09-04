@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
@@ -16,7 +16,7 @@ from app.agents.intake_question import normalize_question_payload
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.nodes import effect_confirm_profile, effect_generate_and_persist_jd
-from app.middleware.auth import AuthMiddleware
+from app.middleware.auth import AuthMiddleware, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
     RequestIdMiddleware,
@@ -180,7 +180,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         return {"job_id": job_id, "message": message}
 
     @router.post("/api/jobs/{job_id}/confirm")
-    def confirm(job_id: str, req: ConfirmRequest | None = None):
+    def confirm(job_id: str, request: Request, req: ConfirmRequest | None = None):
         row = conn.execute(
             "SELECT profile_json, status FROM job_profile WHERE job_id=? ORDER BY version DESC LIMIT 1",
             (job_id,),
@@ -272,7 +272,13 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             ) from exc
 
         effect_confirm_profile(
-            conn, thread_id=job_id, business_key=str(version), profile_dict=profile_dict
+            conn,
+            thread_id=job_id,
+            business_key=str(version),
+            profile_dict=profile_dict,
+            # 决策人由鉴权层给（部署约束 3 的空壳接入点）。SSO 落地后这里
+            # 一行不改，reviewer_of 自动返回真实的企微 userid。
+            reviewer=reviewer_of(request),
         )
 
         gateway = gateway_factory()

@@ -138,7 +138,7 @@ def test_effect_confirm_profile_marks_approved(tmp_path):
     conn.commit()
 
     effect_confirm_profile(
-        conn, thread_id="job1", business_key="1", profile_dict={"job_title": "x"}
+        conn, thread_id="job1", business_key="1", profile_dict={"job_title": "x"}, reviewer="tester"
     )
 
     job_status = conn.execute("SELECT status FROM job WHERE id='job1'").fetchone()[0]
@@ -801,6 +801,7 @@ def test_confirm_profile_persists_acknowledgement_in_the_same_write(tmp_path):
             "job_title": "嵌入式软件工程师",
             "_gap_acknowledgement": {"acknowledged": True, "had_gaps": True},
         },
+        reviewer="tester",
     )
 
     status, profile_json = conn.execute(

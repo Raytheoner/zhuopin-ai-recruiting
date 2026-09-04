@@ -83,10 +83,10 @@ def test_effect_confirm_profile_replay_is_noop_second_time(tmp_path):
     )
     conn.commit()
 
-    effect_confirm_profile(conn, thread_id="job1", business_key="1", profile_dict={})
+    effect_confirm_profile(conn, thread_id="job1", business_key="1", profile_dict={}, reviewer="tester")
     # 第二次调用命中 effect_log，函数体不应再执行（即使这里执行了也是同样结果，
     # 但关键断言是 effect_log 只有一条记录 —— 这是幂等键生效的证据）
-    effect_confirm_profile(conn, thread_id="job1", business_key="1", profile_dict={})
+    effect_confirm_profile(conn, thread_id="job1", business_key="1", profile_dict={}, reviewer="tester")
 
     effect_log_count = conn.execute(
         "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_confirm_profile'"
@@ -343,7 +343,7 @@ def test_effect_confirm_profile_commits_exactly_once_per_call(tmp_path):
 
     conn = _open_commit_counting_connection(str(tmp_path / "test.db"))
 
-    effect_confirm_profile(conn, thread_id="job1", business_key="1", profile_dict={})
+    effect_confirm_profile(conn, thread_id="job1", business_key="1", profile_dict={}, reviewer="tester")
 
     assert conn.commit_count == 1, (
         "effect_confirm_profile 一次成功调用应该只触发 1 次 conn.commit()"
