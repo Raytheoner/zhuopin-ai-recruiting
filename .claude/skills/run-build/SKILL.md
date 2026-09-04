@@ -89,7 +89,10 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
    tasks.md 勾满、review 通过、汇报也说"已完成"。**唯一的症状是 main 上什么都没有**，
    而没有任何东西会报错。实证：2026-08-19 `server-runtime-logging` 跑完全部 7 个 Task
    并通过终审，11 个提交在分支上挂了整整一轮，直到下一次会话查 git 才发现。
-5. 若该变更 tasks.md 已全部勾完，提示用户用 `openspec-archive-change` 收口，把 spec 折进 `openspec/specs/`
+5. 若该变更 tasks.md 已全部勾完，提示用户用 `openspec-archive-change` 收口，把 spec 折进 `openspec/specs/`。
+   🔴 **归档顺序按 spec 依赖，不按完成先后**（2026-09-03 `0903Q` 实证）：一个包的 delta 若是对另一个包
+   ADDED 的需求做 MODIFIED，主 spec 要等那个包归档才存在——先归档 delta 包会把 MODIFIED 落到不存在的基底上。
+   先归档被依赖的包，再归档 delta 包；派归档 opener 时把顺序写死
 
 ## 输出
 

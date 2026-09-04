@@ -17,7 +17,7 @@
 - [x] 2.4 扩展 `app/audit/assertions.py` 6.5 的集成测试：构造"同一草稿先被入队拦截、再放行被总开关拦下"的完整场景，断言 `outbound_block_stats()` 的 `blocked_by_type_and_reason` 对该 `message_type` 计入两个不同的 `reason` 桶，而不是被幂等机制吞掉只剩一条——验证 TD-9 描述的"6.5 系统性缺席"确实被补上。
 - [x] 2.5 同步订正 `openspec/changes/ai-audit-trail-and-outbound-gate/tasks.md` 5.4 的字面幂等键公式描述，由 `{content_hash}:{allowed}` 改为 `{content_hash}:{allowed}:{reason}`，并在该条后追加一句指向本变更包（`outbound-retry-audit-trace`）作为订正依据。⛔ 除这一处文字外不改那份 `tasks.md` 的其他内容。
 - [x] 2.6 `docs/tech-debt.md` TD-9 条目补写销账状态：在条目末尾追加"已于变更包 `outbound-retry-audit-trace`（commit `<待填入实际 hash>`）修复"。⛔ 不删除 TD-9 原文的成因分析——保留作为"为什么当时只登记不修"的历史记录，只在条目末尾追加销账状态，不改写中间正文。
-- [ ] 2.7 全部任务勾选后，当场执行 `openspec-archive-change`（CLAUDE.md「归档时限」：不得让"代码完成但变更包未归档"跨越一个工作 session）。
+- [x] 2.7 全部任务勾选后，当场执行 `openspec-archive-change`（CLAUDE.md「归档时限」：不得让"代码完成但变更包未归档"跨越一个工作 session）。依据：本 opener 0904A 执行归档。
 
 ## 2.x 落地偏离登记
 
@@ -26,5 +26,5 @@
 | 1 | 1.7 写"原因『等待人工确认』" | 首次拦截原因实为 `REASON_CONFIRMATION_REQUIRED`「消息自称需要人工确认」 | **落到实际取值**。`requires_confirmation` 默认 `True`（红线要求），`gate.py:284` 先命中该条；`REASON_AWAITING_CONFIRMATION` 只在 `requires_confirmation=False` 且非最高风险时出现。测试一律用 `decision.reason` / `REASON_*` 常量，⛔ 不硬编码文案 |
 | 2 | 1.1 只说"两处必须引用同一个求值表达式" | 提炼成模块级公共函数 `audit_business_key()`，**两个**直接调用点（`_audit_event` / `record_outbound_decision`）共用；`deliver_candidate_message()` 不直接调用它，是经 `record_outbound_decision()` 间接受益 | **更严**。1.1 允许"模块内小函数或共享表达式"，取前者；`grep -rn ':{decision.allowed}"' app/` 零命中可机器验证 |
 | 3 | 1.4 只说"插入调用" | 同时订正了 `approve()` docstring 里「⛔ 不自行 commit」那一句，**以及 `queue.py` 模块 docstring 里同义的那一句** | **信息不丢**。被拦分支现在经 `idempotent_effect` 装饰器 commit（`app/storage/idempotency.py:75`），与投递路径同构、无半截事务风险，但旧 docstring 会让下一个人推出错误的事务模型。模块 docstring 那一句是 review 第一轮查出来的 |
-| 4 | 2.7 写"当场归档本包" | 归档改到**合并回 main 之后**执行，本 Task 内不归档；因此本包 checkbox 收在 **14/15**，2.7 留待归档当场勾 | **执行位置调整，终态不变**。归档会写 `openspec/specs/` 与 `openspec/changes/archive/`，在 worktree 内做会与 main 产生大面积合并冲突。泳道 opener（0903Q）【四】明确要求"合并回 main → 双验 → 回勾 → 归档" |
+| 4 | 2.7 写"当场归档本包" | 归档改到**合并回 main 之后**执行，本 Task 内不归档；本包 checkbox 收在 **15/15**（2.7 已由 0904A 归档 opener 勾选并当场执行归档） | **执行位置调整，终态不变**。归档会写 `openspec/specs/` 与 `openspec/changes/archive/`，在 worktree 内做会与 main 产生大面积合并冲突。泳道 opener（0903Q）【四】明确要求"合并回 main → 双验 → 回勾 → 归档" |
 | 5 | plan Task 2 Step 4 点名回归 `tests/test_audit_sinks.py` | 仓库内不存在该文件，实际跑的是 `tests/test_audit_sinks_sqlite.py` | **计划文本笔误，非实施偏离**。控制器已独立核实 `ls tests/ \| grep -i sink` 只有 `test_audit_sinks_sqlite.py` |

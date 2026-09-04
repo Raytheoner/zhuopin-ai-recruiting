@@ -291,3 +291,27 @@ test_approving_into_a_closed_switch_leaves_its_own_trail`（不同原因两条�
 `tests/test_outbound_block_stats.py::test_a_second_block_on_the_same_draft_gets_its_own_bucket`
 （6.5 统计能看见第二次拦截）。
 ⚠️ 上面的成因分析 ⛔ 保留原文，不改写——它是"为什么当时只登记不修"的历史记录。
+
+---
+
+## TD-10 · 边界守护 CI 的依赖基线钉死在立项 commit，有未声明的保质期
+
+**欠的是什么**：`scripts/check_boundary.py` 的 `BASELINE_COMMIT`
+（`e65f6857fe255634d49a3e8696b1dba0f5facbec`，立项 commit）钉死作为依赖 diff 的
+基线，判据是「相对该 commit，`requirements.txt` diff 为空」。这条判据没有
+保质期——未来任何一次**正当**新增依赖（`pgvector` / `PaddleOCR` / `BGE-M3` /
+阶段二 `FunASR`）落地时，diff 必然非空，CI 会在**所有分支**上永久变红，且
+不存在"改代码修复"这条路：判据本身就是"不许改 `requirements.txt`"。
+
+**附带盲区**：该守护脚本目前只扫描 `app/`，`tests/` 与 `scripts/` 未纳入扫描
+范围——这两处若引入边界违规，现有判据看不见，影响面尚未评估。
+
+**触发条件**：第一次要往 `requirements.txt` 加依赖时。届时改法二选一：
+1. 基线改为"上一次 tagged 发版"（滚动基线，随发版前移）；
+2. 判据改为"新增依赖必须在白名单内"（显式登记制，不依赖某个历史 commit）。
+
+⛔ 不要到时候图省事简单删掉这道 CI 步骤——那会连同它已经在守护的边界一起丢掉。
+
+**为什么现在只登记不做**：触发条件尚未发生，M1/M2 现有依赖未变。
+
+**来源**：0903O 终审发现，登记于 `lanes-20260904-002413` 看护报告 §四。

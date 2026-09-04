@@ -21,27 +21,27 @@ HR业务线-接力0903B
 
 ---
 
-## 一、状态快照（2026-09-03 第七批跑完后）
+## 一、状态快照（2026-09-04 07:50，第八批跑完后）
 
 | 项 | 现状 |
 |---|---|
-| main | `365e5fa`，**与 origin 同步（ahead 0）**。`0903M` 已加项目级 `Bash(git push:*)` 白名单，下一个新 session 起 push 不再需要人点 |
-| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`（第八批）、`docs/openers/0903Y-泳道批次看护.md`。`0903Y`【二】提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
+| main | `e59691e`，**与 origin 同步（ahead 0）**。白名单三条已生效（push + run-lanes 两种前缀），第八批四条 session 全部自动推上 |
+| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`（号池 0904A）、`.claude/skills/run-build/SKILL.md`（归档顺序规则）、`docs/openers/0904A-*.md`。`0904A` 提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
 | `.51` 代码 | ✅ **已发版 `b86db65`（含 U6）**（`0903L` 2026-09-03 二次发版，`sync-to-server.sh`，冒烟 4 项全过；U6 巡检 CLI 首次实跑 `EXIT=2`／JSONL 镜像不存在＝尚无审计记录非失败；8.4 已在页面手工跑通并回勾，见 `docs/audit-and-outbound-ops.md` §五与 `tasks.md` 8.4） |
-| pytest | main 侧 **786 passed / 1 skipped / 0 failed**（09-03 `0903Z` 独立复核；skipped 那条＝`REPLAY_LIVE` 门控的真回放）。⛔ 别抄进 opener 当基线，见【四】 |
+| pytest | main 侧 **842 passed / 1 skipped / 0 failed**（09-04 `0903Y` 独立复核）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
-| worktree | 只剩主工作区，无多余分支（G/H 的 worktree 由各自 finishing 流程自删，不是外部清理；H 的陈旧分支 `0903J` 已删） |
+| worktree | 两个遗留：`HumanResource-wt-U7`（21:17 未竟尝试的未提交改动，已被 main 取代，`0904A` 证伪后删）；`.claude/worktrees/td9-outbound-retry-audit-trace`（真未合 0，含 TDD 台账，**不删**，等定） |
 
 **变更包进度**
 
 | 变更包 | 进度 | 剩什么 |
 |---|---|---|
-| `ai-audit-trail-and-outbound-gate` | **51/53** | 第1–6章✅（U6 `e5e8e33`，0903G）；只剩 **7.1/7.2**（CI 查 `zhuopin_platform` 依赖与 `sys.path` 注入）。归档条件＝这两条做完 |
+| `ai-audit-trail-and-outbound-gate` | **53/53** | 全勾（U7 `6e1272c`，0903O）。**未归档**——`0904A` 先归档它（retry 包的 delta 依赖它的主 spec） |
 | `m1-intake-quality-fixes` | **68/69** | 8.4 ✅（Shao Peishen 09-03 页面实跑，job `51b225f1`，0903L 取证）；只剩 **8.9**（归档，须 `m1-job-profile-intake` 先归档） |
-| `outbound-retry-audit-trace` | **0/15**（09-03 新立，TD-9） | 两章：1 幂等键改造与 approve() 留痕接线；2 回归、契约同步与销账。下一步 spec-to-plan |
+| `outbound-retry-audit-trace` | **14/15** | 代码全合入（`bf45370`，0903Q，pytest 834→842）；只剩 **2.7 归档**——`0903Q` 发现归档顺序反了正确刹车，`0904A` 按正确顺序做 |
 | `m1-job-profile-intake` | 33/71 | 08-26 已按现实重写 WBS，四类归档 |
 
-**已跑完的批次**：第四批（0827B/C）、第五批（0828A/C/D/B）、第六批（0830A）、**第七批（0903F/G/H/I，4/4 合入 main，报告 `lanes-20260903-115028-看护报告.md`）**。
+**已跑完的批次**：第四批（0827B/C）、第五批（0828A/C/D/B）、第六批（0830A）、第七批（0903F/G/H/I）、**第八批（0903N/O/P/Q，撞上 Anthropic 529 事故重跑两次后收敛，报告 `lanes-20260904-002413-看护报告.md`）**。
 看护报告都在 `.claude/handoff/lanes-*-看护报告.md`。
 
 ---
@@ -101,13 +101,20 @@ superpowers 两条都**没调到**，均按磁盘 SKILL.md 手工走完（第 4 
 结果：K 立了 `outbound-retry-audit-trace`（2 章）并提交全部真源改动；L 二次发版 `b86db65`（含 U6，快照 `backups\20260903-1428`，冒烟 4/4），
 巡检 CLI 首跑 `EXIT=2`＝JSONL 镜像尚不存在（现网无外发调用方，不是失败），8.4 由 Shao Peishen 本人页面跑通、取证三判据全中。
 
-### ⑦ 第八批已编排（Shao Peishen 09-03 「继续」）→ 等 `[Mac]0903Y` 发车
+### ~~⑦ 第八批~~ ✅ 跑完（N/O/P OK，Q PARTIAL＝归档顺序反了、正确刹车）
 
-单泳道 4 条**串行**（U7 与 TD-9 包都要写 ai-audit 的 `tasks.md`，不能两泳道同写）：
-`0903N` U7 plan → `0903O` U7 build 回勾 53/53（不归档）→ `0903P` TD-9 包 plan（1+2 章合一单元，偏离已写明）→ `0903Q` TD-9 build + 归档本包 + 归档 ai-audit 包。
-看护者 `0903Y`（`Z` 同日已用）走引用式：`docs/openers/0903Y-泳道批次看护.md`。dry-run 预期 N 21 / O 27 / P 25 / Q 33 行。
-明令不进泳道：8.9 归档链（`m1-job-profile-intake` 33/71 归档要人工核两处矛盾表述，交互式做）；§5-1 备份任务；TD-9 合入后是否再发 `.51`（等拍板）。
-跑完看 `.claude/handoff/lanes-<时间戳>-看护报告.md`。
+结果：U7 53/53（`6e1272c`）；TD-9 修复全部合入（`bf45370`），pytest 786→842；两条 plan 落档。
+过程：O 两次撞 Anthropic 529 上游事故（status 页有 incident），事故解后重跑收敛；Auto Mode 分类器拦 `nohup`，
+Shao Peishen 亲自跑 `scripts/allow_run_lanes.py` 加白名单后解除。superpowers 四条全没调到、全手工走完（第 7–10 次）。
+🔴 **归档没做**：retry 包的 delta 是对 ai-audit 包 ADDED 需求的 MODIFIED，主 spec 要等 ai-audit 归档才存在——opener 顺序写反了，Q 没产半成品。已触发「归档时限」规则，`0904A` 当场补。规则已写进 run-build skill 收口第 5 步。
+
+### ⑧ `[Mac]0904A`：双归档（先 ai-audit 后 retry）＋ TD-10 登记 ＋ wt-U7 清理 —— 已派（三件都不是不可代项，按 09-04「同结果只给一种」规矩不再问）
+
+对应 0903Y 报告选项 **A + C + E**。C：CI 依赖基线钉死立项 commit、未来加依赖必红 → 登记 **TD-10**（⛔ 不是 O 写的 TD-8，那号已占）。
+E：`wt-U7` 里是被取代的未竟改动，证伪两条（status 只有那 4 处、cherry 真未合 0）后删。td9 的 worktree **不删**（有 TDD 台账）。
+正文 `docs/openers/0904A-双归档与TD10登记与wt清理.md`。
+
+之后可做：8.9 归档链（`m1-job-profile-intake` 先，要人工核两处矛盾表述）；TD-9 合入后是否再发 `.51`（不可代，等拍）；§5-1 备份任务。
 
 ---
 
@@ -117,7 +124,7 @@ superpowers 两条都**没调到**，均按磁盘 SKILL.md 手工走完（第 4 
 |---|---|---|
 | 1 | 🔴 **`git push` 被 auto mode classifier 拦** | 反复出现（08-28、08-30、09-03 K/L 又两次）。09-03 `0903Z` 实测：发车前那次被**直接拒绝**（非挂起待点击），收尾那次成功——同一 session 内两次结果不同，机制仍不明。两条路：**(a)** 每次在能批准的 session 里点放行；**(b)** 给 `.claude/settings.json` 加 `"permissions": {"allow": ["Bash(git push:*)"]}`——项目级、可提交、对所有 session 生效。**Shao Peishen 09-03 拍板走 (b)**。Cowork 侧改 `settings.json` 被 classifier 拦（改权限配置本就该在 CC 里人眼过一遍），✅ `0903M` 已加（`365e5fa`）。⚠️ 白名单对**新开的** session 生效。**09-03 17:xx 又撞一层**：Auto Mode 分类器拦 `0903Y` 的 `nohup run-lanes.sh`（判「无人值守起子 session」高风险），看护者自己改 settings.json 也被拦 ⇒ Shao Peishen 手工加 `Bash(bash docs/openers/run-lanes.sh:*)` 与 `Bash(nohup bash …:*)` 两条。已写进 lane-dispatch skill ④ 与看护者前置自检第 0 条 |
 | 2 | 🔴 **worktree 被未落档地清理，已发生两次** | 08-30 11:38 扫掉 u2/unitE/unitF/u1 四条（判据＝真未合 0，代码零损失）；**09-03 前 u5 也被移除**——而 08-30 那份报告刚评估过「u5 真未合 11，同样的清理不会碰它」。⇒ **判据变了或用了 `--force`，机制不明**。代码没丢（分支 `worktree-audit-u5-queue-and-wiring` 与 `19ab503`/`f899c98` 都在），丢的是 worktree 内 git-ignored 的 `.superpowers/sdd/` 台账。**要不要查清是谁在清、加个护栏？** |
-| 3 | **TD-9**：同一草稿第二次拦截零留痕 | U6（0903G）已**坐实**："放行后复发又被拦"路径系统性缺席。修复要改已过审的 `approve()` 签名 + 5.4 幂等键公式，属契约层变更。**已立** `outbound-retry-audit-trace`（`a15862d`，2 章 15 项），下一步 spec-to-plan |
+| 3 | **TD-9**：同一草稿第二次拦截零留痕 | U6（0903G）已**坐实**："放行后复发又被拦"路径系统性缺席。修复要改已过审的 `approve()` 签名 + 5.4 幂等键公式，属契约层变更。✅ **已修复合入**（`bf45370`，0903Q），TD-9 销账行已写；只差包归档（`0904A`） |
 | 4 | `.51` 留步清单**只剩一项** | §5-1 备份任务确认/新增（`0903D` 只做了一次性快照 `C:\apps\backups\20260903-1003`，不等于常态化备份任务）。§5-2 链校验与 §5-3 四步已于 09-03 闭合。见 `docs/audit-and-outbound-ops.md` 第五节 |
 | 5 | `.51` 整机重启 | 阻断已清、只差窗口。⚠️ 爆炸半径 **7 个服务**（含门户网关本体），`CBS RebootPending=True` + 已 85 天未重启，停机时长不可按常规估。opener＝编排文件 `[Mac] 0820-9R` |
 | 6 | 阶段 C 门户导航 | 需在 Win 笔记本上改门户 HTML。板块名「HR·招聘智能体」，外链 `http://192.168.100.51:8095/hr/recruit-agent/`。与 `.51` 服务无关，不影响运行中的服务 |
