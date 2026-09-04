@@ -686,6 +686,35 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "decisions": job_queries.decision_records(conn, job_id),
         }
 
+    @router.get("/api/queues/needs-manual")
+    def needs_manual_queue() -> dict:
+        """8.4 转人工队列。只读、只展示。
+
+        ⛔ 只展示不处置：本端点与本队列页面 ⛔ 不提供批量确认、批量放弃、批量
+        重生成（合规红线「AI 只做排序推荐，不做自动淘汰」；批量处置是 M2 的事，
+        且必须有人工确认节点与留痕）。
+
+        ⛔ 放弃（abandoned）的岗位不进队列：放弃是终态、不再流转，把它摆进 HR
+        的待办里只会制造清不掉的积压。过滤放在这里而不是
+        derive_needs_manual_reasons 里——那个函数只回答"有哪些理由"，详情页
+        恰恰应该看得到"这个岗位当初为什么被转人工"，哪怕它后来被放弃了。
+        """
+        rows, counts, message_types = _job_rows_with_context()
+        items = [
+            payload
+            for payload in (
+                _job_row_payload(row, counts, message_types)
+                for row in rows
+                if row["status"] != "abandoned"
+            )
+            if payload["needs_manual"]
+        ]
+        # 队列按"等得最久的排前面"，与列表页的倒序刻意相反：列表回答"最近发生了
+        # 什么"，队列回答"该先办哪一个"。job_id 作为第二排序键，保证同一时刻的
+        # 两条有稳定顺序（否则每次刷新顺序会跳，看的人会以为队列变了）。
+        items.sort(key=lambda item: (item["updated_at"], item["job_id"]))
+        return {"jobs": items, "total": len(items)}
+
     @router.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
         job = conn.execute(

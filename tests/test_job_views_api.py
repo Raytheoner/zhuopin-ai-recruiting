@@ -458,3 +458,207 @@ def test_profile_detail_version_count_equals_job_profile_row_count_after_revisio
     }
     for version in data["versions"]:
         assert snapshot_keys <= version["snapshot"].keys()
+
+
+# ── 8.4 转人工队列 ───────────────────────────────────────────────────────────
+
+
+def test_queue_is_empty_when_nothing_needs_a_human(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+
+    data = client.get("/api/queues/needs-manual").json()
+
+    assert data == {"jobs": [], "total": 0}
+
+
+def test_queue_picks_up_jd_discrimination_flag(tmp_path):
+    """今天唯一真实存在的写入方：app/graph/nodes.py 的
+    effect_generate_and_persist_jd 在 JD 连续 2 次触发歧视性表述检测后落库。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(
+        conn, "j1", 1, {"job_title": "A", "_jd_text": "…", "_jd_needs_manual": True},
+        status="approved",
+    )
+
+    data = client.get("/api/queues/needs-manual").json()
+
+    assert data["total"] == 1
+    assert data["jobs"][0]["job_id"] == "j1"
+    assert [r["code"] for r in data["jobs"][0]["needs_manual_reasons"]] == ["jd_discrimination"]
+
+
+def test_queue_picks_up_revision_limit(tmp_path):
+    """spec「修改次数上限」要求"提示转人工"。修复前那句提示只活在一次 409 响应里，
+    页面一关就没了——队列把它变成一条查得到的事实。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+    for version in range(1, MAX_REVISIONS + 1):
+        _seed_review(
+            conn, "j1", version, DECISION_REVISION_REQUESTED,
+            decided_at=f"2026-09-01 11:0{version}:00",
+        )
+
+    data = client.get("/api/queues/needs-manual").json()
+
+    assert data["total"] == 1
+    assert [r["code"] for r in data["jobs"][0]["needs_manual_reasons"]] == ["revision_limit"]
+    assert str(MAX_REVISIONS) in data["jobs"][0]["needs_manual_reasons"][0]["label"]
+
+
+def test_queue_picks_up_job_status_column_when_someone_finally_writes_it(tmp_path):
+    """WBS 2.5 落地当天这一条自动生效。⛔ 不许因为"现在无人写入"就省掉——
+    只认一个恒为空的状态列，队列会永远是空的，而"空队列"和"没人需要处理"
+    在界面上长得一模一样。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="needs_manual")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+
+    data = client.get("/api/queues/needs-manual").json()
+
+    assert data["total"] == 1
+    assert [r["code"] for r in data["jobs"][0]["needs_manual_reasons"]] == ["job_status"]
+
+
+def test_queue_excludes_abandoned_jobs(tmp_path):
+    """放弃是终态、不再流转。把它摆进 HR 的待办里只会制造清不掉的积压。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="abandoned")
+    _seed_version(
+        conn, "j1", 1, {"job_title": "A", "_jd_text": "…", "_jd_needs_manual": True},
+        status="abandoned",
+    )
+
+    assert client.get("/api/queues/needs-manual").json() == {"jobs": [], "total": 0}
+
+
+def test_queue_orders_oldest_first(tmp_path):
+    """队列按"等得最久的排前面"，与列表页的"最近有动静的排前面"刻意相反：
+    列表回答"最近发生了什么"，队列回答"该先办哪一个"。"""
+    client, conn = _make_app(tmp_path)
+    for job_id, at in (("recent", "2026-09-03 15:00:00"), ("stale", "2026-09-01 08:00:00")):
+        _seed_job(conn, job_id, status="approved")
+        _seed_version(
+            conn, job_id, 1, {"job_title": job_id, "_jd_text": "…", "_jd_needs_manual": True},
+            status="approved", created_at=at,
+        )
+
+    ids = [job["job_id"] for job in client.get("/api/queues/needs-manual").json()["jobs"]]
+
+    assert ids == ["stale", "recent"]
+
+
+def test_queue_row_has_the_same_shape_as_a_list_row(tmp_path):
+    """两个页面渲染同一个卡片组件。形状分叉了没有测试会自己发现。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(
+        conn, "j1", 1, {"job_title": "A", "_jd_text": "…", "_jd_needs_manual": True},
+        status="approved",
+    )
+
+    list_row = client.get("/api/jobs").json()["jobs"][0]
+    queue_row = client.get("/api/queues/needs-manual").json()["jobs"][0]
+
+    assert set(list_row.keys()) == set(queue_row.keys())
+    assert list_row == queue_row
+
+
+def test_queue_is_mounted_under_the_configured_root_path(tmp_path):
+    client, conn = _make_app(tmp_path, root_path="/hr/recruit-agent")
+    _seed_job(conn, "j1")
+
+    assert client.get("/hr/recruit-agent/api/queues/needs-manual").status_code == 200
+    assert client.get("/api/queues/needs-manual").status_code == 404
+
+
+def test_queue_exposes_no_write_verbs(tmp_path):
+    """合规红线「AI 只做排序推荐，不做自动淘汰」在本单元的落点：队列只展示、
+    不处置。⛔ 不做批量确认/批量放弃/批量重生成（M2 的事）。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+
+    for method in (client.post, client.put, client.patch, client.delete):
+        assert method("/api/queues/needs-manual").status_code == 405
+
+
+def test_queue_does_not_write_anything(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(
+        conn, "j1", 1, {"job_title": "A", "_jd_text": "…", "_jd_needs_manual": True},
+        status="approved",
+    )
+
+    tables = ("job", "job_profile", "human_review", "effect_log", "outbox")
+    before = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+
+    client.get("/api/queues/needs-manual")
+    client.get("/api/queues/needs-manual")
+
+    after = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    assert before == after
+
+
+def test_queue_contains_exactly_the_needs_manual_jobs_and_is_server_side_state(tmp_path):
+    """控制器追加：队列既要精确（不多不少），又要是服务端推导出来的事实而不是
+    前端记住的状态——刷新（甚至换一个全新的客户端/进程）之后仍然原样在。"""
+    client, conn = _make_app(tmp_path)
+
+    # 两条应该进队列的，理由刻意不同：一条是 JD 歧视性表述被转人工，
+    # 一条是修改次数达上限。
+    _seed_job(conn, "flagged-jd", status="approved")
+    _seed_version(
+        conn, "flagged-jd", 1,
+        {"job_title": "JD 有问题", "_jd_text": "…", "_jd_needs_manual": True},
+        status="approved",
+    )
+
+    _seed_job(conn, "maxed-out")
+    _seed_version(conn, "maxed-out", 1, {"job_title": "改太多次"})
+    for version in range(1, MAX_REVISIONS + 1):
+        _seed_review(
+            conn, "maxed-out", version, DECISION_REVISION_REQUESTED,
+            decided_at=f"2026-09-01 11:0{version}:00",
+        )
+
+    # 三条不应该进队列的：一条普通草案、一条画像干净的已确认岗位、一条已放弃
+    # （即使放弃前 JD 曾被标记转人工，放弃后也不再流转，见
+    # test_queue_excludes_abandoned_jobs）。
+    _seed_job(conn, "plain-draft")
+    _seed_version(conn, "plain-draft", 1, {"job_title": "普通草案"})
+
+    _seed_job(conn, "clean-approved", status="approved")
+    _seed_version(
+        conn, "clean-approved", 1, {"job_title": "干净的已确认岗位", "_jd_text": "…"},
+        status="approved",
+    )
+
+    _seed_job(conn, "abandoned-with-flag", status="abandoned")
+    _seed_version(
+        conn, "abandoned-with-flag", 1,
+        {"job_title": "放弃了", "_jd_text": "…", "_jd_needs_manual": True},
+        status="abandoned",
+    )
+
+    data = client.get("/api/queues/needs-manual").json()
+    ids = {job["job_id"] for job in data["jobs"]}
+
+    expected = {"flagged-jd", "maxed-out"}
+    # 双向断言：该在的都在，不该在的一个都不多——按集合比较，⛔ 不按下标或
+    # 长度，否则"多一条、少一条但总数凑巧相等"这种错误会被放过。
+    assert ids == expected
+    assert data["total"] == len(expected)
+
+    # 队列必须在刷新后仍在，因为它是服务端从库里推导出来的，不是前端记住的
+    # 状态。_make_app(tmp_path) 用同一个 tmp_path 会算出同一个 db 文件路径
+    # （见 _make_app 的 db_path = tmp_path / "views.db"），再调一次就是一个
+    # 全新的 create_app + 全新 TestClient，不携带上面那个 app 实例的任何
+    # 内存状态，等价于"用户刷新页面、甚至换一台机器打开"。
+    fresh_client, _ = _make_app(tmp_path)
+    fresh_ids = {job["job_id"] for job in fresh_client.get("/api/queues/needs-manual").json()["jobs"]}
+
+    assert fresh_ids == expected
