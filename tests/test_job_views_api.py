@@ -264,3 +264,197 @@ def test_list_jobs_does_not_write_anything(tmp_path):
 
     after = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
     assert before == after
+
+
+# ── 8.2 画像详情（版本历史 + 生成快照）─────────────────────────────────────
+
+
+def test_profile_detail_404_for_unknown_job(tmp_path):
+    client, _ = _make_app(tmp_path)
+
+    assert client.get("/api/jobs/nope/profile").status_code == 404
+
+
+def test_profile_detail_returns_every_version_in_order(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(conn, "j1", 1, {"job_title": "嵌入式工程师"}, created_at="2026-09-01 10:01:00")
+    _seed_version(
+        conn, "j1", 2, {"job_title": "嵌入式软件工程师"},
+        status="approved", created_at="2026-09-01 10:20:00",
+    )
+
+    data = client.get("/api/jobs/j1/profile").json()
+
+    assert data["latest_version"] == 2
+    assert [v["version"] for v in data["versions"]] == [1, 2]
+    assert data["title"] == "嵌入式软件工程师"
+    assert data["versions"][1]["status_label"] == "已确认"
+
+
+def test_profile_detail_version_carries_a_generation_snapshot(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+    _seed_version(
+        conn, "j1", 1, {"job_title": "A"},
+        model="deepseek-chat-241226", latency=2100.0,
+        written=["job_title"], ungrounded=["mcu_family"],
+        asked=[{"question_id": "q1"}, {"question_id": "q2"}, {"question_id": "q3"}],
+    )
+
+    version = client.get("/api/jobs/j1/profile").json()["versions"][0]
+
+    snapshot = version["snapshot"]
+    # 工程铁律 5：模型标识必须是 API 响应实际返回的那个，不是配置里写的。
+    assert snapshot["llm_response_model"] == "deepseek-chat-241226"
+    assert snapshot["llm_latency_ms"] == 2100.0
+    assert snapshot["written_fields"] == ["job_title"]
+    assert snapshot["ungrounded_fields"] == ["mcu_family"]
+    assert version["asked_question_count"] == 3
+
+
+def test_profile_detail_shows_gaps_in_chinese_only(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+    _seed_version(conn, "j1", 1, {"job_title": "A"}, derived=["experience_years"])
+
+    version = client.get("/api/jobs/j1/profile").json()["versions"][0]
+
+    assert version["unspecified_fields"] == ["experience_years"]
+    assert version["unspecified_field_labels"]
+    assert "experience_years" not in version["unspecified_field_labels"][0]
+
+
+def test_profile_detail_does_not_render_jd_text(tmp_path):
+    """Global Constraints 第 5 条：详情页只给 JD 状态徽标，不给正文。
+    多一个渲染正文的地方就多一个会漏掉 AI 生成标识的地方。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(
+        conn, "j1", 1,
+        {"job_title": "A", "_jd_text": "这是一整段 JD 正文", "_jd_needs_manual": False},
+        status="approved",
+    )
+
+    body = client.get("/api/jobs/j1/profile").text
+
+    assert "这是一整段 JD 正文" not in body
+    assert client.get("/api/jobs/j1/profile").json()["versions"][0]["jd"]["generated"] is True
+
+
+def test_profile_detail_lists_human_decisions_in_chinese(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+    _seed_review(conn, "j1", 1, DECISION_REVISION_REQUESTED,
+                 feedback="人数改成 3 个", decided_at="2026-09-01 11:00:00")
+    _seed_review(conn, "j1", 2, "approved", decided_at="2026-09-01 12:00:00")
+
+    decisions = client.get("/api/jobs/j1/profile").json()["decisions"]
+
+    assert [d["decision_label"] for d in decisions] == ["要求修改", "确认"]
+    assert decisions[0]["feedback"] == "人数改成 3 个"
+    assert decisions[0]["reviewer"] == "unknown:web-session"
+
+
+def test_profile_detail_states_the_snapshot_boundary_honestly(tmp_path):
+    """analysis_run.job_id 恒为 NULL（没有调用点传 audit_context），按岗位查不出来。
+    ⛔ 不许静默留白：留白会让人以为"这就是全部留痕"。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+
+    note = client.get("/api/jobs/j1/profile").json()["snapshot_note"]
+
+    assert "analysis_run" in note
+    # ⛔ 指向**既有的** TD-1（它的「怎么还」第 ① 步就是接 audit_context），
+    # 不新开一条 TD——同一个事实两个真源，两边迟早写得不一样而没有症状。
+    assert "TD-1" in note
+
+
+def test_profile_detail_for_a_job_without_versions(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "empty")
+
+    data = client.get("/api/jobs/empty/profile").json()
+
+    assert data["versions"] == []
+    assert data["decisions"] == []
+    assert data["latest_version"] is None
+    assert data["stage_label"] == "刚发起，还没有画像"
+
+
+def test_profile_detail_is_mounted_under_the_configured_root_path(tmp_path):
+    client, conn = _make_app(tmp_path, root_path="/hr/recruit-agent")
+    _seed_job(conn, "j1")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+
+    assert client.get("/hr/recruit-agent/api/jobs/j1/profile").status_code == 200
+    assert client.get("/api/jobs/j1/profile").status_code == 404
+
+
+def test_profile_detail_does_not_shadow_the_existing_single_job_endpoint(tmp_path):
+    """回归：新增 /api/jobs/{id}/profile 之后，既有的 GET /api/jobs/{id} 必须照旧。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+    _seed_outbox(conn, "j1", "question")
+
+    existing = client.get("/api/jobs/j1").json()
+
+    assert existing["job_id"] == "j1"
+    assert existing["status"] == "drafting"
+    assert existing["message"]["type"] == "question"
+
+
+def test_profile_detail_does_not_write_anything(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+
+    tables = ("job", "job_profile", "human_review", "effect_log", "outbox")
+    before = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+
+    client.get("/api/jobs/j1/profile")
+    client.get("/api/jobs/j1/profile")
+
+    after = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    assert before == after
+
+
+def test_profile_detail_version_count_equals_job_profile_row_count_after_revisions(tmp_path):
+    """控制器追加：本交付单元被考核的不变式——详情页返回的版本数必须等于
+    job_profile 表里这个岗位实际的行数，一条不多一条不少；且每一版都要带
+    完整的六键快照，不能只有第一版有、后面几版被漏填。
+
+    ⚠️ 局限：这里用 _seed_version / _seed_review 手工造一段"改过 3 次"的历史，
+    不是让真实的 revise() 端到端跑一遍——真跑 revise() 要真的模型调用，而本
+    文件的 _NeverCalledClient 就是设计成不许任何 LLM 调用发生。这条测试验证
+    的是"查询与展示层对已落库的修改历史诚实"，不是"revise() 本身产出正确"。
+    """
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(conn, "j1", 1, {"job_title": "A"}, created_at="2026-09-01 10:01:00")
+    _seed_review(conn, "j1", 1, DECISION_REVISION_REQUESTED,
+                 feedback="人数改成 3 个", decided_at="2026-09-01 10:05:00")
+    _seed_version(conn, "j1", 2, {"job_title": "A", "headcount": 3}, created_at="2026-09-01 10:10:00")
+    _seed_review(conn, "j1", 2, DECISION_REVISION_REQUESTED,
+                 feedback="学历改成本科", decided_at="2026-09-01 10:15:00")
+    _seed_version(
+        conn, "j1", 3, {"job_title": "A", "headcount": 3, "education_requirement": "本科"},
+        status="approved", created_at="2026-09-01 10:20:00",
+    )
+
+    data = client.get("/api/jobs/j1/profile").json()
+
+    expected_count = conn.execute(
+        "SELECT COUNT(*) FROM job_profile WHERE job_id = ?", ("j1",)
+    ).fetchone()[0]
+    assert len(data["versions"]) == expected_count
+
+    snapshot_keys = {
+        "llm_response_model", "llm_latency_ms", "turn_started_at",
+        "completed_at", "ungrounded_fields", "written_fields",
+    }
+    for version in data["versions"]:
+        assert snapshot_keys <= version["snapshot"].keys()
