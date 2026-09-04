@@ -89,7 +89,13 @@ bash docs/openers/run-lanes.sh --dry-run
   （2026-09-03 实证：CC Desktop 的 Auto Mode 分类器会拦「无人值守起会自主 commit/push 的子 session」，
   看护者的 `nohup` 与 `run_in_background` 两条路都被拦，且看护者自己改 settings.json 也被拦——
   安全配置只能 Shao Peishen 手工加）。看护者 opener 的前置自检必须 `grep run-lanes.sh .claude/settings.json`，
-  为 0 即停下报，⛔ 不起脚本。启动命令⛔ 不带 `cd … &&` 前缀，白名单按命令前缀匹配
+  为 0 即停下报，⛔ 不起脚本。启动命令⛔ 不带 `cd … &&` 前缀，白名单按命令前缀匹配。
+  🔴 **09-04 `0904Z` 推翻「白名单能解决」的归因**：白名单三条齐全时分类器依然拦了 `nohup run-lanes.sh`
+  两次（`scripts/allow_run_lanes.py` 复跑确认无新增可加）——这条检查只作为「至少别缺」的必要条件保留，
+  ⛔ 不再当作充分条件；09-03 的"解除"很可能是巧合归因，不是因果。**唯一验证有效的解法**：把启动命令
+  原样贴成 ` ```bash ` 代码块发给 Shao Peishen，他在 CC Desktop 对话里点 Run 按钮直接执行——用户直接
+  动作不经过 AI 的 Bash 工具调用，不触发该分类器。看护者自己反复重试大概率无效，⛔ 不要在这上面
+  空耗轮次，直接切到 Run 按钮路径（`./sync-to-server.sh` 撞同一堵墙，同样处理）
 - 工作区没有本批相关的未提交改动
 
 然后给 Shao Peishen **一样东西：看护者 opener 的 4 行引用块**（2026-09-03 起走引用式，见 `kickoff` skill「引用式 Opener」）：
