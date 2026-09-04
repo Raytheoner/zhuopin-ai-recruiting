@@ -132,9 +132,18 @@ def test_confirm_records_one_human_review(tmp_path):
 
 def test_human_review_row_count_equals_effect_log_count_per_thread(tmp_path):
     """铁律 1 的 reviewer 判据：**每个 effect_* 节点的 effect_log 条数与其业务表
-    行数按 thread 恒等**，且这条不变式有测试覆盖。这就是那个覆盖。"""
+    行数按 thread 恒等**，且这条不变式有测试覆盖。这就是那个覆盖。
+
+    ⚠️ 恒等式必须在**重放**之后仍然成立，不只是首次调用之后——"同一 thread
+    同一 business_key 重跑，effect_log 与业务表行数恒等"才是铁律 1 完整的
+    reviewer 判据。只调一次 confirm 的话，即便 effect_confirm_profile 在重放
+    时重复写 human_review（幂等失效），这条断言也测不出来。所以这里对同一个
+    job 调用两次 /confirm（同一 thread_id、同一 business_key = version），
+    在第二次调用之后再取数比对。
+    """
     client, job_id, _payload = _start_job(tmp_path, extra_responses=[JD_RESPONSE])
-    client.post(f"api/jobs/{job_id}/confirm")
+    assert client.post(f"api/jobs/{job_id}/confirm").status_code == 200
+    assert client.post(f"api/jobs/{job_id}/confirm").status_code == 200
 
     effects = _rows(
         tmp_path,
