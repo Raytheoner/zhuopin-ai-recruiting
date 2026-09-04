@@ -196,7 +196,10 @@ def test_idempotency_survives_seven_days(tmp_path):
 
 
 def test_revise_and_abandon_also_survive_a_restart(tmp_path):
-    """三个分支都要能在重启后走完，⛔ 不只验确认那一条。"""
+    """只验证 abandon 分支在重启后能走完（挂起 → 关闭应用 → 新开一套 app 调
+    /abandon → 落库状态为 abandoned）。⚠️ revise 分支的重启存活**未被本测试
+    覆盖**——函数名与本条历史注释曾暗示"三个分支都验了"，但函数体从未跑过
+    revise 路径，这里改为如实说明，避免把没测的事标成测过。"""
     job_id = _suspend_a_job(tmp_path)
 
     client, _scripted = make_app_with_scripted_client(tmp_path, [])
