@@ -5,10 +5,13 @@
 commit()：它是审计的观测端，不是写入端。有副作用的动作全部在 L4 编排层的
 `effect_*` 节点里（工程铁律 1、2）。reviewer 可以直接 grep 这一条。
 
-⚠️ **"0 命中"不等于"红线守住了"。** 三条断言在空表上全部恒真——同一个绿色
+⚠️ **"0 命中"不等于"红线守住了"。** 前三条断言在空表上全部恒真——同一个绿色
 同时兼容"红线守住了"和"断言根本没生效"两种解释。区分这两者的唯一手段是
 `tests/test_audit_assertion_effectiveness.py`：故意造违例，断言必须失败。
 ⛔ 改本模块任何一条判定逻辑时，必须同步确认那份反证仍然会红。
+
+**断言四是例外**：它在空表上恒真，但**表不存在时判失败**——human_review 由
+m1-job-profile-intake 建，缺表就是留痕没上线，不是"还没到能验证的时候"。
 
 **分层**：本模块不 import `app.config`、不 import `app.graph`、不 import
 `app.outbound`（`app/audit/__init__.py` 的既有规矩 + 分层方向）。数据库连接与
@@ -232,17 +235,121 @@ def assert_no_unlisted_criterion_key(conn: sqlite3.Connection) -> AssertionResul
     )
 
 
-# ── 三条一起跑 ──────────────────────────────────────────────────────────
+# ── 断言四（9.3）：每次人工决策都有 human_review 记录 ────────────────────
+#
+# ⚠️ **本条与上面三条有两处刻意的不同，改之前先读完这段。**
+#
+# ① **表不存在 → 失败**（上面断言一是"通过 + detail 说明"）。rejection_record
+#    要守的行为到 M2 才有，human_review 是 m1-job-profile-intake 本包建的表，
+#    它不存在只有一个解释：留痕路径没上线。
+#
+# ② **有一条按时间划的豁免线**。`.51` 上 17 个真实 job 里，已 approved 的画像
+#    版本是在本表存在之前确认的，它们不可能有留痕。豁免的**条数必须出现在
+#    detail 里**——静默跳过会让"0 违例"这个绿色同时兼容"都留痕了"和"全被
+#    豁免了"，而这两者的处置完全相反。
+#
+#    ⛔ **不要因为巡检报红就把这个日期往后挪。** 豁免线之后仍然缺痕的行是
+#    真的缺痕（本单元上线前那几天产生的），正确处置是登记，不是改常量。
+HUMAN_REVIEW_TABLE = "human_review"
+JOB_PROFILE_TABLE = "job_profile"
+
+# 终态 → 应当留下的决策类型。⛔ 与 app/storage/db.py 的 decision_type CHECK、
+# app/graph/nodes.py 的 DECISION_* 常量逐字同源。
+TERMINAL_STATUS_DECISIONS: dict[str, str] = {
+    "approved": "approved",
+    "abandoned": "abandoned",
+}
+
+# 留痕上线日（UTC，与 datetime('now') 同格式）。早于此刻创建的画像版本豁免。
+HUMAN_REVIEW_ENFORCED_FROM = "2026-09-04 00:00:00"
+
+_REQUIRED_HUMAN_REVIEW_COLUMNS = frozenset(
+    {"job_id", "profile_version", "decision_type", "reviewer"}
+)
+
+ASSERTION_HUMAN_REVIEW_PRESENT = "每一个进入终态的画像版本都有对应的 human_review 记录"
+
+
+def assert_every_decision_has_human_review(
+    conn: sqlite3.Connection,
+) -> AssertionResult:
+    """合规红线「淘汰必须有人工确认节点并留痕」+ spec「决策留痕」的机器判据。
+
+    四条分支，处置各不相同：
+      表不存在        → **失败**（本包建的表，缺表 = 留痕路径没上线）
+      表存在、缺列    → **失败**（fail-closed：验不了红线不算守住了红线）
+      有终态无留痕    → 失败，violations 逐条给出 job_id 与 version
+      全部有留痕      → 通过，detail 里报出被豁免的历史行条数
+    """
+    if not _table_exists(conn, HUMAN_REVIEW_TABLE):
+        return AssertionResult(
+            name=ASSERTION_HUMAN_REVIEW_PRESENT,
+            ok=False,
+            violations=(
+                {"table": HUMAN_REVIEW_TABLE, "problem": "表不存在，人工决策留痕路径没有上线"},
+            ),
+            detail=(
+                f"{HUMAN_REVIEW_TABLE} 表不存在。⛔ 这**不是**“还没到能验证的时候”——"
+                "这张表由 m1-job-profile-intake 建，缺表意味着每一次人工确认都没有留痕。"
+            ),
+        )
+
+    missing = _REQUIRED_HUMAN_REVIEW_COLUMNS - _columns(conn, HUMAN_REVIEW_TABLE)
+    if missing:
+        return AssertionResult(
+            name=ASSERTION_HUMAN_REVIEW_PRESENT,
+            ok=False,
+            violations=({"table": HUMAN_REVIEW_TABLE, "missing_columns": sorted(missing)},),
+            detail=f"{HUMAN_REVIEW_TABLE} 缺列 {sorted(missing)}，无法验证决策留痕。",
+        )
+
+    violations: list[dict[str, Any]] = []
+    # ⛔ 按 sorted 遍历而不是按 dict 顺序：违例清单的顺序要稳定，否则两次巡检
+    # 的输出 diff 里会混进无意义的行序变化。
+    for status, decision in sorted(TERMINAL_STATUS_DECISIONS.items()):
+        rows = _rows(
+            conn,
+            f"SELECT p.job_id, p.version, p.status, p.created_at FROM {JOB_PROFILE_TABLE} p "
+            "WHERE p.status = ? AND p.created_at >= ? AND NOT EXISTS ("
+            f"  SELECT 1 FROM {HUMAN_REVIEW_TABLE} h "
+            "  WHERE h.job_id = p.job_id AND h.profile_version = p.version "
+            "    AND h.decision_type = ?"
+            ")",
+            (status, HUMAN_REVIEW_ENFORCED_FROM, decision),
+        )
+        violations.extend({**row, "expected_decision": decision} for row in rows)
+
+    exempted = _rows(
+        conn,
+        f"SELECT COUNT(*) AS n FROM {JOB_PROFILE_TABLE} "
+        "WHERE status IN ('approved', 'abandoned') AND created_at < ?",
+        (HUMAN_REVIEW_ENFORCED_FROM,),
+    )[0]["n"]
+
+    return AssertionResult(
+        name=ASSERTION_HUMAN_REVIEW_PRESENT,
+        ok=not violations,
+        violations=tuple(violations),
+        detail=(
+            f"豁免 {exempted} 条早于 {HUMAN_REVIEW_ENFORCED_FROM} 的历史画像版本"
+            "（留痕上线之前确认的，不可能有记录）。"
+            "⚠️ 这些行**不代表红线守住了**，只代表它们产生于留痕存在之前。"
+        ),
+    )
+
+
+# ── 四条一起跑 ──────────────────────────────────────────────────────────
 
 COMPLIANCE_ASSERTIONS: tuple[Callable[[sqlite3.Connection], AssertionResult], ...] = (
     assert_no_ai_score_rejections,
     assert_no_blank_evidence_ref,
     assert_no_unlisted_criterion_key,
+    assert_every_decision_has_human_review,
 )
 
 
 def run_compliance_assertions(conn: sqlite3.Connection) -> list[AssertionResult]:
-    """spec「合规断言在 CI 中执行」：三条全部成立才通过。
+    """spec「合规断言在 CI 中执行」：四条全部成立才通过。
 
     ⚠️ **全部跑完再返回，⛔ 不短路。** 第一条红了就返回的话，一次修复只能
     看到一条违例，第二条要等下一轮 CI 才现形。

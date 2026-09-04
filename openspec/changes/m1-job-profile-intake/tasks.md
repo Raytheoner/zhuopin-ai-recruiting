@@ -1,3 +1,5 @@
+**进度：42/71**（2026-09-04 第 6 章确认断点交付单元合入）
+
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
 > **改了什么**：本文件第 1-9 章原是**写于选型前的 M1 全量 WBS**，58 项未勾里大量内容
@@ -87,12 +89,13 @@
 - [ ] 1.2b 建表 `hard_requirement`（**2026-08-20 从原 1.2 拆出**）—— 该表至今不存在，且它是 5.8「硬门槛规则提取」的载体，两条一起做才有意义。拆出来是因为原 1.2 一句话里三张表两张已建、一张没建，整条勾或整条不勾都是错的
 - [ ] 1.3 建表 `analysis_run`（模型标识/版本/prompt版本/temperature/输入哈希/原始响应/token用量）
       ⤷ **已移出**到 `ai-audit-trail-and-outbound-gate`，见文末「已移出」清单
-- [ ] 1.4 建表 `human_review`（决策人/决策类型/时间/关联画像版本，预留 batch_id 供 M2 批量确认用）
+- [x] 1.4 建表 `human_review`（决策人/决策类型/时间/关联画像版本，预留 batch_id 供 M2 批量确认用） → **已实现**，见 `app/storage/db.py` 的 `SCHEMA`：`human_review(id/job_id/profile_version/decision_type/reviewer/feedback/batch_id/decided_at)`，两条 CHECK（decision_type 三值白名单、reviewer 非空白）+ 唯一索引 `idx_human_review_decision`。新表走 CREATE TABLE IF NOT EXISTS，⛔ 未进 `_ADDED_COLUMNS`。测试 `tests/test_human_review_schema.py`
 - [x] 1.5 建表 `effect_log`（幂等键唯一索引） → **已用 SQLite 实现**，见 `app/storage/db.py`：`effect_log(effect_key PRIMARY KEY, thread_id, node_name, business_key, applied_at)` + `CREATE UNIQUE INDEX idx_effect_log_key`。幂等键格式与写入路径见 4.2
 - [ ] 1.5b 建表 `wecom_callback`（回调落库）（**2026-08-20 从原 1.5 拆出**）
       ⤷ **已移出**到阶段二·企微通道，见文末「已移出」清单
 - [x] 1.6 接入 LangGraph checkpointer → **已用 SqliteSaver 实现**，见 `app/graph/build.py:124-126`：checkpointer 拿一个**指向同一个数据库文件但完全独立**的连接（方向 A，修 `docs/findings/2026-08-13-sqlite-事务归属冲突.md` 的事务归属冲突），checkpoint 按 `thread_id` 分区落盘。原文写的「Postgres checkpointer」推迟到 M2 迁移（同 1.1）
 - [ ] 1.6b 跨进程重启恢复的自动化验证（**2026-08-20 从原 1.6 的"验证进程重启后能按 thread_id 恢复"拆出**）—— 现有 `tests/test_graph_idempotency.py::test_graph_replay_from_scratch_does_not_duplicate_effects` 验的是**同进程内同 thread_id 重复 invoke** 不重复产生副作用，**不是**进程重启后按 thread_id 续上。checkpoint 确实落在 SQLite 文件里、结构上重启可恢复，但这件事至今没有任何测试断言过。6.3 的「挂起状态重启后可恢复」指向的是同一个缺口
+      ⚠️ **2026-09-04 补**：这条要的覆盖实际已经落地，见 `tests/test_suspend_recovery.py::test_a_brand_new_process_recovers_the_suspended_thread`（真开一个新操作系统进程，只给数据库路径，断言按 thread_id 读回 checkpoint）。**保持未勾，等 Shao Peishen 确认**——本次交付指令逐条列了要回勾的九条（6.1/6.3/6.4/6.5/6.6/6.7/6.9 + 1.4 + 9.3），未列出 1.6b，回勾与否不由代理人代拍
 - [ ] 1.7 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
       ⤷ **已移出**到 M2 Postgres 迁移，见文末「已移出」清单
 
@@ -148,27 +151,48 @@
 
 ## 6. 确认断点（capability: job-profile-approval）
 
-- [ ] 6.1 画像摘要渲染（卡片可读，不堆字段）
-      🔴 **未实现，且这是一处现网真实缺陷**：`app/graph/build.py:61-67` 确实把
-      `profile_patch_accumulated` 放进了 `confirmation_prompt` 的 payload，但前端
-      `app/web/static/index.html:162-169` 的 `confirmation_prompt` 分支**只渲染
-      「画像已收集完整，请确认。」加一行未指定字段，从头到尾没有任何代码读
-      `profile_patch_accumulated`**（全文件 grep `profile` 零命中）。也就是说：
-      **业务经理是在看不见画像内容的情况下点的「确认画像，生成 JD」。** 这同时解释了
-      `m1-intake-quality-fixes` 第 7 章记的那个现象——三位经理的"编造检查"全答"无编造"，
-      但他们贴的是 JD 截图而非确认页截图：确认页上本来就没有画像可看
+- [x] 6.1 画像摘要渲染（卡片可读，不堆字段） → **已实现**，`app/schemas/job_profile.py:summarize_profile()` 产出中文标签值对、`app/graph/build.py:_deliver_node` 把它放进 `profile_summary`、`app/web/static/index.html:renderProfileSummary()` 渲染。⛔ payload 里没有英文字段名，界面上就不可能出现英文 snake_case。测试 `tests/test_profile_summary.py` + `tests/test_approval_branches.py`
 - [x] 6.2 `effect_send_approval_card` 节点（独占、幂等） → **已用 `effect_deliver_message` 实现**：`app/graph/build.py:58-97` 的 `_deliver_node` 在 `is_complete` 时构造 `type="confirmation_prompt"` 的 `OutboundMessage` 走同一个节点投递。行为等价成立——**独占一个节点** ✅、**带幂等键** ✅（`business_key = f"{round_count}:{内容哈希}"`，前缀带轮次是为了不把"两轮问题恰好相同"的合法投递误杀成重放）。"卡片"是企微 `template_card` 的形态，Web 通道下的等价物就是这条消息
-- [ ] 6.3 挂起状态持久化，验证进程重启后可恢复
-      ⚠️ **持久化那一半是成立的**（画像草案、对话记录、outbox 全在 SQLite，`_run_turn` 每次从库读回完整历史），但**"验证进程重启后可恢复"没有任何测试断言过**——与 1.6b 是同一个缺口，两条一起补。保守起见保持未勾
-- [ ] 6.4 确认分支：冻结画像、写 version、记 `human_review`、流转下游
-      ⚠️ 四件事里**三件已实现**（`effect_confirm_profile` 置 approved + 同步 `job.status`；version 在草案阶段已逐轮写入；流转下游 = `effect_generate_and_persist_jd`），**但 `human_review` 一条记录都没写**——表不存在（1.4），也没有任何写入路径。这是**合规留痕**，"谁在什么时候确认了哪一版画像"目前答不出来，不能跟着包一起归档掉。保持未勾
-- [ ] 6.5 修改分支：基于原画像 + 修改意见重新生成，保留每一版草案
-      ⚠️ 后半**已成立**（`job_profile` 每轮一行、version 递增，每一版草案都在），但**"修改分支"本身不存在**：确认卡片上没有「修改」动作，`/confirm` 之后没有任何回到修改态的路径。保持未勾
-- [ ] 6.6 修改次数上限 5 次，超限提示转人工编辑（随 6.5）
-- [ ] 6.7 放弃分支：置 `abandoned`，保留内容
-      ⚠️ `JobStatus.ABANDONED` 枚举存在，但没有任何接口或代码写它。保持未勾
+- [x] 6.3 挂起状态持久化，验证进程重启后可恢复 → **已实现**，见 `tests/test_suspend_recovery.py`：跨进程恢复 + 7 天时间推进后仍能确认 + 幂等键不因时间流逝而过期
+- [x] 6.4 确认分支：冻结画像、写 version、记 `human_review`、流转下游 → **已实现**，`effect_confirm_profile` 在**同一个事务**里同时完成 status='approved'、job.status 同步与 `human_review` 留痕（工程铁律 1）。恒等不变式测试 `tests/test_approval_branches.py::test_human_review_row_count_equals_effect_log_count_per_thread`
+- [x] 6.5 修改分支：基于原画像 + 修改意见重新生成，保留每一版草案 → **已实现**，`effect_request_revision`（独立 effect 节点）+ `POST /api/jobs/{id}/revise`；每一版草案保留（新 version，⛔ 不覆盖）；上限 5 次由 `revision_count()` 从 human_review 现算，⛔ 无计数列
+- [x] 6.6 修改次数上限 5 次，超限提示转人工编辑（随 6.5） → **已实现**，`effect_request_revision`（独立 effect 节点）+ `POST /api/jobs/{id}/revise`；每一版草案保留（新 version，⛔ 不覆盖）；上限 5 次由 `revision_count()` 从 human_review 现算，⛔ 无计数列
+- [x] 6.7 放弃分支：置 `abandoned`，保留内容 → **已实现**，`effect_abandon_profile` + `POST /api/jobs/{id}/abandon`：置 abandoned、内容一字不改，且 `/reply` `/confirm` `/revise` 三个入口都拒绝已放弃的岗位
 - [ ] 6.8 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
-- [ ] 6.9 **7 天挂起测试**：模拟时间推进，断言挂起状态不丢失且能正常恢复（随 6.3 / 1.6b）
+      ⏸ **留步：等定时基础设施（与 5.6 同源）。** 本系统至今没有任何定时/调度
+      基础设施——发提醒是一个有副作用的动作，必须落在 effect_* 节点里，由一个
+      真正的调度器按时触发。⛔ 不用 sleep 循环或后台线程充数：那种东西进程一
+      重启就没了，而这条 spec 要的恰恰是"挂起 7 天不丢"。判定口径（第 1 天、
+      第 3 天各一次）已写在 spec 的「流程长时间挂起」Scenario 里，调度器落地时
+      直接照抄。已登记 `docs/tech-debt.md` TD-11。
+- [x] 6.9 **7 天挂起测试**：模拟时间推进，断言挂起状态不丢失且能正常恢复（随 6.3 / 1.6b） → **已实现**，见 `tests/test_suspend_recovery.py`：跨进程恢复 + 7 天时间推进后仍能确认 + 幂等键不因时间流逝而过期
+
+### 6.x 落地偏离登记
+
+> 交付执行期间与计划出现的偏离、需要终审 triage 的次要缺口、以及裁决记录，逐条
+> 摘自 `.superpowers/sdd/2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/progress.md`。
+> 本节是「哪里没按计划走、为什么」的记录，⛔ 不做概括性总结抹平细节。
+
+- Task 2 minor（deferred）：`tests/test_profile_summary.py` 有一个未用的 `**_` 形参（plan 逐字给定）
+- Task 2 minor（deferred）：`task-2-report.md` 写"143 行"，diff stat 是 141 行——报告笔误，无代码影响
+- Task 2 ⚠️ 已由控制器解决：`FIELD_LABELS` 顺序与断言一致，由 GREEN 实跑证明，非缺口
+- Task 3 计划偏离（已由 reviewer 独立复核判为「正确且必要」）：brief 的 `JD_RESPONSE` fixture 形状 `{"jd_text","discriminatory_hits"}` 与真实 `_JDBodySchema`（只有 `body`）不符，会让 3 条测试耗尽脚本化 LLM 队列并 500。已改为 `{"body": "..."}`，与仓库既有 JD 测试同形。仅测试 fixture，未改生产代码
+- Task 4 minor（deferred）：`test_revise_keeps_every_draft_version` 只断言 `(version, status)` 元组，未复核 v1 的 `profile_json` 内容未变。结构上不可能被违反（`job_profile.id` 是 PK，`effect_persist_draft` 只做纯 INSERT，撞了会报 PK 错而非静默覆盖）。留给终审 triage
+- Task 4 裁决（控制器，无人可问）：reviewer 报 Important —— `/reply` 只有 abandoned 守卫、没有 approved 守卫，画像冻结后仍可经 `/reply` 复活出新草案版本，与 spec 6.4「确认后冻结」冲突。reviewer 标为 plan-mandated（Task 4 brief 只给了 abandoned）。裁决：**是真缺口，不 park**。依据＝plan 自己的 File Structure 行逐字写着「`/reply` `/confirm` `/revise` 加终态守卫」，approved 属终态。已并入 Task 5 一起做（Task 5 本来就在改这三个入口的守卫），登记为范围追加偏离
+- Task 5 范围追加已交付：`/reply` 补 approved 终态守卫（409 + `_APPROVED_DETAIL`，与 revise 同形），测试 `test_reply_rejects_an_approved_job_and_creates_no_new_draft` 断言拒绝后 `job_profile` 版本行未变
+- Task 5 minor（deferred）：`/abandon` 没有「已 approved 不得放弃」的守卫，可把 approved 翻成 abandoned。不在 plan 的 File Structure 授权范围（只点名 `/reply` `/confirm` `/revise`），留终审 triage
+- Task 5 minor（deferred）：`/abandon` 在 job 与 profile 都不存在时返回 404 "no profile draft yet" 而非 "job not found"，与其他路由文案不一致（brief Step 3b 逐字给定）
+- Task 6 6.1 渲染断言实际落点 = `tests/test_approval_branches.py:78-99`（Task 3 建）：`assert "岗位名称" in labels and "核心技能" in labels` / `assert {"label": "招聘人数", "value": "2"} in summary`。Task 6 自己的前端测试是字符串结构断言（本仓库无 jsdom，既有前端测试一律此形态）
+- Task 6 偏离（已复核为正确）：brief Step 3b 的注释里含 `innerHTML` 字面量，与 brief Step 1「`index.html` 全文不得出现 `innerHTML`」自相矛盾。改写注释措辞，逻辑一字未动；`index.html` 实际 `innerHTML` 用法为 0 处
+- Task 6 裁决（控制器）：「前端从 `profile_patch_accumulated` 取」的约束，其约束力条款是「不另加接口」。Task 3 已把 `profile_summary` 放进同一个 `confirmation_prompt` payload，读它未新增任何接口 —— 遵守约束，非违反
+- Task 6 minor（deferred）：新增的 revise/abandon fetch 无 try/catch 网络失败处理，与既有 `doConfirm` 同形，非本次引入
+- Task 7 变异验证已做并被 reviewer 独立复核 —— 把 `app/graph/build.py` 的 checkpointer 连接指向 `tempfile.mktemp()` 的一次性路径（而非真实 `db_path`），`test_a_brand_new_process_recovers_the_suspended_thread` 转红，报错正是 `AssertionError`：新进程按 thread_id 读不回 checkpoint。已还原，committed 代码里 `checkpointer_conn = get_connection(db_path)`，diff 只含新测试文件
+- Task 7 重启是真重启 —— `subprocess.run([sys.executable, probe, db_path, job_id])` 真开新操作系统进程，探针里 LLM 客户端是一调用就抛的 `_ExplodingClient`，排除了「恢复出来的状态其实是现编的」
+- Task 7 TDD 缺口（已登记）：4 条测试首跑即绿，未经历 RED 阶段。以变异验证补偿；reviewer 逐条复核 4 条均非空断言
+- Task 7 裁决（控制器）：reviewer 报 Important（plan-mandated）—— `test_revise_and_abandon_also_survive_a_restart` 的 docstring 写「三个分支」，函数体（brief 逐字给定）只跑了 abandon，revise 分支的重启存活实际未测。**不 park，但也不追加覆盖**（超出本单元范围）：改为把 docstring 改成与实测一致，并入 Task 9 一起做（已在本次交付完成）。理由＝docstring 过度宣称正是「把没做的事标成做完了」，必须消除
+- Task 8 parked：断言四的豁免线用 `job_profile.created_at`（草案创建时间）与 `HUMAN_REVIEW_ENFORCED_FROM` 比，而 `effect_confirm_profile` / `effect_abandon_profile` 是就地 UPDATE status，`created_at` 决策时不推进。后果：部署时刻已存在的所有 `job_profile` 行（含在途未决草案）永久落在豁免侧，日后被确认/放弃却漏写 `human_review` 时，断言四看不见。ruling：**真实且已确认，但不在本轮改**——① brief 逐字给定了这套比法，属 plan-mandated；② 它是合规红线的机器判据，改它的语义属 CLAUDE.md「不可代」范围（合规红线的任何变更或单次例外一律等 Shao Peishen）；③ 本单元没有任何下游依赖它。已列入交付报告的待裁决项
+- Task 8 偏离（已复核为正确且必要）：brief 的字面代码片段有真实 `SyntaxError`（f-string 里嵌套未转义双引号），改用中文弯引号，语义不变
+- Task 8 偏离（已复核为「非削弱」）：`test_audit_assertion_effectiveness.py` 的 `[False,False,False]` 改 `[False,False,False,True]`，`all(r.violations for r in results)` 改为 `if not r.ok` 限定。reviewer 判定：仍强制既有三条必须被违反，且仍要求每条失败结果都带 violations；原写法在加入第 4 条「本场景下合法不违反」的断言后机械上不可能成立
 
 ## 7. JD 生成（capability: job-description）
 
@@ -201,8 +225,7 @@
       ⚠️ 未做。0.11 的试点是**另一件事**（3 位经理各跑 1 个**新**岗位、收集主观反馈），不是 10 个**历史**岗位重跑 + 双方评估准确率。保持未勾
 - [ ] 9.2 端到端测试：从企微发起到 JD 产出的完整链路
       ⤷ **已移出**到阶段二·企微通道（Web 通道的等价链路已由 `tests/test_web_api.py` 覆盖），见文末「已移出」清单
-- [ ] 9.3 审计断言：每个画像都能追溯到 `analysis_run`；每次人工决策都有 `human_review` 记录
-      ⚠️ 两半分属两处：`analysis_run` 那一半**已随 1.3/2.6 移出**到 `ai-audit-trail-and-outbound-gate`（其 proposal 明确含审计断言查询）；`human_review` 那一半**仍在本包**且没做（1.4 / 6.4）。整条按未完成计，保持未勾
+- [x] 9.3 审计断言：每个画像都能追溯到 `analysis_run`；每次人工决策都有 `human_review` 记录 → **`human_review` 那一半已实现**：`app/audit/assertions.py` 断言四 `assert_every_decision_has_human_review`，已注册进 `COMPLIANCE_ASSERTIONS`（3 条 → 4 条），反证在 `tests/test_audit_assertion_effectiveness.py`。⚠️ `analysis_run` 那一半随 1.3/2.6 已移出到 `ai-audit-trail-and-outbound-gate`，不在本包
 - [x] 9.4 灰度：1 位业务经理试用 2 个真实岗位 → **已由 0.11 完成，且覆盖面更大**：3 位业务经理各跑 1 个真实岗位（姚祖怡·供应链总监、底层软件工程师岗、非标产品采购员岗），反馈汇总见 `docs/m1-demo-pilot-feedback.md`。⚠️ 与原文的差异是"3 人 × 1 岗"而非"1 人 × 2 岗"——样本人数更多、同一人的连续两次体验没覆盖到；灰度目的（真实用户在真实岗位上跑通并给出反馈）已达成
 - [x] 9.5 编写运行手册（部署、配置、故障排查、回滚） → **已实现**，四项逐个对上：`05-发布运行手册.md`（部署 + 配置，含 §「回滚」一节：本服务不影响任何现有流程，停用即回滚，无数据迁移负担）+ `docs/deploy-51-server.md`（故障排查，含 `.env` 非 UTF-8、scp 中文文件名两个真实故障的处置）
 

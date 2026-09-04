@@ -34,6 +34,14 @@
   .gap-warning ul { margin: 0 0 10px; padding-left: 20px; }
   .gap-warning .consequence { font-weight: 600; margin-bottom: 12px; }
   .gap-warning button { margin: 0 8px 0 0; }
+  .profile-summary { border: 1px solid #0d6efd; border-radius: 8px; padding: 14px 16px; margin: 16px 0 8px; }
+  .profile-summary h3 { margin: 0 0 10px; font-size: 15px; }
+  .profile-summary dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+  .profile-summary dt { font-weight: 600; color: #495057; }
+  .profile-summary dd { margin: 0; white-space: pre-wrap; }
+  .approval-actions { margin-top: 8px; }
+  .approval-actions button { margin: 0 8px 0 0; }
+  #revise-box { display: none; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -43,8 +51,17 @@
   <div class="chat" id="chat"></div>
   <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
   <button id="send-btn">发送</button>
+  <div id="profile-summary" class="profile-summary" style="display:none;"></div>
   <div id="gap-warning" class="gap-warning" style="display:none;"></div>
-  <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
+  <div id="approval-actions" class="approval-actions" style="display:none;">
+    <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
+    <button id="revise-btn">我要改一下</button>
+    <button id="abandon-btn">放弃这个岗位</button>
+  </div>
+  <div id="revise-box">
+    <textarea id="revise-input" rows="2" placeholder="要改什么？例如：人数改成 3 个，学历放宽到大专"></textarea>
+    <button id="revise-submit">提交修改意见</button>
+  </div>
 
   <div id="jd-output"></div>
 
@@ -164,6 +181,60 @@
     // 去渲染英文 snake_case，那正是本章要修的故障现象。
     const GAP_CONSEQUENCE = "留空的话，这些要求不会出现在生成的 JD 里。";
 
+    // 画像摘要（tasks 6.1）。**这是在修一处现网真实缺陷**：修复前这个分支只渲染
+    // 「画像已收集完整，请确认。」加一行未指定字段，从头到尾没有任何代码读画像
+    // 内容——业务经理是在看不见画像的情况下点的「确认画像，生成 JD」。
+    //
+    // ⛔ 全程 textContent + createElement，不拼 HTML 字符串塞进 DOM：画像内容
+    // 是 LLM 自由生成的文本。
+    // ⛔ 也不从 payload.profile_patch_accumulated 自己拼——那份是英文键名的原始
+    // dict，前端一旦读它，界面上迟早会出现英文 snake_case（index.html:162 那条
+    // 既有约束）。中文标签值对由后端 summarize_profile() 算好下发。
+    const PROFILE_SUMMARY_MISSING_HINT =
+      "这条确认记录是旧版本产生的，没有随消息带上画像内容。请在下方输入框补一句话，" +
+      "让系统重新整理一遍画像，再确认。";
+
+    function renderProfileSummary(summary) {
+      const box = document.getElementById("profile-summary");
+      box.textContent = "";
+
+      if (!summary || summary.length === 0) {
+        // 历史 confirmation_prompt 行（.51 上 2026-09-04 之前写的）没有
+        // profile_summary 这个键，GET /api/jobs/{id} 会把它们原样读回新前端。
+        // ⛔ 不静默留白：留白会让业务经理以为"这就是全部内容"，那恰恰是他在
+        // 看不见画像的情况下点确认的原样重演。
+        const hint = document.createElement("div");
+        hint.className = "consequence";
+        hint.textContent = PROFILE_SUMMARY_MISSING_HINT;
+        box.appendChild(hint);
+        box.style.display = "block";
+        return;
+      }
+
+      const title = document.createElement("h3");
+      title.textContent = "这是即将冻结的岗位画像，请逐条核对：";
+      box.appendChild(title);
+
+      const list = document.createElement("dl");
+      summary.forEach((item) => {
+        const dt = document.createElement("dt");
+        dt.textContent = item.label;
+        const dd = document.createElement("dd");
+        dd.textContent = item.value;
+        list.appendChild(dt);
+        list.appendChild(dd);
+      });
+      box.appendChild(list);
+      box.style.display = "block";
+    }
+
+    function hideApprovalUi() {
+      ["profile-summary", "gap-warning", "approval-actions", "revise-box"].forEach((id) => {
+        document.getElementById(id).style.display = "none";
+      });
+      document.getElementById("confirm-btn").style.display = "none";
+    }
+
     function renderGapWarning(fields, labels) {
       const box = document.getElementById("gap-warning");
       const confirmBtn = document.getElementById("confirm-btn");
@@ -203,6 +274,8 @@
         // 给输入框——用户下一条回复照常走 POST /reply。
         box.style.display = "none";
         confirmBtn.style.display = "none";
+        document.getElementById("profile-summary").style.display = "none";
+        document.getElementById("approval-actions").style.display = "none";
         appendTurn("assistant", "好的，请直接补充上面这几项，我接着记。");
         document.getElementById("input").focus();
       });
@@ -238,14 +311,19 @@
           // 回复文本会对不上当前问题。
           activeQuestions = turn;
         }
-        document.getElementById("confirm-btn").style.display = "none";
-        document.getElementById("gap-warning").style.display = "none";
+        hideApprovalUi();
       } else if (message.type === "confirmation_prompt") {
-        appendTurn("assistant", "画像已收集完整，请确认。");
+        appendTurn("assistant", "画像已收集完整，请逐条核对后确认。");
+        renderProfileSummary(message.payload.profile_summary);
         renderGapWarning(
           message.payload.unspecified_fields || [],
           message.payload.unspecified_field_labels || []
         );
+        // 三个操作始终一起出现（spec：确认/修改/放弃）。⛔ 有缺口时也不能只留
+        // 确认一条路——renderGapWarning 只管收起「确认」按钮，"修改"和"放弃"
+        // 任何时候都在，否则业务经理会被卡在一个没有出口的页面上。
+        document.getElementById("approval-actions").style.display = "block";
+        document.getElementById("revise-box").style.display = "none";
       }
     }
 
@@ -360,6 +438,67 @@
         appendTurn("assistant", "⚠️ JD 多次触发歧视性表述检测，已转人工处理，请核对下方内容。");
       }
     }
+
+    // ── 修改分支（tasks 6.5 / 6.6）──────────────────────────────────────
+    document.getElementById("revise-btn").addEventListener("click", () => {
+      const box = document.getElementById("revise-box");
+      box.style.display = "block";
+      document.getElementById("revise-input").focus();
+    });
+
+    document.getElementById("revise-submit").addEventListener("click", async () => {
+      const input = document.getElementById("revise-input");
+      const feedback = input.value.trim();
+      if (!feedback) return;
+
+      appendTurn("user", feedback);
+      input.value = "";
+      hideApprovalUi();
+
+      const resp = await fetch(`api/jobs/${jobId}/revise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: feedback }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        // 409 超限时 detail 是对象（带 revision_count / max_revisions），
+        // 422 空意见时 detail 是字符串。两种都要说人话。
+        const detail = data && data.detail;
+        const reason =
+          typeof detail === "string"
+            ? detail
+            : (detail && detail.message) || "修改提交失败，请稍后重试。";
+        appendTurn("assistant", "⚠️ " + reason);
+        // 超限之后**确认那条路仍然开着**（spec：由 HR 直接编辑画像后提交确认），
+        // 所以把确认区放回来，⛔ 不要把人锁死在一个没有出口的页面上。
+        document.getElementById("approval-actions").style.display = "block";
+        return;
+      }
+      renderMessage(data.message);
+    });
+
+    // ── 放弃分支（tasks 6.7）────────────────────────────────────────────
+    document.getElementById("abandon-btn").addEventListener("click", async () => {
+      // 放弃是终态且不可撤销，二次确认不是多余的一步。⛔ 不做成"点一下就放弃"。
+      if (!window.confirm("放弃后这个岗位不再流转（内容会保留）。确定放弃吗？")) return;
+
+      const resp = await fetch(`api/jobs/${jobId}/abandon`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "" }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        const detail = data && data.detail;
+        appendTurn("assistant", "⚠️ " + (typeof detail === "string" ? detail : "放弃失败，请稍后重试。"));
+        return;
+      }
+      hideApprovalUi();
+      appendTurn("assistant", "已放弃这个岗位。已采集的内容保留在系统里，可供事后查阅。");
+      document.getElementById("send-btn").disabled = true;
+      document.getElementById("input").disabled = true;
+    });
 
     document.getElementById("confirm-btn").addEventListener("click", () => doConfirm(false));
   </script>

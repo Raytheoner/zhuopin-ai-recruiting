@@ -63,12 +63,22 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
             # 加一个新键而不是改 unspecified_fields 的类型：.51 上的历史
             # confirmation_prompt 行存的是字符串数组，GET /api/jobs/{id} 会把它们
             # 原样读回新前端，改类型会让历史行当场崩。
-            from app.schemas.job_profile import field_labels
+            from app.schemas.job_profile import field_labels, summarize_profile
 
             unspecified = state.get("unspecified_fields", [])
+            profile = state.get("profile_patch_accumulated", {})
             payload = {
                 "type": "confirmation_prompt",
-                "profile_patch_accumulated": state.get("profile_patch_accumulated", {}),
+                # 原始画像照旧带上：它是 GET /api/jobs/{id} 读回历史行时唯一的
+                # 原始数据，⛔ 不能因为新增了 profile_summary 就把它删掉。
+                "profile_patch_accumulated": profile,
+                # tasks 6.1：画像本身必须**可渲染地**出现在确认页上。
+                # 修复前 profile_patch_accumulated 在 payload 里躺着但没有任何
+                # 代码读它（index.html 全文 grep `profile` 零命中）——业务经理是
+                # 在看不见画像内容的情况下点的「确认画像，生成 JD」。
+                # 摘要在这里算好、以中文标签值对的形态下发，⛔ 不另加接口：
+                # 前端拿不到英文字段名，界面上就不可能出现英文 snake_case。
+                "profile_summary": summarize_profile(profile),
                 "unspecified_fields": unspecified,
                 "unspecified_field_labels": field_labels(unspecified),
             }

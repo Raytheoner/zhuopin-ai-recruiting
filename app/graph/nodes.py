@@ -17,6 +17,55 @@ from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
 from app.storage.idempotency import idempotent_effect
 
+# 人工决策的三种类型（tasks 6.4 / 6.5 / 6.7）。
+# ⛔ 三个字面量与 app/storage/db.py 的 human_review.decision_type CHECK、
+# app/audit/assertions.py 断言四的 TERMINAL_STATUS_DECISIONS 逐字同源。改一处
+# 必须同步改另两处——不同步的后果没有任何症状：不报错、不失败，只是留痕落在
+# 一个断言查不到的取值上，审计那天才发现。
+DECISION_APPROVED = "approved"
+DECISION_REVISION_REQUESTED = "revision_requested"
+DECISION_ABANDONED = "abandoned"
+
+
+def _record_human_review(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    profile_version: int,
+    decision_type: str,
+    reviewer: str,
+    feedback: str | None = None,
+) -> None:
+    """把一次人工决策写进 human_review（spec「决策留痕」）。
+
+    ⛔ **本函数不 commit、不开事务**，只能在某个 effect_* 节点的函数体内被调用，
+    与该节点的业务写落在同一个事务里、由 idempotent_effect 装饰器统一提交一次
+    （工程铁律 1）。分开提交会出现"画像已确认但查不到谁确认的"，而更糟的是：
+    幂等记录一旦先落，重试会被判定为"已执行"，那条留痕**永远不会补上**。
+
+    ⛔ reviewer 不接受空白（表上有 CHECK 兜底）；**更不得写入任何自动判定的
+    产物**——决策人只能是人（合规红线：AI 只做排序推荐，淘汰必须有人工确认
+    节点并留痕）。
+
+    id 取 `{job_id}-v{version}-{decision_type}`，与唯一索引
+    (job_id, profile_version, decision_type) 和幂等键
+    {job_id}:{node_name}:{version} **同粒度**。两道防线粒度不一致时，宽的那道
+    形同虚设（与 pending_approval 的 (thread_id, content_hash) 同一理由）。
+    """
+    conn.execute(
+        "INSERT INTO human_review "
+        "(id, job_id, profile_version, decision_type, reviewer, feedback, decided_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+        (
+            f"{job_id}-v{profile_version}-{decision_type}",
+            job_id,
+            profile_version,
+            decision_type,
+            reviewer,
+            feedback,
+        ),
+    )
+
 
 def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeState:
     """compute_* 节点：纯函数，只调用 LLM 与做数据转换，不写库、不发消息。"""
@@ -183,11 +232,16 @@ def effect_deliver_message(
 
 @idempotent_effect("effect_confirm_profile")
 def effect_confirm_profile(
-    conn: sqlite3.Connection, *, thread_id: str, business_key: str, profile_dict: dict
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    profile_dict: dict,
+    reviewer: str,
 ) -> None:
     """
-    effect_* 节点：把最新画像草案冻结为 approved，同步更新 job.status。
-    business_key = 冻结的 version 号，防止同一版本被重复确认两次。
+    effect_* 节点：把最新画像草案冻结为 approved，同步更新 job.status，并记一条
+    human_review。business_key = 冻结的 version 号，防止同一版本被重复确认两次。
 
     不在这里 conn.commit() —— 理由同 effect_persist_draft：写入与 effect_log
     记录必须由 idempotent_effect 装饰器在同一个事务里一次性提交。
@@ -196,6 +250,17 @@ def effect_confirm_profile(
     确认留痕（`_gap_acknowledgement`）。留痕与 status='approved' 必须落在同一条
     事务里（铁律 1）——分开写会出现"画像已确认但查不到确认时是否知情"，而这正是
     spec「使事后可以查明确认时业务经理是否知情」要杜绝的状态。
+
+    2026-09-04（tasks 6.4）：human_review 那一条痕也进**同一个事务**。它回答的是
+    另一个问题——"谁、在什么时候、确认了哪一版画像"（spec「决策留痕」）。
+    ⛔ 不新增一个 effect_record_confirmation 节点去单独写它：多一个节点就多一个
+    幂等键，而两个幂等键意味着"状态已 approved、留痕却缺席"是一个可达状态，
+    合规上答不出话。
+
+    profile_version 直接取 int(business_key)：调用方（app/web/server.py 的
+    confirm）传的 business_key 就是被冻结的 version（与 effect_persist_draft
+    用 int(business_key) 推 version 是同一条约定）。⛔ 不另加一个 version 参数
+    ——同一个事实有两个入参，迟早会有一个调用点把它们传得不一致。
     """
     conn.execute(
         "UPDATE job_profile SET status = 'approved', profile_json = ? "
@@ -203,6 +268,109 @@ def effect_confirm_profile(
         (json.dumps(profile_dict, ensure_ascii=False), thread_id, thread_id),
     )
     conn.execute("UPDATE job SET status = 'approved' WHERE id = ?", (thread_id,))
+    _record_human_review(
+        conn,
+        job_id=thread_id,
+        profile_version=int(business_key),
+        decision_type=DECISION_APPROVED,
+        reviewer=reviewer,
+    )
+
+
+# 同一岗位的画像修改次数上限（tasks 6.6 / spec「修改次数上限」）。
+# 超限不是失败，是**换一条路**：提示转人工，由 HR 直接编辑画像后提交确认。
+# ⚠️ 上限的意义是护住业务经理的耐心（design.md 决策六：一个追问到第 8 轮的
+# 机器人，下次就没人用了），⛔ 不要因为"多改几次也没坏处"把它调大。
+MAX_REVISIONS = 5
+
+
+@idempotent_effect("effect_request_revision")
+def effect_request_revision(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    reviewer: str,
+    feedback: str,
+) -> None:
+    """
+    effect_* 节点：记一次「修改」决策，独占、幂等。
+    business_key = 被打回的那一版画像 version。
+
+    ⛔ **本节点不改画像、不改任何状态。** 修改意见的落地是下一轮采集：
+    app/web/server.py 的 revise 把 feedback 当作用户这一轮的原话交给 _run_turn，
+    原画像作为 profile_patch_accumulated 一起送进 prompt，产出的是 job_profile
+    的**新一版**（design.md 决策四：画像改动走新版本，每一版草案都保留）。
+    ⛔ 绝不 UPDATE 已有的 job_profile 行——那会让"当时按什么标准筛的"答不上来。
+
+    ⛔ 不与 effect_confirm_profile / effect_abandon_profile 合并成一个"处理确认"
+    节点。三条路径的对外后果完全不同（冻结并触发一次真实的 LLM 调用 / 什么都不
+    冻结只记一笔 / 终止），合成一个节点后，"恢复时节点从头整个重跑"会带着一个
+    分支参数走进另一条路径，而幂等键只有一个（工程铁律 1、2）。
+
+    不在这里 conn.commit() —— 理由同 effect_persist_draft。
+    """
+    _record_human_review(
+        conn,
+        job_id=thread_id,
+        profile_version=int(business_key),
+        decision_type=DECISION_REVISION_REQUESTED,
+        reviewer=reviewer,
+        feedback=feedback,
+    )
+
+
+def revision_count(conn: sqlite3.Connection, job_id: str) -> int:
+    """已提出的修改次数。**真源 = human_review 行数**，⛔ 不另存计数列。
+
+    另存一列计数器就多一个会漂移的真源，而漂移**没有任何症状**：不报错、
+    不失败，只是上限悄悄算错——业务经理要么在第 3 次就被拦下，要么改到第 8 轮
+    还没人拦。这与 app/graph/state.py 里"预算计数器不放进 state 自增"是同一条
+    理由。
+    """
+    return conn.execute(
+        "SELECT COUNT(*) FROM human_review WHERE job_id = ? AND decision_type = ?",
+        (job_id, DECISION_REVISION_REQUESTED),
+    ).fetchone()[0]
+
+
+@idempotent_effect("effect_abandon_profile")
+def effect_abandon_profile(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    reviewer: str,
+    feedback: str | None = None,
+) -> None:
+    """
+    effect_* 节点：把岗位与当前画像版本置为 abandoned，独占、幂等。
+    business_key = 被放弃的那一版画像 version。
+
+    ⛔ **内容一字不改**（tasks 6.7 原话"置 abandoned，保留内容"）：不删
+    job_profile 行、不清 profile_json、不动 conversation。放弃不是撤销——
+    事后要能查明"当时放弃的是哪一版画像、内容长什么样"。
+
+    ⛔ 不与 effect_confirm_profile / effect_request_revision 合并（理由见
+    effect_request_revision 的 docstring）。
+
+    不在这里 conn.commit() —— 理由同 effect_persist_draft：两条 UPDATE 与
+    human_review 留痕、effect_log 记录必须由 idempotent_effect 装饰器在同一个
+    事务里一次性提交（工程铁律 1）。
+    """
+    conn.execute(
+        "UPDATE job_profile SET status = 'abandoned' WHERE job_id = ? AND version = ?",
+        (thread_id, int(business_key)),
+    )
+    conn.execute("UPDATE job SET status = 'abandoned' WHERE id = ?", (thread_id,))
+    _record_human_review(
+        conn,
+        job_id=thread_id,
+        profile_version=int(business_key),
+        decision_type=DECISION_ABANDONED,
+        reviewer=reviewer,
+        feedback=feedback,
+    )
 
 
 @idempotent_effect("effect_generate_and_persist_jd")

@@ -303,10 +303,11 @@ def test_run_compliance_assertions_reports_every_broken_line_at_once(conn):
 
     results = run_compliance_assertions(conn)
 
-    assert len(results) == 3
-    assert [r.ok for r in results] == [False, False, False]
+    assert len(results) == 4
+    # 第四条（human_review）本次没有被破坏——没有终态画像版本，自然无违例。
+    assert [r.ok for r in results] == [False, False, False, True]
     # spec：任一条不成立时判定为失败**并指出违例记录**。
-    assert all(r.violations for r in results)
+    assert all(r.violations for r in results if not r.ok)
 
 
 def test_failing_assertion_always_carries_violations(conn):
@@ -321,3 +322,50 @@ def test_failing_assertion_always_carries_violations(conn):
     for result in results:
         if not result.ok:
             assert result.violations, f"{result.name} 失败但没有指出违例记录"
+
+
+# ── 反证四（9.3）：决策留痕缺失必须被抓到 ────────────────────────────────
+
+
+def test_missing_human_review_is_caught(conn):
+    """造违例：画像已 approved，human_review 里一条都没有 → 断言必须失败。
+
+    这正是本单元开工前 `.51` 的真实状态——"谁在什么时候确认了哪一版画像"
+    答不出来。断言存在的全部意义就是让这个状态在 CI 里红。
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+    from tests.test_audit_assertions import _seed_terminal_profile
+
+    _seed_terminal_profile(conn, status="approved")
+    result = assert_every_decision_has_human_review(conn)
+
+    assert result.ok is False
+    assert result.violations, "断言失败时必须指出违例记录，⛔ 不许只报一个 False"
+    assert result.violations[0]["job_id"] == "j1"
+
+
+def test_missing_human_review_table_fails_closed(conn):
+    """表不存在 → **失败**，⛔ 不是"还没到能验证的时候"。
+
+    与断言一（rejection_record）刻意相反：那张表要到 M2 才建，human_review 是
+    m1-job-profile-intake 本包建的。它不存在只有一个解释——留痕路径没上线。
+    """
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    conn.execute("DROP TABLE human_review")
+    result = assert_every_decision_has_human_review(conn)
+    assert result.ok is False and result.violations
+
+
+def test_missing_reviewer_column_fails_closed(conn):
+    """缺列 → 失败：验不了红线不算守住了红线（与断言一的缺列分支同一处置）。"""
+    from app.audit.assertions import assert_every_decision_has_human_review
+
+    conn.execute("DROP TABLE human_review")
+    conn.execute(
+        "CREATE TABLE human_review (id TEXT PRIMARY KEY, job_id TEXT, "
+        "profile_version INTEGER, decision_type TEXT)"
+    )
+    result = assert_every_decision_has_human_review(conn)
+    assert result.ok is False
+    assert "reviewer" in str(result.violations)

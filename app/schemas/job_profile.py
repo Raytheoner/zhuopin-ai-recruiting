@@ -111,3 +111,95 @@ def field_label(name: str) -> str:
 def field_labels(names) -> list[str]:
     """按原顺序批量转中文名。下游按下标与英文列表配对，顺序必须保持。"""
     return [field_label(name) for name in names]
+
+
+# ── 画像摘要渲染（tasks 6.1）──────────────────────────────────────────────
+#
+# ⛔ 这段必须留在本文件、与 JobProfile 和 FIELD_LABELS 待在一起，理由与
+# FIELD_LABELS 的注释逐字相同：加字段时，前端不会跟着改，摘要里就会少一个
+# 字段——而"业务经理看不见画像内容"正是本章要修的那个故障。放在这里，漏改会被
+# tests/test_profile_summary.py::test_every_profile_field_renders 当场抓到。
+#
+# ⛔ 输出里不含英文字段名。遍历的是 FIELD_LABELS 而不是 profile 的键：不在
+# 字段表里的键（`_jd_text`、`_gap_acknowledgement`、模型幻觉出来的键）**结构上**
+# 进不来，不靠"记得跳过下划线"成立。
+#
+# ⚠️ 本函数跑在 app/graph/build.py 的 _deliver_node 里，入参是 LLM 自由生成的
+# 裸 dict（还没撞过 JobProfile 的类型约束，那要到 POST /confirm 才发生）。
+# **任何形状都不许抛异常**——抛了就是整轮对话当场失败。渲染得难看可以接受。
+
+
+def _render_scalar(value) -> str:
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _render_skill_item(item: dict) -> str:
+    name = _render_scalar(item.get("name")).strip()
+    if not name:
+        return ""
+    return f"{name}（{'必会' if item.get('required') else '加分'}）"
+
+
+def _render_sop_project(item: dict) -> str:
+    parts = [_render_scalar(item.get("vehicle_model")).strip() or "未命名车型"]
+    sop_date = _render_scalar(item.get("sop_date")).strip()
+    if sop_date:
+        parts.append(f"SOP {sop_date}")
+    role = _render_scalar(item.get("role")).strip()
+    if role:
+        parts.append(role)
+    parts.append("已量产" if item.get("is_mass_production") else "未量产")
+    return " · ".join(parts)
+
+
+# 对象列表字段的逐项渲染器。⛔ 加了新的对象列表字段就要在这里加一行，否则会
+# 落到下面那条 _render_pairs 兜底路径上——那条路径会把英文键名摆到业务经理
+# 面前，是降级不是设计。
+_ITEM_RENDERERS = {
+    "core_skills": _render_skill_item,
+    "sop_projects": _render_sop_project,
+}
+
+
+def _render_pairs(item: dict) -> str:
+    """未登记渲染器的对象兜底。⛔ 不 str(dict)——那会把 Python 字面量
+    （含引号与花括号）原样摆到业务经理面前。"""
+    return "，".join(f"{key}：{_render_scalar(val)}" for key, val in item.items())
+
+
+def _render_value(name: str, value) -> str:
+    if isinstance(value, list):
+        item_renderer = _ITEM_RENDERERS.get(name)
+        rendered = []
+        for item in value:
+            if isinstance(item, dict):
+                text = item_renderer(item) if item_renderer else _render_pairs(item)
+            else:
+                text = _render_scalar(item)
+            text = text.strip()
+            if text:
+                rendered.append(text)
+        return "、".join(rendered)
+    if isinstance(value, dict):
+        return _render_pairs(value)
+    return _render_scalar(value).strip()
+
+
+def summarize_profile(profile: dict) -> list[dict]:
+    """画像 → `[{"label": 中文名, "value": 中文值}]`，按 FIELD_LABELS 声明序。
+
+    只输出**有值**的字段（tasks 6.1 原话"卡片可读，不堆字段"）。
+    """
+    summary: list[dict] = []
+    for name, label in FIELD_LABELS.items():
+        if name not in profile:
+            continue
+        rendered = _render_value(name, profile[name])
+        if not rendered:
+            continue
+        summary.append({"label": label, "value": rendered})
+    return summary

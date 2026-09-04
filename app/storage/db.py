@@ -169,6 +169,49 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approval_content
 
 CREATE INDEX IF NOT EXISTS idx_pending_approval_status
     ON pending_approval (status);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 人工决策留痕（m1-job-profile-intake tasks 1.4 / 6.4 / 9.3）。
+-- 新表，走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只
+-- 服务"老库缺列"这一种情况，新表不需要它。.51 上 data/demo.db 的 17 个真实
+-- job 与既有表一行不改，无数据迁移。
+--
+-- ⛔ job_id 上刻意不加外键。与 effect_log.thread_id、pending_approval.thread_id
+-- 同一形态：留痕表按 thread 记事实，把它的可写性绑在业务表上，"留痕写不进去"
+-- 就会变成"业务动作整个失败"——而留痕孤立远好过留痕丢失。
+--
+-- decision_type 的三个取值与 app/graph/nodes.py 的 DECISION_* 常量、
+-- app/audit/assertions.py 断言四的 TERMINAL_STATUS_DECISIONS 逐字同源。
+-- ⛔ 改任何一处都必须同步改另两处，否则留痕会静默落在一个断言查不到的取值上，
+-- 而这个故障没有任何症状：不报错、不失败，只是审计那天答不出话。
+--
+-- reviewer 的 CHECK 是合规红线「淘汰必须有人工确认节点并留痕」在存储层的落点：
+-- 决策人为空的留痕等于没留痕，且这条**由数据库强制**。trim 的第二参数显式列出
+-- 空格/制表/换行/回车——SQLite 的单参 trim() 只剥空格（与 criterion_score
+-- .evidence_ref 的 CHECK 同一理由）。
+CREATE TABLE IF NOT EXISTS human_review (
+    id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL,
+    profile_version INTEGER NOT NULL,
+    decision_type TEXT NOT NULL
+        CHECK (decision_type IN ('approved', 'revision_requested', 'abandoned')),
+    reviewer TEXT NOT NULL CHECK (
+        reviewer IS NOT NULL
+        AND trim(reviewer, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    feedback TEXT,
+    -- M2 批量确认的预留列（tasks 1.4）。现在没有写入方，必须可空。
+    batch_id TEXT,
+    decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 重复留痕的第二道防线（第一道是 idempotent_effect）。粒度与幂等键
+-- {job_id}:{node_name}:{profile_version} 完全一致——node_name 与 decision_type
+-- 一一对应。两道防线粒度不一致时，宽的那道形同虚设。
+-- 这条索引同时也是按 job_id 的查询索引（job_id 是最左前缀），
+-- ⛔ 不要再单独建一条 (job_id) 的索引。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_human_review_decision
+    ON human_review (job_id, profile_version, decision_type);
 """
 
 
