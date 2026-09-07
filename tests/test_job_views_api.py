@@ -1,6 +1,9 @@
+import ast
 import json
 import re
 import sqlite3
+from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -130,6 +133,22 @@ def _seed_outbox(conn, job_id, message_type):
     conn.commit()
 
 
+_WRITE_GUARD_TABLES = ("job", "job_profile", "human_review", "effect_log", "outbox")
+
+
+def _snapshot_tables(conn, tables=_WRITE_GUARD_TABLES):
+    """只读端点的机器判据：内容快照而不是行数快照（final review I-4）。
+
+    `SELECT COUNT(*)` 前后相等挡得住 INSERT/DELETE，但**挡不住 UPDATE**——
+    UPDATE 不改变行数。这里改成对每张表取 `SELECT * ORDER BY rowid` 的全量
+    元组，请求前后逐字比对：任何一个字段被悄悄改写，快照就会不相等。
+    """
+    return {
+        table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+        for table in tables
+    }
+
+
 # ── 8.1 岗位列表 ─────────────────────────────────────────────────────────────
 
 
@@ -175,6 +194,61 @@ def test_list_jobs_sorts_most_recently_active_first(tmp_path):
     ids = [job["job_id"] for job in client.get("/api/jobs").json()["jobs"]]
 
     assert ids == ["new", "old"]
+
+
+def test_list_jobs_created_at_label_is_shanghai_time_not_raw_utc(tmp_path):
+    """final review I-1：`created_at` 落库时是 SQLite `datetime('now')`
+    （UTC、无时区后缀）。直接把它上屏，无锡的人会看到早 8 小时的时间。
+    `created_at_label` / `updated_at_label` 必须是转换后的东八区文案，⛔ 不
+    写死一个魔数字符串——期望值由裸 UTC 值现算，通用换算才是这条测试要
+    钉住的事实。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", created_at="2026-09-01 10:00:00")
+    _seed_version(conn, "j1", 1, {"job_title": "A"}, created_at="2026-09-01 10:05:00")
+
+    job = client.get("/api/jobs").json()["jobs"][0]
+
+    def shanghai(utc: str) -> str:
+        return (
+            datetime.strptime(utc, "%Y-%m-%d %H:%M:%S") + timedelta(hours=8)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+
+    assert job["created_at_label"] == shanghai("2026-09-01 10:00:00")
+    assert job["updated_at_label"] == shanghai("2026-09-01 10:05:00")
+    # 裸值原样保留给逻辑用（"裸值给逻辑、label 给显示"）。
+    assert job["created_at"] == "2026-09-01 10:00:00"
+    assert job["updated_at"] == "2026-09-01 10:05:00"
+
+
+def test_profile_detail_created_at_label_is_shanghai_time(tmp_path):
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", created_at="2026-09-01 10:00:00")
+    _seed_version(conn, "j1", 1, {"job_title": "A"}, created_at="2026-09-01 10:00:30")
+
+    data = client.get("/api/jobs/j1/profile").json()
+
+    expected = (
+        datetime.strptime("2026-09-01 10:00:00", "%Y-%m-%d %H:%M:%S") + timedelta(hours=8)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    assert data["created_at_label"] == expected
+    assert data["versions"][0]["created_at_label"] == (
+        datetime.strptime("2026-09-01 10:00:30", "%Y-%m-%d %H:%M:%S") + timedelta(hours=8)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def test_profile_detail_decision_reviewer_label_is_chinese_for_the_unknown_reviewer(tmp_path):
+    """M1：鉴权是空壳，今天每条留痕的 reviewer 恒为 UNKNOWN_REVIEWER
+    （"unknown:web-session"）。直接展示裸值是一串没有意义的英文。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(conn, "j1", 1, {"job_title": "A"})
+    _seed_review(conn, "j1", 1, "approved")
+
+    decision = client.get("/api/jobs/j1/profile").json()["decisions"][0]
+
+    assert decision["reviewer"] == "unknown:web-session"
+    assert decision["reviewer_label"] == "未登录（演示环境）"
+    assert decision["decided_at_label"]
 
 
 def test_list_jobs_includes_a_job_with_no_profile_yet(tmp_path):
@@ -251,19 +325,19 @@ def test_list_jobs_is_mounted_under_the_configured_root_path(tmp_path):
 
 def test_list_jobs_does_not_write_anything(tmp_path):
     """只读端点的机器判据：调用前后 job / job_profile / human_review /
-    effect_log / outbox 的行数逐表恒等。"""
+    effect_log / outbox 的**内容**逐表恒等（I-4：行数快照挡不住 UPDATE，
+    UPDATE 不改变行数）。"""
     client, conn = _make_app(tmp_path)
     _seed_job(conn, "j1")
     _seed_version(conn, "j1", 1, {"job_title": "A"})
     _seed_outbox(conn, "j1", "question")
 
-    tables = ("job", "job_profile", "human_review", "effect_log", "outbox")
-    before = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    before = _snapshot_tables(conn)
 
     client.get("/api/jobs")
     client.get("/api/jobs")
 
-    after = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    after = _snapshot_tables(conn)
     assert before == after
 
 
@@ -409,17 +483,17 @@ def test_profile_detail_does_not_shadow_the_existing_single_job_endpoint(tmp_pat
 
 
 def test_profile_detail_does_not_write_anything(tmp_path):
+    """内容快照而非行数快照（I-4）：UPDATE 不改变行数，只有逐字比对才挡得住。"""
     client, conn = _make_app(tmp_path)
     _seed_job(conn, "j1")
     _seed_version(conn, "j1", 1, {"job_title": "A"})
 
-    tables = ("job", "job_profile", "human_review", "effect_log", "outbox")
-    before = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    before = _snapshot_tables(conn)
 
     client.get("/api/jobs/j1/profile")
     client.get("/api/jobs/j1/profile")
 
-    after = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    after = _snapshot_tables(conn)
     assert before == after
 
 
@@ -510,6 +584,43 @@ def test_queue_picks_up_revision_limit(tmp_path):
     assert str(MAX_REVISIONS) in data["jobs"][0]["needs_manual_reasons"][0]["label"]
 
 
+def test_queue_excludes_approved_jobs_that_only_hit_the_revision_limit(tmp_path):
+    """final review I-2：approved 岗位一旦撞过修改上限，`revise()` 已经对它
+    直接 409、`revision_counts` 也不会再变——这是一件**已经做完的事**，不是
+    还需要人工介入的事。修复前这类岗位会永久钉在队列里、没有任何路径能清掉
+    （队列只读、revise() 对 approved 409、本单元不许写库）。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(conn, "j1", 1, {"job_title": "A"}, status="approved")
+    for version in range(1, MAX_REVISIONS + 1):
+        _seed_review(
+            conn, "j1", version, DECISION_REVISION_REQUESTED,
+            decided_at=f"2026-09-01 11:0{version}:00",
+        )
+
+    data = client.get("/api/queues/needs-manual").json()
+
+    assert data == {"jobs": [], "total": 0}
+
+
+def test_queue_still_includes_approved_jobs_flagged_by_jd_discrimination(tmp_path):
+    """反证，防止上一条修法写过头：⛔ 不能整体过滤 approved 岗位——
+    `_jd_needs_manual` 恰恰只出现在 approved 岗位上，那是今天队列里唯一
+    真实存在的写入方，整体过滤会得到一个恒空队列（Global Constraint 8
+    明令要防的无症状故障）。"""
+    client, conn = _make_app(tmp_path)
+    _seed_job(conn, "j1", status="approved")
+    _seed_version(
+        conn, "j1", 1, {"job_title": "A", "_jd_text": "…", "_jd_needs_manual": True},
+        status="approved",
+    )
+
+    data = client.get("/api/queues/needs-manual").json()
+
+    assert data["total"] == 1
+    assert [r["code"] for r in data["jobs"][0]["needs_manual_reasons"]] == ["jd_discrimination"]
+
+
 def test_queue_picks_up_job_status_column_when_someone_finally_writes_it(tmp_path):
     """WBS 2.5 落地当天这一条自动生效。⛔ 不许因为"现在无人写入"就省掉——
     只认一个恒为空的状态列，队列会永远是空的，而"空队列"和"没人需要处理"
@@ -587,6 +698,7 @@ def test_queue_exposes_no_write_verbs(tmp_path):
 
 
 def test_queue_does_not_write_anything(tmp_path):
+    """内容快照而非行数快照（I-4）：UPDATE 不改变行数，只有逐字比对才挡得住。"""
     client, conn = _make_app(tmp_path)
     _seed_job(conn, "j1", status="approved")
     _seed_version(
@@ -594,14 +706,80 @@ def test_queue_does_not_write_anything(tmp_path):
         status="approved",
     )
 
-    tables = ("job", "job_profile", "human_review", "effect_log", "outbox")
-    before = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    before = _snapshot_tables(conn)
 
     client.get("/api/queues/needs-manual")
     client.get("/api/queues/needs-manual")
 
-    after = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    after = _snapshot_tables(conn)
     assert before == after
+
+
+# ── final review I-4：server.py 里三个 handler + 两个 helper 的 AST 写守卫 ──
+#
+# app/storage/job_queries.py 已经有等价的 AST 守卫
+# （test_module_contains_no_write_statements），app/web/server.py 里
+# list_jobs / get_job_profile / needs_manual_queue 三个 handler 及其
+# _job_row_payload / _job_rows_with_context 两个 helper 此前没有——而这三个
+# handler 的函数体正落在 server.py 里，是最可能被将来某个人顺手加一句
+# UPDATE 的地方（行数快照挡不住 UPDATE，见上面几条 _does_not_write_anything
+# 测试的加固说明）。
+
+_READ_ONLY_HANDLER_NAMES = (
+    "list_jobs",
+    "get_job_profile",
+    "needs_manual_queue",
+    "_job_row_payload",
+    "_job_rows_with_context",
+)
+
+
+def _non_docstring_string_literals_in_function(tree: ast.AST, name: str) -> list[str] | None:
+    """给定函数名，取出它函数体内所有**非 docstring**的字符串字面量。
+
+    与 tests/test_job_queries.py::_non_docstring_literals 同一条纪律：
+    ⛔ 不扫函数自己的说明性注释/docstring（这几个 handler 的 docstring 里
+    大量出现"⛔ 不许有 INSERT/UPDATE/DELETE"这类说明文字，扫全文会被自己
+    的说明判违例）。返回 None 表示按这个名字找不到函数——调用方必须把它当
+    失败处理，不能悄悄跳过。
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            docstring_id = None
+            if ast.get_docstring(node, clean=False) is not None:
+                docstring_id = id(node.body[0].value)
+            return [
+                sub.value
+                for sub in ast.walk(node)
+                if isinstance(sub, ast.Constant)
+                and isinstance(sub.value, str)
+                and id(sub) != docstring_id
+            ]
+    return None
+
+
+def test_view_endpoint_handlers_and_helpers_contain_no_write_statements():
+    """8.1/8.2/8.4 三个 handler 及其两个 helper：不许有任何一条写语句字面量。
+
+    这条与 tests/test_job_queries.py::test_module_contains_no_write_statements
+    是同一个判据在 server.py 这一侧的等价物——scope 收窄到这五个函数的函数体，
+    不牵连 create_job / confirm / revise / abandon 等本来就该写库的既有端点。
+    """
+    tree = ast.parse(Path("app/web/server.py").read_text(encoding="utf-8"))
+
+    for name in _READ_ONLY_HANDLER_NAMES:
+        literals = _non_docstring_string_literals_in_function(tree, name)
+        assert literals is not None, (
+            f"app/web/server.py 里找不到函数 {name}——8.1/8.2/8.4 的实现可能"
+            "被改名、移动或删除了，这条写守卫需要重新核对覆盖范围。"
+        )
+        for literal in literals:
+            upper = literal.upper()
+            for statement in ("INSERT INTO", "UPDATE ", "DELETE FROM", "ALTER TABLE", "DROP TABLE"):
+                assert statement not in upper, (
+                    f"{name}() 里出现了 {statement}：{literal!r}——"
+                    "8.1/8.2/8.4 三个只读端点及其 helper 不许有任何写语句。"
+                )
 
 
 def test_queue_contains_exactly_the_needs_manual_jobs_and_is_server_side_state(tmp_path):

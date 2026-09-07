@@ -1,11 +1,13 @@
 import ast
 import json
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from app.graph.nodes import DECISION_REVISION_REQUESTED, MAX_REVISIONS
+from app.middleware.auth import UNKNOWN_REVIEWER
 from app.storage import job_queries
 from app.storage.db import init_schema
 
@@ -83,6 +85,9 @@ def test_latest_profile_rows_returns_only_the_newest_version_per_job(conn):
     assert rows[0]["latest_version"] == 2
     assert rows[0]["profile"]["job_title"] == "新标题"
     assert rows[0]["updated_at"] == "2026-09-01 10:05:00"
+    # I-1：裸值原样保留给逻辑用，label 是转好的东八区展示文案。
+    assert rows[0]["updated_at_label"] == job_queries.to_shanghai_label(rows[0]["updated_at"])
+    assert rows[0]["created_at_label"] == job_queries.to_shanghai_label(rows[0]["created_at"])
 
 
 def test_latest_profile_rows_keeps_jobs_that_have_no_profile_yet(conn):
@@ -137,6 +142,42 @@ def test_latest_message_types_returns_last_row_per_thread(conn):
         "j1": "confirmation_prompt",
         "j2": "question",
     }
+
+
+def test_to_shanghai_label_converts_utc_to_asia_shanghai(conn):
+    """final review I-1：无锡看到的每一个时间戳都必须是东八区。⛔ 不写死一个
+    魔数字符串——通用换算：期望值由裸 UTC 值 + 8 小时现算，不是提前算好的
+    一个固定答案（那样测试和实现完全可能对着同一个错误的公式抄出一致的结果）。
+    """
+    utc = "2026-09-01 10:30:00"
+
+    label = job_queries.to_shanghai_label(utc)
+
+    expected = (
+        datetime.strptime(utc, "%Y-%m-%d %H:%M:%S") + timedelta(hours=8)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    assert label == expected
+    # 换算结果的小时数必须逐字等于 UTC 小时 + 8（对 24 取模，覆盖跨天进位）。
+    utc_hour = datetime.strptime(utc, "%Y-%m-%d %H:%M:%S").hour
+    label_hour = datetime.strptime(label, "%Y-%m-%d %H:%M:%S").hour
+    assert label_hour == (utc_hour + 8) % 24
+
+
+def test_to_shanghai_label_rolls_over_into_the_next_day(conn):
+    """跨天进位是这条换算最容易被写错的地方：UTC 20:00 之后的任何时刻，
+    东八区都已经是第二天。"""
+    utc = "2026-09-01 20:15:30"
+
+    label = job_queries.to_shanghai_label(utc)
+
+    assert label == "2026-09-02 04:15:30"
+
+
+def test_to_shanghai_label_passes_through_none_and_malformed_values(conn):
+    """NULL 与格式异常的历史脏数据 ⛔ 不能让整页 500——原样返回好过白屏。"""
+    assert job_queries.to_shanghai_label(None) is None
+    assert job_queries.to_shanghai_label("") == ""
+    assert job_queries.to_shanghai_label("not-a-timestamp") == "not-a-timestamp"
 
 
 def test_display_title_prefers_profile_job_title_over_placeholder(conn):
@@ -196,6 +237,31 @@ def test_needs_manual_reason_from_revision_limit_and_label_carries_the_number():
     # 上限数字不能在文案里写死：写死之后改 MAX_REVISIONS 界面上不会跟着变，
     # 而且不报错——业务经理看到的上限和系统实际执行的上限会悄悄不一致。
     assert "5" in reasons[0]["label"]
+
+
+def test_needs_manual_reason_from_revision_limit_is_suppressed_once_approved():
+    """final review I-2：approved 岗位一旦撞过修改上限就是**一件已经做完的事**
+    ——revise() 对 approved 直接 409，revision_counts 也不会再变。继续产出
+    这条理由会让这类岗位永久钉在转人工队列里、没有任何路径能清掉。"""
+    reasons = job_queries.derive_needs_manual_reasons(
+        job_status="approved", profile={}, revision_count=5, max_revisions=5
+    )
+
+    assert reasons == []
+
+
+def test_needs_manual_reason_from_jd_discrimination_still_fires_when_approved():
+    """反证，防止上一条的修法写过头：⛔ 不能整体过滤 approved——
+    `_jd_needs_manual` 恰恰只出现在 approved 岗位上，那是今天队列里唯一
+    真实存在的写入方，整体过滤会得到一个恒空队列。"""
+    reasons = job_queries.derive_needs_manual_reasons(
+        job_status="approved",
+        profile={"_jd_needs_manual": True},
+        revision_count=5,
+        max_revisions=5,
+    )
+
+    assert [r["code"] for r in reasons] == [job_queries.REASON_JD_DISCRIMINATION]
 
 
 def test_needs_manual_reasons_can_stack():
@@ -350,7 +416,7 @@ def test_decision_records_are_chronological_and_labelled_in_chinese(conn):
                    feedback="人数改成 3 个", decided_at="2026-09-01 11:00:00")
     _insert_review(conn, "j1", 2, "approved", decided_at="2026-09-01 12:00:00")
 
-    records = job_queries.decision_records(conn, "j1")
+    records = job_queries.decision_records(conn, "j1", unknown_reviewer=UNKNOWN_REVIEWER)
 
     assert [r["profile_version"] for r in records] == [1, 2]
     assert records[0]["decision_label"] == "要求修改"
@@ -358,6 +424,24 @@ def test_decision_records_are_chronological_and_labelled_in_chinese(conn):
     assert records[1]["decision_label"] == "确认"
     for record in records:
         assert record["decision_type"] not in record["decision_label"]
+    # M1：决策人恒为 UNKNOWN_REVIEWER（鉴权空壳阶段），裸值直接展示是一串
+    # 没有意义的英文（"unknown:web-session"）。reviewer_label 映射成中文，
+    # 裸值原样保留给逻辑用。
+    assert records[0]["reviewer"] == UNKNOWN_REVIEWER
+    assert records[0]["reviewer_label"] == "未登录（演示环境）"
+    assert records[0]["decided_at_label"]
+
+
+def test_decision_records_shows_a_real_reviewer_identity_unchanged(conn):
+    """SSO 落地后 reviewer 会是真实的企微 userid——这时 ⛔ 不能被误判成
+    UNKNOWN_REVIEWER 而被替换成"未登录（演示环境）"这句话。"""
+    _insert_job(conn, "j1")
+    _insert_version(conn, "j1", 1, {})
+    _insert_review(conn, "j1", 1, "approved", reviewer="wxid_real_person")
+
+    record = job_queries.decision_records(conn, "j1", unknown_reviewer=UNKNOWN_REVIEWER)[0]
+
+    assert record["reviewer_label"] == "wxid_real_person"
 
 
 def _non_docstring_literals(path: str) -> list[str]:

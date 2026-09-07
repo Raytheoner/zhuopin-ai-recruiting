@@ -707,6 +707,32 @@
 
     document.getElementById("confirm-btn").addEventListener("click", () => doConfirm(false));
 
+    // 通用 fetch-JSON 封装，供下面三个只读视图共用。⛔ 刻意放在下面那段标记
+    // 注释**之前**：它是纯 HTTP 基础设施，不认识、也不渲染任何业务字段——
+    // 里面读的 resp.status 是浏览器 Fetch API 原生的 HTTP 状态码属性，与
+    // job.status / job_profile.status 这类业务英文状态字段毫无关系。放在
+    // 标记注释之后的话，会被下面 test_view_rendering_never_writes_raw_
+    // english_status_fields_into_dom 那条按整段文本扫"status"这个词本身的
+    // 机器判据连坐——那条判据挡的是业务字段，不是 HTTP 状态码，两者撞了同
+    // 一个英文单词纯属巧合。
+    async function getJson(path) {
+      // 相对路径，配合 <head> 里的 <base href> 解析（部署约束 1）。
+      // ⛔ 不写开头的 "/"。
+      //
+      // 返回 { ok, httpStatus, data }，⛔ 不再用一个 null 兜住所有失败：
+      // 404（这条记录本来就不存在）与网络故障/5xx（也许重试就好了）需要
+      // 不同的文案，合成一句话会让用户对着一条永远不会成功的"重试"傻等
+      // （M8）。调用方按 httpStatus 区分文案，不区分的调用方就统一显示一句
+      // "读取失败"，⛔ 不留白——留白会让人以为"这就是全部内容"。
+      try {
+        const resp = await fetch(path);
+        if (!resp.ok) return { ok: false, httpStatus: resp.status };
+        return { ok: true, data: await resp.json() };
+      } catch (err) {
+        return { ok: false, httpStatus: null };
+      }
+    }
+
     // ── 会话之外的三个只读视图（tasks 8.1 / 8.2 / 8.4）────────────────────
     //
     // ⛔ 这一段里只有 GET，一个写请求都没有，而且不许有。列表、详情、队列都是
@@ -725,20 +751,6 @@
       return node;
     }
 
-    async function getJson(path) {
-      // 相对路径，配合 <head> 里的 <base href> 解析（部署约束 1）。
-      // ⛔ 不写开头的 "/"。
-      try {
-        const resp = await fetch(path);
-        if (!resp.ok) return null;
-        return await resp.json();
-      } catch (err) {
-        // 网络失败与 5xx 走同一条兜底：调用方一律渲染"读取失败"，
-        // ⛔ 不留白——留白会让人以为"这就是全部内容"。
-        return null;
-      }
-    }
-
     function renderJobCard(job) {
       const card = el("div", "job-card");
 
@@ -751,8 +763,8 @@
       card.appendChild(head);
 
       const meta = [
-        "发起于 " + job.created_at,
-        "最近更新 " + job.updated_at,
+        "发起于 " + job.created_at_label,
+        "最近更新 " + job.updated_at_label,
         job.latest_version === null
           ? "还没有画像版本"
           : "画像已到第 " + job.latest_version + " 版",
@@ -779,7 +791,7 @@
           (version.version === latestVersion ? "（最新）" : ""))
       );
 
-      const meta = ["落库于 " + version.created_at, "状态 " + version.status_label];
+      const meta = ["落库于 " + version.created_at_label, "状态 " + version.status_label];
       if (!version.is_productive) meta.push("这一轮没有新产出");
       block.appendChild(el("div", "job-meta", meta.join(" ｜ ")));
 
@@ -836,6 +848,12 @@
       return block;
     }
 
+    // 详情请求的时序令牌（M6）：连点两条不同岗位的「查看画像详情」，两个
+    // getJson 并发在飞，先发的如果后到，会用它的数据覆盖后发那次已经渲染
+    // 好的、用户实际点的那一条详情，且⛔ 无任何提示。每次进入 loadJobDetail
+    // 都领取一个新令牌；await 之后发现自己已经不是最新令牌，直接放弃渲染。
+    let detailToken = 0;
+
     async function loadJobDetail(targetJobId) {
       // #job-detail 只活在 #view-list 里面；从「转人工队列」点进来时
       // #view-list 还是 display:none，不先切过去的话 #job-detail 被设成
@@ -846,20 +864,38 @@
       // "进入岗位列表页"。switchView 用的还是按钮 + style.display 这一套
       // （Global Constraints 第 11 条），不是新开一条路由。
       switchView("list");
+      // #job-list 与 #job-detail 同属 #view-list、且在它前面（index.html
+      // 里 #job-list 先声明），不隐藏的话它会带着几分钟前的旧数据铺在
+      // 详情上方——switchView 只切容器可见性，不会重新拉取列表数据
+      // （I-3）。对称的恢复动作在 loadJobList() 里。
+      document.getElementById("job-list").style.display = "none";
+      const token = ++detailToken;
       const box = document.getElementById("job-detail");
       box.style.display = "block";
       box.textContent = "正在读取画像详情…";
 
-      const data = await getJson(`api/jobs/${targetJobId}/profile`);
+      const result = await getJson(`api/jobs/${targetJobId}/profile`);
+      if (token !== detailToken) return; // 已经有更新的一次请求在飞，放弃渲染
       box.textContent = "";
-      if (!data) {
-        box.appendChild(el("div", "muted", "画像详情读取失败，请稍后重试。"));
+      if (!result.ok) {
+        // 404（这个岗位不存在或已被删除）与其它失败要说不同的话：
+        // 前者重试也不会好，后者才值得让人"稍后重试"（M8）。
+        const message =
+          result.httpStatus === 404
+            ? "这个岗位不存在或已被删除"
+            : "画像详情读取失败，请稍后重试。";
+        box.appendChild(el("div", "muted", message));
         return;
       }
+      const data = result.data;
 
       box.appendChild(el("h2", null, data.title));
       box.appendChild(
-        el("div", "job-meta", "状态：" + data.stage_label + " ｜ 发起于 " + data.created_at)
+        el(
+          "div",
+          "job-meta",
+          "状态：" + data.stage_label + " ｜ 发起于 " + data.created_at_label
+        )
       );
       // 快照边界写在页面上，⛔ 不静默留白：留白会让人以为"这就是全部留痕"。
       box.appendChild(el("div", "ai-hint", data.snapshot_note));
@@ -878,10 +914,10 @@
         const list = el("ul", "decision-list");
         decisions.forEach((decision) => {
           const parts = [
-            decision.decided_at,
+            decision.decided_at_label,
             "第 " + decision.profile_version + " 版",
             decision.decision_label,
-            "决策人 " + decision.reviewer,
+            "决策人 " + decision.reviewer_label,
           ];
           if (decision.feedback) parts.push(decision.feedback);
           list.appendChild(el("li", null, parts.join(" ｜ ")));
@@ -893,16 +929,20 @@
     async function loadJobList() {
       const box = document.getElementById("job-list");
       document.getElementById("job-detail").style.display = "none";
+      // 对称的恢复动作：loadJobDetail() 从队列点进详情时会把 #job-list 隐藏
+      // 掉（I-3），这里是唯一的"回到列表页"路径，必须把它重新显示出来，
+      // 否则下次进列表页会是一片空白（容器还在，只是被上次详情隐藏了）。
+      box.style.display = "block";
       box.textContent = "正在读取岗位列表…";
 
-      const data = await getJson("api/jobs");
+      const result = await getJson("api/jobs");
       box.textContent = "";
-      if (!data) {
+      if (!result.ok) {
         box.appendChild(el("div", "muted", "岗位列表读取失败，请稍后重试。"));
         return;
       }
 
-      const jobs = data.jobs || [];
+      const jobs = result.data.jobs || [];
       if (jobs.length === 0) {
         box.appendChild(el("div", "muted", "还没有任何岗位。回到「提需求」用一句话发起一个。"));
         return;
@@ -914,13 +954,14 @@
       const box = document.getElementById("queue-list");
       box.textContent = "正在读取队列…";
 
-      const data = await getJson("api/queues/needs-manual");
+      const result = await getJson("api/queues/needs-manual");
       box.textContent = "";
-      if (!data) {
+      if (!result.ok) {
         box.appendChild(el("div", "muted", "队列读取失败，请稍后重试。"));
         return;
       }
 
+      const data = result.data;
       const jobs = data.jobs || [];
       if (jobs.length === 0) {
         // ⛔ 不留白：空白区域和"读取失败"长得一样。明说队列是空的。

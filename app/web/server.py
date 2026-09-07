@@ -31,7 +31,7 @@ from app.graph.nodes import (
     effect_request_revision,
     revision_count,
 )
-from app.middleware.auth import AuthMiddleware, reviewer_of
+from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
     RequestIdMiddleware,
@@ -595,7 +595,9 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
                 jd=jd,
             ),
             "created_at": row["created_at"],
+            "created_at_label": row["created_at_label"],
             "updated_at": row["updated_at"],
+            "updated_at_label": row["updated_at_label"],
             "latest_version": row["latest_version"],
             "revision_count": revisions,
             # ⛔ 只回 JD 的三个布尔状态，不回正文：正文有专门的、合规上已过审的
@@ -680,10 +682,13 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
                 jd=jd,
             ),
             "created_at": row["created_at"],
+            "created_at_label": row["created_at_label"],
             "latest_version": row["latest_version"],
             "snapshot_note": _SNAPSHOT_NOTE,
             "versions": versions,
-            "decisions": job_queries.decision_records(conn, job_id),
+            "decisions": job_queries.decision_records(
+                conn, job_id, unknown_reviewer=UNKNOWN_REVIEWER
+            ),
         }
 
     @router.get("/api/queues/needs-manual")
