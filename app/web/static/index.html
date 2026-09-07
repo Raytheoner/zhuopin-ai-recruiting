@@ -53,42 +53,83 @@
   .approval-actions { margin-top: 8px; }
   .approval-actions button { margin: 0 8px 0 0; }
   #revise-box { display: none; margin-top: 8px; }
+  .nav { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; }
+  .nav-btn { margin: 0 0 -1px; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px 8px 0 0; background: none; font-size: 15px; }
+  .nav-btn.active { border-color: #dee2e6 #dee2e6 #fff; background: #fff; font-weight: 600; }
+  .job-card { border: 1px solid #dee2e6; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+  .job-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  .job-title { font-weight: 600; font-size: 16px; }
+  .badge { display: inline-block; border: 1px solid #adb5bd; border-radius: 12px; padding: 1px 10px; font-size: 12px; color: #495057; }
+  /* 「待人工」用与 gap-warning 同一套红：它和缺口警示是同一类"需要人来处理"
+     的信号，两处用不同的颜色只会让人重新学一遍配色含义。 */
+  .badge-manual { background: #f8d7da; border-color: #dc3545; color: #58151c; }
+  .job-meta { font-size: 13px; color: #6c757d; margin-bottom: 6px; }
+  .reason { background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; border-radius: 6px; padding: 6px 10px; margin: 6px 0; font-size: 13px; }
+  .muted { color: #6c757d; font-size: 14px; }
+  .version-block { border-left: 3px solid #0d6efd; padding: 4px 0 4px 12px; margin: 16px 0; }
+  .profile-dl { margin: 8px 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+  .profile-dl dt { font-weight: 600; color: #495057; }
+  .profile-dl dd { margin: 0; white-space: pre-wrap; }
+  .snapshot { font-size: 13px; color: #495057; background: #f8f9fa; border-radius: 6px; padding: 6px 10px; margin-top: 6px; }
+  .decision-list { font-size: 14px; padding-left: 20px; }
 </style>
 </head>
 <body>
   <div class="banner">⚠️ 演示环境，不进入正式招聘流程</div>
 
-  <h1>一句话提用人需求</h1>
-  <div class="chat" id="chat"></div>
-  <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
-  <button id="send-btn">发送</button>
-  <div id="profile-summary" class="profile-summary" style="display:none;"></div>
-  <div id="gap-warning" class="gap-warning" style="display:none;"></div>
-  <div id="approval-actions" class="approval-actions" style="display:none;">
-    <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
-    <button id="revise-btn">我要改一下</button>
-    <button id="abandon-btn">放弃这个岗位</button>
-  </div>
-  <div id="revise-box">
-    <textarea id="revise-input" rows="2" placeholder="要改什么？例如：人数改成 3 个，学历放宽到大专"></textarea>
-    <button id="revise-submit">提交修改意见</button>
+  <!-- 三个视图之间用按钮切换，⛔ 不用 <a href> 或 hash 路由：那会和 <base href>
+       的解析纠缠出一类只在挂了 root_path 时才现形的 bug（部署约束 1）。 -->
+  <div class="nav">
+    <button id="nav-intake" class="nav-btn active">提需求</button>
+    <button id="nav-list" class="nav-btn">岗位列表</button>
+    <button id="nav-queue" class="nav-btn">转人工队列</button>
   </div>
 
-  <div id="jd-panel">
-    <div id="jd-output"></div>
-    <div id="jd-grounding" class="jd-grounding" style="display:none;"></div>
-    <div id="jd-authorship" class="jd-authorship" style="display:none;"></div>
-    <div class="jd-actions">
-      <button id="jd-copy-btn">复制全文</button>
-      <button id="jd-edit-btn">编辑文案</button>
-      <button id="jd-human-btn">标记为人工撰写</button>
-      <span id="jd-copy-hint" class="jd-hint"></span>
+  <div id="view-intake">
+    <h1>一句话提用人需求</h1>
+    <div class="chat" id="chat"></div>
+    <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
+    <button id="send-btn">发送</button>
+    <div id="profile-summary" class="profile-summary" style="display:none;"></div>
+    <div id="gap-warning" class="gap-warning" style="display:none;"></div>
+    <div id="approval-actions" class="approval-actions" style="display:none;">
+      <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
+      <button id="revise-btn">我要改一下</button>
+      <button id="abandon-btn">放弃这个岗位</button>
     </div>
-    <div id="jd-editor">
-      <textarea id="jd-editor-input" rows="12"></textarea>
-      <button id="jd-save-btn">保存文案</button>
-      <button id="jd-cancel-btn">取消</button>
+    <div id="revise-box">
+      <textarea id="revise-input" rows="2" placeholder="要改什么？例如：人数改成 3 个，学历放宽到大专"></textarea>
+      <button id="revise-submit">提交修改意见</button>
     </div>
+
+    <div id="jd-panel">
+      <div id="jd-output"></div>
+      <div id="jd-grounding" class="jd-grounding" style="display:none;"></div>
+      <div id="jd-authorship" class="jd-authorship" style="display:none;"></div>
+      <div class="jd-actions">
+        <button id="jd-copy-btn">复制全文</button>
+        <button id="jd-edit-btn">编辑文案</button>
+        <button id="jd-human-btn">标记为人工撰写</button>
+        <span id="jd-copy-hint" class="jd-hint"></span>
+      </div>
+      <div id="jd-editor">
+        <textarea id="jd-editor-input" rows="12"></textarea>
+        <button id="jd-save-btn">保存文案</button>
+        <button id="jd-cancel-btn">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-list" style="display:none;">
+    <h1>岗位列表</h1>
+    <div id="job-list"></div>
+    <div id="job-detail" style="display:none;"></div>
+  </div>
+
+  <div id="view-queue" style="display:none;">
+    <h1>转人工队列</h1>
+    <p class="muted">这里列出需要 HR 人工介入的岗位，等得最久的排在最前面。本页只看不动手：处置动作要回到对应岗位上、由人逐个做。</p>
+    <div id="queue-list"></div>
   </div>
 
   <script>
@@ -665,6 +706,299 @@
     });
 
     document.getElementById("confirm-btn").addEventListener("click", () => doConfirm(false));
+
+    // 通用 fetch-JSON 封装，供下面三个只读视图共用。⛔ 刻意放在下面那段标记
+    // 注释**之前**：它是纯 HTTP 基础设施，不认识、也不渲染任何业务字段——
+    // 里面读的 resp.status 是浏览器 Fetch API 原生的 HTTP 状态码属性，与
+    // job.status / job_profile.status 这类业务英文状态字段毫无关系。放在
+    // 标记注释之后的话，会被下面 test_view_rendering_never_writes_raw_
+    // english_status_fields_into_dom 那条按整段文本扫"status"这个词本身的
+    // 机器判据连坐——那条判据挡的是业务字段，不是 HTTP 状态码，两者撞了同
+    // 一个英文单词纯属巧合。
+    async function getJson(path) {
+      // 相对路径，配合 <head> 里的 <base href> 解析（部署约束 1）。
+      // ⛔ 不写开头的 "/"。
+      //
+      // 返回 { ok, httpStatus, data }，⛔ 不再用一个 null 兜住所有失败：
+      // 404（这条记录本来就不存在）与网络故障/5xx（也许重试就好了）需要
+      // 不同的文案，合成一句话会让用户对着一条永远不会成功的"重试"傻等
+      // （M8）。调用方按 httpStatus 区分文案，不区分的调用方就统一显示一句
+      // "读取失败"，⛔ 不留白——留白会让人以为"这就是全部内容"。
+      try {
+        const resp = await fetch(path);
+        if (!resp.ok) return { ok: false, httpStatus: resp.status };
+        return { ok: true, data: await resp.json() };
+      } catch (err) {
+        return { ok: false, httpStatus: null };
+      }
+    }
+
+    // ── 会话之外的三个只读视图（tasks 8.1 / 8.2 / 8.4）────────────────────
+    //
+    // ⛔ 这一段里只有 GET，一个写请求都没有，而且不许有。列表、详情、队列都是
+    // 把已经落库的事实读出来摆好：加写入就越过了本交付单元的边界，也会让
+    // "这几个页面可以放心给业务经理点"这个前提不再成立。队列尤其⛔ 不做批量
+    // 处置（合规红线：AI 只做排序推荐，不做自动淘汰；淘汰必须有人工确认节点
+    // 并留痕），机器判据见 tests/test_static_frontend.py 的两条断言。
+    //
+    // ⛔ 全程 createElement + textContent，不拼 HTML 字符串：岗位标题与画像
+    // 字段值都是 LLM 自由生成的文本。与 renderProfileSummary 同一条纪律。
+
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined && text !== null) node.textContent = text;
+      return node;
+    }
+
+    function renderJobCard(job) {
+      const card = el("div", "job-card");
+
+      const head = el("div", "job-card-head");
+      head.appendChild(el("span", "job-title", job.title));
+      head.appendChild(el("span", "badge", job.stage_label));
+      if (job.needs_manual) {
+        head.appendChild(el("span", "badge badge-manual", "待人工"));
+      }
+      card.appendChild(head);
+
+      const meta = [
+        "发起于 " + job.created_at_label,
+        "最近更新 " + job.updated_at_label,
+        job.latest_version === null
+          ? "还没有画像版本"
+          : "画像已到第 " + job.latest_version + " 版",
+        "修改 " + job.revision_count + " 次",
+      ];
+      card.appendChild(el("div", "job-meta", meta.join(" ｜ ")));
+
+      // 转人工的理由逐条展开，⛔ 不只显示一个"待人工"徽标：HR 打开队列时
+      // 第一件要知道的事是"这条为什么在这里"，光一个徽标等于让他挨个点进去猜。
+      (job.needs_manual_reasons || []).forEach((reason) => {
+        card.appendChild(el("div", "reason", "需人工：" + reason.label));
+      });
+
+      const detailBtn = el("button", null, "查看画像详情");
+      detailBtn.addEventListener("click", () => loadJobDetail(job.job_id));
+      card.appendChild(detailBtn);
+      return card;
+    }
+
+    function renderVersionBlock(version, latestVersion) {
+      const block = el("div", "version-block");
+      block.appendChild(
+        el("h3", null, "第 " + version.version + " 版" +
+          (version.version === latestVersion ? "（最新）" : ""))
+      );
+
+      const meta = ["落库于 " + version.created_at_label, "状态 " + version.status_label];
+      if (!version.is_productive) meta.push("这一轮没有新产出");
+      block.appendChild(el("div", "job-meta", meta.join(" ｜ ")));
+
+      const summary = version.summary || [];
+      if (summary.length > 0) {
+        const list = el("dl", "profile-dl");
+        summary.forEach((item) => {
+          list.appendChild(el("dt", null, item.label));
+          list.appendChild(el("dd", null, item.value));
+        });
+        block.appendChild(list);
+      } else {
+        block.appendChild(el("div", "muted", "这一版还没有可展示的画像字段。"));
+      }
+
+      // ⛔ 只渲染中文名。服务端已经把 unspecified_field_labels 算好下发，
+      // 前端不碰英文 snake_case（index.html 既有约束）。
+      const gapLabels = version.unspecified_field_labels || [];
+      if (gapLabels.length > 0) {
+        block.appendChild(el("div", "reason", "未指定：" + gapLabels.join("、")));
+      }
+
+      const snapshot = version.snapshot || {};
+      const latency = snapshot.llm_latency_ms;
+      const snapshotParts = [
+        // 工程铁律 5：这是 API 响应实际返回的模型标识，不是配置里写的名字。
+        "模型：" + (snapshot.llm_response_model || "未记录"),
+        "本轮 LLM 耗时：" +
+          (latency === null || latency === undefined ? "未记录" : Math.round(latency) + " ms"),
+        "本轮问出 " + version.asked_question_count + " 个问题",
+        "本轮写入字段 " + (snapshot.written_fields || []).length + " 个",
+      ];
+      // ⛔ 只渲染中文名，与上面 unspecified_field_labels 同一条纪律：
+      // ungrounded_fields 是英文 snake_case 业务字段名，渲染它就是 Global
+      // Constraints 第 13 条要挡的那个故障现象。服务端已经把
+      // ungrounded_field_labels 算好下发（与 unspecified_field_labels 用
+      // 同一个 field_labels()），⛔ 不读 snapshot.ungrounded_fields。
+      const ungroundedLabels = snapshot.ungrounded_field_labels || [];
+      if (ungroundedLabels.length > 0) {
+        snapshotParts.push("未溯源字段：" + ungroundedLabels.join("、"));
+      }
+      block.appendChild(el("div", "snapshot", snapshotParts.join(" ｜ ")));
+
+      // ⛔ 这里只渲染 JD 的状态徽标，不渲染 JD 正文：渲染正文就要在这里自己
+      // 保证 AI 生成标识不被裁掉，而正文已经有一个专门的、合规上已过审的
+      // 展示位（#jd-output）。少一个展示位就少一处会漏标识的地方。
+      const jd = version.jd || {};
+      if (jd.generated) {
+        const jdParts = ["这一版已生成 JD"];
+        if (jd.needs_manual) jdParts.push("曾触发歧视性表述检测，已转人工");
+        jdParts.push(jd.human_written ? "已标记为人工撰写" : "带 AI 生成标识");
+        block.appendChild(el("div", "snapshot", jdParts.join(" ｜ ")));
+      }
+      return block;
+    }
+
+    // 详情请求的时序令牌（M6）：连点两条不同岗位的「查看画像详情」，两个
+    // getJson 并发在飞，先发的如果后到，会用它的数据覆盖后发那次已经渲染
+    // 好的、用户实际点的那一条详情，且⛔ 无任何提示。每次进入 loadJobDetail
+    // 都领取一个新令牌；await 之后发现自己已经不是最新令牌，直接放弃渲染。
+    let detailToken = 0;
+
+    async function loadJobDetail(targetJobId) {
+      // #job-detail 只活在 #view-list 里面；从「转人工队列」点进来时
+      // #view-list 还是 display:none，不先切过去的话 #job-detail 被设成
+      // display:block 也是白设——它的祖先容器仍然是隐藏的，点击看起来像
+      // 什么都没发生。⛔ 这里只调 switchView，不调 showView：showView 会
+      // 顺带触发 loadJobList()（一次多余的 GET api/jobs + 把整份岗位列表
+      // 铺到详情上方），而这里只是要换一下"哪个容器可见"，不是要用户
+      // "进入岗位列表页"。switchView 用的还是按钮 + style.display 这一套
+      // （Global Constraints 第 11 条），不是新开一条路由。
+      switchView("list");
+      // #job-list 与 #job-detail 同属 #view-list、且在它前面（index.html
+      // 里 #job-list 先声明），不隐藏的话它会带着几分钟前的旧数据铺在
+      // 详情上方——switchView 只切容器可见性，不会重新拉取列表数据
+      // （I-3）。对称的恢复动作在 loadJobList() 里。
+      document.getElementById("job-list").style.display = "none";
+      const token = ++detailToken;
+      const box = document.getElementById("job-detail");
+      box.style.display = "block";
+      box.textContent = "正在读取画像详情…";
+
+      const result = await getJson(`api/jobs/${targetJobId}/profile`);
+      if (token !== detailToken) return; // 已经有更新的一次请求在飞，放弃渲染
+      box.textContent = "";
+      if (!result.ok) {
+        // 404（这个岗位不存在或已被删除）与其它失败要说不同的话：
+        // 前者重试也不会好，后者才值得让人"稍后重试"（M8）。
+        const message =
+          result.httpStatus === 404
+            ? "这个岗位不存在或已被删除"
+            : "画像详情读取失败，请稍后重试。";
+        box.appendChild(el("div", "muted", message));
+        return;
+      }
+      const data = result.data;
+
+      box.appendChild(el("h2", null, data.title));
+      box.appendChild(
+        el(
+          "div",
+          "job-meta",
+          "状态：" + data.stage_label + " ｜ 发起于 " + data.created_at_label
+        )
+      );
+      // 快照边界写在页面上，⛔ 不静默留白：留白会让人以为"这就是全部留痕"。
+      box.appendChild(el("div", "ai-hint", data.snapshot_note));
+
+      const versions = (data.versions || []).slice().reverse();
+      if (versions.length === 0) {
+        box.appendChild(el("div", "muted", "这个岗位还没有任何画像版本。"));
+      }
+      versions.forEach((version) => {
+        box.appendChild(renderVersionBlock(version, data.latest_version));
+      });
+
+      const decisions = data.decisions || [];
+      if (decisions.length > 0) {
+        box.appendChild(el("h3", null, "人工决策留痕"));
+        const list = el("ul", "decision-list");
+        decisions.forEach((decision) => {
+          const parts = [
+            decision.decided_at_label,
+            "第 " + decision.profile_version + " 版",
+            decision.decision_label,
+            "决策人 " + decision.reviewer_label,
+          ];
+          if (decision.feedback) parts.push(decision.feedback);
+          list.appendChild(el("li", null, parts.join(" ｜ ")));
+        });
+        box.appendChild(list);
+      }
+    }
+
+    async function loadJobList() {
+      const box = document.getElementById("job-list");
+      document.getElementById("job-detail").style.display = "none";
+      // 对称的恢复动作：loadJobDetail() 从队列点进详情时会把 #job-list 隐藏
+      // 掉（I-3），这里是唯一的"回到列表页"路径，必须把它重新显示出来，
+      // 否则下次进列表页会是一片空白（容器还在，只是被上次详情隐藏了）。
+      box.style.display = "block";
+      box.textContent = "正在读取岗位列表…";
+
+      const result = await getJson("api/jobs");
+      box.textContent = "";
+      if (!result.ok) {
+        box.appendChild(el("div", "muted", "岗位列表读取失败，请稍后重试。"));
+        return;
+      }
+
+      const jobs = result.data.jobs || [];
+      if (jobs.length === 0) {
+        box.appendChild(el("div", "muted", "还没有任何岗位。回到「提需求」用一句话发起一个。"));
+        return;
+      }
+      jobs.forEach((job) => box.appendChild(renderJobCard(job)));
+    }
+
+    async function loadQueue() {
+      const box = document.getElementById("queue-list");
+      box.textContent = "正在读取队列…";
+
+      const result = await getJson("api/queues/needs-manual");
+      box.textContent = "";
+      if (!result.ok) {
+        box.appendChild(el("div", "muted", "队列读取失败，请稍后重试。"));
+        return;
+      }
+
+      const data = result.data;
+      const jobs = data.jobs || [];
+      if (jobs.length === 0) {
+        // ⛔ 不留白：空白区域和"读取失败"长得一样。明说队列是空的。
+        box.appendChild(el("div", "muted", "队列是空的，当前没有需要人工介入的岗位。"));
+        return;
+      }
+      box.appendChild(el("div", "job-meta", "共 " + data.total + " 个岗位在等人工处理。"));
+      jobs.forEach((job) => box.appendChild(renderJobCard(job)));
+    }
+
+    const VIEW_LOADERS = { intake: null, list: loadJobList, queue: loadQueue };
+
+    // 只切容器可见性 + 导航按钮的高亮状态，⛔ 不触发任何数据加载。
+    // 二审 finding：loadJobDetail 之前调用 showView("list") 切视图时，会
+    // 顺带把 showView 自带的 loadJobList() 也点着了——那是一次多余的
+    // GET api/jobs，加载完还会把整份岗位列表重新铺在 #job-detail 上方，
+    // 而用户只是想看一条详情。切视图与拉数据是两件事，只在真正需要"进入
+    // 一个视图并刷新它的数据"时（导航按钮）才该绑在一起。
+    function switchView(name) {
+      ["intake", "list", "queue"].forEach((key) => {
+        document.getElementById("view-" + key).style.display =
+          key === name ? "block" : "none";
+        document.getElementById("nav-" + key).classList.toggle("active", key === name);
+      });
+    }
+
+    function showView(name) {
+      switchView(name);
+      const loader = VIEW_LOADERS[name];
+      // 每次切过去都重新拉一次，⛔ 不缓存：列表与队列是别人（HR、另一个业务
+      // 经理）也会改动的数据，缓存住只会让人对着一份过期的队列做决定。
+      if (loader) loader();
+    }
+
+    document.getElementById("nav-intake").addEventListener("click", () => showView("intake"));
+    document.getElementById("nav-list").addEventListener("click", () => showView("list"));
+    document.getElementById("nav-queue").addEventListener("click", () => showView("queue"));
   </script>
 </body>
 </html>

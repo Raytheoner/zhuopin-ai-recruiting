@@ -558,3 +558,317 @@ def test_ungrounded_terms_are_shown_as_advice_not_a_blocker():
     """决策 12：只观测不拦截。⛔ 前端不得因为有未溯源术语就禁用复制或保存。"""
     assert "jd-grounding" in INDEX_HTML
     assert "ungrounded_terms" in INDEX_HTML
+
+
+# ── 交付单元 8：会话之外的三个只读视图（tasks 8.1 / 8.2 / 8.4）───────────────
+
+
+def test_three_views_and_their_nav_buttons_exist():
+    for element_id in (
+        "nav-intake", "nav-list", "nav-queue",
+        "view-intake", "view-list", "view-queue",
+        "job-list", "job-detail", "queue-list",
+    ):
+        assert f'id="{element_id}"' in INDEX_HTML, f"缺少 #{element_id}"
+
+
+def test_view_endpoints_are_fetched_with_relative_paths():
+    """部署约束 1：挂到任意子路径下都要能工作，靠 <base href> 解析。
+    带开头 "/" 的路径会打到门户根上去。"""
+    for path in ("api/jobs", "api/queues/needs-manual"):
+        assert f'"{path}"' in INDEX_HTML or f"`{path}`" in INDEX_HTML
+
+    for absolute in ('"/api/jobs', "`/api/jobs", '"/api/queues', "`/api/queues"):
+        assert absolute not in INDEX_HTML
+
+
+_WRITE_METHOD_RE = re.compile(r"""method\s*:\s*["'](POST|PUT|PATCH|DELETE)["']""")
+
+
+def test_view_code_issues_no_write_requests():
+    """本单元只读（Global Constraints 第 7 条）。前端只许 GET。
+
+    既有的写请求（POST /reply、/confirm、/revise、/abandon、/jd…）都显式带
+    method: "POST"，本测试数一遍写方法出现次数，⛔ 新增视图不许再添一个。
+
+    M4 加固：旧版只认精确字面量 `method: "POST"`（双引号、这个确切的空格）。
+    单引号 `method: 'POST'`、不同的空格写法、或干脆换成 `method: "DELETE"`/
+    `"PUT"`/`"PATCH"` 都绕得过去，而这些同样是写请求。改成正则
+    `method\\s*:\\s*["'](POST|PUT|PATCH|DELETE)["']`，把四个写动词与两种
+    引号、任意空格一起框住。数字仍按实测值钉死——它不是摆设，是本文件里
+    真实存在的写请求个数，改动这个数字之前必须先说清是新增了哪个写请求，
+    并回到 CLAUDE.md 的合规红线「AI 只做排序推荐，不做自动淘汰」重新论证。
+    """
+    write_count = len(_WRITE_METHOD_RE.findall(INDEX_HTML))
+    assert write_count == 7, (
+        f"index.html 里写方法（POST/PUT/PATCH/DELETE）出现了 {write_count} 次，"
+        "预期 7 次（reply/create 共用 1、confirm 1、revise 1、abandon 1、"
+        "jd 编辑 1、jd 标记人工 1、jd 保存 1）。交付单元 8 的三个视图是只读的，"
+        "⛔ 不许新增写请求；确实需要新增写入时，先回到 CLAUDE.md 的合规红线"
+        "「AI 只做排序推荐，不做自动淘汰」重新论证。"
+    )
+
+
+def test_queue_page_has_no_batch_action_buttons():
+    """合规红线在前端的落点：队列只展示、不处置。"""
+    for forbidden in ("批量确认", "批量放弃", "批量处理", "一键确认", "全部确认"):
+        assert forbidden not in INDEX_HTML
+
+
+def test_detail_view_does_not_render_jd_body_text():
+    """Global Constraints 第 5 条：详情页只给 JD 状态徽标，不给正文。
+    渲染正文就要自己保证 AI 生成标识不被裁掉，而正文已经有专门的展示位。"""
+    match = re.search(r"function renderVersionBlock\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 renderVersionBlock()"
+
+    body = match.group(0)
+    assert "jd_text" not in body
+    assert "带 AI 生成标识" in body
+
+
+def test_view_rendering_never_uses_innerhtml():
+    """岗位标题与画像字段值是 LLM 自由生成的文本，innerHTML 是一条注入路径。
+    这条与既有的 renderProfileSummary / renderQuestionBlock 是同一条纪律。"""
+    assert "innerHTML" not in _WITHOUT_LINE_COMMENTS
+
+
+def test_view_switch_reloads_data_instead_of_caching():
+    """列表与队列是别人（HR、另一个业务经理）也会改动的数据。缓存住只会让人
+    对着一份过期的队列做决定。"""
+    match = re.search(r"function showView\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 showView()"
+    assert "loader()" in match.group(0)
+
+
+# ── 控制器追加：Task 1 / Task 3 两位 reviewer 共同标记的 ⚠️ ────────────────
+#
+# API 回执里刻意同时带着英文原始字段（status / decision_type /
+# latest_profile_status）与中文对应字段（stage_label / decision_label /
+# status_label）：英文字段只给逻辑用，绝不给展示用。这条断言把这条纪律焊死
+# 在机器判据上——只扫本交付单元新增的那段 JS（从下面这个注释到文件末尾），
+# 不牵连既有代码：既有代码今天没有用到这三个字段，扫全文件只会让这条测试
+# 对不相关的历史代码变化过度敏感。
+
+
+def _view_rendering_js() -> str:
+    marker = "会话之外的三个只读视图（tasks 8.1 / 8.2 / 8.4）"
+    parts = INDEX_HTML.split(marker, 1)
+    assert len(parts) == 2, (
+        "index.html 里找不到交付单元 8 新增视图代码段的标记注释——"
+        "三个只读视图的前端代码可能还没写，或者标记注释被改掉了。"
+    )
+    return parts[1]
+
+
+def test_view_rendering_never_writes_raw_english_status_fields_into_dom():
+    """⛔ 界面上不得出现英文 snake_case 字段名或英文 status 值（Global
+    Constraints 第 13 条）。Task 1 / Task 3 的 reviewer 都标记过同一个 ⚠️：
+    API 回执里 status / decision_type / latest_profile_status / ungrounded_fields
+    是给逻辑用的原始字段，从来不是给展示用的——真正要渲染的是它们各自的
+    中文对应字段 stage_label / decision_label / status_label /
+    ungrounded_field_labels。ungrounded_fields 这一条是二审 Critical
+    finding C1 补的：`renderVersionBlock()` 曾经直接渲染过它，是本章要修的
+    真实事故，不是假设风险。
+
+    2026-09-04 二审 finding I2：上一版这条测试只挡点号访问（`.status`）与
+    方括号访问（`["status"]`），挡不住**解构**——`const { status } = job;`
+    或 `{ status: raw }` 这类改名解构一次都不含前两种字符形态，却照样把
+    原始英文字段的值读进了一个新变量，随后完全可能被渲染。方括号/点号/
+    解构三种读取方式的共同点是：**这个英文标识符本身，作为一个独立的词，
+    出现在代码里**。所以这里改成用词边界（`\\b`）扫整段代码找这个词本身，
+    不再关心它是通过哪种语法被读出来的——只要这个词出现在非注释代码里，
+    就判定有被渲染的风险，宁可整体禁止出现。
+
+    `\\bstatus\\b` 不会误伤 `status_label`：`_` 是词字符，`status` 与
+    `_label` 之间没有词边界，正则不会在那里断词。`ungrounded_fields` 同理
+    不会误伤新增的 `ungrounded_field_labels`（两个字符串在 "field(s)" 这个
+    位置就分叉了，一个是复数 `fields`，一个是单数 `field_labels`，前者作为
+    连续子串根本不出现在后者内部）。
+
+    final review I-1 追加：`created_at` / `updated_at` / `decided_at` 这三个
+    UTC 裸时间戳同样只给逻辑用——真正要渲染的是它们各自的东八区中文标签
+    `created_at_label` / `updated_at_label` / `decided_at_label`（服务端用
+    `zoneinfo.ZoneInfo("Asia/Shanghai")` 转换后下发，见
+    app/storage/job_queries.py::to_shanghai_label）。直接渲染裸值会让无锡的
+    人看到早 8 小时的时间，且不报错、不失败，只是每一个时间都错——与
+    status/decision_type 那几条同一类"看不出来的故障"，用同一条 `\\b` 词
+    边界判据一并挡住。`\\bcreated_at\\b` 同理不会误伤 `created_at_label`
+    （`_` 是词字符，`created_at` 与 `_label` 之间没有词边界）。
+
+    D7 加固：剥注释这一步之前只剥单行 `//`，不剥块注释 `/* ... */`——谁在
+    这段代码里写一句块注释提到这几个英文字段名（哪怕只是说明性文字），就会
+    被这条断言误判为"渲染了原始字段"而假红；反过来，先剥块注释再剥单行
+    注释，才不会漏过真正藏在块注释之外的渲染代码。这里改成先用 `re.sub`
+    整体挖掉 `/* ... */`（`re.S` 让 `.` 跨行匹配），再按原来的方式剥单行
+    `//`——两种注释都不参与扫描，只有真正的代码文本才会被检查。
+    """
+    section = _view_rendering_js()
+    section_without_block_comments = re.sub(r"/\*.*?\*/", "", section, flags=re.S)
+    section_without_comments = "\n".join(
+        line.split("//", 1)[0] for line in section_without_block_comments.splitlines()
+    )
+
+    for field in (
+        "status",
+        "decision_type",
+        "latest_profile_status",
+        "ungrounded_fields",
+        "created_at",
+        "updated_at",
+        "decided_at",
+    ):
+        hit = re.search(rf"\b{re.escape(field)}\b", section_without_comments)
+        assert not hit, (
+            f"新视图代码里出现了英文原始字段 {field} 本身（点号访问、方括号访问、"
+            f"解构赋值、或改名解构都会命中这条断言）——只允许渲染它的中文对应"
+            f"字段（stage_label / decision_label / status_label / "
+            f"ungrounded_field_labels / created_at_label / updated_at_label / "
+            f"decided_at_label 之一）。"
+        )
+
+
+# ── 二审 Important finding I1：从「转人工队列」点「查看画像详情」不能哑火 ──
+#
+# #job-detail 只活在 #view-list 里面（#view-queue 是它的旁支，不是祖先）。
+# renderJobCard() 造的"查看画像详情"按钮在列表页和队列页共用同一个
+# loadJobDetail()。从队列页点这个按钮时，如果 loadJobDetail 只是把
+# #job-detail 设成 display:block 而不先把 #view-list 切到可见，#job-detail
+# 的祖先容器 #view-list 仍然是 display:none——设置生效了，但整棵子树连着
+# 父容器一起被隐藏，用户在屏幕上什么都看不见，点击像是"哑火"了。
+#
+# 这与 plan 原文（task-5-brief.md Step 4）逐字一致的写法里就带着这个缺陷；
+# 控制器裁定这里必须偏离计划修掉它，理由是 Global Constraints 第 11 条
+# "视图切换用按钮 + style.display" 的本意是"按钮点了要真的切到看得见的地方"，
+# 一个静默什么都不做的按钮不满足这条约束的意图。
+#
+# 我们不能真的点一下按钮验证（无浏览器），这条测试只能停在源码层面：钉住
+# loadJobDetail() 的函数体里，`showView("list")` 这一句出现在把 #job-detail
+# 设为 display:block 那一句**之前**——这是源码级证据，不是交互级证据。
+
+
+def test_loading_detail_from_the_queue_switches_to_the_list_view_first():
+    """
+    源码级证据（⛔ 不是交互级证据）：断言 loadJobDetail() 函数体内
+    `switchView("list")` 的调用位置在 `job-detail` 被设为可见之前。真正的
+    "点一下按钮、看见详情展开、且没有多余的列表刷新"这件事，本仓库没有
+    浏览器，验证不了。
+
+    三审 finding：loadJobDetail 原先调的是 showView("list")，而 showView
+    会顺带触发 loadJobList()（VIEW_LOADERS 里挂着的那个）——那是一次多余
+    的 GET api/jobs，加载完还会把整份岗位列表铺在 #job-detail 上方，用户
+    只是想看一条详情，却先看到一整页别的岗位。修法是把"切视图"和"切视图
+    并刷新数据"拆成两个函数：switchView() 只管 style.display / active
+    class，showView() 是 switchView() + 触发 VIEW_LOADERS 里的 loader。
+    loadJobDetail 改调前者，三个导航按钮仍然调后者（行为不变，点击导航
+    仍然刷新数据）。这里同时钉住三件事：
+      1. loadJobDetail 调用的是 switchView("list")，⛔ 不是 showView(——
+         防止将来有人为了"图省事"把它改回 showView，重新引入这次要修的
+         副作用；
+      2. showView 仍然会去查 VIEW_LOADERS 并调用查到的 loader——防止
+         "拆分时手滑，把导航按钮的刷新行为也一起拆没了"；
+      3. 视图切换仍然发生在 #job-detail 被设为可见**之前**（时序不变）；
+      4.（final review I-3 追加）#job-list 在进详情时被隐藏、在回到列表页
+         时被恢复——否则 #job-list 会带着几分钟前的旧数据铺在详情上方，
+         或者在从未打开过列表的情况下以一个空 div 紧贴在标题下面。
+    """
+    match = re.search(r"async function loadJobDetail\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 loadJobDetail()"
+    body = match.group(0)
+
+    assert 'switchView("list")' in body, (
+        "loadJobDetail() 里没有切回列表视图——从「转人工队列」点「查看画像"
+        "详情」时，#job-detail 的祖先容器 #view-list 仍是 display:none，"
+        "点击会看起来像什么都没发生。"
+    )
+    assert "showView(" not in body, (
+        "loadJobDetail() 里出现了 showView(——这会顺带触发 loadJobList()，"
+        "多打一次 GET api/jobs，还会把整份岗位列表铺在详情上方。这里只应该"
+        "切视图（switchView），不应该连带刷新列表数据。"
+    )
+
+    switch_at = body.index('switchView("list")')
+    reveal_at = body.index('getElementById("job-detail")')
+    assert switch_at < reveal_at, (
+        'switchView("list") 必须在拿到 #job-detail 并把它设为可见**之前**'
+        "调用，否则视图切换的时序不对，#job-detail 依然可能被切走的视图"
+        "盖住。"
+    )
+
+    # I-3：#job-list 必须在 loadJobDetail() 里被隐藏——否则它仍铺在详情
+    # 上方，且是一份不再刷新、几分钟前的旧列表。
+    assert 'getElementById("job-list").style.display = "none"' in body, (
+        "loadJobDetail() 没有把 #job-list 隐藏——从队列点进详情时，列表会"
+        "铺在详情上方（而且是过期的旧列表，因为这里只切视图不刷新数据）。"
+    )
+
+    # I-3 的对称一半：loadJobList() 必须把 #job-list 重新显示出来，否则
+    # 下次真正进列表页时，容器还留着上次 loadJobDetail() 设的 display:none，
+    # 用户会看到一片空白。
+    list_match = re.search(r"async function loadJobList\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert list_match, "index.html 里找不到 loadJobList()"
+    list_body = list_match.group(0)
+    assert 'box.style.display = "block"' in list_body, (
+        "loadJobList() 没有把 #job-list 恢复为可见——loadJobDetail() 会把它"
+        "隐藏掉（见上面那条断言），如果这里不恢复，下次进列表页会是一片空白。"
+    )
+
+
+def test_show_view_still_dispatches_its_loader_for_nav_buttons():
+    """
+    三审 finding 的另一半：拆出 switchView() 之后，showView()（三个导航
+    按钮仍在用）必须继续触发 VIEW_LOADERS 里挂着的 loader——否则点导航
+    切到「岗位列表」/「转人工队列」会变成只换了个空容器、数据不刷新，
+    这是比原来的 bug 更糟的退化。
+    """
+    match = re.search(r"function showView\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 showView()"
+    body = match.group(0)
+
+    assert "VIEW_LOADERS" in body, (
+        "showView() 不再查 VIEW_LOADERS 了——导航按钮切视图时不会再刷新数据。"
+    )
+    assert "loader()" in body
+
+
+# ── final review M6：loadJobDetail 的陈旧响应竞态 ──────────────────────────
+#
+# 连点两条不同岗位的「查看画像详情」，两次 getJson 并发在飞。没有令牌守卫时，
+# 先发的请求如果后到，会用它的数据覆盖后发那次已经渲染好的、用户实际点的
+# 那一条详情——且没有任何提示，用户看到的是 A 的详情却以为点的是 B。
+# 修法：函数外维护一个 detailToken 计数器，进入 loadJobDetail 时递增并记下
+# 自己这次的令牌，await 之后发现令牌已经不是最新的就直接 return，不再渲染。
+
+
+def test_load_job_detail_guards_against_stale_responses_with_a_token():
+    """
+    源码级证据：钉住 detailToken 守卫的三个组成部分都在，且顺序正确——
+    领取令牌在 await 之前，检查令牌在 await 之后、渲染之前。
+    """
+    assert re.search(r"\blet\s+detailToken\s*=\s*0\s*;", INDEX_HTML), (
+        "找不到模块级的 detailToken 计数器——没有它就没有地方记住"
+        "当前哪一次请求最新。"
+    )
+
+    match = re.search(r"async function loadJobDetail\(.*?\n {4}\}", INDEX_HTML, re.DOTALL)
+    assert match, "index.html 里找不到 loadJobDetail()"
+    body = match.group(0)
+
+    assert "++detailToken" in body, (
+        "loadJobDetail() 进入时没有领取一个新令牌（++detailToken）——"
+        "没有令牌就分不清这次请求是不是最新的那次。"
+    )
+    assert "token !== detailToken" in body, (
+        "loadJobDetail() 里没有在 await 之后检查令牌是否仍是最新——连点两条"
+        "不同岗位的详情时，先发后到的响应会覆盖后发先到、用户实际在看的"
+        "正确结果，且没有任何提示。"
+    )
+
+    token_at = body.index("++detailToken")
+    await_at = body.index("await getJson")
+    check_at = body.index("token !== detailToken")
+    render_at = body.index('box.appendChild(el("h2"')
+    assert token_at < await_at < check_at < render_at, (
+        "detailToken 守卫的时序不对：必须是「领取令牌 → 发请求 → 请求回来后"
+        "先检查令牌 → 令牌仍最新才渲染」，任何一步挪到别的位置都会让守卫"
+        "形同虚设（比如检查放在渲染之后，陈旧响应已经把内容写上屏幕了）。"
+    )

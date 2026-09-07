@@ -23,6 +23,7 @@ from app.graph.jd_nodes import (
     jd_edit_business_key,
 )
 from app.graph.nodes import (
+    DECISION_REVISION_REQUESTED,
     MAX_REVISIONS,
     effect_abandon_profile,
     effect_confirm_profile,
@@ -30,13 +31,14 @@ from app.graph.nodes import (
     effect_request_revision,
     revision_count,
 )
-from app.middleware.auth import AuthMiddleware, reviewer_of
+from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
     RequestIdMiddleware,
     unhandled_exception_handler,
 )
 from app.schemas.job_profile import JobProfile, field_label, field_labels
+from app.storage import job_queries
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -558,6 +560,165 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
                 status_code=409, detail="这个岗位还没有生成 JD，请先确认画像"
             ) from exc
         return _jd_payload(job_id, version)
+
+    # ── 会话之外的只读视图（tasks 8.1 / 8.2 / 8.4）────────────────────────
+    #
+    # ⛔ 这一段里三个端点全是 GET，且不许有别的：列表、详情、队列都只是把已经
+    # 落库的事实读出来摆好。加写入就越过了本交付单元的边界，也会让"这几个页面
+    # 可以放心给业务经理点"这个前提不再成立。
+    #
+    # ⚠️ MAX_REVISIONS 与 DECISION_REVISION_REQUESTED 由这里**传进**查询层，
+    # 不在 app/storage/job_queries.py 里重抄：那两个名字的真源是
+    # app/graph/nodes.py，而 storage 层 import graph 层是层次倒置
+    # （graph 已经在 import storage/idempotency.py）。
+
+    def _job_row_payload(row: dict, counts: dict, message_types: dict) -> dict:
+        """列表与队列共用同一个行形状。两处各拼一份的话，将来加一个字段必然
+        只加在其中一处，而两个页面显示不一致这件事没有测试会自己发现。"""
+        profile = row["profile"]
+        jd = job_queries.jd_state(profile)
+        revisions = counts.get(row["job_id"], 0)
+        reasons = job_queries.derive_needs_manual_reasons(
+            job_status=row["status"],
+            profile=profile,
+            revision_count=revisions,
+            max_revisions=MAX_REVISIONS,
+        )
+        return {
+            "job_id": row["job_id"],
+            "title": job_queries.display_title(row),
+            "status": row["status"],
+            "stage_label": job_queries.stage_label(
+                job_status=row["status"],
+                latest_version=row["latest_version"],
+                latest_message_type=message_types.get(row["job_id"]),
+                jd=jd,
+            ),
+            "created_at": row["created_at"],
+            "created_at_label": row["created_at_label"],
+            "updated_at": row["updated_at"],
+            "updated_at_label": row["updated_at_label"],
+            "latest_version": row["latest_version"],
+            "revision_count": revisions,
+            # ⛔ 只回 JD 的三个布尔状态，不回正文：正文有专门的、合规上已过审的
+            # 展示位（GET /api/jobs/{job_id}/jd）。多一个渲染正文的地方就多一个
+            # 会漏掉 AI 生成标识的地方。
+            "jd": jd,
+            "needs_manual": bool(reasons),
+            "needs_manual_reasons": reasons,
+        }
+
+    def _job_rows_with_context() -> tuple[list[dict], dict, dict]:
+        """列表与队列都要的三次查询。⛔ 不做逐 job 的 N+1 查询。"""
+        return (
+            job_queries.latest_profile_rows(conn),
+            job_queries.revision_counts(
+                conn, revision_decision_type=DECISION_REVISION_REQUESTED
+            ),
+            job_queries.latest_message_types(conn),
+        )
+
+    @router.get("/api/jobs")
+    def list_jobs() -> dict:
+        """8.1 岗位列表与状态视图。只读。
+
+        ⛔ 不分页：M1 的量级是"日均新增岗位个位数"（design.md 非目标：不追求
+        高并发），加分页只会多一套前后端要对齐的状态。量级变了再说。
+        """
+        rows, counts, message_types = _job_rows_with_context()
+        return {"jobs": [_job_row_payload(row, counts, message_types) for row in rows]}
+
+    # 8.2「生成快照」的诚实边界。
+    #
+    # analysis_run 表里有工程铁律 3 要求的全套字段（模型标识/版本/prompt 版本/
+    # temperature/输入哈希/原始响应/token 用量），但**当前没有任何调用点给网关传
+    # audit_context**——app/llm/gateway.py 的 audit_context 参数在 app/graph/ 与
+    # app/agents/ 下无调用方，于是 app/audit/hook.py 里 context.get("job_id") 恒为
+    # None，那些行的 job_id 全是 NULL，按岗位根本查不出来。
+    #
+    # ⛔ 不在这里瞎猜关联（比如按时间就近匹配 analysis_run 行）：猜出来的留痕比
+    # 没有留痕更糟——审计那天答不出"这条是怎么对上的"，而 PIPL 第 24 条说明权
+    # 要的正是这个答案。本页展示的快照来自 job_profile 逐轮落的列，其中
+    # llm_response_model 是工程铁律 5 的落点（API 响应里实际返回的模型标识）。
+    #
+    # 补齐的做法是在网关调用点传 audit_context={"job_id": ...}，那要碰 app/graph/
+    # 与 app/agents/，超出本交付单元边界。
+    #
+    # ⛔ 不为此新开一条技术债：这件事**已经登记在 docs/tech-debt.md 的 TD-1** 里
+    # ——TD-1「怎么还」第 ① 步逐字写着"先有一个单元把 audit_context（至少含
+    # thread_id / job_id / node）接到 intake 的 LLM 调用上"，「现状」段又逐字写着
+    # "intake 路径尚未传 audit_context，那些行的 job_id / application_id 全为 NULL"。
+    # 再开一条就是给同一个事实开第二个真源，两边迟早写得不一样而没有任何症状。
+    _SNAPSHOT_NOTE = (
+        "本页快照来自逐轮落库的画像行，模型标识取自 API 响应实际返回值。"
+        "完整的模型调用留痕（analysis_run 表）当前未与岗位关联、按岗位查不到，"
+        "见技术债 TD-1 的第 ① 步（audit_context 尚未接到 intake 路径）。"
+    )
+
+    @router.get("/api/jobs/{job_id}/profile")
+    def get_job_profile(job_id: str) -> dict:
+        """8.2 画像详情：版本历史 + 每版生成快照 + 人工决策留痕。只读。
+
+        标题与 JD 状态复用 latest_profile_rows() 的同一条推导路径，⛔ 不另写
+        一份"取最新版画像"的逻辑：两份推导迟早会在某个边界上不一致（比如
+        "只有 job、没有 job_profile"那种行），而不一致时两边都不报错。
+        """
+        rows = [row for row in job_queries.latest_profile_rows(conn) if row["job_id"] == job_id]
+        if not rows:
+            raise HTTPException(status_code=404, detail="job not found")
+        row = rows[0]
+
+        versions = job_queries.profile_versions(conn, job_id)
+        jd = job_queries.jd_state(row["profile"])
+
+        return {
+            "job_id": row["job_id"],
+            "title": job_queries.display_title(row),
+            "status": row["status"],
+            "stage_label": job_queries.stage_label(
+                job_status=row["status"],
+                latest_version=row["latest_version"],
+                latest_message_type=job_queries.latest_message_types(conn).get(job_id),
+                jd=jd,
+            ),
+            "created_at": row["created_at"],
+            "created_at_label": row["created_at_label"],
+            "latest_version": row["latest_version"],
+            "snapshot_note": _SNAPSHOT_NOTE,
+            "versions": versions,
+            "decisions": job_queries.decision_records(
+                conn, job_id, unknown_reviewer=UNKNOWN_REVIEWER
+            ),
+        }
+
+    @router.get("/api/queues/needs-manual")
+    def needs_manual_queue() -> dict:
+        """8.4 转人工队列。只读、只展示。
+
+        ⛔ 只展示不处置：本端点与本队列页面 ⛔ 不提供批量确认、批量放弃、批量
+        重生成（合规红线「AI 只做排序推荐，不做自动淘汰」；批量处置是 M2 的事，
+        且必须有人工确认节点与留痕）。
+
+        ⛔ 放弃（abandoned）的岗位不进队列：放弃是终态、不再流转，把它摆进 HR
+        的待办里只会制造清不掉的积压。过滤放在这里而不是
+        derive_needs_manual_reasons 里——那个函数只回答"有哪些理由"，详情页
+        恰恰应该看得到"这个岗位当初为什么被转人工"，哪怕它后来被放弃了。
+        """
+        rows, counts, message_types = _job_rows_with_context()
+        items = [
+            payload
+            for payload in (
+                _job_row_payload(row, counts, message_types)
+                for row in rows
+                if row["status"] != "abandoned"
+            )
+            if payload["needs_manual"]
+        ]
+        # 队列按"等得最久的排前面"，与列表页的倒序刻意相反：列表回答"最近发生了
+        # 什么"，队列回答"该先办哪一个"。job_id 作为第二排序键，保证同一时刻的
+        # 两条有稳定顺序（否则每次刷新顺序会跳，看的人会以为队列变了）。
+        items.sort(key=lambda item: (item["updated_at"], item["job_id"]))
+        return {"jobs": items, "total": len(items)}
 
     @router.get("/api/jobs/{job_id}")
     def get_job(job_id: str):

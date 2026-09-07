@@ -1,4 +1,4 @@
-**进度：53/72**（2026-09-04 `0904K` 回勾 1.2b/5.8/5.9「硬门槛规则草案」——建表 `hard_requirement`（只存不执行，`blocking` 是标注不是开关）；提取是确定性纯函数 `app/agents/hard_requirement.py`，⛔ 不调模型；落库在既有 `effect_confirm_profile` 体内，与画像冻结、`human_review` 同一事务、同一连接，⛔ 不新增 `effect_*` 节点；主观描述两道防线（`soft_skill_keywords` 结构性排除 + 词表过滤，落库前 `assert_no_subjective_requirements` 命中即抛）。8 commits `401d01c`→`8efc645`；全量 1008 → **1061 passed, 1 skipped**。落地偏离三条与 parked 技术债三条见 5.8/5.9 条目下的登记）
+**进度：56/72**（2026-09-07 `0905A` 回勾 8.1/8.2/8.4「Web 列表 / 画像详情 / 转人工队列」——三个**只读**视图，新建只读查询层 `app/storage/job_queries.py`（AST 守卫钉死零写入、⛔ 不 import `app.graph`/`app.agents`），`app/web/server.py` 追加三个 `GET` 端点与中文标签映射，`index.html` 加导航与两个视图容器（⛔ 不引框架、不加构建步骤）。转人工队列是**推导视图不是状态列**，同查 `job.status='needs_manual'` / `_jd_needs_manual` / 修改次数上限三个来源。8 commits `db51d89`→`21af03a`（rebase 后）；全量 1061 → **1141 passed, 1 skipped**，`-m compliance` 66 passed。落地偏离、deferred 与 parked 共 14 条见「8.x 落地偏离登记」，其中**两条待 Shao Peishen 复核/拍板**）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -245,12 +245,57 @@
 > 现状：只有**一个单页会话界面**（`app/web/static/index.html`，271 行）——输入框、
 > 追问对话、确认按钮、JD 展示。本章四条要的都是**会话之外**的视图，一条都没有。
 
-- [ ] 8.1 岗位列表与状态视图 —— 无列表接口（只有 `GET /api/jobs/{job_id}` 查单个）、无列表页
-- [ ] 8.2 画像详情页（含版本历史与生成快照）—— `job_profile` 逐版落库了，但没有任何页面或接口把版本历史读出来
+- [x] 8.1 岗位列表与状态视图 —— 无列表接口（只有 `GET /api/jobs/{job_id}` 查单个）、无列表页
+      ✅ **2026-09-07 `0905A` 回勾：已由交付单元 8 交付**。`GET /api/jobs`（`app/web/server.py::list_jobs`）+ 只读查询层 `app/storage/job_queries.py::latest_profile_rows` / `stage_label`，前端 `#view-list` 岗位列表视图。标题从**最新一版画像**的 `job_title` 读出（⛔ 不回写 `job.title`）；状态一律服务端映射成中文 `stage_label` 下发，界面⛔ 不出现英文 status 值或 snake_case 字段名；时间戳一律下发东八区 `*_label`（⛔ 不把 SQLite 的 UTC 裸值上屏）
+- [x] 8.2 画像详情页（含版本历史与生成快照）—— `job_profile` 逐版落库了，但没有任何页面或接口把版本历史读出来
+      ✅ **2026-09-07 `0905A` 回勾：已由交付单元 8 交付**。`GET /api/jobs/{job_id}/profile`（`app/web/server.py::get_job_profile`）逐版下发版本历史 + 生成快照 + `human_review` 决策留痕。机器判据：`tests/test_job_views_api.py::test_profile_detail_version_count_equals_job_profile_row_count_after_revisions` 现场 `SELECT COUNT(*)` 推导期望值（⛔ 未写死数字），并逐版断言 snapshot 六个键齐全
+      ⚠️ 快照的模型标识取 `job_profile.llm_response_model`（API **响应实际返回**的值），⛔ 不取配置里的 `settings.llm_model`——这正是工程铁律 5 要区分开的两个东西
+      ⚠️ 详情页 ⛔ **不渲染 JD 正文**，只渲染「带 AI 生成标识」/「已标记为人工撰写」徽标。理由：正文已有一个合规上过审的展示位（`#jd-output`，交付单元 7），少一个展示位就少一处会漏标识的地方
 - [x] 8.3 JD 查看与复制 —— 查看已有（`#jd-output`），复制没有（同 7.7）
       ✅ **2026-09-04 回勾：缺的那半（复制）已由交付单元 7 / commit `77f78a1` 交付**，见 `app/web/static/index.html`：`#jd-copy-btn`「复制全文」按钮(:82) + `#jd-copy-hint` 结果提示(:85)，处理函数 `copyJdText()`(:470-508) 先走 `navigator.clipboard.writeText`，再用 `textarea` + `execCommand("copy")` 兜底（demo 挂明文 `http://…:8095`，非安全上下文里 `navigator.clipboard` 直接不存在且不抛异常，只写前半段按钮会一声不响地什么都不做）。复制的是落库原文 `currentJdText`，含 AI 生成标识，与 7.7 同一处实现。查看侧 `#jd-output`(:78) 本就在
       ⚠️ 本条只覆盖 JD 的查看与复制这一件事，**不代表第 8 章"会话之外的视图"这个整体已补上**——8.1 / 8.2 / 8.4 仍是三条独立缺口，章首现状说明按那三条读
-- [ ] 8.4 `needs_manual` 队列（HR 处理转人工的岗位）—— 无队列。前端只在单次 JD 生成 `needs_manual` 时提示一句，页面一关就没了；`JobStatus.NEEDS_MANUAL` 至今无人写入（同 2.5）
+- [x] 8.4 `needs_manual` 队列（HR 处理转人工的岗位）—— 无队列。前端只在单次 JD 生成 `needs_manual` 时提示一句，页面一关就没了；`JobStatus.NEEDS_MANUAL` 至今无人写入（同 2.5）
+      ✅ **2026-09-07 `0905A` 回勾：已由交付单元 8 交付**。`GET /api/queues/needs-manual`（`app/web/server.py::needs_manual_queue`）+ 前端 `#view-queue`。队列是**推导视图不是状态列**：同查三个来源——① `job.status='needs_manual'`（2.5 未做，今天恒为空，落地当天自动生效）② `job_profile.profile_json` 的 `_jd_needs_manual`（今天唯一真实写入方）③ 修改次数达上限。⛔ 只认 ① 会得到一个永远为空的队列，而**空队列与"没人需要处理"在界面上长得一模一样**
+      ✅ 合规红线落点：队列**只展示、不处置**——⛔ 无批量确认 / 批量放弃 / 批量重生成，一个写按钮都没有（M2 的事）。机器判据：`tests/test_job_views_api.py::test_queue_contains_exactly_the_needs_manual_jobs_and_is_server_side_state` 双向集合相等 + 用**全新** `create_app`/`TestClient` 复查同一 db 证明是服务端推导而非前端记忆
+
+### 8.x 落地偏离登记
+
+2026-09-07 `0905A`（续跑 `0904M`，上一轮跑到全分支终审的 fix wave 时预算耗尽被打断、**未留下任何终审记录**，本轮按"从未终审过"完整重做）。plan = `docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue.md`。⛔ 无一处为让测试通过而放宽既有断言（复审逐处核过：既有断言六处修改**全是加强**）。
+
+**A. 与计划正文的偏离（2 条，需 Shao Peishen 复核 / 拍板）**
+
+1. 🔴 **待 Shao Peishen 复核**：**队列页「查看画像详情」按钮改成会跳转，偏离计划原文的"静默无反应"**。计划 Task 5 brief 原文即写成点了不跳转。实施时判为无症状故障（业务经理只会以为系统卡了），按 Global Constraints 第 11 条「视图切换用按钮 + `style.display`」的意图取保守方向修掉。当时为 `run-lanes.sh` 无人值守、⛔ 无法提问，由控制器裁定。本轮全分支终审**复核并确认该裁决成立**（技术方案审查属 `CLAUDE.md`「可代」范围）。⚠️ 但偏离上一轮**没修干净**：`ec73b3a` 的 commit message 声称修两件事，实际只修了一件（多打一次 GET 没了，但整份岗位列表仍铺在详情上方、而且从此变成**过期**的），本轮 I-3 补完。
+2. 🔴 **待 Shao Peishen 拍板（`design.md` 未覆盖的业务口径，⛔ 不由实现侧默认）**：**撞过修改上限的岗位，在被确认（`approved`）之后还该不该留在转人工队列里？** 本轮按「不该留」实现（`job_queries.py::derive_needs_manual_reasons` 里 `revision_limit` 这一条加 `job_status != "approved"` 前置条件）。依据：队列只读、`revise()` 对 approved 直接 409 ⇒ 留着就**永远清不掉**，而队列文案写的是「请由 HR 直接编辑画像后提交确认」——**一件已经做完的事**；这与 `needs_manual_queue()` 自己为「排除 abandoned」给出的理由是同一条推理。⚠️ 若判「该留」（让 HR 复核一眼），则必须换文案 **并**另给一条出队路径，否则积压照样清不掉。⛔ 修法只作用在 `revision_limit` 一条上，**未整体过滤 approved**——`_jd_needs_manual` 恰恰只发生在 approved 岗位上，整体过滤会得到 Global Constraints 第 8 条明令要防的那个恒空队列（有反证用例 `test_queue_still_includes_approved_jobs_flagged_by_jd_discrimination` 焊住）。
+
+**B. 全分支终审发现并当轮修掉的 4 条 Important（`21af03a`）**
+
+3. **I-1 UTC 时间戳直接上屏**。`created_at` / `updated_at` / `decided_at` 一路从 SQLite 的 `datetime('now')`（UTC、无时区后缀）原样透传到界面——无锡的人会把 18:30 读成 10:30，且队列页写着「等得最久的排在最前面」，判断依据整体偏移 8 小时。⛔ 不报错、不失败。本分支是**全仓库第一个渲染时间戳的地方**（`git show` 核过），非继承缺陷。修法：服务端 `to_shanghai_label()`（`zoneinfo.ZoneInfo("Asia/Shanghai")`）下发 `*_label`，前端只渲染 label，⛔ 前端零时区硬编码。
+4. **I-2** 见上 A.2。
+5. **I-3** 见上 A.1 的后半。
+6. **I-4 三个只读端点的「只读」机器判据只数行数**（`SELECT COUNT(*)` 前后相等）——**`UPDATE` 不改变行数**，而 Global Constraints 第 7 条点名禁止的第一件事（⛔ 回写 `job.title`）恰恰是一条 UPDATE。守卫挡不住它声称在挡的东西。修法：换成内容快照（`SELECT * ORDER BY rowid` 全量元组前后比对）+ 给 `server.py` 三个 handler 及两个 helper 补一条 AST 写守卫。
+   ⚠️ **复审的独立变异验证给出一条比"守卫已加"更有用的事实**：变异 A（字面量 `"UPDATE …"`）→ AST 守卫红；变异 B（**运行期拼串** `f"{'UP'+'DATE'} job SET…"` + commit）→ **AST 守卫绿、漏**，内容快照红；变异 C（多行字符串 UPDATE + commit）→ 两道都红。⇒ **两道守卫互补才成立**，AST 那条单独用有洞（另挡不住 `REPLACE INTO` / `INSERT OR REPLACE` / 换行 `DELETE` / 调用别处的写函数）。内容快照的表清单只有 5 张（缺 `conversation` / `analysis_run` 等）。下一个在 `server.py` 加只读端点的单元照此办理，⛔ 不要只加 AST 那一道。
+
+**C. minor deferred（8 条，终审逐条 triage，1 条销项、1 条已修、6 条继续 deferred）**
+
+7. **D1 继续 deferred**：`job_queries.py` 里 `latest_profile_rows` 与 `profile_versions` 两处 `profile_json` 解析逻辑重复。纯 DRY，两处行为逐字一致（都是"解析失败→空 dict"），无漂移风险。
+8. **D2 继续 deferred**：状态字面量未走 `app.schemas.job_profile.JobStatus` 枚举。终审核过取值域与枚举逐字一致、今天无漂移；计划原文即如此写，改动属纯风格。
+9. **D3 继续 deferred**：列表端点视角下无 `abandoned` / `needs_manual` 的 `stage_label` 用例。已被覆盖——`test_stage_label_covers_every_reachable_state` 在纯函数层跑全分支，端点层另有两条各走一条，再补是重复覆盖。
+10. **D4 / D6 继续 deferred**：`get_job_profile` 与 `needs_manual_queue` 都是 O(n) 全表扫再在 Python 里过滤（详情端点实际是**两次**全表扫）。`design.md` 非目标已排除该量级。量级变了再一起处理。
+11. **D5 销项**（不再是 deferred）：payload 里裸英文 `status` / `decision_type` 与中文 `*_label` 并存的约定（"裸值给逻辑、label 给显示"）。终审已验证：前端只渲染 `*_label`，`\b` 词边界守卫连解构/改名解构一起挡住；服务端两处 `.get(k, k)` 兜底的取值域已核（`job_profile.status` 全仓库只有两处写、`human_review.decision_type` 有 CHECK 锁死三值）⇒ 今天没有裸英文能漏进界面的路径。条目关闭。
+12. **D7 已修**：raw-field 守卫的注释剥离只处理单行 `//`、不处理 `/* */` 块注释。这是个**会静默失效**的守卫（谁在那段里写一行块注释就会让断言假红或被人删掉），本轮随 I-1 一起加固。
+13. **D8 继续 deferred**：`_ANY_ABSOLUTE_HREF_OR_SRC_RE` 也会匹配 SVG 的 `xlink:href`。真出现 SVG 时"绝对路径的 xlink:href 也该红"本来就是对的行为，不是缺陷。
+
+**D. 复审后 parked 的 4 条残留 Minor（按 SDD 协议「没有第二轮 fix wave」，只登记不修）**
+
+14. **P1 前端只读守卫的扫描切片缩小了一个函数**：`getJson` 为避开 `\bstatus\b` 词边界守卫被挪到 Task-8 标记之前，而守卫按标记切片。当前不构成漏洞（该函数不碰业务字段、不进 DOM，相对路径与只读两条判据扫的是整份 HTML），但"守卫覆盖范围"这件事本身没落成任何判据。
+15. **P2** M8 的 404 文案（「这个岗位不存在或已被删除」）零机器判据，改回去不会有测试变红。纯文案。
+16. **P3 ⚠️ `app/web/server.py:704-706` 的 docstring 已被本轮 I-2 证伪**——它说这里不做过滤，而该函数从本轮起确实带了一条过滤。**下一个碰 `server.py` 的单元顺手改掉**，⛔ 不要照着它推理。
+17. **P4** `to_shanghai_label` 解析失败时返回的裸值与转换值长得一模一样，用户看不出没转换（今天取值域内不可达）。
+18. **⛔ 不在本分支修、已路由**：`job_profile` 上没有 `UNIQUE(job_id, version)`（`app/storage/db.py`）。真出现同 job 同 version 两行时，列表会把**同一个岗位显示成两张卡片**，`get_job_profile` 的 `rows[0]` 则任取一行。属既有 schema 缺口，Global Constraints 第 9 条明令本单元⛔ 不许碰 `db.py`；本单元是第一个会把它显示成"重复卡片"的地方。
+
+**E. 工具链留痕**
+
+19. **⚠️ `superpowers:subagent-driven-development` 在 `0904M` 与本轮 `0905A` 两个 session 都调不到**（`Skill` 工具报 `Unknown skill`）。两轮均按磁盘 `~/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/SKILL.md` **手工走同一协议**（每 Task 派新实现子代理 → 两阶段 task review → 修复循环 → 全分支终审 → 唯一一轮 fix wave → 定向复审）。⛔ **不得记作"跑了 skill"**。终审与复审都用了协议自带的 `scripts/review-package` 生成评审包。
 
 ## 9. 验收与交付
 
