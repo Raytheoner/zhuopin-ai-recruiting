@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sqlite3
 
 from tools.liaison.queue import list_tasks
@@ -57,21 +58,39 @@ _CELL_TRANSLATION = str.maketrans(
 _TABLE_HEADER = "| ID | 状态 | 发送人 | 会话 | 接收时间 | 推送时间 | msgid | 摘要 |"
 _TABLE_DIVIDER = "|---:|---|---|---|---|---|---|---|"
 
+#: `escape_cell` 输出里唯二会出现的转义形状：`_CELL_TRANSLATION` 产生的两字符
+#: 序列（`\\`、`\|`、`\n`、`\r`、`\t`），以及不可打印字符产生的四字符 `\xNN`。
+#: 截断时必须按这张表切"完整 token"，⛔ 不许按字符下标硬切——那会切出半个
+#: token（例如切在反斜杠和 `n` 之间），留下一个孤立反斜杠贴着省略号。
+#: 每个分支的第二个字符互不相同（`\`/`|`/`n`/`r`/`t`/`x`），彼此不构成前缀
+#: 歧义，交给正则引擎从左到右按位置贪一次即可，不依赖分支顺序。
+_ESCAPE_TOKEN = re.compile(r"\\\\|\\\||\\n|\\r|\\t|\\x[0-9a-fA-F]{2}|.", re.DOTALL)
+
 
 def escape_cell(text, *, max_chars: int = DEFAULT_CELL_MAX_CHARS) -> str:
     """纯函数：把任意字符串压成一个安全的表格单元格。
 
     竖线转义成 `\\|`、换行/回车/制表符转义成可见的两字符序列、其余不可打印字符
-    转义成 `\\xNN`。超长按字符截断并以 `…` 标记。
+    转义成 `\\xNN`。超长按 token 截断并以 `…` 标记——**按转义序列整体截断，
+    ⛔ 不按字符下标硬切**，硬切可能恰好切在一个转义序列中间（fix round 1，
+    Minor）。预算不够容纳最后一个 token 时该 token 整体丢弃，不留半截。
 
     ⛔ 只在这里转义。存储层原样存——参考服务的"竖线归一化"是给
     "拿 Markdown 当数据库"那套形态打的补丁，在本形态下只会静默改掉用户发来的字。
     """
     escaped = ("" if text is None else str(text)).translate(_CELL_TRANSLATION)
     escaped = "".join(ch if ch.isprintable() else f"\\x{ord(ch):02x}" for ch in escaped)
-    if len(escaped) > max_chars:
-        escaped = escaped[: max_chars - 1] + "…"
-    return escaped
+    if len(escaped) <= max_chars:
+        return escaped
+    budget = max_chars - 1  # 留一个字符给省略号
+    kept: list[str] = []
+    used = 0
+    for token in _ESCAPE_TOKEN.findall(escaped):
+        if used + len(token) > budget:
+            break
+        kept.append(token)
+        used += len(token)
+    return "".join(kept) + "…"
 
 
 def render_queue_markdown(conn: sqlite3.Connection, *, generated_at: str) -> str:
@@ -121,12 +140,23 @@ def export_queue_markdown(
     先写同目录临时文件再 `os.replace()`：中途崩溃时读者要么看到上一版完整内容、
     要么看到新版完整内容，⛔ 不会看到半截表格——半截表格看起来就像"队列少了几条"。
 
-    ⛔ 不用 `with open(...)`（本模块 docstring 的第三条）。
+    写临时文件或替换失败（磁盘满、权限错误等）时，删除**本次调用自己创建的
+    那个临时文件**（fix round 1，Important）——⛔ 不扫描目录清理别的 `.tmp`
+    文件，那会误伤并发导出留下的临时文件。原异常原样向上抛，⛔ 不吞、
+    ⛔ 不替换成别的异常：磁盘满要让调用方看得见。
+
+    ⛔ 不用 `with open(...)`（本模块 docstring 的第三条）；清理用
+    `try`/`except`+`unlink(missing_ok=True)`，不引入 `with` 或
+    `contextlib.suppress`。
     """
     destination = pathlib.Path(out_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     text = render_queue_markdown(conn, generated_at=generated_at)
     staging = destination.with_name(destination.name + ".tmp")
-    staging.write_text(text, encoding="utf-8")
-    os.replace(staging, destination)
+    try:
+        staging.write_text(text, encoding="utf-8")
+        os.replace(staging, destination)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
     return destination

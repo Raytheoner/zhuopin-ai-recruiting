@@ -91,6 +91,38 @@ def test_escape_cell_truncates_and_marks_it():
     assert cell.endswith("…")
 
 
+def test_escape_cell_truncation_never_splits_an_escape_sequence():
+    """Minor（fix round 1）：截断发生在**已转义之后**的字符串上，按字符数硬切
+    可能恰好切在一个多字符转义序列中间（如 `\\` 和 `n` 之间），留下一个孤立
+    反斜杠紧贴省略号——看起来像半个转义、观感是瑕疵。
+
+    构造：7 个 `A` + 一个真实换行符（转义后变成两字符 `\\n`）+ 1 个 `Z`，
+    转义后共 10 字符：`AAAAAAA\nZ`（其中 `\n` 是两个字符：反斜杠、字母 n）。
+    `max_chars=9` 时朴素的字符切片会切在反斜杠之后、`n` 之前，
+    留下 `AAAAAAA` 加一个孤立反斜杠再加 `…`。转义序列必须整体保留或整体丢弃，不许切一半。
+    """
+    text = "A" * 7 + "\n" + "Z"
+    cell = escape_cell(text, max_chars=9)
+    assert cell.endswith("…")
+    assert not cell.endswith("\\…"), f"转义序列被从中间切断：{cell!r}"
+    # 序列要么整体保留（结果里出现完整的两字符 \n），要么整体丢弃——
+    # 这里预算不够容纳 \n 这个 token，所以应该整体丢弃，只剩 7 个 A。
+    assert cell == "AAAAAAA…"
+
+
+def test_escape_cell_truncation_never_splits_a_control_char_hex_escape():
+    """同一条 Minor 的第二个场景：4 字符的 `\\xNN` 序列也不许被切一半。"""
+    text = "A" * 7 + "\x00" + "Z"
+    cell = escape_cell(text, max_chars=9)
+    assert cell.endswith("…")
+    stripped = cell[:-1]
+    # 不许出现游离的 `\`、`\x` 或 `\x0` 这类不完整片段
+    assert not stripped.endswith("\\")
+    assert not stripped.endswith("\\x")
+    assert not (len(stripped) >= 3 and stripped[-3:-1] == "\\x")
+    assert cell == "AAAAAAA…"
+
+
 def test_escape_cell_keeps_cjk_and_emoji_intact():
     """⛔ 不许因为"看起来不是 ASCII"就转义。只有不可打印字符才转。"""
     assert escape_cell("报价单 📎 已发") == "报价单 📎 已发"
@@ -177,6 +209,38 @@ def test_export_leaves_no_temporary_file_behind(conn, tmp_path):
     export_queue_markdown(conn, out_path=out, generated_at=GENERATED_AT)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["liaison.db", "liaison.db-shm",
                                                           "liaison.db-wal", "queue.md"]
+
+
+def test_export_removes_the_temp_file_when_writing_it_fails(conn, tmp_path, monkeypatch):
+    """Important（fix round 1）：写临时文件中途失败（磁盘满/权限错误等），
+    `queue.md.tmp` ⛔ 不许堆积在目标目录里。原异常必须原样向上抛，
+    ⛔ 不许被清理逻辑吞掉或替换成别的异常。
+
+    用 monkeypatch 模拟写盘失败，⛔ 不真的把磁盘写满。只拦截以 `.tmp`
+    结尾的那次 `Path.write_text`，其余调用（含测试自身用到的）走原实现。
+    """
+    _enqueue(conn, msgid="msg-1", content="报价单已发")
+    out = tmp_path / "queue.md"
+
+    original_write_text = pathlib.Path.write_text
+
+    def _boom(self, *args, **kwargs):
+        if self.name.endswith(".tmp"):
+            # 模拟"写盘写到一半失败"：真实的磁盘满/断电是文件已经落地、
+            # 内容不完整时抛异常，⛔ 不是异常在文件创建之前就拦下——
+            # 后者测不出清理逻辑,因为根本没有文件可清理。
+            original_write_text(self, "partial", encoding="utf-8")
+            raise OSError("simulated disk full")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "write_text", _boom)
+
+    with pytest.raises(OSError, match="simulated disk full"):
+        export_queue_markdown(conn, out_path=out, generated_at=GENERATED_AT)
+
+    assert not out.exists(), "写失败不该留下目标文件"
+    leftover_tmp = [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    assert leftover_tmp == [], f"临时文件残留：{leftover_tmp}"
 
 
 def test_queue_view_module_never_reads_anything():
