@@ -775,3 +775,71 @@ SDK 事件到达时触发，而"启动后从未连上过"这种情形永远等�
 **不还的后果**：第 7 章上线当天，如果真实 msgid 恰好含 `_`，带附件消息
 会整批失败且外部看起来毫无规律（时好时坏取决于具体 msgid 内容），
 且没有任何提前预警——这条 TD 就是那份预警。
+
+---
+
+## TD-23 `defer_task` 用「幂等键命中」推断状态，而不是读状态
+
+**登记时间**：2026-09-09（第 5 章 run-build 收口，[Mac]0909D）
+**位置**：`tools/liaison/queue.py` `defer_task` 的幂等短路分支
+**级别**：不阻塞第 5 章（`defer_task` 当前**零生产调用方**，只有测试在调）
+
+**成因**：`idempotent_effect` 的前置检查在被装饰函数体**之前**短路返回，所以对同一
+`{thread_id}:effect_defer_task:{msgid}` 的第二次调用走不到存储层 TRIGGER。为满足 spec
+「非法转移一律拒绝」，`defer_task` 把"幂等命中"当作"这行已经离开过 pending"的证据直接
+抛 `TaskTransitionRejected`。
+
+**缺陷**：「离开过 pending」**不等于**「现在不在 pending」。存储层只在
+`NEW.send_status='deferred'` 时触发，`deferred → pending` 在 schema 上是**合法的**，
+只是目前没有对应的业务函数。
+
+**触发场景（第 6 章一旦加「取消暂缓/重新置为待发」就会踩到）**：
+`defer(M)` 成功 → 撤销暂缓把 `M` 改回 `pending` → 再 `defer(M)` → 幂等键命中 → 抛
+`TaskTransitionRejected` 并声称"此前已成功从待发转入过暂缓"。但此刻 `M` 就在 `pending`，
+这次转移**完全合法**却被永久拒绝，且**该 msgid 的暂缓从此再也做不成**（幂等键永远命中）。
+附带：该分支异常文案硬编码"从待发转入过暂缓"，在 `pending→deferred→pushed→再 defer`
+路径下文案也会失真（拒绝结论仍正确）。
+
+**还债动作**（二选一，⛔ 不要改成 `return False`——那与「非法转移一律拒绝」冲突）：
+① 在 schema 加一条禁止 `deferred/pushed → pending` 的 TRIGGER，让上述推理真正成立；
+② 在幂等命中分支**读一次当前状态**再决定抛什么。
+
+**触发条件**：第 6 章要把 `defer_task` 接进任何调用路径之前。
+**不还的后果**：第 6 章接线后，被撤销过暂缓的条目永远无法再次暂缓，且报错信息指向错误
+的原因，排查会被带偏。
+
+**为什么第 5 章不改**：本服务有强制结构测试 `test_no_checkpointer_or_langgraph_in_liaison`
+钉死 `tools/liaison/` **不含 langgraph/checkpointer**，「节点从头重跑」的重放场景在此服务
+不存在；且当前零生产调用方。终审 reviewer 独立核查确认该裁定依据成立。
+
+---
+
+## TD-24 `mark_task_pushed` 的推送时间戳只有 thread 级幂等保护，缺第二道防线
+
+**登记时间**：2026-09-09（第 5 章 run-build 收口，[Mac]0909D）
+**位置**：`tools/liaison/queue.py` `mark_task_pushed`
+**级别**：不阻塞第 5 章（当前**零生产调用方**）
+
+**成因**：队列条目的业务身份是**全局唯一**的 `msgid`（`liaison_task.msgid UNIQUE`），但
+幂等键是 `{thread_id}:effect_mark_task_pushed:{msgid}`——**带 thread 前缀**。
+`enqueue_task` 面对同一问题有 `msgid UNIQUE` 这道结构防线兜底（并有测试覆盖
+「同一 msgid 由另一个 thread_id 投递」），`mark_task_pushed` **没有任何兜底**：
+存储层的 TRIGGER 只拦 `→ deferred`，`pushed → pushed` 表层完全放行。
+
+**触发场景（第 6 章「群通知外发」正是这个接缝）**：
+msgid `M` 归档时 `thread_id = u_tang`（私聊），10:00 首次推送成功、`pushed_at = 10:00`；
+第 6 章重试时若按**推送目标群**取 `thread_id = chat_xxx` 调
+`mark_task_pushed(thread_id="chat_xxx", msgid="M", pushed_at="11:30")`
+→ `effect_key` 不同 → 预检不命中 → UPDATE 真的执行 → **`pushed_at` 被改写成 11:30**，
+`effect_log` 里 `effect_mark_task_pushed` 变成 2 行。
+docstring「第一次推送的那个时刻才是事实」当场变假，且**没有任何症状**——
+`effect_mark_task_pushed` 是 UPDATE 型、不进 `EFFECT_NODE_TO_TABLE`，恒等断言抓不到它。
+现有 `test_mark_pushed_twice_is_an_idempotent_no_op` 只走同一个 `thread_id`，测不到这条。
+
+**还债动作**（二选一）：
+① 在 schema 加 `BEFORE UPDATE ... WHEN NEW.send_status='pushed' AND OLD.send_status='pushed'`
+   的 `RAISE`（与 defer TRIGGER 同一手法，保持「存储层是唯一真源」）；
+② `mark_task_pushed` 内部**从任务行读回 `thread_id`**，不由调用方传。
+
+**触发条件**：第 6 章要调用 `mark_task_pushed` 之前。
+**不还的后果**：推送时间戳被静默改写，审计上「第一次推送时刻」不再可信，且无告警。
