@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,59 @@ T = TypeVar("T", bound=BaseModel)
 
 class SchemaExtractionFailed(Exception):
     """重试耗尽后仍未拿到符合 Schema 的结构化输出。"""
+
+
+class LLMProviderUnavailable(Exception):
+    """
+    主备供应商都答不上来（传输层故障）。
+
+    ⛔ 与 `SchemaExtractionFailed` **刻意分成两个类型**：那个是"模型答了、但没按
+    schema 答"（内容问题，重试有意义、切供应商没意义），这个是"根本没答上"
+    （供应商问题，切供应商有意义、在同一家重试没意义）。合成一个异常之后，
+    编排层就再也分不出"转人工的原因是模型不听话"还是"供应商挂了"——而这两件事
+    的人工处置完全不同。
+    """
+
+
+# 供应商角色。⛔ 两个字面量只在这里定义：analysis_run 的切换事件行、日志、
+# 测试断言全部引用它们，散落成字符串就会出现"日志里写 backup、断言里写
+# fallback"这种查不出来的不一致。
+PROVIDER_PRIMARY = "primary"
+PROVIDER_FALLBACK = "fallback"
+
+# 切换事件写进 `analysis_run.raw_response` 的标记（2.3「切换事件记入
+# analysis_run」）。⛔ 不新建日志表、不给 analysis_run 加列：那张表已经带齐
+# 工程铁律 3 的全部字段，切换事件只是"这次调用没拿到响应"的一行留痕。
+PROVIDER_SWITCH_EVENT = "provider_switch"
+
+# 切换判据的分界线，**写死**。5xx = 供应商自己的问题，切；4xx = 请求本身的
+# 问题（鉴权、参数、配额），换一家照样错，⛔ 不切。
+_SWITCHABLE_STATUS_FLOOR = 500
+
+
+def _rejects_latest_alias(model: str) -> None:
+    """工程铁律 5：模型版本显式锁定，禁止 `latest` 类别名。主备一视同仁——
+    备用供应商上漂了版本，历史评分照样失去解释力。"""
+    if model == "latest" or model.endswith(":latest") or model.endswith("-latest"):
+        raise ValueError(f"禁止使用 latest 类别名锁定模型版本，收到: {model!r}")
+
+
+def _is_switchable(exc: Exception) -> bool:
+    """
+    这个异常该不该切备用供应商。**判据写死在这里，⛔ 不做可配置**——
+    "什么算供应商挂了"是一条业务契约，配置化之后 .51 上改一行 .env 就能让
+    4xx 也去打备用供应商，把一个鉴权配置错误放大成两家供应商的账单。
+
+    切：HTTP 5xx、超时、连接错误（`APITimeoutError` 是 `APIConnectionError`
+        的子类，一条 isinstance 就都盖住了）
+    ⛔ 不切：4xx（鉴权/参数/配额——换一家照样错）、schema 校验失败
+        （那是内容问题，由 max_retries 在**同一家**上重试）
+    """
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code >= _SWITCHABLE_STATUS_FLOOR
+    return False
 
 
 # OpenAI strict 结构化输出规范（以及照抄该规范的 OpenAI 兼容供应商）不接受这些
@@ -173,6 +226,16 @@ class LLMCallMeta:
     attempts: int
 
 
+@dataclass(frozen=True)
+class _Provider:
+    """一家供应商的三件套。role 只用于留痕与日志，⛔ 不参与任何判定。"""
+
+    role: str
+    client: Any
+    model: str
+    supports_json_schema: bool
+
+
 class LLMGateway:
     # 铁律 5：temperature 恒为 0。发给 API 的值与记进留痕的值必须是**同一个**
     # 来源——写成两处字面量，改了一处忘了另一处，留痕就开始撒谎且没人发现。
@@ -190,15 +253,88 @@ class LLMGateway:
         max_retries: int = 2,
         audit_hook: AuditHook | None = None,
         client: Any = None,
+        fallback_api_key: str = "",
+        fallback_base_url: str = "",
+        fallback_model: str = "",
+        fallback_supports_json_schema: bool = False,
+        fallback_client: Any = None,
     ) -> None:
-        if model == "latest" or model.endswith(":latest") or model.endswith("-latest"):
-            raise ValueError(f"禁止使用 latest 类别名锁定模型版本，收到: {model!r}")
+        _rejects_latest_alias(model)
 
         self._model = model
         self._supports_json_schema = supports_json_schema
         self._max_retries = max_retries
         self._audit_hook = audit_hook or NoopAuditHook()
         self._client = client or OpenAI(api_key=api_key, base_url=base_url)
+        self._primary = _Provider(
+            role=PROVIDER_PRIMARY,
+            client=self._client,
+            model=model,
+            supports_json_schema=supports_json_schema,
+        )
+        self._fallback = self._build_fallback(
+            api_key=fallback_api_key,
+            base_url=fallback_base_url,
+            model=fallback_model,
+            supports_json_schema=fallback_supports_json_schema,
+            client=fallback_client,
+        )
+
+    @staticmethod
+    def _build_fallback(
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        supports_json_schema: bool,
+        client: Any,
+    ) -> _Provider | None:
+        """
+        备用供应商是**可选**的：一个都不配就返回 None，网关行为与配它之前逐字
+        一致（2.3 的默认值要求）。
+
+        ⛔ 配不全时不猜、更不复用主供应商的 api_key：备用是**另一家**供应商，
+        主家的 key 拿去打它只会得到 401，而 401 是 4xx——按 `_is_switchable`
+        不切、直接抛，等于把"配置漏了一项"变成"整条采集链路挂掉"。配不全时
+        一律按「无备用」运行并打 WARNING，方向是保守的那一侧。
+        """
+        if client is not None:
+            # 测试注入路径：给了 client 就必须给 model，否则留痕里记不出这是谁答的。
+            if not model:
+                raise ValueError("注入了 fallback_client 就必须同时给出 fallback_model")
+            _rejects_latest_alias(model)
+            return _Provider(
+                role=PROVIDER_FALLBACK,
+                client=client,
+                model=model,
+                supports_json_schema=supports_json_schema,
+            )
+
+        configured = [bool(api_key), bool(base_url), bool(model)]
+        if not any(configured):
+            return None
+        if not all(configured):
+            logger.warning(
+                "备用供应商配置不全（LLM_FALLBACK_API_KEY / LLM_FALLBACK_BASE_URL / "
+                "LLM_FALLBACK_MODEL 必须同时给全，当前缺失: %s），本进程按「无备用」"
+                "运行——主供应商故障时不会切换，会直接抛 LLMProviderUnavailable。",
+                [
+                    name
+                    for name, present in zip(
+                        ("api_key", "base_url", "model"), configured
+                    )
+                    if not present
+                ],
+            )
+            return None
+
+        _rejects_latest_alias(model)
+        return _Provider(
+            role=PROVIDER_FALLBACK,
+            client=OpenAI(api_key=api_key, base_url=base_url),
+            model=model,
+            supports_json_schema=supports_json_schema,
+        )
 
     def extract_structured(
         self,
@@ -236,10 +372,60 @@ class LLMGateway:
         attempts = self._max_retries + 1
         total_latency_ms = 0.0
 
-        for attempt_index in range(attempts):
+        provider = self._primary
+        switched = False
+        # 每调一次 AuditHook.record 就 +1，**跨供应商单调递增**。
+        # ⛔ 不要退回"用循环下标当 attempt"：切换事件行与紧随其后的重试行会拿到
+        # 同一个 attempt，而 app/audit/hook.py 的 _event_id 是
+        # {thread_id}:{node}:{input_hash}:{attempt}——撞 id 的第二行会被
+        # SqliteSink 当成"已写过"静默丢掉，切换事件就此消失且不报错。
+        record_seq = 0
+        # schema 校验失败才消耗重试预算（2.5「校验失败重试至多 2 次」）。
+        # ⛔ 供应商故障不计入：它由"至多切一次"独立封顶，两个预算混用会让
+        # "主家超时一次"白白吃掉一次本该留给模型的重试。
+        schema_attempts_used = 0
+
+        while schema_attempts_used < attempts:
             started = time.monotonic()
-            response = self._call_model(system_prompt, user_prompt, schema)
+            try:
+                response = self._call_model(provider, system_prompt, user_prompt, schema)
+            except Exception as exc:
+                latency_ms = (time.monotonic() - started) * 1000
+                total_latency_ms += latency_ms
+                if not _is_switchable(exc):
+                    # 4xx / 其他：换一家照样错，⛔ 不切、⛔ 不重试，原样抛给调用方。
+                    raise
+                record_seq += 1
+                self._record_provider_switch(
+                    provider=provider,
+                    exc=exc,
+                    prompt_version=prompt_version,
+                    input_hash=input_hash,
+                    latency_ms=latency_ms,
+                    attempt=record_seq,
+                    audit_context=audit_context,
+                    switched_to=None if (self._fallback is None or switched) else self._fallback,
+                )
+                if self._fallback is None or switched:
+                    raise LLMProviderUnavailable(
+                        f"供应商不可用且已无可切换的备用（最后一家: {provider.role}/"
+                        f"{provider.model}）: {exc!r}"
+                    ) from exc
+                logger.warning(
+                    "主供应商 %s 调用失败（%s），切换到备用供应商 %s；"
+                    "切换事件已记入 analysis_run（raw_response 含 %s 标记）。",
+                    provider.model,
+                    type(exc).__name__,
+                    self._fallback.model,
+                    PROVIDER_SWITCH_EVENT,
+                )
+                provider = self._fallback
+                switched = True
+                continue
+
             latency_ms = (time.monotonic() - started) * 1000
+            schema_attempts_used += 1
+            record_seq += 1
             # 累计而不是覆盖：调用方落库的是"这一轮用户等了多久"，重试的时间
             # 用户也在等（intake-turn-observability「重试计入耗时」）。
             # AuditHook 那边继续按单次尝试记录，两个口径互不污染。
@@ -268,7 +454,9 @@ class LLMGateway:
             )
 
             self._audit_hook.record(
-                model=self._model,
+                # 配置侧记的是**这一次实际用的那家**的模型名，切到备用之后
+                # 就是备用方的名字——记主供应商的名字等于让留痕撒谎。
+                model=provider.model,
                 response_model=response_model,
                 system_fingerprint=system_fingerprint,
                 prompt_version=prompt_version,
@@ -280,7 +468,7 @@ class LLMGateway:
                 # 每次尝试各记一条，attempt 让它们在 analysis_run.id 上区分得开：
                 # 同一次 extract_structured 的多次尝试 input_hash 完全相同，不带
                 # attempt 就会互撞，第 2 次起会被主键短路当成"已写过"静默丢掉。
-                attempt=attempt_index + 1,
+                attempt=record_seq,
                 # ⛔ 原样透传，不读、不拷、不改（design.md D6）。
                 audit_context=audit_context,
             )
@@ -295,15 +483,70 @@ class LLMGateway:
             return parsed, LLMCallMeta(
                 latency_ms=total_latency_ms,
                 response_model=response_model,
-                attempts=attempt_index + 1,
+                attempts=schema_attempts_used,
             )
 
         raise SchemaExtractionFailed(
             f"{attempts} 次尝试后仍未通过 Schema 校验（{schema.__name__}）: {last_error}"
         ) from last_error
 
-    def _call_model(self, system_prompt: str, user_prompt: str, schema: type[BaseModel]):
-        strict_schema = _to_strict_json_schema(schema) if self._supports_json_schema else None
+    def _record_provider_switch(
+        self,
+        *,
+        provider: _Provider,
+        exc: Exception,
+        prompt_version: str,
+        input_hash: str,
+        latency_ms: float,
+        attempt: int,
+        audit_context: dict[str, Any] | None,
+        switched_to: _Provider | None,
+    ) -> None:
+        """
+        把一次供应商故障（以及随之发生的切换）记成 `analysis_run` 的**一行**。
+
+        ⛔ 不新建表、不加列（2.3「切换事件记入 analysis_run」；AuditHook 的签名
+        也不能动，见 LLMCallMeta 的说明）。这一行的判据是自洽的：
+        `raw_response` 是一段 JSON，`event` 字段恒为 `provider_switch`；
+        `response_model` 为 None（根本没拿到响应）；`token_usage` 为空。
+        紧随其后那一行的 `configured_model` 就是切过去的那家。
+
+        ⛔ raw_response 里只放异常类型名与角色/模型名，**不放异常文本**：
+        供应商的错误体可能回显请求内容，而 spec 禁止在留痕里存原文。
+        """
+        self._audit_hook.record(
+            model=provider.model,
+            response_model=None,
+            system_fingerprint=None,
+            prompt_version=prompt_version,
+            temperature=self.TEMPERATURE,
+            input_hash=input_hash,
+            raw_response=json.dumps(
+                {
+                    "event": PROVIDER_SWITCH_EVENT,
+                    "failed_role": provider.role,
+                    "failed_model": provider.model,
+                    "error_type": type(exc).__name__,
+                    "switched_to_role": None if switched_to is None else switched_to.role,
+                    "switched_to_model": None if switched_to is None else switched_to.model,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            token_usage={},
+            latency_ms=latency_ms,
+            attempt=attempt,
+            audit_context=audit_context,
+        )
+
+    def _call_model(
+        self,
+        provider: _Provider,
+        system_prompt: str,
+        user_prompt: str,
+        schema: type[BaseModel],
+    ):
+        strict_schema = _to_strict_json_schema(schema) if provider.supports_json_schema else None
         # 自由 object（裸 dict 字段）在 strict 模式下无法表达，只能降级回
         # json_object 模式，否则模型会被 additionalProperties=false 锁死成只能
         # 返回 {}——静默返回空结果比被供应商拒绝更难排查。
@@ -349,8 +592,8 @@ class LLMGateway:
                 {"role": "user", "content": user_prompt},
             ]
 
-        return self._client.chat.completions.create(
-            model=self._model,
+        return provider.client.chat.completions.create(
+            model=provider.model,
             temperature=self.TEMPERATURE,
             messages=messages,
             response_format=response_format,
