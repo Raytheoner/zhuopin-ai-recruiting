@@ -11,6 +11,8 @@
 # 与根 requirements.txt 同版本，避免两套 pytest 行为差异变成"这边绿那边红"。
 pytest==8.3.4
 
-# ── 通道 SDK ────────────────────────────────────────────────────────────
-# 由第 1 章 Task 3（路线 ①）或 Task 4（路线 ②）按兼容性实测结论填入。
-# ⛔ 在 docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md 有结论之前，这里保持为空。
+# ── 通道 SDK（路线 ①，依据 docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md）──
+# ⛔ 必须钉死到具体发行版本（==），不许 >= / ~= / 裸名字：
+#    实测过的那份与装上的那份必须是同一份，否则实测结论不成立（design D8）。
+# ⚠️ import 名是 `aibot`，不是 `wecom_aibot_python_sdk`。
+wecom-aibot-python-sdk==1.0.2
