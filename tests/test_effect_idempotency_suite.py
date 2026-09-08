@@ -562,3 +562,98 @@ def test_forced_interrupt_then_recovery_applies_the_effect_exactly_once(node_nam
     assert recipe.count_business_rows(fresh) == rows_before + recipe.rows_per_effect, (
         f"{node_name}：恢复重跑后业务事实应恰好 {recipe.rows_per_effect} 份。{recipe.note}"
     )
+
+
+@pytest.mark.parametrize("node_name", sorted(EFFECT_NODE_MANIFEST))
+def test_effect_log_count_equals_business_rows_per_thread(node_name, tmp_path):
+    """
+    ⭐ 工程铁律 1 的 reviewer 判据逐字落成断言：
+    「每个 effect_* 节点的 effect_log 条数与其业务表行数按 thread 恒等」。
+
+    做法：连续调用三次（同一 thread_id、同一 business_key），第二三次会命中
+    effect_log 短路。三次之后 effect_log 恒为 1，业务事实恒为 rows_per_effect。
+
+    ⚠️ 这条**不是** Task 2 主用例的重复。主用例证明的是"崩溃点两侧的原子性"，
+    这一条证明的是"稳态下两个计数不会漂移"。前者防丢失，后者防重复——
+    铁律 1 的两个方向各需要一条。
+    """
+    recipe = build_recipes(tmp_path)[node_name]
+    conn = get_connection(str(tmp_path / f"{node_name}-steady.db"))
+    init_schema(conn)
+    conn.commit()
+    recipe.seed(conn)
+    rows_before = recipe.count_business_rows(conn)
+
+    for _ in range(3):
+        recipe.invoke(conn)
+
+    effect_rows = conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name = ? AND thread_id = ?",
+        (node_name, recipe.thread_id),
+    ).fetchone()[0]
+    assert effect_rows == 1, f"{node_name}：同一幂等键调 3 次，effect_log 应恒为 1"
+    assert recipe.count_business_rows(conn) == rows_before + recipe.rows_per_effect, (
+        f"{node_name}：同一幂等键调 3 次，业务事实应恒为 {recipe.rows_per_effect} 份。{recipe.note}"
+    )
+
+
+def test_llm_call_is_replayed_when_the_crash_lands_before_commit(tmp_path):
+    """
+    ⚠️ **观察项 O-1 的固化，不是红灯。**
+
+    `effect_generate_and_persist_jd` 的副作用有两半：一半在事务里（写
+    job_profile.profile_json），一半在事务外（一次真实、有成本的 LLM 调用）。
+    崩溃落在提交之前时，事务那一半被正确丢弃，**LLM 那一半已经发生过了**，
+    重放会再调一次——数据库状态依旧精确一次（这正是铁律 1 要保的），
+    但**账单是两次**。
+
+    这条用例把这个事实钉住，让它成为一个**已知且被度量**的性质，而不是
+    某天有人看账单时才发现的意外。⛔ 本单元不修它（只新增 tests/）；
+    要修得让 LLM 调用与写库拆成两个节点（先 compute 出文本并落草稿，
+    再 effect 写正式列），那是另一个交付单元的事。
+    """
+    _CountingGateway.calls = 0
+    recipe = build_recipes(tmp_path)["effect_generate_and_persist_jd"]
+    db_path = str(tmp_path / "jd-cost.db")
+
+    conn = _open_crashing_connection(db_path)
+    init_schema(conn)
+    conn.commit()
+    recipe.seed(conn)
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        recipe.invoke(conn)
+    conn.close()
+
+    fresh = get_connection(db_path)
+    recipe.invoke(fresh)
+
+    assert recipe.count_business_rows(fresh) == 1, "数据库状态必须精确一次"
+    assert _CountingGateway.calls == 2, (
+        "观察项 O-1：崩溃在提交之前时 LLM 会被调用两次（第一次的结果随事务丢弃）。"
+        "若这里变成 1，说明有人把 LLM 调用挪到了事务之外或加了缓存——那是好事，"
+        "请更新本用例并从计划的「红灯与观察项」里摘掉 O-1"
+    )
+
+
+def test_outbound_audit_has_no_sqlite_business_row_by_design(tmp_path):
+    """
+    ⚠️ **观察项 O-2 的固化。** `effect_record_outbound_audit` 的
+    `rows_per_effect = 0` 是全表唯一的 0，必须有一条用例说明它是设计如此，
+    否则下一个读这份注册表的人只会当成"这条配方没写完"。
+    """
+    recipe = build_recipes(tmp_path)["effect_record_outbound_audit"]
+    assert recipe.rows_per_effect == 0
+    assert "显式声明的例外" in recipe.note
+
+    conn = get_connection(str(tmp_path / "audit.db"))
+    init_schema(conn)
+    conn.commit()
+    recipe.invoke(conn)
+    assert recipe.count_business_rows(conn) == 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_record_outbound_audit'"
+        ).fetchone()[0]
+        == 1
+    ), "SQLite 里没有业务行，但幂等保护必须照常生效——重复留痕由 effect_log 挡住"

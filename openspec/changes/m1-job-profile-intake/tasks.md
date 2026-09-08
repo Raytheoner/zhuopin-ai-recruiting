@@ -133,8 +133,9 @@
 - [x] 4.2 幂等装饰器：`effect_*` 节点执行前查 `effect_log`，命中即跳过；幂等键 `{thread_id}:{node_name}:{business_key}` → **已实现**，见 `app/storage/idempotency.py` 的 `idempotent_effect`：幂等键格式**逐字一致**（`f"{thread_id}:{node_name}:{business_key}"`），命中即返回 None 跳过；业务写与 `effect_log` 行由装饰器**在同一个事务里一次提交**（铁律 1），函数体抛异常时先 rollback 再上抛。测试 `tests/test_idempotency.py` / `tests/test_transaction_ownership.py`
 - [x] 4.3 `interrupt()` 挂起与 `Command(resume=...)` 恢复的最小闭环打通 → **已用其他方式实现（2026-08-26 Shao Peishen 判定行为等价）**：本图**刻意没有使用 `interrupt()`**（`tests/test_graph_idempotency.py:104` 注释原文："本图没有用 interrupt"）。Web 通道下"挂起等人"由「HTTP 请求/响应 + 状态落 SQLite + 独立 `/confirm` 端点」达成，本条要的"最小闭环"目的已达成。
       ⚠️ **企微通道那批要重新审视这条**：消息异步推送、用户可能几小时后才回，那时才需要"图挂起在节点 → 回调到达 → `Command(resume=...)` 续上"。判定为等价的是**Web 通道下**的闭环，不等于企微通道也不需要 `interrupt()`
-- [ ] 4.4 **幂等专项测试**：对每个 `effect_*` 节点强制中断并恢复，断言副作用只发生一次
-      ⚠️ 4 个 effect 节点里**覆盖了 3 个**（`effect_persist_draft` / `effect_deliver_message` / `effect_confirm_profile`，见 `tests/test_graph_idempotency.py`），**`effect_generate_and_persist_jd` 一条都没有**。而它恰恰是唯一一个在重放时会**重复触发真实付费 LLM 调用**的节点（`app/graph/nodes.py:149-198`），漏的正好是代价最大的那个。保持未勾
+- [x] 4.4 **幂等专项测试**：对每个 `effect_*` 节点强制中断并恢复，断言副作用只发生一次 → **已实现**，见 `tests/test_effect_idempotency_suite.py`。当前 **10 个** `effect_*` 节点**全部覆盖**（清单由 AST 从 `app/` 现扫，与硬编码 `EFFECT_NODE_MANIFEST` 双向比对，新增节点漏测即变红）。中断落在"业务写已入事务、`effect_log` 已 INSERT、`commit()` 尚未落盘"那一刻，随后换全新连接确认什么都没落盘、再按同一 `thread_id`/`business_key` 重跑。
+      ⚠️ 本条原注解写的"4 个 effect 节点里覆盖了 3 个"写于只有 4 个节点时，已过期，此次一并订正。
+      ⚠️ 遗留观察项 O-1：`effect_generate_and_persist_jd` 在崩溃落于提交之前时，LLM 会被**真实调用两次**（数据库状态仍精确一次）。已由 `test_llm_call_is_replayed_when_the_crash_lands_before_commit` 固化度量，修复（把 LLM 调用与写库拆成 compute/effect 两个节点）属另一个交付单元。
 - [x] 4.5 写入 `AGENTS.md` / `CLAUDE.md`：副作用节点铁律，让后续变更自动继承 → **已用 `CLAUDE.md` 实现**，见「工程铁律」第 1、2 条（副作用节点独占 + 幂等键格式 + 幂等记录与业务写同事务 + `compute_*`/`effect_*` 命名）。本仓库不使用 `AGENTS.md` 格式；`CLAUDE.md` 每会话自动加载，本条"让后续变更自动继承"的目的已达成
 
 ## 5. 需求解析 Agent（capability: job-profile-intake）
