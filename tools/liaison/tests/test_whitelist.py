@@ -436,3 +436,67 @@ def test_admit_rereads_the_file_on_every_call(tmp_path):
     assert admit("TangLiPing", path) is True
     path.unlink()
     assert admit("TangLiPing", path) is False
+
+
+def test_pyyaml_constructor_error_log_does_not_leak_scalar_text(tmp_path, caplog):
+    """`yaml.safe_load` 对畸形 `!!int` / `!!bool` 标签抛的是 ValueError / KeyError，
+    根本不是 `yaml.YAMLError`——它们绕过 `_read_roster` 里专门加固的
+    YAMLError 分支，直接落进 `load_whitelist` 的通用兜底。兜底此前用
+    `exc_info=True`，而这些异常的 `str()` 里原样嵌着触发解析的标量文本，
+    如果那段文本恰好是手机号，就会被整个转印进 ERROR 日志。
+    """
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        'members:\n  - userid: !!int "13800138000abc"\n    name: 汤丽萍\n    role: HR AI 专员\n',
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert "13800138000abc" not in caplog.text
+
+
+def test_pyyaml_bool_constructor_error_log_does_not_leak_scalar_text(tmp_path, caplog):
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        'members:\n  - userid: !!bool "tangliping@zhuopin.com"\n'
+        "    name: 汤丽萍\n    role: HR AI 专员\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert "tangliping@zhuopin.com" not in caplog.text
+
+
+def test_top_level_key_outside_members_is_rejected(tmp_path, caplog):
+    """顶层字段的白名单必须和条目级一样严格——多一个键就整份名单全拒，
+    不是"忽略陌生顶层键、照常吃 members"。日志只写键名，不写值。
+    """
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        'hr_contact_phone: "138-0013-8000"\n'
+        "notes: 汤丽萍 tangliping(at)zhuopin.com\n"
+        "members:\n"
+        "  - userid: TangLiPing\n"
+        "    name: 汤丽萍\n"
+        "    role: HR AI 专员\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert error_records(caplog)
+    assert "hr_contact_phone" in caplog.text
+    assert "138-0013-8000" not in caplog.text
+    assert "tangliping(at)zhuopin.com" not in caplog.text
+
+
+def test_rebinding_default_whitelist_path_takes_effect_through_admit(tmp_path, monkeypatch):
+    """`DEFAULT_WHITELIST_PATH` 若被冻在 `def` 时的默认参数里，运行时重新赋值
+    这个模块常量对 `admit()`/`load_whitelist()` 就是死信——第 4／5 章接线、
+    以及测试用 monkeypatch 换配置文件，全都会悄悄读回出厂文件。
+    """
+    override_path = write_roster(
+        tmp_path / "override.yaml",
+        [{"userid": "TestOnlyOverrideMember", "name": "测试用覆盖条目", "role": "仅本用例使用"}],
+    )
+    monkeypatch.setattr(whitelist_module, "DEFAULT_WHITELIST_PATH", override_path)
+    assert admit("TestOnlyOverrideMember") is True
