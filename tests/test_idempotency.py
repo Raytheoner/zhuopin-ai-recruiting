@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 
 import pytest
 
@@ -246,3 +247,69 @@ def test_unique_key_race_short_circuits_and_rolls_back_this_write(tmp_path, capl
 
     # 这条路径很罕见，必须在日志里留下痕迹，否则现网只能看见"什么都没发生"
     assert any("effect_race" in r.getMessage() for r in caplog.records)
+
+
+def test_non_unique_integrity_error_still_propagates(tmp_path):
+    """
+    "撞 IntegrityError 就当幂等命中"是**错的**修法：effect_log 上还有 NOT NULL
+    约束，thread_id 传成 None 一样抛 IntegrityError，但那是调用方的真 bug，
+    吞掉它等于把一个必现故障伪装成"这件事已经做过了"。
+
+    判据用的是语义而不是错误文案：回滚之后这把 effect_key 不在库里 ⇒ 不是
+    幂等命中 ⇒ 原样上抛。
+    """
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    @idempotent_effect("effect_not_null")
+    def send(conn, thread_id, business_key):
+        return "sent"
+
+    with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+        send(conn, thread_id=None, business_key="v1")
+
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+
+
+def test_rollback_failure_during_short_circuit_does_not_fake_success(tmp_path, caplog):
+    """
+    回滚失败是"回滚失败"这一族里最坏的一支：本次的业务写没被撤掉，仍躺在
+    未提交事务里等着被下一次不相关的 commit 带走。此时返回 None 等于告诉
+    调用方"一切正常、这件事早做过了"，而恒等式正悬在破掉的边缘。
+
+    正确行为 = 记 ERROR + 把 IntegrityError 抛给调用方（宁可 500 一次，
+    也不要静默地让恒等式破掉）。
+    """
+    db_path = str(tmp_path / "test.db")
+
+    # sqlite3.Connection.rollback 在本机 Python 3.14.6 上是只读 slot，实例级
+    # `conn.rollback = _boom` 会直接 AttributeError（已验证，与本文件
+    # test_cleanup_rollback_failure_does_not_mask_original_exception 采用同一
+    # workaround 的原因相同）：改用连接子类在类级别覆写 rollback，让紧随其后
+    # 的 rollback 失败（模拟事务已被别的所有者结束等情况）。
+    class _RollbackFailingConnection(sqlite3.Connection):
+        def rollback(self):
+            raise sqlite3.OperationalError("rollback exploded")
+
+    conn = sqlite3.connect(db_path, check_same_thread=False, factory=_RollbackFailingConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)  # init_schema 只用 commit()，不用 rollback()，对这个子类安全
+    winner_conn = get_connection(db_path)
+
+    @idempotent_effect("effect_race_rb")
+    def send(conn, thread_id, business_key):
+        winner_conn.execute(
+            "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))",
+            (f"{thread_id}:effect_race_rb:{business_key}", thread_id, "effect_race_rb", business_key),
+        )
+        winner_conn.commit()
+        conn.execute("INSERT INTO job (id, title) VALUES (?, ?)", ("job-loser", "本次写的行"))
+        return "sent"
+
+    with caplog.at_level(logging.ERROR, logger="app.storage.idempotency"):
+        with pytest.raises(sqlite3.IntegrityError):
+            send(conn, thread_id="job1", business_key="v1")
+
+    assert any(r.levelname == "ERROR" for r in caplog.records)
