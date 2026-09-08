@@ -1,4 +1,4 @@
-**进度：58/72**（2026-09-08 `0908H` 回勾 4.4「幂等专项测试」——给仓库里**全部 10 个** `effect_*` 节点各建一条「业务写已入事务、`effect_log` 已 INSERT、`commit()` 尚未落盘 → 强制中断 → 换全新连接确认什么都没落盘 → 按同一 `thread_id`/`business_key` 重跑 → 断言副作用恰好一份」的用例，新增单一文件 `tests/test_effect_idempotency_suite.py`。节点清单由 `ast` 从 `app/` 现扫（⛔ 不用 grep——`app/audit/assertions.py` 与 `app/outbound/delivery.py` 的注释/docstring 里都有 `@idempotent_effect` 字面量，grep 会误报），与硬编码 `EFFECT_NODE_MANIFEST` 双向比对；终审又补两条守卫：**函数名以 `effect_` 开头却没加装饰器**、**两个节点复用同一 `node_name` 字面量**（后者本身就是铁律 1 隐患：`effect_key` 撞车会让第二个节点被短路、永不执行）。4 commits `97c496e`→`a1947e3`（rebase 后）；全量 1140 → **1168 passed, 1 skipped**，另有 1 条**既有失败** `test_boundary_guard::test_real_repository_dependency_diff_is_empty`（`requirements.txt` 自基线漂移，本单元合并前后完全一致、与本单元无关）。红灯 **0**——10 个节点全部真幂等。⛔ 未改 `app/` 一个字；落地偏离 3 条、观察项 O-1/O-2/O-3 与 parked 1 条见「4.4 落地偏离登记」，跨泳道协调登记为 `docs/tech-debt.md` TD-12；`0908F` 回勾 5.3「需求识别」——spec Scenario「需求描述为空或与招聘无关」的两半（回引导语 **AND** 不创建岗位记录）第一次同时成立。识别本身早在 L3 `run_intake_turn` 里，缺的是编排侧那一半：`POST /api/jobs` 在第一句话**之前**就 `INSERT INTO job`，判非用人需求后那行还留着。做法＝把 L3 的 `is_job_related` 从 `graph.invoke()` 终态取出交给 server 分流（**server 只分流、⛔ 不二次判定模型**），首轮判否时**落后即删**（外键 `job_profile.job_id → job` ＋ `PRAGMA foreign_keys=ON` 逼出来的顺序，先判后建在结构上做不到），`job_id` 回 `null`。删除集刻意**包含** `effect_log`（否则铁律 1 的「`effect_log` 条数与业务表行数按 thread 恒等」当场破，且破得**没有任何症状**）、刻意**排除** `analysis_run`（铁律 3/5：那次模型调用真实发生过——岗位可以当作从未成立，「我们调过一次模型」这个事实不可以）。引导语同时改为**确定性系统文案**，⛔ 不再采用模型自由文本——合规红线「AI 只做排序推荐、不做自动淘汰」第一次有了可机器断言的对象。7 commits `a30011a`→`eb7ab4e`（rebase 后）；全量 1155 →（并入 4.4 后）**1183 passed, 1 skipped**，唯一失败仍是那条**既有的** `test_boundary_guard::test_real_repository_dependency_diff_is_empty`（与本单元无关，合并前后一致）。⛔ 未碰 `app/graph/nodes.py`/`build.py`/`app/llm/`/`app/audit/`/`db.py`/`job_queries.py`。反证与变异实证见「5.3 落地偏离登记」；parked 1 条已登记 `docs/tech-debt.md` TD-13，**待 Shao Peishen 拍板**）
+**进度：60/72**（2026-09-08 `0908D` 回勾 **2.3 + 2.5**——M1 交付单元 2「LLM 网关：双供应商切换与重试转人工」。2.3 把一家供应商抽成 `_Provider`，重试循环拆成两个互不干扰的预算：schema 校验失败消耗 `max_retries` 在**同一家**上重试，传输层故障（5xx/超时/连接错误）触发**至多一次**切换；4xx 与 schema 失败⛔ 不切。切换事件是 `analysis_run` 的一行（`raw_response` 里 `event=provider_switch`），⛔ 未建表、未加列、未改 `AuditHook` 签名。备用是**可选**的——四个 `Settings` 字段默认全空，不配即无备用、行为与今天逐字一致，⇒ **`.51` 不需要发版**。2.5 补齐原先完全缺失的“转 `needs_manual`”那一半：`compute_intake_turn`（纯函数）把两类语义不同的终局异常翻成 state 信号与两个原因码，条件边导向 `app/graph/manual_handoff.py` 的两个幂等 `effect_*` 节点，**完全绕开 `effect_persist_draft`**——“不产出半成品”在图上的形状就是这一轮不落 `job_profile` 行；并接通 8.4 的转人工队列（`job_queries.py` 那句“2.5 落地当天自动生效”兑现）。8 commits `f10db9a`→`3e926ce`；全量 1140 → **1227 passed, 1 skipped**，另有 1 条**既有失败** `test_boundary_guard::test_real_repository_dependency_diff_is_empty`（`requirements.txt` 自基线漂移，与本单元无关、本单元⛔ 未碰该文件）；`-m compliance` 67 passed。两阶段 review 全过：Task 5 抓到 1 条 Critical（`needs_manual` 粘滞，真图真库探针复现），终审再抓 3 条 Important，均已修并经 scoped re-review 确认。⚠️ **范围偏离 1 条待 Shao Peishen 事后确认**、⏸ 留步与另开单元 4 条，见「2.x 落地偏离登记」）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -105,15 +105,46 @@
 
 - [x] 2.1 **模型对比实测**（阻塞后续所有 LLM 相关任务） → **与 0.1 是同一件事，已完成**，产出 `docs/m1-model-comparison.md`（DeepSeek flash vs pro 的 `json_schema` 遵循度、抽取准确率、延迟、单价对比）。⚠️ 原文要求「至少三家供应商」，实际只做了 DeepSeek 一家——这是 2026-08-11 决策者的**显式拍板**（不等 doubao/qwen 补测账号），不是漏做；同一件事在 0.1 已按该决策勾选，这里保持一致
 - [x] 2.2 网关薄封装：统一调用入口，强制 `temperature=0`，模型版本显式锁定（禁止 `latest` 类别名） → **已实现**，见 `app/llm/gateway.py`：`LLMGateway.__init__` 对 `latest` / `*:latest` / `*-latest` 直接 `raise ValueError`（:172-173），`_call_model` 硬编码 `temperature=0`（:322）。铁律 5 的"取回响应实际 `model` 字段"也已落地（:227 `response_model` + :233 `system_fingerprint`）。测试 `tests/test_llm_gateway.py`
-- [ ] 2.3 双供应商切换与降级：主供应商失败自动切备用，切换事件记入 `analysis_run`
-      ⤷ **已移出**到「多供应商接入」，见文末「已移出」清单
+- [x] 2.3 双供应商切换与降级：主供应商失败自动切备用，切换事件记入 `analysis_run`
+      ⤷ 原**已移出**到「多供应商接入」，见文末「已移出」清单
+      ✅ **2026-09-08 `0908D` 划回本包并回勾：已由 M1 交付单元 2 交付**（7 commits `f10db9a`→`3e926ce`）。移出的两条依据现已各自失效：① “只有一家供应商时切备用无处可切”——本单元把备用做成**可选**，四个 `Settings` 字段默认全空，不配即无备用、行为与今天逐字一致（`tests/test_main_fallback_wiring.py` 起真子进程断言 `_gateway_factory()._fallback is None`），所以不依赖第二家账号就能交付且能测；② “切换事件要记进 `analysis_run`，那张表在 `ai-audit-trail-and-outbound-gate` 里、该包要先落地”——该包 U3 已于 2026-09-04 交付（见 2.6）。实现：`app/llm/gateway.py` 把一家供应商抽成 `_Provider`，重试循环拆成**两个互不干扰的预算**（schema 校验失败消耗 `max_retries` 在同一家上重试；传输层故障触发**至多一次**切换）。切换判据写死不可配置（5xx/超时/连接错误切，4xx 与 schema 失败⛔ 不切）。切换事件是 `analysis_run` 的一行（`raw_response` 里 `event=provider_switch`），⛔ 未新建表、未加列、未改 `AuditHook` 签名。铁律 5 落点：切过去之后 `configured_model` 与 `response_model` 记的都是**备用方**的（变异验证：改回记主家 → 精确 1 条红）
+      ⏸ **`.51` 上无法验证真实切换**：本项目只有 DeepSeek 一家账号，`LLM_FALLBACK_*` 保持全空 ⇒ 现网行为与今天逐字一致，**本单元不需要发版**。备用供应商选谁、要不要采购第二家账号 = **预算与外部采购，属不可代项**，⛔ 代理人不得代拍，待 Shao Peishen 决定
 - [x] 2.4 结构化输出：`json_schema` 优先、`json_object` + Pydantic 本地校验降级，两条路径都实现 → **已实现**，见 `app/llm/gateway.py:273-325` 的 `_call_model`：`_to_strict_json_schema` 把 pydantic schema 转成 strict 形态走 `json_schema`；`_has_free_form_object` 命中自由 dict 字段（如 `_IntakeTurnSchema.profile_patch`）时降级为 `json_object` 并把 schema 写进 system prompt。两条路径末端都过 `schema.model_validate`（:258）
-- [ ] 2.5 校验失败重试至多 2 次，仍失败转 `needs_manual`，**不产出半成品**
-      ⚠️ 重试与"不产出半成品"两半**已实现**（`max_retries=2`、`attempts = max_retries + 1`、失败抛 `SchemaExtractionFailed` 而不返回半成品），但**"转 `needs_manual`" 完全没有实现**——`JobStatus.NEEDS_MANUAL` 只是个枚举值，没有任何代码写它，也没有队列承接（见 8.4）。保持未勾
+- [x] 2.5 校验失败重试至多 2 次，仍失败转 `needs_manual`，**不产出半成品**
+      ⚠️ 重试与"不产出半成品"两半**已实现**（`max_retries=2`、`attempts = max_retries + 1`、失败抛 `SchemaExtractionFailed` 而不返回半成品），但**"转 `needs_manual`" 完全没有实现**——`JobStatus.NEEDS_MANUAL` 只是个枚举值，没有任何代码写它，也没有队列承接（见 8.4）
+      ✅ **2026-09-08 `0908D` 回勾：缺的那一半已由 M1 交付单元 2 补齐**。`compute_intake_turn`（纯函数）捕获 `SchemaExtractionFailed` / `LLMProviderUnavailable` 两类**语义不同**的终局异常，翻译成 state 上的 `needs_manual` 信号与两个不同的原因码（`schema_retry_exhausted` = 模型答了但没按 schema 答；`provider_unavailable` = 主备都没答上——两者的人工处置完全不同，全链路未合流）；`app/graph/build.py` 用一条**条件边**导向新文件 `app/graph/manual_handoff.py` 的两个幂等 `effect_*` 节点（置状态 / 投递消息，各带幂等键、各独占一个节点），**完全绕开 `effect_persist_draft`**——“不产出半成品”这句话在图上的形状就是“这一轮不落 `job_profile` 行”，有 `SELECT COUNT(*) FROM job_profile = 0` 直接断言。终态 `approved` / `abandoned` ⛔ 不被覆盖。转人工是**系统判定**，⛔ 未往 `human_review` 写行（`@pytest.mark.compliance` 守着，恒为 0）
+      ✅ **与 8.4 的队列打通**：`app/storage/job_queries.py` 的 `derive_needs_manual_reasons` 第 1 个来源 `job.status='needs_manual'` 原注写着“今天恒为空，2.5 落地当天自动生效”——就是今天。有 `test_the_needs_manual_queue_can_finally_see_it` 断言。⛔ 未改 `app/web/server.py` 一个字
+      ⚠️ **反证变异验证**（证明断言非恒真）：旁路整个去掉 → 7 条红；异常分支不置信号 → 9 条红；异常分支自增 `round_count` → 精确 2 条红
+      ⏸ **前端不渲染 `needs_manual` 消息**：`app/web/static/index.html` 只认 `question` / `confirmation_prompt` / `jd_result`，转人工消息会被返回但不显示。⛔ 本单元不碰 `app/web/`。业务上的兜底是转人工队列（8.4，已打通）。**需另开一个前端单元**
+      ⏸ **转人工轮的用户输入不进 `conversation`**：`conversation` 唯一写入点在 `effect_persist_draft` 内，handoff 旁路绕开它 ⇒ 模型恢复后的那一轮看不到用户在故障期间说过的话。终审已据此把文案里“不用重新说一遍”的失实承诺改成“请稍后重新发一次”（合入前必修项 I-3 第一步）。**第二步——转人工轮也持久化对话记录（需第三个独占的 `effect_*` 节点，只写 `conversation` 不写 `job_profile` 以保持“不产出半成品”）——另开单元**
 - [x] 2.6 每次调用自动写 `analysis_run`，无需业务代码显式调用
       ⤷ **已移出**到 `ai-audit-trail-and-outbound-gate`，见文末「已移出」清单
       ✅ **2026-09-04 回勾：已由 `ai-audit-trail-and-outbound-gate` U3 / commit `883a4df` 交付**。注入点唯一一处：`app/main.py:40` 模块级构造 `RecorderAuditHook(_audit_recorder, _audit_conn)`，`app/main.py:43` 的 `_gateway_factory()` 把它作为 `audit_hook` 传进 `LLMGateway`（原先接的 `NoopAuditHook` 已退回测试专用，见 `app/llm/gateway.py:144`）。"调用即写、业务代码零改动"两半都有断言：`tests/test_audit_end_to_end.py::test_one_scoring_call_lands_every_reproducibility_field` 不 mock 任何一层留痕，一次 `extract_structured` 走完 `LLMGateway → RecorderAuditHook → AuditRecorder → SqliteSink`，直接 `SELECT * FROM analysis_run` 逐字段核对；`tests/test_main_wiring.py::test_importing_app_main_wires_a_real_recorder_hook` 起子进程真 import `app.main`，断言 `_gateway_factory()._audit_hook` 是 `RecorderAuditHook` 且两次调用同一对象（防每次新建连接）。
       ⚠️ 已交付的是**通道**，不是"留痕可按业务标识检索"：生产三个调用点（`intake_agent.py:972` / `jd_agent.py:69` / `scripts/compare_models.py:115`）目前一个都不传 `audit_context`，写进去的 `application_id` / `job_id` / `thread_id` 全是 NULL。接业务侧另属一单元，登记在 `docs/tech-debt.md` TD-1
+
+### 2.x 落地偏离登记
+
+**（2026-09-08 `0908D`，M1 交付单元 2：WBS 2.3 + 2.5）**
+
+1. 🔴 **范围偏离，待 Shao Peishen 事后确认**——实现计划的 Global Constraints 13 写死「`app/graph/nodes.py` 只改**两处**（import 行 + `compute_intake_turn` 里 `run_intake_turn(...)` 那一段）」，本单元实际改了**三处**。
+   *起因*：Task 5 的 review 用真图真库探针实测复现出一个 **Critical**——`needs_manual` 会**粘滞**。`IntakeState` 没有 reducer，LangGraph 按 LastValue 存 checkpoint，而 `app/web/server.py` 每轮重建的输入 state 不含 `needs_manual`，`compute_intake_turn` 的成功返回又以 `**state` 开头且没有显式写回 `False` ⇒ 一次**瞬时**模型故障之后，该岗位**永久**走转人工旁路：模型早已恢复，用户每说一句都既不进 `job_profile` 也不进 `conversation`，**静默丢失且不报错**；`round_count` 自增还会让幂等键变化、每轮再投一条“已转人工”。而下发文案恰恰写着“不用重新说一遍”，`POST /reply` 也不拦 `needs_manual`，业务经理必然继续说下去。
+   *裁决*：本轮是 `run-lanes` 无头执行、无人可请示，控制者按“宁可留待办、不要把静默数据丢失合进 main”取保守方向 = **修**（在成功返回补 `needs_manual: False` / `needs_manual_reason_code: ""`，即第三处）。三条依据：① 该约束的书面理由是“避开与并行泳道的合并冲突”，而并行泳道碰的是 `app/agents/intake_agent.py` 与 `app/web/server.py`，**不含 `nodes.py`**，理由不成立；② 不修等于把静默数据丢失合进 main；③ 修复方向与计划自身意图一致（转人工本就该是可恢复的）。**终审 reviewer 逐条复核后明确认同该裁决**，并复核了“还有没有别的入口能让 `True` 留在 checkpoint 里”——`compute_intake_turn` 全函数只有两个 `return`，两处都显式写定；其余节点均 `return state` 原样透传，判定源唯一。
+
+2. **既有测试同步更新 1 处（授权范围内）**：终审必修项 I-2 把两个 handoff 节点的 `business_key` 从 `str(round_count)` 改成 `f"{round_count}:{reason_code}"`（否则同一 `round_count` 内的第二次转人工会被幂等键吞掉，业务经理拿到上一次的**陈旧消息与错误原因码**），`tests/test_intake_needs_manual.py::test_each_effect_gets_its_own_idempotency_key` 断言的两个 key **字面值**随之更新。⛔ 断言强度未削弱——scoped re-review 已核实它仍是 `keys == [...]` 逐字相等，未被改成 `in` / 前缀 / 只查条数。
+
+3. **跨泳道集成**：rebase 到最新 main 后，0908H 刚合入的 `tests/test_effect_idempotency_suite.py` 的清单守卫报红（本单元新增了两个 `effect_*` 节点）。按守卫的指示把两者加进 `EFFECT_NODE_MANIFEST` 并各补一条崩溃-恢复配方（commit `3e926ce`），**纯追加**，⛔ 未改该文件既有的任何配方/清单项/断言。
+
+**⏸ 留步与另开单元（⛔ 本单元不做）**
+
+- ⏸ **`.51` 上无法验证真实的双供应商切换**：只有 DeepSeek 一家账号。`LLM_FALLBACK_*` 保持全空 ⇒ 现网行为与今天逐字一致，**本单元不需要发版**。备用选谁、要不要采购第二家账号 = **预算与外部采购，属不可代项**，⛔ 代理人不得代拍。
+- ⏸ **前端不渲染 `needs_manual` 消息**（`index.html` 只认三种类型）。⛔ 本单元不碰 `app/web/`；兜底是已打通的 8.4 队列。**需另开前端单元**。
+- ⏸ **转人工轮的用户输入不进 `conversation`**：唯一写入点在 `effect_persist_draft` 内，handoff 旁路绕开它。终审据此把文案的失实承诺改成“请稍后重新发一次”（已修）；**真正的修法（第三个只写 `conversation` 不写 `job_profile` 的 `effect_*` 节点）另开单元**。
+- ⏸ **切换事件行的 `thread_id` / `job_id` 仍为 NULL**：采集路径至今不传 `audit_context`（`docs/tech-debt.md` TD-1）。“切换事件记入 `analysis_run`”成立，但**按岗位查不到**；切换事件靠 `input_hash` + `attempt` 自成一组，在本单元范围内自洽。建议还 TD-1 时把切换事件行一并补上。
+- ⏸ **`Settings.validate_model_version()` 对 `llm_model` 仍漏 `-latest` 写法**：网关 `__init__` 的 `_rejects_latest_alias` 三种都查、兜得住，不是活的漏洞；放宽既有字段的校验口径会让 `.51` 上一份今天能起来的 `.env` 明天起不来，⛔ 不在本单元做。
+
+**已 triage 为可延后的 minor**（终审判定，均不拦 merge）：`gateway.py` 里同一条件写两遍（`_fallback is None or switched`）；`self._model` / `self._supports_json_schema` 与 `_primary` 冗余（⚠️ `self._client` **不可删**，`tests/test_jd_agent.py` 与 `tests/test_intake_agent.py` 直读）；无备用可切时仍写 `event=provider_switch`（下游统计需过滤 `switched_to_role is not null`）；`tests/test_main_fallback_wiring.py` 的 AST 断言只查 `.attr` 未查 `.value`。
+**行为变更登记（非缺陷，终审已核实零可观察变化）**：不配备用时主家 5xx/超时不再抛 openai 原异常，改抛 `LLMProviderUnavailable`——全仓 grep 确认**没有任何一处 `except` 捕获 openai 异常类型**，两者同样穿透，约束「行为逐字一致」在可观察层面成立。
+
 
 ## 3. 地基：企业微信通道
 
@@ -431,7 +462,7 @@ Web 通道的等价端到端链路已由 `tests/test_web_api.py` 覆盖。
 
 | 原条目 | 内容 | 依据 |
 |---|---|---|
-| 2.3 | 双供应商切换与降级，切换事件记入 `analysis_run` | 本条的前提是 2.1 的"至少三家供应商对比"，而 2026-08-11 决策者**显式拍板** M1 只用 DeepSeek 单供应商、不等 doubao/qwen 补测账号。只有一家供应商时"切备用"无处可切。⚠️ 另有依赖：切换事件要记进 `analysis_run`，而那张表在 `ai-audit-trail-and-outbound-gate` 里，**该包要先落地** |
+| ~~2.3~~ ⚰️ **已划回本包并交付**（2026-09-08 `0908D`，见上文 §2） | 双供应商切换与降级，切换事件记入 `analysis_run` | ~~本条的前提是 2.1 的"至少三家供应商对比"，而 2026-08-11 决策者**显式拍板** M1 只用 DeepSeek 单供应商、不等 doubao/qwen 补测账号。只有一家供应商时"切备用"无处可切。⚠️ 另有依赖：切换事件要记进 `analysis_run`，而那张表在 `ai-audit-trail-and-outbound-gate` 里，**该包要先落地**~~ ⇒ **两条依据现已各自失效**：备用做成了可选（不配即无备用，不依赖第二家账号即可交付并测试），且 `analysis_run` 已由该包 U3 于 2026-09-04 交付 |
 
 ---
 
