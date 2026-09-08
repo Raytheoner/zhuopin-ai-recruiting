@@ -90,3 +90,11 @@ class IntakeState(TypedDict, total=False):
     # API 响应里实际返回的模型标识（铁律 5）。与配置里的别名分开记录、
     # 不互相覆盖——配置里写的名字不算数，响应返回的才算。
     llm_response_model: str | None
+
+    # ── 2.5 转人工信号 ──────────────────────────────────────────────
+    # compute_intake_turn 在"重试耗尽 / 主备都不可用"时置位。这是**唯一**
+    # 决定图走 effect_mark_needs_manual 分支的键（见 app/graph/build.py 的
+    # 条件边），⛔ 不要再引入第二个判定源。
+    needs_manual: bool
+    # 原因码，取值见 app/graph/manual_handoff.py 的 REASON_* 常量。
+    needs_manual_reason_code: str

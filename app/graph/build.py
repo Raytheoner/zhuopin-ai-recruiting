@@ -5,6 +5,7 @@ import os
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
+from app.graph.manual_handoff import effect_deliver_manual_handoff, effect_mark_needs_manual
 from app.graph.nodes import compute_intake_turn, effect_deliver_message, effect_persist_draft, message_business_key
 from app.graph.state import IntakeState
 
@@ -23,6 +24,11 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
     """
     单轮采集流程：compute_intake_turn → effect_persist_draft → effect_deliver_message → END。
     每次 HTTP 请求 invoke 一次；跨请求的对话历史由 SqliteSaver 按 thread_id 持久化恢复。
+
+    2.5 的转人工是**同一张图上的一条旁路**：compute_intake_turn 置位
+    `needs_manual` 时改走 effect_mark_needs_manual → effect_deliver_manual_handoff
+    → END，⛔ 完全绕开 effect_persist_draft——那正是"不产出半成品"这句话在图上
+    的形状（不落新版本画像）。
     """
     # 本函数的前提是"checkpointer 与 effect 层的 conn 打开的是同一个数据库
     # 文件、但用两个独立连接"（方向 A，见下方 checkpointer_conn 处的说明）。
@@ -115,14 +121,50 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
         )
         return state
 
+    def _mark_needs_manual_node(state: IntakeState) -> IntakeState:
+        effect_mark_needs_manual(
+            conn,
+            thread_id=state["job_id"],
+            # business_key 用 round_count：这一轮**没有**落 job_profile 行，
+            # 所以重放/用户重试时 round_count 仍然是同一个值，幂等键命中、
+            # 这两个 effect 被正确跳过（job.status 已经是 needs_manual、消息
+            # 已经投递过一次）。⛔ 不要在这里用时间戳之类每次都变的值。
+            business_key=str(state["round_count"]),
+            reason_code=state["needs_manual_reason_code"],
+        )
+        return state
+
+    def _deliver_manual_handoff_node(state: IntakeState) -> IntakeState:
+        effect_deliver_manual_handoff(
+            conn,
+            thread_id=state["job_id"],
+            business_key=str(state["round_count"]),
+            channel=channel,
+            reason_code=state["needs_manual_reason_code"],
+            round_count=state["round_count"],
+        )
+        return state
+
+    def _route_after_compute(state: IntakeState) -> str:
+        """本轮走正常落库还是走转人工旁路。**唯一判定源是 needs_manual**。"""
+        return "handoff" if state.get("needs_manual") else "draft"
+
     graph.add_node("compute_intake_turn", _compute_node)
     graph.add_node("effect_persist_draft", _persist_node)
     graph.add_node("effect_deliver_message", _deliver_node)
+    graph.add_node("effect_mark_needs_manual", _mark_needs_manual_node)
+    graph.add_node("effect_deliver_manual_handoff", _deliver_manual_handoff_node)
 
     graph.set_entry_point("compute_intake_turn")
-    graph.add_edge("compute_intake_turn", "effect_persist_draft")
+    graph.add_conditional_edges(
+        "compute_intake_turn",
+        _route_after_compute,
+        {"draft": "effect_persist_draft", "handoff": "effect_mark_needs_manual"},
+    )
     graph.add_edge("effect_persist_draft", "effect_deliver_message")
     graph.add_edge("effect_deliver_message", END)
+    graph.add_edge("effect_mark_needs_manual", "effect_deliver_manual_handoff")
+    graph.add_edge("effect_deliver_manual_handoff", END)
 
     # 修复 CI 抓到的事务归属冲突（docs/findings/2026-08-13-sqlite-事务归属冲突.md）：
     # checkpointer 与 effect 层（app/storage/idempotency.py 的 idempotent_effect）

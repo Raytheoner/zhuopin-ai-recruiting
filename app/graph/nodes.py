@@ -15,8 +15,9 @@ from app.agents.jd_agent import JDGenerationResult, generate_jd
 from app.audit.events import DecisionEvent
 from app.audit.recorder import AuditRecorder
 from app.channels.base import Channel, OutboundMessage
+from app.graph.manual_handoff import REASON_PROVIDER_UNAVAILABLE, REASON_SCHEMA_EXHAUSTED
 from app.graph.state import IntakeState
-from app.llm.gateway import LLMGateway
+from app.llm.gateway import LLMGateway, LLMProviderUnavailable, SchemaExtractionFailed
 from app.outbound import queue
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
@@ -130,22 +131,59 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         IntakeQuestion.from_payload(item) for item in state.get("previous_questions", [])
     ]
 
-    result = run_intake_turn(
-        gateway,
-        history=history,
-        round_count=round_count,
-        # 已累积的字段必须一起送进 prompt：SYSTEM_PROMPT 要求"不要重复历史已有
-        # 字段"，模型看不见这份内容就无从遵守（review Critical 发现1）。
-        profile_patch_accumulated=accumulated_before,
-        # 预算的两个口径与已问台账都从 state 透传，真源是数据库（_run_turn 查
-        # 出来放进 state），compute 节点自己不查库——它是 compute_*，纯函数。
-        productive_round_count=state.get("productive_round_count", round_count),
-        asked_question_ids_before=list(state.get("asked_question_ids_before", [])),
-        previous_questions=previous_questions,
-        # 第 5 章的已问台账（重问标注与重问上限）由它推导。compute_* 是纯函数，
-        # 不自己查库——这份数据由 app/web/server.py 的 _run_turn 放进 state。
-        asked_question_rounds=list(state.get("asked_question_rounds", [])),
-    )
+    # ── 2.5「重试耗尽 → 转 needs_manual，不产出半成品」──────────────────
+    # 这是本交付单元在 nodes.py 里的**唯一**逻辑改动处。捕获的两类异常语义不同、
+    # 原因码也不同：SchemaExtractionFailed = 模型答了但没按 schema 答；
+    # LLMProviderUnavailable = 主备两家都没答上。
+    #
+    # ⛔ 不在这里写库、不在这里发消息——compute_* 是纯函数（工程铁律 2）。
+    # 置位 needs_manual 之后，由 app/graph/build.py 的条件边把流程导向
+    # effect_mark_needs_manual / effect_deliver_manual_handoff 两个 effect 节点。
+    try:
+        result = run_intake_turn(
+            gateway,
+            history=history,
+            round_count=round_count,
+            # 已累积的字段必须一起送进 prompt：SYSTEM_PROMPT 要求"不要重复历史已有
+            # 字段"，模型看不见这份内容就无从遵守（review Critical 发现1）。
+            profile_patch_accumulated=accumulated_before,
+            # 预算的两个口径与已问台账都从 state 透传，真源是数据库（_run_turn 查
+            # 出来放进 state），compute 节点自己不查库——它是 compute_*，纯函数。
+            productive_round_count=state.get("productive_round_count", round_count),
+            asked_question_ids_before=list(state.get("asked_question_ids_before", [])),
+            previous_questions=previous_questions,
+            # 第 5 章的已问台账（重问标注与重问上限）由它推导。compute_* 是纯函数，
+            # 不自己查库——这份数据由 app/web/server.py 的 _run_turn 放进 state。
+            asked_question_rounds=list(state.get("asked_question_rounds", [])),
+        )
+    except (SchemaExtractionFailed, LLMProviderUnavailable) as exc:
+        reason_code = (
+            REASON_SCHEMA_EXHAUSTED
+            if isinstance(exc, SchemaExtractionFailed)
+            else REASON_PROVIDER_UNAVAILABLE
+        )
+        # ⛔ 这里不打日志：nodes.py 没有模块级 logger，为一条 warning 再加两行
+        # 导入等于把"只改一处"变成"改三处"。转人工这件事的日志打在
+        # app/graph/manual_handoff.py 的 effect_mark_needs_manual 里——那才是
+        # 状态真正落库的地方，而 compute_* 的返回值可能因重放被丢弃。
+        return {
+            **state,
+            # ⛔ 原样退回，**不并入任何本轮的部分解析结果**（2.5「不产出
+            # 半成品」）：半成品比没有更糟——业务经理会以为系统听懂了。
+            "profile_patch_accumulated": accumulated_before,
+            # ⛔ history 不追加 assistant 轮：这一轮系统什么也没说。追加一句
+            # 空话会让下一轮的 prompt 里多出一段模型从未说过的话。
+            "history": history,
+            "needs_manual": True,
+            "needs_manual_reason_code": reason_code,
+            "is_complete": False,
+            "is_job_related": state.get("is_job_related", True),
+            "pending_questions": [],
+            # ⛔ round_count 不自增：这一轮不落 job_profile 行，而 round_count
+            # 的真源就是 job_profile 的行数（_run_turn 每轮重查）。在这里 +1
+            # 会让 state 与库对不上。
+            "is_productive": False,
+        }
 
     accumulated = {**accumulated_before, **result.profile_patch}
 
