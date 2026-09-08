@@ -27,7 +27,7 @@ HR业务线-接力0903B
 |---|---|
 | main | `2dfa499`，**与 origin 同步（ahead 0）**。⚠️ 另一条线在跑：`0908A`（HR 企微值守机器人 `openspec-propose`，09-08 09:31 派），`openspec/changes/hr-wecom-aibot-liaison/` 尚未跟踪——本线所有 opener ⛔ 不碰它 |
 | 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`、`docs/openers/0908Z-*.md`、`0908B-*.md`、`0908I-*.md`。`0908Z`【二】提交前四个；`0908I` 未在其清单里，由 `0908B`/`0908I` 自己带上。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
-| `.51` 代码 | ⚠️ **仍是 `3f59842`（含 TD-9 修复）——四次发版 `6bb1d90` 于 2026-09-08 失败已回滚**（`0908B`：Windows 无系统时区库、venv 缺 `tzdata`，`job_queries.py` 顶层 `ZoneInfo("UTC")` 在 import 期抛 `ZoneInfoNotFoundError`，服务起不来；已从快照 `C:\apps\backups\20260908-1004` 回滚，现网 200，停摆约 3 分钟。⏸ 第 6/7 章、9.6、硬门槛新表、Web 三页**均未上线**；修复＝`requirements.txt` 补 `tzdata`，且下次**必须「装依赖 + sync」不能只 sync**，待他裁决。见 `docs/findings/2026-09-08-51四次发版回滚.md`） ｜ 原三次发版记录（`0904Z` 2026-09-04，冒烟 4 项全过）见 `docs/audit-and-outbound-ops.md` §五 |
+| `.51` 代码 | ⚠️ **仍是 `3f59842`（含 TD-9 修复）——四次发版 `6bb1d90` 于 2026-09-08 失败已回滚**（`0908B`：Windows 无系统时区库、venv 缺 `tzdata`，`job_queries.py` 顶层 `ZoneInfo("UTC")` 在 import 期抛 `ZoneInfoNotFoundError`，服务起不来；已从快照 `C:\apps\backups\20260908-1004` 回滚，现网 200，停摆约 3 分钟。⏸ 第 6/7 章、9.6、硬门槛新表、Web 三页**均未上线**；修复＝`requirements.txt` 补 `tzdata`，且下次**必须「先装依赖、再 sync」，顺序不可颠倒**——✅ Shao Peishen 09-08 回「补 tzdata」已裁决，`requirements.txt` 已补 `tzdata==2026.3`，重发走 `0908J`（等他点 Run）。见 `docs/findings/2026-09-08-51四次发版回滚.md`） ｜ 原三次发版记录（`0904Z` 2026-09-04，冒烟 4 项全过）见 `docs/audit-and-outbound-ops.md` §五 |
 | pytest | main 侧 **1061 passed / 1 skipped**（09-04 `0904Y` 复核）＋ 0905A 后未复核（应更高）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
 | worktree | 已清空（三个遗留分支 intake-unit6 / unit7 / td9 仍在，真未合均 0，无害） |
@@ -126,6 +126,7 @@ C 发现断言四豁免线用 `created_at` 有洞 → Shao Peishen 裁决「现�
 ### ⑪ 09-08：`0908B` `.51` 四次发版（等「发」）＋ 第十一批已编排（等 `0908Z` 发车）
 
 - `0908B`：现网 `3f59842` 落后 main 五个交付单元（含 6.1 现网缺陷修复）。requirements 无变动只 sync。发版后跑巡检、把断言四历史行抄成清单待 Shao Peishen 核实。正文 `docs/openers/0908B-51四次发版与巡检.md`。🔴 不可代，09-08 已回「发」，**已执行 → ❌ 失败已回滚**（缺 `tzdata`，见 `docs/findings/2026-09-08-51四次发版回滚.md`）。巡检与断言四历史行清单随之顺延，⛔ 不是漏跑
+- `0908J`：`.51` 四次发版**重试**。✅ Shao Peishen 09-08 回「补 tzdata」＝本条授权；`requirements.txt` 已补 `tzdata==2026.3`。🔴 与 `0908B` 唯一差别＝**先在 .51 装 `tzdata` 再 sync**（装包对旧代码惰性、服务不用停；颠倒顺序＝白白再停摆一次）。⛔ 不重跑 `deploy-server.ps1`，按手册阶段 D 只重跑装包步骤。正文 `docs/openers/0908J-51四次发版重试.md`。🔴 不可代，**等他点 Run**
 - 第十一批三泳道并行（文件两两不交）：网关 `0908C→D`（2.3 双供应商 + 2.5 重试转人工不产半成品）；识别 `0908E→F`（5.3 非用人需求不建单）；幂等 `0908G→H`（4.4 每个 effect_* 中断恢复恒等，清单自动收集防过期）。dry-run 预期 C21/D22/E19/F21/G20/H21。正文 `docs/openers/0908Z-泳道批次看护.md`
 - ✅ Shao Peishen 09-08 裁决「按推荐」：1.7/5.6/6.8 移出为 C 类（调度基础设施，待立项）→ `0908I`（🔴 须在 0908Z 收敛后跑，与 0908F 回勾行相邻）。之后本包 D 类只剩 9.1（人工评估），归档判定等他
 

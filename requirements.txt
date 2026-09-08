@@ -6,5 +6,9 @@ langgraph==1.0.10
 langgraph-checkpoint-sqlite==2.0.6
 openai==1.59.6
 python-dotenv==1.0.1
+# Windows 没有系统 IANA 时区库，stdlib zoneinfo 必须靠它兜底（job_queries.py 用 ZoneInfo）。
+# ⛔ 别因为「没有任何代码 import tzdata、Mac/Linux 上不装也能跑」就删——删掉 .51 当场起不来，
+# 见 docs/findings/2026-09-08-51四次发版回滚.md
+tzdata==2026.3
 pytest==8.3.4
 httpx==0.28.1
