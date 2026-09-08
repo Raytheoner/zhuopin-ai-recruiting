@@ -1,4 +1,4 @@
-**进度：56/72**（2026-09-07 `0905A` 回勾 8.1/8.2/8.4「Web 列表 / 画像详情 / 转人工队列」——三个**只读**视图，新建只读查询层 `app/storage/job_queries.py`（AST 守卫钉死零写入、⛔ 不 import `app.graph`/`app.agents`），`app/web/server.py` 追加三个 `GET` 端点与中文标签映射，`index.html` 加导航与两个视图容器（⛔ 不引框架、不加构建步骤）。转人工队列是**推导视图不是状态列**，同查 `job.status='needs_manual'` / `_jd_needs_manual` / 修改次数上限三个来源。8 commits `db51d89`→`21af03a`（rebase 后）；全量 1061 → **1141 passed, 1 skipped**，`-m compliance` 66 passed。落地偏离、deferred 与 parked 共 14 条见「8.x 落地偏离登记」，其中**两条待 Shao Peishen 复核/拍板**）
+**进度：57/72**（2026-09-08 `0908H` 回勾 4.4「幂等专项测试」——给仓库里**全部 10 个** `effect_*` 节点各建一条「业务写已入事务、`effect_log` 已 INSERT、`commit()` 尚未落盘 → 强制中断 → 换全新连接确认什么都没落盘 → 按同一 `thread_id`/`business_key` 重跑 → 断言副作用恰好一份」的用例，新增单一文件 `tests/test_effect_idempotency_suite.py`。节点清单由 `ast` 从 `app/` 现扫（⛔ 不用 grep——`app/audit/assertions.py` 与 `app/outbound/delivery.py` 的注释/docstring 里都有 `@idempotent_effect` 字面量，grep 会误报），与硬编码 `EFFECT_NODE_MANIFEST` 双向比对；终审又补两条守卫：**函数名以 `effect_` 开头却没加装饰器**、**两个节点复用同一 `node_name` 字面量**（后者本身就是铁律 1 隐患：`effect_key` 撞车会让第二个节点被短路、永不执行）。4 commits `97c496e`→`a1947e3`（rebase 后）；全量 1140 → **1168 passed, 1 skipped**，另有 1 条**既有失败** `test_boundary_guard::test_real_repository_dependency_diff_is_empty`（`requirements.txt` 自基线漂移，本单元合并前后完全一致、与本单元无关）。红灯 **0**——10 个节点全部真幂等。⛔ 未改 `app/` 一个字；落地偏离 3 条、观察项 O-1/O-2/O-3 与 parked 1 条见「4.4 落地偏离登记」，跨泳道协调登记为 `docs/tech-debt.md` TD-12）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -137,6 +137,23 @@
       ⚠️ 本条原注解写的"4 个 effect 节点里覆盖了 3 个"写于只有 4 个节点时，已过期，此次一并订正。
       ⚠️ 遗留观察项 O-1：`effect_generate_and_persist_jd` 在崩溃落于提交之前时，LLM 会被**真实调用两次**（数据库状态仍精确一次）。已由 `test_llm_call_is_replayed_when_the_crash_lands_before_commit` 固化度量，修复（把 LLM 调用与写库拆成 compute/effect 两个节点）属另一个交付单元。
 - [x] 4.5 写入 `AGENTS.md` / `CLAUDE.md`：副作用节点铁律，让后续变更自动继承 → **已用 `CLAUDE.md` 实现**，见「工程铁律」第 1、2 条（副作用节点独占 + 幂等键格式 + 幂等记录与业务写同事务 + `compute_*`/`effect_*` 命名）。本仓库不使用 `AGENTS.md` 格式；`CLAUDE.md` 每会话自动加载，本条"让后续变更自动继承"的目的已达成
+
+### 4.4 落地偏离登记
+
+> 交付执行期间与计划出现的偏离、观察项、以及裁决记录，逐条摘自
+> `.superpowers/sdd/2026-09-08-m1-job-profile-intake-unit4-4-idempotency-suite/progress.md`。
+> 本节是「哪里没按计划走、为什么」的记录，⛔ 不做概括性总结抹平细节。
+> ⚠️ 该 SDD 台账在 worktree 内、git-ignored，收口删 worktree 时会消失，已转写一份到主检出同名路径。
+
+- **D-1 落地偏离**：计划正文把 `import` 块写在文件中部（Task 2/3 的追加处），实际统一收到文件顶部。纯风格、不改任何值与行为。理由＝mid-file import 会被 code-quality rubric 判成缺陷，而本轮无人值守无法请示，取"两边都不违反"的方向
+- **D-2 落地偏离（修正了计划自身的 bug）**：计划给 `effect_record_outbound_audit` 的计数查询是 `SELECT COUNT(*) FROM analysis_run WHERE thread_id = ?`，但 `analysis_run`（`app/storage/db.py:84`）**根本没有 `thread_id` 列**，照抄会 `OperationalError`。改为不带 `WHERE` 的 `COUNT(*)`；每个节点各用独立 `tmp_path` 库，语义等价
+- **D-3 落地偏离**：计划写「Expected: 15 passed」「Expected: 28 passed」，真实算术是 14 与 26（计划把守卫数记成 5、实际 Task 1 交付 3 条）。按测试名逐条核对而非凑数字，⛔ 未为凑够数字而增测。终审 fix wave 后最终 28 条
+- **O-1 观察项（计划明令"钉住不修"）**：`effect_generate_and_persist_jd` 的副作用一半在事务里（写 `job_profile`）、一半在事务外（一次真实付费 LLM 调用）。崩溃落在提交之前时数据库状态精确一次，**但 LLM 被真实调用两次、账单是两次**。已由 `test_llm_call_is_replayed_when_the_crash_lands_before_commit` 断言 `calls == 2` 固化度量。修法＝拆成 `compute_jd_text` + `effect_persist_jd` 两个节点，属另一交付单元
+- **O-2 观察项（设计如此）**：`effect_record_outbound_audit` 的 SQLite 业务行恒为 0（外发事件在 `analysis_run` 里没有真身，载体是 JSONL 镜像，且镜像 append 在 commit **之后**、本就不在事务里）。以 `rows_per_effect = 0` + `note=` + 专用用例三处显式声明，⛔ 不是漏测
+- **O-3 观察项（复核中新发现，覆盖口径的诚实边界）**：有 **4 个**节点的业务变更是"值幂等"的——跑一次与跑两次收敛到同一份数据，因此**任何**行计数口径都无法区分"生效一次"与"生效两次"：`effect_update_jd_text`、`effect_mark_jd_human_written`、`effect_generate_and_persist_jd`（用 `_jd_text IS NOT NULL` 判定）、`effect_record_outbound_audit`（`rows_per_effect=0`，两条行断言退化成 `0 == 0`）。这 4 个的重复防护**完全由 `effect_log COUNT(*) == 1` 断言承担**；另外 6 个 INSERT 型节点的行计数可独立抓到双写。四条配方均已补 `note=` 写明此事
+- **终审 triage（全分支 review 报 CHANGES REQUIRED，单次 fix wave 后全部 ADDRESSED）**：I-1 清单守卫抓不到"函数名叫 `effect_*` 却没加装饰器"的新节点——而那恰恰是作者**已经忘了**幂等约定的情形，正是本单元要防的；I-2 重复 `node_name` 字面量被 dict 静默折叠（last-writer-wins），新节点复用既有字面量可蒙混过关，且重复 `node_name` 本身就是铁律 1 隐患（`effect_key` 撞车 ⇒ 第二个节点被短路、永不执行）；I-3 `collect_effect_nodes()` 的 docstring 声称"两者一致由 `app/audit/assertions.py` 另行保证"**失实**（该处 `TERMINAL_STATUS_EFFECT_NODES` 只覆盖 10 个节点里的 2 个）。三条均已修，⛔ 未改 `app/`
+- **parked（不阻塞合并）**：scoped re-review 的 deferred 项称"别名 import（`import idempotent_effect as _eff`）会同时击穿两条新守卫"——经控制器实测**不成立**：别名装饰的 `effect_aliased` 会被 `test_every_effect_named_function_is_decorated_with_idempotent_effect` 报成"未装饰"而**变红**（保守方向）。真正残留的盲区更窄：**用别名装饰、且函数名不以 `effect_` 开头**的节点两条守卫都抓不到。另两条已在 docstring 里明写的残留盲区：定义在 `app/` 之外的节点、节点名不是源码字面量的动态注册
+- **跨泳道协调（登记为 `docs/tech-debt.md` TD-12）**：unit2 网关兜底计划新增 `effect_mark_needs_manual` 与 `effect_deliver_manual_handoff` 两个 effect 节点，全文没提 `EFFECT_NODE_MANIFEST`。该泳道落地时本套件**会变红——这是清单守卫在按设计工作**。unit2 实施者必须①把两个名字加进清单②在 `build_recipes()` 各加一条配方；⛔ 不得为了变绿而删清单条目（删条目＝宣布该节点不需要幂等保护，属铁律 1 的例外，只有 Shao Peishen 能拍）
 
 ## 5. 需求解析 Agent（capability: job-profile-intake）
 
