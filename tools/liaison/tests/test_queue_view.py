@@ -6,6 +6,7 @@
 
 import ast
 import pathlib
+import re
 
 import pytest
 
@@ -79,9 +80,84 @@ def test_escape_cell_turns_newlines_into_visible_two_char_sequences():
 
 
 def test_escape_cell_escapes_other_control_characters():
-    assert escape_cell("空\x00字节") == r"空\x00字节"
-    assert escape_cell("转义\x1b序列") == r"转义\x1b序列"
-    assert escape_cell("删除\x7f符") == r"删除\x7f符"
+    """fix round 2：不可打印字符改成定长 `\\uXXXX`（BMP 内固定 4 位十六进制），
+    不再用变长的 `\\xNN`——变长会让截断切出语义错误的半截（见下方专项用例）。
+    """
+    assert escape_cell("空\x00字节") == r"空\u0000字节"
+    assert escape_cell("转义\x1b序列") == r"转义\u001b序列"
+    assert escape_cell("删除\x7f符") == r"删除\u007f符"
+
+
+def test_escape_cell_escapes_codepoints_above_0xff_with_a_fixed_width_form():
+    """核心缺陷（fix round 2）：旧实现用 `f"\\\\x{{ord(ch):02x}}"`，`02x` 只保证
+    **最小**宽度 2，码点 > 0xFF 时产出**变长**十六进制（如 U+2028 → `\\x2028`，
+    6 字符而不是 4）。而截断用的 token 化正则只吃固定 2 位 `\\x[0-9a-fA-F]{2}`，
+    于是把 `\\x2028` 拆成 `\\x20` + `2` + `8` 三个 token——`\\x20` 恰好是一个语法
+    完整但语义错误的转义（真正的 U+0020 是空格，但这里其实是 U+2028 的前半截）。
+
+    修复：BMP 内的不可打印字符一律 `\\uXXXX`（定长 4 位），超出 BMP 的一律
+    `\\UXXXXXXXX`（定长 8 位）——与 Python 自身 `unicode_escape` 的惯例一致，
+    定长意味着 token 化正则可以精确匹配、不会再产生变长导致的歧义。
+    """
+    for ch in (chr(0x2028), chr(0x200B), chr(0xFEFF)):
+        escaped = escape_cell(ch)
+        assert escaped == f"\\u{ord(ch):04x}", (
+            f"U+{ord(ch):04X} 转义结果不是定长 \\uXXXX：{escaped!r}"
+        )
+        assert len(escaped) == 6, f"\\uXXXX 必须恒定 6 字符：{escaped!r}"
+
+    # 超出 BMP（> 0xFFFF）：用 8 位 \U 形式，与 \u 形式靠大小写区分，彼此不会混淆。
+    astral = chr(0xE0001)  # LANGUAGE TAG，Cf 类别，非打印
+    escaped_astral = escape_cell(astral)
+    assert escaped_astral == f"\\U{ord(astral):08x}"
+    assert len(escaped_astral) == 10
+
+
+def test_escape_cell_truncation_never_splits_a_wide_codepoint_escape():
+    """截断恰好落在 `\\uXXXX`（宽字符转义）中间时，必须整体丢弃，⛔ 不许留半截。
+
+    旧实现下这个用例会产出 `AAAAAAA\\x20…`（切出了看起来完整、实际是
+    U+2028 前半截的 `\\x20`）——静默语义失真，比"肉眼可见的半截"更危险。
+    """
+    text = "A" * 7 + chr(0x2028) + "Z"
+    full = escape_cell(text, max_chars=200)
+    assert full == "AAAAAAA\\u2028Z"
+
+    # ` ` 转义后是 6 字符：\ u 2 0 2 8。逐个 max_chars 扫过整个序列的
+    # 中间位置，确保输出里不会出现"半个 \\uXXXX"这种不完整片段。
+    for max_chars in range(8, 15):
+        cell = escape_cell(text, max_chars=max_chars)
+        assert cell.endswith("…") or cell == full
+        stripped = cell[:-1] if cell.endswith("…") else cell
+        # 不许出现游离的 `\`、`\u`，或位数不足 4 位的残缺 `\uXXX`/`\uXX`/`\uX`
+        assert not re.search(r"\\u[0-9a-fA-F]{0,3}$", stripped), (
+            f"max_chars={max_chars} 切出了半个 \\uXXXX：{cell!r}"
+        )
+
+
+def test_escape_cell_is_unambiguous_for_distinct_inputs():
+    """无歧义性：即使完全不截断，转义结果也必须能唯一还原原始字符串——
+    任意两个不同的原始字符串，转义后 ⛔ 不许得到同一个结果。
+
+    第一组：真实的 U+2028 字符 vs 用户自己打的六个字面 ASCII 字符 `\\u2028`。
+    后者含一个真实反斜杠，会被 `_CELL_TRANSLATION` 先翻倍成两个反斜杠，
+    天然与"转义生成的单个反斜杠"区分开，这是本方案无歧义性的结构性保证。
+
+    第二组：对应旧缺陷的经典构造——`\\x2028`（旧变长方案对 U+2028 的转义结果）
+    这一串字符本身有歧义，既可读作"一个 4 位转义"也可读作"2 位转义 + 字面
+    `28`"。新方案下二者不会再合流，因为 `\\uXXXX` 恒定 4 位，`\\x` 前缀也
+    根本不再是合法转义形状。
+    """
+    real_char = escape_cell(chr(0x2028))
+    user_typed_literal = escape_cell("\\u2028")  # 用户真的打了这 6 个字符
+    assert real_char != user_typed_literal
+    assert real_char == "\\u2028"
+    assert user_typed_literal == "\\\\u2028"  # 真实反斜杠被翻倍
+
+
+def test_escape_cell_keeps_cjk_and_emoji_intact():
+    """⛔ 不许因为"看起来不是 ASCII"就转义。只有不可打印字符才转。"""
+    assert escape_cell("报价单 📎 已发") == "报价单 📎 已发"
 
 
 def test_escape_cell_truncates_and_marks_it():
@@ -111,21 +187,17 @@ def test_escape_cell_truncation_never_splits_an_escape_sequence():
 
 
 def test_escape_cell_truncation_never_splits_a_control_char_hex_escape():
-    """同一条 Minor 的第二个场景：4 字符的 `\\xNN` 序列也不许被切一半。"""
+    """同一条 Minor 的第二个场景：fix round 2 后 `\\x00` 变成 6 字符的 `\\u0000`
+    （定长 `\\uXXXX`），同样不许被切一半。"""
     text = "A" * 7 + "\x00" + "Z"
     cell = escape_cell(text, max_chars=9)
     assert cell.endswith("…")
     stripped = cell[:-1]
-    # 不许出现游离的 `\`、`\x` 或 `\x0` 这类不完整片段
+    # 不许出现游离的 `\`、`\u` 或位数不足 4 位的残缺 `\uXXX`/`\uXX`/`\uX`
     assert not stripped.endswith("\\")
-    assert not stripped.endswith("\\x")
-    assert not (len(stripped) >= 3 and stripped[-3:-1] == "\\x")
+    assert not stripped.endswith("\\u")
+    assert not re.search(r"\\u[0-9a-fA-F]{0,3}$", stripped)
     assert cell == "AAAAAAA…"
-
-
-def test_escape_cell_keeps_cjk_and_emoji_intact():
-    """⛔ 不许因为"看起来不是 ASCII"就转义。只有不可打印字符才转。"""
-    assert escape_cell("报价单 📎 已发") == "报价单 📎 已发"
 
 
 # ── 渲染（纯函数） ────────────────────────────────────────────────────

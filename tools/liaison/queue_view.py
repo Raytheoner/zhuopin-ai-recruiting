@@ -58,28 +58,59 @@ _CELL_TRANSLATION = str.maketrans(
 _TABLE_HEADER = "| ID | 状态 | 发送人 | 会话 | 接收时间 | 推送时间 | msgid | 摘要 |"
 _TABLE_DIVIDER = "|---:|---|---|---|---|---|---|---|"
 
-#: `escape_cell` 输出里唯二会出现的转义形状：`_CELL_TRANSLATION` 产生的两字符
-#: 序列（`\\`、`\|`、`\n`、`\r`、`\t`），以及不可打印字符产生的四字符 `\xNN`。
+#: `escape_cell` 输出里会出现的转义形状：`_CELL_TRANSLATION` 产生的两字符
+#: 序列（`\\`、`\|`、`\n`、`\r`、`\t`），以及不可打印字符产生的**定长**转义——
+#: BMP 内（码点 ≤ 0xFFFF）六字符 `\uXXXX`，超出 BMP 十字符 `\UXXXXXXXX`
+#: （与 Python 自身 `unicode_escape` 的惯例一致）。
+#:
+#: fix round 2：曾经这里写的是"四字符 `\xNN`"——那句话本身是错的。
+#: `f"\\x{{ord(ch):02x}}"` 的 `02x` 只保证**最小**宽度 2，码点 > 0xFF 时
+#: （如 U+2028）会产出**变长**十六进制（`\x2028`，6 字符而不是 4），而这个
+#: 转义形状本身还有歧义：即使不截断，`\x2028` 也无法区分"一个 4 位转义"
+#: 和"一个 2 位转义 `\x20` 后面跟字面量 `28`"。改成定长的 `\uXXXX`/`\UXXXXXXXX`
+#: 后不再有这问题：宽度固定，且 `u`/`U` 的大小写把两档长度彻底分开。
+#:
 #: 截断时必须按这张表切"完整 token"，⛔ 不许按字符下标硬切——那会切出半个
-#: token（例如切在反斜杠和 `n` 之间），留下一个孤立反斜杠贴着省略号。
-#: 每个分支的第二个字符互不相同（`\`/`|`/`n`/`r`/`t`/`x`），彼此不构成前缀
-#: 歧义，交给正则引擎从左到右按位置贪一次即可，不依赖分支顺序。
-_ESCAPE_TOKEN = re.compile(r"\\\\|\\\||\\n|\\r|\\t|\\x[0-9a-fA-F]{2}|.", re.DOTALL)
+#: token（例如切在反斜杠和 `n` 之间，或切在 `\uXXXX` 中间），留下一截看似
+#: 合法、实则语义错误的残片。每个分支的第二个字符互不相同
+#: （`\`/`|`/`n`/`r`/`t`/`u`/`U`），彼此不构成前缀歧义，且 `\u`/`\U` 各自的
+#: 十六进制位数固定，交给正则引擎从左到右按位置贪一次即可，不依赖分支顺序。
+_ESCAPE_TOKEN = re.compile(
+    r"\\\\|\\\||\\n|\\r|\\t|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|.", re.DOTALL
+)
 
 
 def escape_cell(text, *, max_chars: int = DEFAULT_CELL_MAX_CHARS) -> str:
     """纯函数：把任意字符串压成一个安全的表格单元格。
 
     竖线转义成 `\\|`、换行/回车/制表符转义成可见的两字符序列、其余不可打印字符
-    转义成 `\\xNN`。超长按 token 截断并以 `…` 标记——**按转义序列整体截断，
-    ⛔ 不按字符下标硬切**，硬切可能恰好切在一个转义序列中间（fix round 1，
-    Minor）。预算不够容纳最后一个 token 时该 token 整体丢弃，不留半截。
+    转义成**定长**形式：BMP 内（码点 ≤ 0xFFFF）`\\uXXXX`（4 位十六进制），
+    超出 BMP `\\UXXXXXXXX`（8 位十六进制）——与 Python 自身 `unicode_escape`
+    的惯例一致。
+
+    fix round 2（根因修复）：曾经用 `f"\\x{{ord(ch):02x}}"`，`02x` 只保证
+    **最小**宽度 2，码点 > 0xFF 时（如 U+2028）产出**变长**十六进制
+    （`\\x2028`，6 字符），而截断用的 token 化正则只吃固定 2 位，于是把
+    `\\x2028` 拆成 `\\x20` + `2` + `8` 三个 token——`\\x20` 语法完整但语义
+    错误（真正的 U+0020 是空格，这里其实是 U+2028 的前半截），比看得见的
+    半截更危险。更根本的问题是这个转义形式本身就有歧义：即使完全不截断，
+    `\\x2028` 也无法区分"一个 4 位转义"和"`\\x20` 后面跟字面量 `28`"。
+    改成定长形式后，宽度固定、`u`/`U` 大小写把两档长度分开，不再有歧义。
+
+    超长按 token 截断并以 `…` 标记——**按转义序列整体截断，⛔ 不按字符下标
+    硬切**，硬切可能恰好切在一个转义序列中间（fix round 1，Minor）。预算
+    不够容纳最后一个 token 时该 token 整体丢弃，不留半截。
 
     ⛔ 只在这里转义。存储层原样存——参考服务的"竖线归一化"是给
     "拿 Markdown 当数据库"那套形态打的补丁，在本形态下只会静默改掉用户发来的字。
     """
     escaped = ("" if text is None else str(text)).translate(_CELL_TRANSLATION)
-    escaped = "".join(ch if ch.isprintable() else f"\\x{ord(ch):02x}" for ch in escaped)
+    escaped = "".join(
+        ch
+        if ch.isprintable()
+        else (f"\\u{ord(ch):04x}" if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}")
+        for ch in escaped
+    )
     if len(escaped) <= max_chars:
         return escaped
     budget = max_chars - 1  # 留一个字符给省略号
