@@ -192,6 +192,32 @@ def test_make_sdk_connect_refuses_a_client_missing_the_expected_surface():
         assert attr in str(excinfo.value)
 
 
+def test_make_sdk_connect_refuses_a_coroutine_function_connect():
+    """🔴 controller ruling（docs/findings/2026-09-09-aibot-wsclient-表面实测.md）：
+
+    真实 SDK 的 `WSClient.connect` 是 `async def`。同步调用它只会返回一个协程
+    对象、不执行任何网络动作——`run_forever` 会把"刚连上"误判成"立刻又断开
+    了"，从此永远退避重连，⛔ 不报错、⛔ 没有任何症状。`make_sdk_connect` 必须
+    在接线阶段就当场拒绝这种表面，而不是把一个不满足"阻塞到断开为止"契约的
+    callable 交给 run_forever。
+    """
+    events = {}
+
+    class AsyncConnectClient:
+        def on(self, event, handler):
+            events[event] = handler
+
+        async def connect(self):  # pragma: no cover - 不应被真的调用到
+            raise AssertionError("协程 connect 必须在接线阶段就被拒绝，不应被调用")
+
+    with pytest.raises(session_client.SdkSurfaceUnverifiedError) as excinfo:
+        session_client.make_sdk_connect(
+            AsyncConnectClient(), on_connected=lambda: None, on_disconnected=lambda: None
+        )
+    assert "client.run()" in str(excinfo.value)
+    assert events == {}, "⛔ 表面拒绝之前不许先订阅事件——半接线比不接线更危险"
+
+
 def test_make_sdk_connect_subscribes_both_events_and_returns_a_blocking_callable():
     """用 fake 连接对象验接线形状，⛔ 不联真企微。"""
     events = {}

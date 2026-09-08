@@ -653,3 +653,31 @@ userid 填入使出厂态消失时复核一次）。
 ⚠️ 但要防的是**图省事把守卫改回只认裸局部名**：那会重新打开 `with self._conn:` 的口子，
 而那个口子的症状是**没有症状**（`effect_log` 与业务表静默劈叉，正是 `.51` 2026-08-10／08-12
 丢 `outbox` 的失败模式）。宁可留误报，⛔ 不许退回窄化。
+
+## TD-19 · 真实建连尚未适配——`make_sdk_connect` 对协程 `connect` 表面按"未验即拒绝启动"处理
+
+**欠的是什么**：Task 5 的探针实测（`docs/findings/2026-09-09-aibot-wsclient-表面实测.md`
+「遗留发现」）发现真实 SDK 的 `WSClient.connect` 是 `async def`——同步调用它只会返回一个
+协程对象、不执行任何网络操作，不满足 `run_forever` 期望的"阻塞到断开为止"契约；真正的
+阻塞入口是 `client.run()`。第 7 章按 controller ruling 把这个判断做成结构：
+`session_client.make_sdk_connect` 用 `inspect.iscoroutinefunction` 探测 `connect`，探到协程
+函数就当场 `raise SdkSurfaceUnverifiedError`（指名 `client.run()` 与 findings 文档），
+`__main__.main()` 据此以 `EXIT_SDK_SURFACE_UNVERIFIED` 拒绝启动。**本章没有写、也没有猜
+任何"把 `client.run()` 接进 `run_forever`"的适配代码**——那需要真实凭据把整条链路跑一遍
+才能验证接对了，而 `HR_LIAISON_BOT_ID`/`HR_LIAISON_BOT_SECRET` 尚未注册，本仓库拿不到。
+
+**触发条件**：Shao Peishen 在企微后台注册 aibot、取得 `HR_LIAISON_BOT_ID`/
+`HR_LIAISON_BOT_SECRET` 之后，第 8 章 8.6 灰度验收——用真实凭据把 `client.run()`（或等价的
+同步阻塞封装）接进 `session_client.run_forever`，并端到端验证真实建连与真实断线重连都按
+预期记窗口、告警、恢复。在此之前，`tools/liaison/.venv` 里跑
+`test_make_sdk_connect_refuses_a_coroutine_function_connect` /
+`test_main_exits_when_the_sdk_connect_is_a_coroutine_function` 等断言会持续把这个缺口保持
+"响亮可见"。
+
+**不还的后果**：不还也没有隐患——当前处置是"表面对不上就拒绝启动"，失败模式是进程
+在启动时**立刻、显式**退出（`EXIT_SDK_SURFACE_UNVERIFIED`，日志与 stderr 都点名
+`client.run()`），⛔ 不是静默自旋重连（那正是本章要消灭的失败类别，详见本条上方引用的
+findings 与 controller ruling）。真正的风险只在于：如果将来有人绕开
+`make_sdk_connect` 的这道检查、直接把 `client.connect`（协程）手工拼进
+`run_forever`，就会退回"服务起得来、日志正常、但从不真正建连"的静默故障——⛔ 不许
+削弱或绕过这道检查来"让它先跑起来"。

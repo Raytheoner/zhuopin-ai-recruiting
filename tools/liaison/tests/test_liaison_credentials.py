@@ -17,6 +17,7 @@ import time
 
 import pytest
 
+from tools.liaison.__main__ import EXIT_MISSING_CREDENTIALS, EXIT_SDK_UNAVAILABLE
 from tools.liaison.config import (
     BOT_ID_ENV,
     BOT_SECRET_ENV,
@@ -118,15 +119,37 @@ def test_entrypoint_exits_nonzero_and_names_missing_items(tmp_path):
 
 
 def test_entrypoint_succeeds_when_credentials_present(tmp_path):
+    """凭据校验通过后，入口不得再因为"凭据"这件事拒绝启动。
+
+    ⚠️ **第 7 章更新**：Task 6 接线后，凭据校验通过只是入口的第一关，紧接着会
+    尝试 `import aibot` 构造 SDK 连接对象。本用例用 `sys.executable` 起子进程，
+    也就是**根 venv**——design D10 的依赖隔离决定了 aibot 只装在
+    `tools/liaison/.venv`，根 venv 里必然装不上。因此这里的"成功"标准从
+    "returncode == 0"改写为"没有因为凭据缺失退出（EXIT_MISSING_CREDENTIALS），
+    而是恰好在下一关——SDK 不可用（EXIT_SDK_UNAVAILABLE）——停下"，这正是本
+    进程在根 venv 里能达到的最远、也是诚实的位置；凭据取值仍然不得出现在任何
+    输出里。
+    """
     proc, _ = _run_entrypoint(
         {BOT_ID_ENV: "bot-1", BOT_SECRET_ENV: "sec-1"}, tmp_path
     )
-    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert proc.returncode != EXIT_MISSING_CREDENTIALS, (
+        f"凭据齐备时不该被判定为缺失：stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert proc.returncode == EXIT_SDK_UNAVAILABLE, (
+        f"根 venv 不装 aibot（design D10），预期止步于 SDK 不可用："
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
     assert "sec-1" not in proc.stdout + proc.stderr, "凭据取值不得出现在任何输出里"
 
 
 def test_entrypoint_reads_dotenv_when_process_env_is_absent(tmp_path):
-    """凭据"只从进程环境读"——.env 的作用是**填进**进程环境，不是第二个真源。"""
+    """凭据"只从进程环境读"——.env 的作用是**填进**进程环境，不是第二个真源。
+
+    ⚠️ 同上一条：根 venv 没装 aibot（design D10），.env 填进的凭据一旦通过校验，
+    下一关必然止步于 EXIT_SDK_UNAVAILABLE。本用例只关心"没有因为凭据缺失退出"，
+    这才是"从 .env 读到了凭据"这件事本身要验的东西。
+    """
     dotenv = tmp_path / "from-file.env"
     dotenv.write_text(
         f"# 注释行应被跳过\n{BOT_ID_ENV}=bot-from-file\n{BOT_SECRET_ENV}=sec-from-file\n",
@@ -141,7 +164,8 @@ def test_entrypoint_reads_dotenv_when_process_env_is_absent(tmp_path):
         [sys.executable, "-m", "tools.liaison"],
         cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=30,
     )
-    assert proc.returncode == 0, f"stderr={proc.stderr!r}"
+    assert proc.returncode != EXIT_MISSING_CREDENTIALS, f"stderr={proc.stderr!r}"
+    assert proc.returncode == EXIT_SDK_UNAVAILABLE, f"stderr={proc.stderr!r}"
 
 
 def test_dotenv_strips_export_prefix(tmp_path):

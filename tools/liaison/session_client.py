@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -142,6 +143,35 @@ def make_sdk_connect(
             "REQUIRED_CLIENT_ATTRS / EVENT_CONNECTED / EVENT_DISCONNECTED，"
             "并把原始输出落进 docs/findings/。⛔ 不要绕过本检查。"
         )
+    connect = client.connect
+    if inspect.iscoroutinefunction(connect):
+        # 实测（docs/findings/2026-09-09-aibot-wsclient-表面实测.md「遗留发现」）：
+        # 真实 SDK 的 WSClient.connect 是 `async def`，同步调用只会拿到一个协程
+        # 对象、执行不了任何网络动作——`run_forever` 会把"刚连上"误判成"立刻又
+        # 断开了"，退避从 1s 起不停重连，永远连不上、⛔ 不报错、⛔ 没有任何症状。
+        # 真正满足 run_forever「阻塞到断开为止」这个契约的入口是 client.run()
+        # （同步、跑到断线为止）。本模块 ⛔ 不猜一个未经真实凭据验证的 async
+        # 适配方案——凭据未注册，猜错同样是静默故障，只是换了个位置。
+        raise SdkSurfaceUnverifiedError(
+            "SDK 的 connect 是协程函数（async def），不满足 run_forever 期望的"
+            "「阻塞到断开为止」同步调用契约：同步调用它只会返回一个协程对象，"
+            "不执行任何网络操作。真正的阻塞入口是 client.run()。本模块拒绝把"
+            "未经验证的 async→同步适配硬接上去，详见 "
+            "docs/findings/2026-09-09-aibot-wsclient-表面实测.md「遗留发现」一节。"
+        )
     client.on(EVENT_CONNECTED, lambda *args, **kwargs: on_connected())
     client.on(EVENT_DISCONNECTED, lambda *args, **kwargs: on_disconnected())
-    return client.connect
+    return connect
+
+
+def build_client(credentials):
+    """按凭据造一个 SDK 连接对象。
+
+    ⛔ `import aibot` 同样写在函数体里（根 venv 不装 SDK）。装不上时抛的是
+    `ImportError`，调用方据此给一个**专用退出码**——SDK 缺失是配置问题，
+    ⛔ 不许被当成"网络不好"进重试循环，那会让一个永远不会自愈的故障
+    看起来像是在等待恢复。
+    """
+    import aibot
+
+    return aibot.WSClient(build_ws_options(credentials))
