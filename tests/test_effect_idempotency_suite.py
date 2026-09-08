@@ -83,8 +83,9 @@ EFFECT_NODE_MANIFEST = frozenset(
 )
 
 
-def collect_effect_nodes() -> dict[str, str]:
-    """AST 扫 `app/` 下全部 .py，返回 {节点名: "相对路径:行号"}。
+def collect_effect_node_sites() -> dict[str, list[str]]:
+    """AST 扫 `app/` 下全部 .py，返回 {节点名: ["相对路径:行号", ...]}——**保留同一个
+    字面量的全部出现位置**，不做去重合并。
 
     ⭐ **用 AST 而不是 grep**：`app/audit/assertions.py` 的注释里、
     `app/outbound/delivery.py` 的 docstring 里都出现过 `@idempotent_effect`
@@ -95,9 +96,23 @@ def collect_effect_nodes() -> dict[str, str]:
 
     节点名取**装饰器的字面量参数**而非函数名：幂等键里存进 effect_log 的是
     这个字面量（见 app/storage/idempotency.py），它才是数据库里的事实。
-    两者一致由 `app/audit/assertions.py` 另行保证，本文件不重复断言。
+
+    ⚠️ **上面这句"两者一致"曾经写的是"由 `app/audit/assertions.py` 另行保证，
+    本文件不重复断言"——那是假的，已订正。** `app/audit/assertions.py` 的
+    `TERMINAL_STATUS_EFFECT_NODES` 只交叉核对了 10 个节点里的**两个**
+    （`effect_confirm_profile`、`effect_abandon_profile`，服务于终态留痕断言）；
+    其余八个节点的函数名与装饰器字面量参数是否一致，**没有任何代码断言**——
+    本文件也不断言。这是一个真实存在的空白，不是"另有人管"。
+
+    ⚠️ **本守卫抓不到什么**（reviewer 已确认、明确排除在外，⛔ 不要以为清单
+    绿了就代表这些也被盖住）：
+    (a) 定义在 `app/` 之外的 effect 节点——本收集器只扫 `app/` 下的 `.py`；
+    (b) 动态生成的节点名，例如 `make_effect("effect_x")` 这种字面量参数不是
+    直接写在 `@idempotent_effect(...)` 里的写法——下面的字面量断言会把这类
+    写法钉在红灯上（`len(deco.args) == 1 and isinstance(deco.args[0], ast.Constant)`
+    失败），但钉住之后它依然进不了清单，只是不会被静默漏掉、会被看见。
     """
-    found: dict[str, str] = {}
+    sites: dict[str, list[str]] = {}
     for path in sorted(_APP_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -116,8 +131,79 @@ def collect_effect_nodes() -> dict[str, str]:
                     "无法从源码静态推断，这条清单守卫和 app/audit/assertions.py 的"
                     "断言就同时失效了。"
                 )
-                found[deco.args[0].value] = f"{path.relative_to(_REPO_ROOT)}:{node.lineno}"
-    return found
+                where = f"{path.relative_to(_REPO_ROOT)}:{node.lineno}"
+                sites.setdefault(deco.args[0].value, []).append(where)
+    return sites
+
+
+def collect_effect_nodes() -> dict[str, str]:
+    """`collect_effect_node_sites()` 的薄封装：每个节点名只取第一个出现位置，
+    向后兼容既有调用方（`build_recipes()` 的键集合比对、
+    `test_collector_reports_where_each_node_lives` 等）。
+
+    ⚠️ 重名检测由 `test_no_duplicate_effect_node_name_literals` 独立断言，
+    本函数不做去重告警——它存在的目的只是保留一个简单的 dict[str, str] 接口，
+    不是"这里已经确认过没有重复"。
+    """
+    return {name: wheres[0] for name, wheres in collect_effect_node_sites().items()}
+
+
+def collect_effect_named_functions() -> list["_EffectFunctionSite"]:
+    """AST 扫 `app/` 下全部 .py，返回**所有**名字以 `effect_` 开头的函数定义
+    （`def` 与 `async def` 都算），不问它有没有被装饰。
+
+    ⭐ **I-1 的核心**：`collect_effect_node_sites()`／`collect_effect_nodes()`
+    只看装饰器的字面量参数——一个作者忘了加 `@idempotent_effect` 的
+    `effect_*` 节点，对它们完全不可见，清单守卫、崩溃-恢复用例全都不会拿到
+    这个节点，测试保持全绿。而"作者已经忘了"正是工程铁律 1 存在的理由：
+    没有幂等键、没有 `effect_log` 行，LangGraph 从节点开头整个重跑时会静默
+    重复这个副作用。这个收集器反过来按**函数名**找，不管装饰器在不在，
+    再由 `test_every_effect_named_function_is_decorated_with_idempotent_effect`
+    断言"找到的每一个都被装饰了"。
+
+    ⚠️ 装饰器识别方式与 `collect_effect_node_sites()` 相同——按源码拼写认
+    `idempotent_effect`。对 `from app.storage.idempotency import
+    idempotent_effect as _eff` 这种别名形式，本守卫与上面那个守卫一样仍然
+    失明：这是承认但本轮不修的残留限制，不在"抓不到什么"清单里重复列——
+    原因是它不属于 reviewer 明确圈定的两条残留（out-of-app / 动态节点名），
+    而是两个收集器共有的同一个已知盲区。
+    """
+    sites: list[_EffectFunctionSite] = []
+    for path in sorted(_APP_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("effect_"):
+                continue
+            has_decorator = any(
+                isinstance(deco, ast.Call)
+                and (
+                    (isinstance(deco.func, ast.Name) and deco.func.id == "idempotent_effect")
+                    or (
+                        isinstance(deco.func, ast.Attribute)
+                        and deco.func.attr == "idempotent_effect"
+                    )
+                )
+                for deco in node.decorator_list
+            )
+            sites.append(
+                _EffectFunctionSite(
+                    qualname=node.name,
+                    where=f"{path.relative_to(_REPO_ROOT)}:{node.lineno}",
+                    has_idempotent_effect_decorator=has_decorator,
+                )
+            )
+    return sites
+
+
+@dataclass(frozen=True)
+class _EffectFunctionSite:
+    """一处以 `effect_` 开头命名的函数定义（不问是否装饰）。"""
+
+    qualname: str
+    where: str
+    has_idempotent_effect_decorator: bool
 
 
 def test_manifest_matches_the_source_tree():
@@ -155,6 +241,55 @@ def test_collector_ignores_the_literal_in_comments_and_docstrings():
     assert not any(where.startswith("app/outbound/delivery.py:") for where in located.values()), (
         "app/outbound/delivery.py 里没有任何 effect_* 节点，只有一句说明它"
         "**不是**节点的 docstring——收集器扫到它说明用错了实现（应为 AST，非文本匹配）"
+    )
+
+
+def test_every_effect_named_function_is_decorated_with_idempotent_effect():
+    """⭐⭐ I-1：按函数名找 `effect_*` 定义，揪出"忘了加装饰器"这种情形——
+    `collect_effect_nodes()` 只认装饰器字面量，对这类节点完全不可见。
+
+    一个名字以 `effect_` 开头却没有 `@idempotent_effect` 的函数，没有幂等键、
+    不落 `effect_log` 行；LangGraph 从节点开头整个重跑时，这个副作用会被
+    静默重复执行——这正是工程铁律 1 要防的那种失败，也是"作者已经忘了"这个
+    最常见的疏漏形态。
+    """
+    undecorated = [
+        site for site in collect_effect_named_functions() if not site.has_idempotent_effect_decorator
+    ]
+    assert not undecorated, "\n".join(
+        [
+            "以下函数名以 effect_ 开头，但没有 @idempotent_effect 装饰器——"
+            "没有幂等键，没有 effect_log 行，LangGraph 从节点开头整个重跑时会"
+            "静默重复这个副作用（工程铁律 1）：",
+            *(f"  - {site.qualname} @ {site.where}" for site in undecorated),
+        ]
+    )
+
+
+def test_no_duplicate_effect_node_name_literals():
+    """⭐⭐ I-2：同一个 `@idempotent_effect(...)` 字面量参数不能出现在两处。
+
+    `collect_effect_nodes()` 的 `dict[str, str]` 是 last-writer-wins：两个函数
+    共用同一个字面量时，先出现的那个会被后出现的静默顶掉，清单守卫对这种
+    情形完全看不见——甚至可能出现"新节点用了一个已在清单里的旧名字"这种
+    最危险的形态：清单保持绿灯，但一个从未被测过的节点已经悄悄上线。
+
+    重复本身就是一个独立的铁律 1 危害：两个节点共享 `node_name` 时，只要
+    `thread_id` + `business_key` 也相同，幂等键 `f"{thread_id}:{node_name}:
+    {business_key}"` 就会撞车，后一个节点会被 `idempotent_effect` 短路、
+    永远不执行——`docs/findings/2026-08-13-sqlite-事务归属冲突.md` 记录的
+    那类静默丢失是同一族故障。
+    """
+    duplicated = {
+        name: wheres for name, wheres in collect_effect_node_sites().items() if len(wheres) > 1
+    }
+    assert not duplicated, "\n".join(
+        [
+            "以下 @idempotent_effect 节点名字面量出现了不止一次——两个节点共享"
+            "同一个 node_name，幂等键在 thread_id + business_key 相同时会撞车，"
+            "后一个节点将被 idempotent_effect 短路、永远不执行：",
+            *(f"  - {name!r}: {wheres}" for name, wheres in duplicated.items()),
+        ]
     )
 
 
@@ -425,7 +560,13 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "AND json_extract(profile_json, '$._jd_text') IS NOT NULL",
                 (_JOB,),
             ).fetchone()[0],
-            note="唯一一个重放会重复触发付费 LLM 调用的节点，见「红灯与观察项」O-1",
+            note=(
+                "唯一一个重放会重复触发付费 LLM 调用的节点，见「红灯与观察项」O-1。"
+                "同时它也是 value-idempotent 的：这里用 IS NOT NULL 做存在性判断，"
+                "只要该字段已被写过一次，哪怕重放让 LLM 又生成了一遍新文本覆盖旧值，"
+                "在这一列上仍然是「存在」——行数分不出写了一次还是两次，双发保护"
+                "同样完全靠 effect_log 的 COUNT(*) == 1 断言。"
+            ),
         ),
         "effect_enqueue_pending_approval": Recipe(
             thread_id=_JOB,
@@ -458,7 +599,10 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "（SqliteSink.SUPPORTED_EVENT_TYPES 只收 ai_analysis），它的载体是"
                 "JSONL 镜像，而镜像 append 由调用方在装饰器 commit **之后**触发，"
                 "本就不在事务里。所以本节点的 SQLite 业务行数恒为 0——这是设计如此，"
-                "⛔ 不是漏测。见「红灯与观察项」O-2"
+                "⛔ 不是漏测。见「红灯与观察项」O-2。"
+                "同时它是四个 value-idempotent 配方之一，且是最极端的一个："
+                "rows_per_effect=0 时业务行断言退化成 0 == 0 的恒等式，永远成立、"
+                "什么也证明不了，双发保护 100% 靠 effect_log 的 COUNT(*) == 1。"
             ),
         ),
         "effect_update_jd_text": Recipe(
@@ -471,10 +615,16 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 version=1,
                 edited_text=_EDITED_JD,
             ),
-            count_business_rows=lambda conn: sum(
-                1
-                for _ in [1]
-                if _EDITED_JD in _profile_v1(conn).get(JD_TEXT_KEY, "")
+            count_business_rows=lambda conn: int(
+                bool(_EDITED_JD in _profile_v1(conn).get(JD_TEXT_KEY, ""))
+            ),
+            note=(
+                "**value-idempotent**：这条业务写是把 JD 文案整段替换成同一段"
+                "编辑后的文本，无论 idempotent_effect 放行执行了一次还是被短路"
+                "跳过零次，profile_json 里这段文案落地后的取值完全相同——单看"
+                "这一列的取值/行数分不出「生效了一次」与「生效了两次」，双发"
+                "保护完全靠 effect_log 的 COUNT(*) == 1 断言，这里的检查只是"
+                "附带确认。"
             ),
         ),
         "effect_mark_jd_human_written": Recipe(
@@ -488,8 +638,11 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 reviewer="HR 乙",
                 marked_at=_TS,
             ),
-            count_business_rows=lambda conn: sum(
-                1 for _ in [1] if _profile_v1(conn).get(JD_AUTHORSHIP_KEY)
+            count_business_rows=lambda conn: int(bool(_profile_v1(conn).get(JD_AUTHORSHIP_KEY))),
+            note=(
+                "**value-idempotent**：标记「人工撰写」是把 profile_json 里的一个"
+                "作者标记位设成同一个值，重复标记与只标记一次在这一列上的取值"
+                "完全相同——双发保护同样完全靠 effect_log 的 COUNT(*) == 1 断言。"
             ),
         ),
     }

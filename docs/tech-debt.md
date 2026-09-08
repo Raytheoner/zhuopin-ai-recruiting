@@ -429,3 +429,35 @@ test_approving_into_a_closed_switch_leaves_its_own_trail`（不同原因两条�
 
 **不还的后果**：业务经理看到的草案缺一条他明明写了的门槛，而**没有任何东西会报错**——
 他只会以为系统认为那句话不构成门槛。
+
+---
+
+## TD-12 · unit2 网关兜底落地时会新增两个 effect 节点，需同步进幂等清单
+
+**登记**：2026-09-08，delivery unit 4.4（幂等专项测试）终审 fix wave 登记。
+
+**是什么**：`docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry.md`
+（unit2 网关兜底与重试，尚未落地）新增两个 effect 节点——`effect_mark_needs_manual`
+与 `effect_deliver_manual_handoff`（计划里落在 `app/graph/manual_handoff.py`，均带
+`@idempotent_effect(...)`）——该计划全文没有提到
+`tests/test_effect_idempotency_suite.py` 的 `EFFECT_NODE_MANIFEST`。unit2 落地
+合并时，`test_manifest_matches_the_source_tree` 会因为源码里出现了清单里没有的
+节点名而变红——**这是本单元的清单守卫在按设计工作**（「新增节点漏测即变红」），
+但下一个实施者需要事先知道该怎么处理这次预期中的红灯，而不是当场现推。
+
+**触发条件**：unit2 落地合并那一刻。
+
+**怎么还**：unit2 的实施者必须做两件事，两件都做才算还清：
+① 把 `effect_mark_needs_manual` 与 `effect_deliver_manual_handoff` 两个名字加进
+`tests/test_effect_idempotency_suite.py` 的 `EFFECT_NODE_MANIFEST`；
+② 在 `build_recipes()` 里各加一条崩溃-恢复配方（种子数据、调用方式、
+`count_business_rows`），让 `test_forced_interrupt_then_recovery_applies_the_effect_exactly_once`
+与 `test_effect_log_count_equals_business_rows_per_thread` 两条参数化用例把它们
+也覆盖到。
+⛔ **不得为了让测试变绿而从 `EFFECT_NODE_MANIFEST` 里删掉任何既有条目**——删掉
+一个节点名等于宣布"这个节点不需要幂等保护"，这是工程铁律 1 的例外，只有
+Shao Peishen 能拍板。
+
+**不还的后果**：两个新节点没有崩溃-恢复用例覆盖，铁律 1 要求的"业务写与
+effect_log 同一事务提交"对它们无人验证过；一旦其中一个在提交前崩溃后重放，
+不会有任何测试事先发现——而这恰恰是本交付单元存在的全部意义要防的那类失败。
