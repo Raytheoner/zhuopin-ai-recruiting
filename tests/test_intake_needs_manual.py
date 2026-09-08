@@ -201,3 +201,48 @@ def test_a_successful_turn_after_a_failing_one_resets_needs_manual_and_persists(
     # checkpoint 里的信号必须已经复位，不能是上一轮遗留的 True。
     snapshot = graph.get_state(config)
     assert snapshot.values.get("needs_manual") is False
+
+
+def test_replaying_the_same_failing_turn_delivers_exactly_one_message(tmp_path):
+    """LangGraph 恢复时节点从头整个重跑——重跑不得再投递一次。"""
+    conn, _channel, graph = _run_failing_turn(tmp_path)
+    graph.invoke(_state(), config={"configurable": {"thread_id": "job1"}})
+
+    assert conn.execute("SELECT COUNT(*) FROM outbox WHERE thread_id='job1'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM effect_log WHERE thread_id='job1'").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM job_profile WHERE job_id='job1'").fetchone()[0] == 0
+
+
+def test_effect_log_count_matches_the_business_write_per_thread(tmp_path):
+    """reviewer 判据：effect_log 条数与业务表行数按 thread 恒等。
+    本单元的业务写是 job.status 一次 + outbox 一行，各对应一条 effect_log。"""
+    conn, _channel, _graph = _run_failing_turn(tmp_path)
+
+    outbox_rows = conn.execute(
+        "SELECT COUNT(*) FROM outbox WHERE thread_id='job1'"
+    ).fetchone()[0]
+    deliver_effects = conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE thread_id='job1' "
+        "AND node_name='effect_deliver_manual_handoff'"
+    ).fetchone()[0]
+    assert outbox_rows == deliver_effects == 1
+
+
+def test_provider_outage_produces_its_own_reason_code(tmp_path):
+    """两类失败的人工处置完全不同，队列里必须分得开。"""
+    _conn, channel, _graph = _run_failing_turn(
+        tmp_path, exc=LLMProviderUnavailable("主备都不可用")
+    )
+    assert channel.latest("job1").payload["reason_code"] == REASON_PROVIDER_UNAVAILABLE
+
+
+def test_the_needs_manual_queue_can_finally_see_it(tmp_path):
+    """job_queries.py:224「今天恒为空，2.5 落地当天自动生效」——就是这一刻。
+    ⚠️ 本用例⛔ 不改 app/web/server.py，只证明它读得到。"""
+    conn, _channel, _graph = _run_failing_turn(tmp_path)
+    status = conn.execute("SELECT status FROM job WHERE id='job1'").fetchone()[0]
+
+    reasons = derive_needs_manual_reasons(
+        job_status=status, profile={}, revision_count=0, max_revisions=3
+    )
+    assert [reason["code"] for reason in reasons] == ["job_status"]
