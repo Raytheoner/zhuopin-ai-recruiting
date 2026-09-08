@@ -115,7 +115,26 @@ def _validated_userid(entry: Any, index: int, path: Path) -> str | None:
         logger.error("准入名单第 %d 条不是映射，整条丢弃：path=%s", index, path)
         return None
 
-    userid = entry.get("userid")
+    keys = set(entry.keys())
+    extra = keys - ALLOWED_MEMBER_FIELDS
+    if extra:
+        logger.error(
+            "准入名单第 %d 条含不允许的字段 %s，整条丢弃（只允许 %s；⛔ 不采集手机号／邮箱／身份证号）：path=%s",
+            index,
+            sorted(str(key) for key in extra),
+            sorted(ALLOWED_MEMBER_FIELDS),
+            path,
+        )
+        return None
+
+    missing = ALLOWED_MEMBER_FIELDS - keys
+    if missing:
+        logger.error(
+            "准入名单第 %d 条缺字段 %s，整条丢弃：path=%s", index, sorted(missing), path
+        )
+        return None
+
+    userid = entry["userid"]
     if not isinstance(userid, str) or not userid.strip():
         logger.error(
             "准入名单第 %d 条 userid 为空或非字符串，整条丢弃（该成员不会被准入）：path=%s",

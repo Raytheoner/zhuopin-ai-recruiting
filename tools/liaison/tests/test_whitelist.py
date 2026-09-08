@@ -308,3 +308,56 @@ def test_shipped_config_admits_nobody_until_userids_are_filled_in():
     断言两个 userid 均命中，那次改动本身就是"名单已生效"的证据。
     """
     assert load_whitelist(SHIPPED_CONFIG) == frozenset()
+
+
+def test_entry_with_a_forbidden_field_is_dropped_entirely(tmp_path, caplog):
+    """多余字段 ⇒ 整条丢弃，不是"忽略多余字段"。
+
+    同时断言日志只写字段**名**、不写字段**值**——多余字段的值恰恰可能就是
+    不该被采集的个人信息，写进日志等于把它换个地方留存。
+    """
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {
+                "userid": "TangLiPing",
+                "name": "汤丽萍",
+                "role": "HR AI 专员",
+                "phone": "13800138000",
+            },
+            {"userid": "ShaoPeishen", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset({"ShaoPeishen"})
+    assert "phone" in caplog.text
+    assert "13800138000" not in caplog.text
+
+
+def test_entry_missing_a_required_field_is_dropped(tmp_path, caplog):
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {"userid": "TangLiPing", "name": "汤丽萍"},
+            {"userid": "ShaoPeishen", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset({"ShaoPeishen"})
+
+
+def test_non_mapping_entry_is_dropped(tmp_path, caplog):
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        ["TangLiPing", {"userid": "ShaoPeishen", "name": "邵培申", "role": "工具主人"}],
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset({"ShaoPeishen"})
+
+
+def test_yaml_python_tags_are_not_constructed(tmp_path):
+    """⛔ 绝不用 yaml.load。名单文件受版本管理，但它是"配置"这一类的输入，
+    用能构造任意 Python 对象的加载器是无谓的暴露面。"""
+    path = tmp_path / "whitelist.yaml"
+    path.write_text("members: !!python/object/apply:os.system ['echo pwned']\n", encoding="utf-8")
+    assert load_whitelist(path) == frozenset()
