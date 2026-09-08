@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import datetime
+import pathlib
 import unicodedata
 from typing import Any, Final
 
@@ -132,3 +134,91 @@ def _truncate_preserving_extension(name: str, max_bytes: int) -> str:
     # 因此 `truncated_stem + suffix` 不可能退化成 "" / "." / ".."。
     truncated_stem = _truncate_utf8(stem, max_bytes - suffix_bytes)
     return truncated_stem + suffix
+
+
+#: 单个路径组件的字节上限（APFS / ext4 的 name component 限制）。
+#: `<msgid>__<文件名>` 合起来受这一条约束，⛔ 不是只约束文件名。
+MAX_PATH_COMPONENT_BYTES: Final[int] = 255
+
+#: `<msgid>` 与文件名之间的分隔符（design D4 逐字）。
+_MSGID_SEPARATOR: Final[str] = "__"
+
+# tools/liaison/archive.py → parents[0]=liaison, [1]=tools, [2]=仓库根
+_REPO_ROOT: Final[pathlib.Path] = pathlib.Path(__file__).resolve().parents[2]
+
+#: 归档根目录（design D4）。`data/` 已被 .gitignore:11 覆盖，归档不会误入版本管理。
+DEFAULT_ARCHIVE_ROOT: Final[pathlib.Path] = _REPO_ROOT / "data" / "liaison" / "archive"
+
+
+def _validated_key(value: Any, field_name: str) -> str:
+    """校验一个要进路径的**键**（`thread_id` / `msgid`）。
+
+    ⛔ **只校验、不改写。** 归一化会把两个不同的键磨成同一个字符串，
+    两条消息就落到同一个路径上——「归档覆盖」那个生产 bug 换了个成因又回来了。
+    键来自企微协议、本该是安全的标识符；不安全就说明上游给的东西有问题，
+    这时候正确的方向是**响亮地失败**，不是安静地清洗。
+    """
+    if not isinstance(value, str):
+        raise ArchivePathError(f"{field_name} 必须是字符串，实际是 {type(value).__name__}")
+    if value != value.strip() or not value:
+        raise ArchivePathError(f"{field_name} 为空或含首尾空白，⛔ 不接受也不清洗")
+    if value in (".", ".."):
+        raise ArchivePathError(f"{field_name} 是 '.' 或 '..'，会指向目录本身")
+    for char in value:
+        if char in _PATH_SEPARATORS or unicodedata.category(char) == "Cc":
+            raise ArchivePathError(f"{field_name} 含路径分隔符或控制字符，⛔ 不清洗，直接拒绝")
+    return value
+
+
+def _yyyymmdd(received_at: Any) -> str:
+    """从 `received_at` 取出 `yyyymmdd`，**只用于分目录**。
+
+    ⛔ 不做时区换算——协议给的偏移就是发送人看到的那个时刻。
+    ⛔ 不兜底成"今天"——那会把一个坏时间戳变成一条落错目录的记录，
+    而且不报错、事后无从发现。
+    """
+    if not isinstance(received_at, str):
+        raise ArchivePathError(
+            f"received_at 必须是 ISO-8601 字符串，实际是 {type(received_at).__name__}"
+        )
+    try:
+        moment = datetime.datetime.fromisoformat(received_at)
+    except ValueError as exc:
+        raise ArchivePathError(f"received_at 不是可解析的 ISO-8601 时间戳：{received_at!r}") from exc
+    return f"{moment.year:04d}{moment.month:02d}{moment.day:02d}"
+
+
+def compute_archive_path(
+    *,
+    thread_id: Any,
+    msgid: Any,
+    received_at: Any,
+    filename: Any,
+    archive_root: pathlib.Path = DEFAULT_ARCHIVE_ROOT,
+) -> pathlib.Path:
+    """算出一份附件的归档落点（design D4 逐字）：
+
+        <archive_root>/<thread_id>/<yyyymmdd>/<msgid>__<归一化文件名>
+
+    **键的最细一级是 `msgid`。** ⛔ 禁止任何"按天一个文件"或"按人一个文件"
+    的粗粒度落点——那正是参考服务生产 bug「归档覆盖」的成因。日期在这条路径里
+    只是分目录。
+
+    纯函数：不读文件、不读时钟、不读环境变量。同一条消息在任何时刻算出的路径
+    必须逐字相同——否则重投时会落出第二份，而幂等装饰器仍认为只处理了一次。
+    """
+    safe_thread_id = _validated_key(thread_id, "thread_id")
+    safe_msgid = _validated_key(msgid, "msgid")
+    day = _yyyymmdd(received_at)
+
+    prefix = safe_msgid + _MSGID_SEPARATOR
+    budget = MAX_PATH_COMPONENT_BYTES - len(prefix.encode("utf-8"))
+    if budget < len(FALLBACK_FILENAME.encode("utf-8")):
+        # msgid 长到连占位名都放不下。⛔ 不许截断 msgid——那是改写键。
+        raise ArchivePathError(
+            f"msgid 过长（{len(prefix.encode('utf-8'))} 字节），"
+            f"路径组件放不下文件名；⛔ 不截断 msgid"
+        )
+
+    safe_name = compute_safe_filename(filename, max_bytes=budget)
+    return archive_root / safe_thread_id / day / (prefix + safe_name)

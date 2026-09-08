@@ -205,3 +205,148 @@ def test_compute_safe_filename_is_pure():
     }
     leaked = called & _FORBIDDEN_IN_PURE_FUNCTIONS
     assert not leaked, f"compute_safe_filename 不再是纯函数，出现了 {sorted(leaked)}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 4.1 / spec「归档键细到单条消息」
+# ─────────────────────────────────────────────────────────────────────────
+
+import pathlib  # noqa: E402  （追加段落，保持与上文同一文件）
+
+from tools.liaison.archive import (  # noqa: E402
+    DEFAULT_ARCHIVE_ROOT,
+    ArchivePathError,
+    compute_archive_path,
+)
+
+ROOT = pathlib.Path("/tmp/archive-root-for-tests")
+
+
+def _path(**overrides):
+    kwargs = {
+        "thread_id": "tanglp",
+        "msgid": "msg-0001",
+        "received_at": "2026-09-09T10:30:00+08:00",
+        "filename": "反馈表.xlsx",
+        "archive_root": ROOT,
+    }
+    kwargs.update(overrides)
+    return compute_archive_path(**kwargs)
+
+
+def test_path_layout_matches_design_d4_verbatim():
+    """D4 逐字：`<archive_root>/<thread_id>/<yyyymmdd>/<msgid>__<原文件名>`。"""
+    assert _path() == ROOT / "tanglp" / "20260909" / "msg-0001__反馈表.xlsx"
+
+
+def test_same_sender_same_day_three_messages_get_three_distinct_paths():
+    """spec Scenario「同人同天多条消息」——三个**同名**附件，三条不同路径。
+
+    这条直接对应参考服务的生产 bug「归档覆盖」：它把日期当成了键的最细一级，
+    同人同天的后一条覆盖前一条。本实现里日期只是分目录。
+    """
+    paths = {
+        _path(msgid=f"msg-{n}", filename="反馈表.xlsx") for n in ("a", "b", "c")
+    }
+    assert len(paths) == 3
+
+
+def test_same_name_different_content_are_distinguished_by_msgid():
+    """spec Scenario「同人同天同名文件内容不同」：靠 msgid 区分，两份都能取回。"""
+    assert _path(msgid="m1") != _path(msgid="m2")
+
+
+def test_date_only_partitions_directories_never_the_leaf():
+    """判据写成"叶子名里不含日期段"——防止有人把 yyyymmdd 塞进文件名当键。"""
+    path = _path()
+    assert path.parent.name == "20260909"
+    assert "20260909" not in path.name
+    assert path.name.startswith("msg-0001__")
+
+
+def test_date_comes_from_received_at_never_from_the_clock():
+    """纯函数：同一条消息在任何时刻算出的路径必须一模一样。
+
+    ⛔ 实现里出现 `datetime.now()` 会让重投时算出**第二个**路径——
+    两份都在，而幂等装饰器还认为只处理了一次。
+    """
+    assert _path(received_at="2020-01-02T03:04:05+08:00").parent.name == "20200102"
+
+
+def test_received_at_offset_is_not_converted():
+    """协议给的偏移就是发送人看到的那个时刻，⛔ 不做时区换算。"""
+    assert _path(received_at="2026-09-09T00:30:00+08:00").parent.name == "20260909"
+    assert _path(received_at="2026-09-09T23:30:00+08:00").parent.name == "20260909"
+
+
+def test_naive_received_at_is_accepted():
+    """没有偏移的时间戳同样能用——日期取字面值。"""
+    assert _path(received_at="2026-09-09 10:30:00").parent.name == "20260909"
+
+
+def test_unparseable_received_at_raises():
+    """⛔ 不许兜底成"今天"——那会把一个坏时间戳变成一条落错目录的记录。"""
+    with pytest.raises(ArchivePathError):
+        _path(received_at="昨天下午")
+
+
+@pytest.mark.parametrize("bad", ["", "   ", ".", "..", "a/b", "a\\b", "x\x00y", None, 7])
+def test_keys_are_validated_never_rewritten(bad):
+    """`thread_id`／`msgid` 只校验、⛔ 不改写。
+
+    改写会制造碰撞：两个不同的 msgid 被磨成同一个字符串 ⇒ 两条消息落同一路径
+    ⇒ 「归档覆盖」换个成因又回来了。所以这里的正确行为是**抛**，不是清洗。
+    """
+    with pytest.raises(ArchivePathError):
+        _path(thread_id=bad)
+    with pytest.raises(ArchivePathError):
+        _path(msgid=bad)
+
+
+def test_group_chat_thread_id_is_accepted():
+    """群聊的 thread_id 取 chatid（design D3），形态与 userid 不同但同样合法。"""
+    assert _path(thread_id="wrkSHat_chatid_001").parent.parent.name == "wrkSHat_chatid_001"
+
+
+def test_leaf_component_never_exceeds_the_filesystem_limit():
+    """`<msgid>__<文件名>` 合起来才是那个 255 字节的路径组件。
+
+    ⛔ 只给文件名设预算不够——msgid 也占字节。这条用一个长 msgid + 长中文名
+    把两者一起顶到上限。
+    """
+    path = _path(msgid="m" * 120, filename="档" * 300 + ".xlsx")
+    assert len(path.name.encode("utf-8")) <= 255
+    assert path.name.endswith(".xlsx")
+
+
+def test_absurdly_long_msgid_raises_instead_of_silently_overflowing():
+    """msgid 长到连一个字符的文件名都放不下 ⇒ 抛，⛔ 不静默截断 msgid（那是改写键）。"""
+    with pytest.raises(ArchivePathError):
+        _path(msgid="m" * 260)
+
+
+def test_hostile_filename_cannot_escape_the_archive_root():
+    """最终判据不是"字符串里没有 ..%"，而是**解析后的路径确实在根目录下面**。"""
+    path = _path(filename="../../../../etc/passwd")
+    assert ROOT in path.parents
+
+
+def test_missing_filename_falls_back_but_still_archives():
+    """无附件名（None）不该让整条消息归档不了——折成占位名。"""
+    assert _path(filename=None).name == "msg-0001__unnamed"
+
+
+def test_default_archive_root_is_under_data_liaison():
+    """D4 的落点。⛔ 不许落到 data/ 之外——`data/` 已被 .gitignore 覆盖。"""
+    assert DEFAULT_ARCHIVE_ROOT.parts[-3:] == ("data", "liaison", "archive")
+
+
+def test_compute_archive_path_is_pure():
+    tree = ast.parse(inspect.getsource(compute_archive_path))
+    called = {
+        node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    leaked = called & _FORBIDDEN_IN_PURE_FUNCTIONS
+    assert not leaked, f"compute_archive_path 不再是纯函数，出现了 {sorted(leaked)}"
