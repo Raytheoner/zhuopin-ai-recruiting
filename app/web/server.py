@@ -4,7 +4,7 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -76,6 +76,19 @@ class JDEditRequest(BaseModel):
     text: str
 
 
+class TurnOutcome(NamedTuple):
+    """一轮采集的结果：给通道的消息 + L3 判定的"这是不是用人需求"。
+
+    is_job_related 是 **L3 纯函数 run_intake_turn 的输出**，经 compute_intake_turn
+    放进 state、由 graph.invoke() 的终态原样带回来。编排层只按它分流，
+    ⛔ 不在 server 里再调一次模型做二次判断（tasks 5.3 的硬边界）——两个
+    判定器迟早会给出不同答案，而分歧没有任何症状。
+    """
+
+    message: dict
+    is_job_related: bool
+
+
 def _render_index(root_path: str) -> str:
     """把 <!--BASE_HREF--> 占位符换成真实 <base href>，让前端相对路径请求
     在任意挂载前缀下都能解析到正确的地址。root_path="" 时挂域根。"""
@@ -126,7 +139,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             return message.payload
         return normalize_question_payload(message.payload)
 
-    def _run_turn(job_id: str, message: str) -> dict:
+    def _run_turn(job_id: str, message: str) -> TurnOutcome:
         # 轮次起始时刻在这里打，不在 compute 节点里打：那才是"用户开始等"
         # 的时刻，节点里打会漏掉下面几次取数的时间。格式与 job_profile
         # .created_at 的 datetime('now') 完全一致（见 sqlite_utc_now）。
@@ -189,10 +202,17 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "asked_question_rounds": asked_question_rounds,
             "turn_started_at": turn_started_at,
         }
-        graph.invoke(state, config={"configurable": {"thread_id": job_id}})
+        # 终态要接住，⛔ 不要再丢掉：is_job_related 只有这一个合法来源。
+        final_state = graph.invoke(state, config={"configurable": {"thread_id": job_id}})
 
         latest = channel.latest(job_id)
-        return {"type": latest.type, "payload": _response_payload(latest)}
+        return TurnOutcome(
+            message={"type": latest.type, "payload": _response_payload(latest)},
+            # 默认 True：判定没接上时按"是用人需求"算，与 compute 节点里
+            # is_productive 的默认口径一致——保守方向是**保留**记录，
+            # 不是悄悄删掉一个真实岗位。
+            is_job_related=bool(final_state.get("is_job_related", True)),
+        )
 
     # 终态说明文案。⛔ 不要在这里写"请联系管理员"这类无动作的话——业务经理
     # 需要知道**下一步能做什么**，而不是知道自己撞墙了。
@@ -270,7 +290,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             "INSERT INTO job (id, title, status) VALUES (?, '待确定', 'drafting')", (job_id,)
         )
         conn.commit()
-        message = _run_turn(job_id, req.message)
+        message = _run_turn(job_id, req.message).message
         return {"job_id": job_id, "message": message}
 
     @router.post("/api/jobs/{job_id}/reply")
@@ -284,7 +304,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         # 用 confirm/revise 已有的同一个状态码与同一段文案（_APPROVED_DETAIL）。
         if _job_status(job_id) == "approved":
             raise HTTPException(status_code=409, detail=_APPROVED_DETAIL)
-        message = _run_turn(job_id, req.message)
+        message = _run_turn(job_id, req.message).message
         return {"job_id": job_id, "message": message}
 
     @router.post("/api/jobs/{job_id}/confirm")
@@ -473,7 +493,7 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         # 重跑一轮采集。retry 语义与 POST /reply 完全一致（同一个 _run_turn）：
         # 重复提交会各自产生一版草案，这是既有行为，本单元不改。留痕那一半
         # 不受影响——它有幂等键，重复提交只记一条。
-        message = _run_turn(job_id, feedback)
+        message = _run_turn(job_id, feedback).message
         return {"job_id": job_id, "message": message}
 
     @router.post("/api/jobs/{job_id}/abandon")

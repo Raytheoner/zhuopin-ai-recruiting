@@ -1205,3 +1205,18 @@ def test_asked_question_rounds_are_accumulated_oldest_first(tmp_path):
         "第 5 章台账的 first_asked_round 全靠这个顺序推导，顺序错了不会报错，"
         "只会让重问次数与首问轮次悄悄算错"
     )
+
+
+def test_off_topic_turn_calls_the_model_exactly_once(tmp_path):
+    """server 只按 L3 的结论分流，⛔ 不再调一次模型做二次判断。
+
+    call_count > 1 就说明编排层自己又问了一遍"这算不算用人需求"——那是
+    第二个判定器，两个判定器迟早会给出不同答案，而分歧没有任何症状。
+    """
+    responses = [json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}})]
+    client, scripted = make_app_with_scripted_client(tmp_path, responses)
+
+    resp = client.post("/api/jobs", json={"message": "今天中午吃什么"})
+
+    assert resp.status_code == 200
+    assert scripted.chat.completions.call_count == 1
