@@ -144,6 +144,32 @@ def test_entrypoint_reads_dotenv_when_process_env_is_absent(tmp_path):
     assert proc.returncode == 0, f"stderr={proc.stderr!r}"
 
 
+def test_dotenv_strips_export_prefix(tmp_path):
+    """`export KEY=value` 是常见的 shell 书写习惯，必须解析出真正的键名。
+
+    回归目标：曾经 `key, _, value = line.partition("=")` 不剥离 `export ` 前缀，
+    导致真实键名从未被设置，而是设了一个叫 "export HR_LIAISON_BOT_ID" 的假键——
+    诊断信息会误导成"变量缺失"，即便 .env 里明明写了。与扫描器
+    test_liaison_no_secrets_in_vcs.py 的 _ASSIGNMENT 正则（同样接受
+    `(?:export[ \t]+)?`）保持口径一致。
+    """
+    dotenv = tmp_path / "export-style.env"
+    dotenv.write_text(f"export {BOT_ID_ENV}=bot-exported\n", encoding="utf-8")
+    from tools.liaison.__main__ import load_dotenv_into_environ
+
+    env_backup = dict(os.environ)
+    try:
+        os.environ.pop(BOT_ID_ENV, None)
+        load_dotenv_into_environ(dotenv)
+        assert os.environ[BOT_ID_ENV] == "bot-exported"
+        assert not any(name.startswith("export") for name in os.environ), (
+            "不应残留一个以 'export' 开头的假键名"
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(env_backup)
+
+
 def test_process_env_wins_over_dotenv(tmp_path):
     """进程环境优先于 .env（与 pydantic-settings 在 app/config.py 里的口径一致）。"""
     dotenv = tmp_path / "loser.env"

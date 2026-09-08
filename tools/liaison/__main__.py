@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -50,6 +51,10 @@ def load_dotenv_into_environ(path: Path) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
+        # 允许 `export KEY=value` 这种 shell 习惯写法：与本文件的扫描器
+        # test_liaison_no_secrets_in_vcs.py 的 _ASSIGNMENT 正则口径保持一致，
+        # 否则真实的 export 行会被当成变量名叫 "export XXX" 的键，诊断信息误导人。
+        key = re.sub(r"^export[ \t]+", "", key)
         if not key or key in os.environ:
             continue
         os.environ[key] = value.strip().strip('"').strip("'")

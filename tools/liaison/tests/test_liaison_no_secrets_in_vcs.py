@@ -26,7 +26,7 @@ CREDENTIAL_ENV_NAMES = (
 )
 
 _ASSIGNMENT = re.compile(
-    r"^(?:export[ \t]+)?(?:" + "|".join(CREDENTIAL_ENV_NAMES) + r")[ \t]*=[ \t]*(\S+)",
+    r"^[ \t]*(?:export[ \t]+)?(?:" + "|".join(CREDENTIAL_ENV_NAMES) + r")[ \t]*=[ \t]*(\S+)",
     re.MULTILINE,
 )
 
@@ -75,6 +75,18 @@ def test_dotenv_itself_is_not_tracked():
         cwd=str(REPO_ROOT), capture_output=True,
     )
     assert completed.returncode != 0, ".env 被 git 跟踪了，真实凭据正在入库"
+
+
+def test_assignment_regex_matches_indented_credential_line():
+    """回归：曾经 _ASSIGNMENT 锚在行首且不允许前导空白，缩进的真实凭据赋值
+
+    （例如粘进一段嵌套 markdown/YAML 代码块或缩进的 shell 里）会完全逃过扫描。
+    这里直接测正则本身，不依赖真的往仓库里写一份缩进凭据。
+    """
+    text = f"    {CREDENTIAL_ENV_NAMES[0]}=indented-real-secret\n"
+    match = _ASSIGNMENT.search(text)
+    assert match is not None, "缩进的凭据赋值应当被 _ASSIGNMENT 捕获"
+    assert match.group(1) == "indented-real-secret"
 
 
 def test_no_tracked_file_assigns_a_real_credential_value():
