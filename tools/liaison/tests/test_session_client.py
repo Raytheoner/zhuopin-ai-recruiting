@@ -6,6 +6,9 @@ opener 约束 4 逐字：用 SDK 内置重连；测试用 fake 连接对象验�
 
 from __future__ import annotations
 
+import ast
+import pathlib
+
 import pytest
 
 from tools.liaison import session_client
@@ -171,6 +174,47 @@ def test_ws_options_disable_the_reconnect_attempt_ceiling():
     assert options.max_reconnect_attempts == session_client.UNLIMITED_RECONNECT_ATTEMPTS
     assert options.heartbeat_interval == session_client.DEFAULT_HEARTBEAT_SECONDS
     assert options.bot_id == "fake-bot"
+
+
+def test_ws_options_source_pins_the_reconnect_ceiling_to_unlimited():
+    """AST 级别的钉子：即使根 venv 没装 aibot 也要能挡住"删掉这一行"。
+
+    上面那条 `test_ws_options_disable_the_reconnect_attempt_ceiling` 靠
+    `importorskip("aibot")` 才能跑，而根 venv 按 design D10 故意不装 SDK——
+    全量 pytest 走的正是根 venv，那条测试在这里永远 skip，删掉
+    `max_reconnect_attempts=` 那一行不会让根 venv 的套件变红。这条断言不依赖
+    SDK：直接解析源码，钉死 `aibot.WSClientOptions(...)` 调用点上必须显式传
+    `max_reconnect_attempts=UNLIMITED_RECONNECT_ATTEMPTS`——是本章其它地方已经
+    在用的同一手法（AST 结构断言，见 test_session_liveness.py）。⛔ 不装 SDK、
+    不 fake、不删掉上面那条 importorskip 用例——这条是**额外**的一道岗。
+    """
+    source_path = pathlib.Path(session_client.__file__)
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "WSClientOptions"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "aibot"
+    ]
+    assert len(calls) == 1, (
+        f"期望恰好一处 aibot.WSClientOptions(...) 调用，实际找到 {len(calls)} 处"
+    )
+    call = calls[0]
+
+    ceiling_kwargs = [kw for kw in call.keywords if kw.arg == "max_reconnect_attempts"]
+    assert len(ceiling_kwargs) == 1, (
+        "aibot.WSClientOptions(...) 必须显式传 max_reconnect_attempts=—— "
+        "没传就是走 SDK 默认值 10，5 分钟退避耗尽后服务活着但永不重连，且没有任何症状"
+    )
+    value_node = ceiling_kwargs[0].value
+    assert isinstance(value_node, ast.Name) and value_node.id == "UNLIMITED_RECONNECT_ATTEMPTS", (
+        "max_reconnect_attempts= 必须传本模块的 UNLIMITED_RECONNECT_ATTEMPTS 常量（值 -1），"
+        "⛔ 不许改成别的字面量或换个名字的变量"
+    )
 
 
 def test_make_sdk_connect_refuses_a_client_missing_the_expected_surface():

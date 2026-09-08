@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import queue
+import re
 from datetime import datetime, timedelta
 
 import pytest
@@ -80,7 +81,14 @@ def test_worker_uses_the_event_timestamp_not_the_processing_time(svc):
 
 
 def test_worker_ticks_when_the_queue_stays_empty(svc, tmp_path):
-    """队列空 = 一切正常 = 该盖存活戳。这条就是"空闲不误判"在进程侧的形式。"""
+    """队列空 = 一切正常 = 该盖存活戳。这条就是"空闲不误判"在进程侧的形式。
+
+    ⚠️ 这里还要证伪 7.1 的红线在 `except queue.Empty:` 分支上的进程侧版本：
+    参考服务的生产 bug 就是把"队列一段时间没收到事件"当成断线信号
+    （`svc.on_disconnected(clock())` 塞进这个分支）。空转多轮之后，
+    ⛔ 不许开出任何中断窗口，⛔ 状态也不许被搬去 STATE_DISCONNECTED——
+    否则安静的下午会产生一串假告警，真正的断线反而被淹没在里面。
+    """
     svc.on_connected(T0)
     events: queue.Queue = queue.Queue()
     liaison_main.run_session_worker(
@@ -94,6 +102,13 @@ def test_worker_ticks_when_the_queue_stays_empty(svc, tmp_path):
 
     payload = json.loads((tmp_path / "liveness.json").read_text(encoding="utf-8"))
     assert payload["stamp_at"] == session.format_instant(T0 + timedelta(hours=2))
+    assert session.select_open_windows(svc.conn) == [], (
+        "队列空闲不是断线信号，⛔ 不许因为几轮 queue.Empty 就开出中断窗口"
+    )
+    assert (
+        svc.conn.execute("SELECT COUNT(*) FROM liaison_outage_window").fetchone()[0] == 0
+    ), "空闲轮询期间 ⛔ 一个窗口都不该出现，不论开着还是已闭合"
+    assert svc.state == session.STATE_CONNECTED
 
 
 def test_main_still_refuses_to_start_without_credentials(tmp_path, monkeypatch, capsys):
@@ -227,3 +242,56 @@ def test_this_chapter_wires_no_message_handling():
 def test_main_module_never_uses_a_with_statement():
     tree = ast.parse(MAIN_SOURCE.read_text(encoding="utf-8"), filename=str(MAIN_SOURCE))
     assert not [n for n in ast.walk(tree) if isinstance(n, (ast.With, ast.AsyncWith))]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 结构断言：让"按无消息判断线"这个 bug 在 __main__.py 里也写不出来
+# ─────────────────────────────────────────────────────────────────────────
+#
+# session.py 结构上表达不了消息时序（那条断言见
+# test_session_liveness.py::test_session_module_has_no_message_timing_state），
+# 但能表达它的恰恰是本文件：`run_session_worker` 的 `except queue.Empty:`
+# 分支字面意思就是"一段时间没有事件"。参考服务的生产 bug 正是在这个位置把
+# 它当成了断线信号。口径与 test_session_liveness.py 保持一致（只看标识符，
+# ⛔ 不看注释与字符串——上面这段说明性文字合法，把它变成变量名才是问题）。
+
+_FORBIDDEN_LIVENESS_IDENTIFIER = re.compile(r"(?i)(last_?message|no_?message|idle|silence|quiet)")
+
+
+def _liveness_identifiers(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+    return names
+
+
+def test_main_module_has_no_message_timing_state():
+    """7.1 逐字，姊妹版：⛔ 不许在 __main__.py 里出现与消息时序有关的标识符。
+
+    红了不要往正则里加豁免——先问"这个模块为什么需要知道消息的时间"。
+    """
+    tree = ast.parse(MAIN_SOURCE.read_text(encoding="utf-8"), filename=str(MAIN_SOURCE))
+    offenders = sorted(
+        n for n in _liveness_identifiers(tree) if _FORBIDDEN_LIVENESS_IDENTIFIER.search(n)
+    )
+    assert offenders == [], f"__main__.py 出现了与消息时序有关的标识符：{offenders}"
+
+
+def test_the_main_module_structural_guard_actually_catches_a_break():
+    """证伪：喂一段带 idle_since 的源码，上面那条判据必须抓到。"""
+    tree = ast.parse(
+        "def run(events, idle_since):\n"
+        "    if events.empty() and idle_since:\n"
+        "        return 'disconnected'\n"
+    )
+    offenders = sorted(
+        n for n in _liveness_identifiers(tree) if _FORBIDDEN_LIVENESS_IDENTIFIER.search(n)
+    )
+    assert offenders == ["idle_since"]
