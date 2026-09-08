@@ -559,7 +559,7 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
    | 项 | 值 |
    |---|---|
-   | 发版 HEAD | `7a48a19`（含 `0908B` 拟发的全部内容 + `bc1a0d0` 补 `tzdata==2026.3`） |
+   | 发版 HEAD | `7a48a19`（含 `0908B` 拟发的全部内容 + `bc1a0d0` 补 `tzdata==2026.3`）。⚠️ 精度说明：另一 session 于 `11:52:53` 提交了 `cf308cc`（sync 脚本重启输出 GBK→UTF-8），与本次 sync 执行几乎同刻，本地 HEAD 在 scp 瞬间可能已是 `cf308cc`。`git diff 7a48a19 cf308cc -- app/ requirements.txt pyproject.toml scripts/` **为空**——`cf308cc` 只改 `sync-to-server.sh` 自身，**对被部署的服务代码零差异**，故现网 `app\` 内容按 `7a48a19` 记；`sync-to-server.sh` 也在 scp 清单内，`.51` 上那份是两版之一，不影响服务 |
    | 快照目录 | `C:\apps\backups\20260908-1150`（`app\` + `data\`） |
    | 前置核对 4 项 | 全过（main 与 origin 同步；`ssh zp51` 回 `ok`；`git show HEAD:requirements.txt` 命中 `tzdata==2026.3`；现网基线 `200`）。⚠️ `requirements.txt` 本轮有改动，`0908B` 的「diff 必须为空」闸门本轮不适用 |
    | 🔴 装依赖（先于 sync） | `pip install tzdata==2026.3` → `Successfully installed tzdata-2026.3`；随即验证 `ZoneInfo("UTC"), ZoneInfo("Asia/Shanghai")` → 打出 `UTC Asia/Shanghai` ✅。**服务未停**（旧代码无人 import tzdata，装包对其惰性）。⛔ 未重跑 `deploy-server.ps1` |
