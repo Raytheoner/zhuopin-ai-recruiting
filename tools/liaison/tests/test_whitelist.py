@@ -393,3 +393,46 @@ def test_yaml_parse_error_log_does_not_leak_source_text(tmp_path, caplog):
     with caplog.at_level(logging.ERROR):
         assert load_whitelist(path) == frozenset()
     assert "13800138000" not in caplog.text
+
+
+def test_appending_a_member_takes_effect_without_touching_any_py_file(tmp_path):
+    """spec Scenario「追加一名成员」：新成员开始命中，且未修改任何源代码文件。
+
+    ⚠️ 这里用的是虚构的测试标识，⛔ 不要改成聂鑫／王寒月／陈承——
+    那三位不入名单是 design.md D2 的结论，测试里出现会误导 reviewer。
+    """
+    base = [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}]
+    path = write_roster(tmp_path / "whitelist.yaml", base)
+
+    fingerprint_before = source_fingerprint()
+    assert admit("TestOnlyAppendedMember", path) is False
+
+    write_roster(
+        path,
+        base
+        + [
+            {
+                "userid": "TestOnlyAppendedMember",
+                "name": "测试用追加条目",
+                "role": "仅本用例使用，⛔ 不是 D2 名单成员",
+            }
+        ],
+    )
+
+    assert admit("TestOnlyAppendedMember", path) is True
+    assert source_fingerprint() == fingerprint_before
+
+
+def test_admit_rereads_the_file_on_every_call(tmp_path):
+    """无缓存不变式：名单文件消失后，上一次命中的人立刻不再命中。
+
+    ⛔ 不要为了性能给 load_whitelist 加缓存——spec 明文禁止
+    "放行上一次成功加载的名单"，缓存与 fail-closed 直接冲突。
+    """
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}],
+    )
+    assert admit("TangLiPing", path) is True
+    path.unlink()
+    assert admit("TangLiPing", path) is False
