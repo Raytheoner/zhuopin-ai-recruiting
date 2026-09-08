@@ -19,9 +19,14 @@
 
 from __future__ import annotations
 
+import json
+import pathlib
 import sqlite3
+from dataclasses import dataclass
 
 from app.storage.idempotency import idempotent_effect
+from tools.liaison.archive import DEFAULT_ARCHIVE_ROOT
+from tools.liaison.attachments import StoredAttachment
 from tools.liaison.storage.effects import effect_enqueue_task
 
 #: 摘要的默认长度上限（字符数，不是字节）。摘要只进 Markdown 视图与队列列表，
@@ -247,3 +252,97 @@ def list_tasks(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     )
     cursor.row_factory = sqlite3.Row
     return cursor.fetchall()
+
+
+@dataclass(frozen=True)
+class TaskSource:
+    """一条队列条目连同它回指到的来源消息与全部附件。
+
+    spec「每条队列条目可回指来源消息」的取回形态。⛔ 不做懒加载：
+    调用这个函数的场景是"点开一条待办看材料"，多一次往返换来的省略毫无意义，
+    而懒加载会让"取得回来"这件事在调用点之外的某个时刻才失败。
+    """
+
+    task_id: int
+    msgid: str
+    thread_id: str
+    sender_userid: str
+    received_at: str
+    send_status: str
+    pushed_at: str | None
+    summary: str
+    msgtype: str
+    content: str
+    attachments: tuple[StoredAttachment, ...]
+
+    def attachment_paths(
+        self, *, archive_root: pathlib.Path = DEFAULT_ARCHIVE_ROOT
+    ) -> tuple[pathlib.Path, ...]:
+        """把台账里的相对路径还原成可读的绝对路径。
+
+        台账存的是**相对归档根**的路径（`attachments.StoredAttachment` 的注释）：
+        归档根将来可能整体搬家，存绝对路径会让台账里所有的行一起失效。
+        """
+        return tuple(archive_root / item.relative_path for item in self.attachments)
+
+
+def _parse_attachments(attachments_json: str) -> tuple[StoredAttachment, ...]:
+    """把 `liaison_message.attachments_json` 解析成结构化附件清单。
+
+    坏 JSON / 不是数组 / 缺字段 ⇒ 返回空元组，⛔ 不抛。取回材料和核对材料是
+    两件事：核对由 `consistency.verify_ledger_against_archive` 负责报告不一致，
+    在这里抛异常只会让"点开一条待办"变成一次崩溃。
+    """
+    try:
+        entries = json.loads(attachments_json)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(entries, list):
+        return ()
+    parsed = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            parsed.append(
+                StoredAttachment(
+                    filename=entry["filename"],
+                    relative_path=entry["relative_path"],
+                    byte_length=entry["byte_length"],
+                    sha256=entry["sha256"],
+                )
+            )
+        except KeyError:
+            continue
+    return tuple(parsed)
+
+
+def load_task_source(conn: sqlite3.Connection, *, task_id: int) -> TaskSource | None:
+    """按队列条目 id 取回它的来源消息与全部附件。找不到返回 `None`。
+
+    只读，⛔ 不写任何东西。JOIN 而不是两次查询：外键保证消息一定在，
+    分两次查会给"消息中途被删"这种本不可能的状态留一个分支。
+    """
+    row = conn.execute(
+        "SELECT t.id, t.msgid, t.thread_id, t.sender_userid, t.received_at, "
+        "       t.send_status, t.pushed_at, t.summary, m.msgtype, m.content, m.attachments_json "
+        "FROM liaison_task AS t "
+        "JOIN liaison_message AS m ON m.msgid = t.msgid "
+        "WHERE t.id = ?",
+        (task_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return TaskSource(
+        task_id=row[0],
+        msgid=row[1],
+        thread_id=row[2],
+        sender_userid=row[3],
+        received_at=row[4],
+        send_status=row[5],
+        pushed_at=row[6],
+        summary=row[7],
+        msgtype=row[8],
+        content=row[9],
+        attachments=_parse_attachments(row[10]),
+    )
