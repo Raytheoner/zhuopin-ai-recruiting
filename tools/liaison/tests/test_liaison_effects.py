@@ -123,6 +123,33 @@ def test_liaison_does_not_import_product_db_layer():
 _TRANSACTION_BOUNDARY_ATTRS = ("commit", "rollback", "executescript")
 
 
+#: 已知与数据库无关的上下文管理器（TD-18 的还债形态）。
+#: ⚠️ 这是一份**正面白名单**：只放行这里逐条列出的被调用者，其余 `with <Call>:`
+#: 一律照旧判违规。⛔ 绝不许退化成"只对名字里含 conn 的表达式判违规"——
+#: 那会重新打开 `with self._conn:` 的口子，而那个口子**没有症状**。
+#: ⛔ 往这份名单里加东西之前先确认：它绝不可能是一个 sqlite3 连接。
+_NON_DB_CONTEXT_CALLEES = frozenset(
+    {
+        "open",
+        "os.fdopen",
+        "io.open",
+        "contextlib.suppress",
+        "tempfile.NamedTemporaryFile",
+        "tempfile.TemporaryDirectory",
+    }
+)
+
+
+def _is_known_non_db_context(func: ast.AST) -> bool:
+    # `with <callee>(...)` 的 callee 是否在正面白名单里。
+    # 用 `ast.unparse` 取点号全名（`os.fdopen` 而不是只看 `fdopen`），
+    # 这样 `with fdopen(...)`（来路不明的裸名）不会被误放行。
+    try:
+        return ast.unparse(func) in _NON_DB_CONTEXT_CALLEES
+    except Exception:
+        return False
+
+
 def _scan_transaction_violations(
     source: str, label: str, allowlist: set[str]
 ) -> list[str]:
@@ -164,6 +191,8 @@ def _scan_transaction_violations(
                 # 第 3–5 章的服务对象几乎必然把连接挂成属性，只认 `ast.Name`
                 # 在那里是瞎的）、以及 `ast.Call`（如 `with get_connection() as c:`，
                 # Important 1 原文允许不处理，但覆盖成本低就顺手覆盖了）都要抓。
+                if isinstance(expr, ast.Call) and _is_known_non_db_context(expr.func):
+                    continue
                 if isinstance(expr, (ast.Name, ast.Attribute, ast.Call)):
                     scope = scope_name(func_stack)
                     if scope not in allowlist:

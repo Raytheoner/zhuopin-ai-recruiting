@@ -636,7 +636,7 @@ userid 填入使出厂态消失时复核一次）。
 `app/outbound/delivery.py` **直接 import 失败**——而它在 `.51` 的发送链路上。
 在那之前，它持续污染测试输出，让"测试输出应当干净"这条判据失去分辨力。
 
-## TD-18 · 值守服务事务扫描器对 `with <Call>:` 会误报
+## ~~TD-18~~ · 值守服务事务扫描器对 `with <Call>:` 会误报 ✅ 已还
 
 **欠的是什么**：`tools/liaison/tests/test_liaison_effects.py` 的 `_scan_transaction_violations`
 在第 2 章终审后放宽为：`with` / `async with` 的 context expr 是 `ast.Name`、`ast.Attribute`
@@ -653,6 +653,11 @@ userid 填入使出厂态消失时复核一次）。
 ⚠️ 但要防的是**图省事把守卫改回只认裸局部名**：那会重新打开 `with self._conn:` 的口子，
 而那个口子的症状是**没有症状**（`effect_log` 与业务表静默劈叉，正是 `.51` 2026-08-10／08-12
 丢 `outbox` 的失败模式）。宁可留误报，⛔ 不许退回窄化。
+
+**已还**（第 4 章 Task 3，2026-09-09）：`_scan_transaction_violations` 加 `_NON_DB_CONTEXT_CALLEES`
+正面白名单，放行 `open` / `os.fdopen` / `io.open` / `contextlib.suppress` /
+`tempfile.NamedTemporaryFile` / `tempfile.TemporaryDirectory`。⛔ 未窄化判据——
+`with self._conn:` 与 `with get_connection():` 仍被抓，9 条 `test_scanner_*` 全绿。
 
 ## TD-19 · 真实建连尚未适配——`make_sdk_connect` 对协程 `connect` 表面按"未验即拒绝启动"处理
 
