@@ -26,6 +26,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from app.storage.idempotency import idempotent_effect
+from tools.liaison import alerts as liaison_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -235,3 +236,153 @@ def read_liveness_stamp(path: pathlib.Path) -> dict | None:
         logger.warning("存活戳字段不完整，按「没有上一次记录」处理：%s", path)
         return None
     return payload
+
+
+class LiaisonSession:
+    """连接生命周期的状态机。**唯一持有"现在是连着还是断着"这个判断的地方。**
+
+    ⛔ 本类里不存在"上一条消息什么时候来的"这种状态——`tick()` 的判据只有
+    `self._state` 一个变量。7.1 逐字：存活戳只跟连接健康走，
+    "一段时间无消息" ≠ 断线。tests/test_session_liveness.py 的 AST 断言守着这条。
+
+    时间一律**由调用方传入**，⛔ 类内部不调 `datetime.now()`：两小时的空闲要在
+    单测里毫秒跑完，且每次跑出来的时间线必须一模一样。
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        alert_sink: "liaison_alerts.AlertSink",
+        *,
+        liveness_path: pathlib.Path = DEFAULT_LIVENESS_PATH,
+    ) -> None:
+        self.conn = conn
+        self.alert_sink = alert_sink
+        self.liveness_path = liveness_path
+        self._state = STATE_STARTING
+        self._since: datetime | None = None
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    # ── 启动 ──────────────────────────────────────────────────────────
+    def start(self, now: datetime) -> None:
+        """一次进程启动要做的全部补记（7.3）。顺序是钉死的，⛔ 不许调换：
+
+        1. 读上一次的存活戳；若上次死在**连接健康**的状态，用最后一次盖戳的时间
+           开一个 `startup_gap` 窗口——那段停机时间同样收不到消息；
+        2. 把**所有**未闭合窗口（含上一步刚开的那个）按"恢复时间 = 本次启动时间"
+           闭合。一条闭合路径管两种成因，⛔ 不要为 gap 单独写一条；
+        3. 补发所有"已闭合但还没告警"的窗口；
+        4. 最后才写本次启动的存活戳——写早了，第 1 步就读不到上一次的了。
+        """
+        previous = read_liveness_stamp(self.liveness_path)
+        if previous is not None and previous["state"] == STATE_CONNECTED:
+            gap_started_at = previous["stamp_at"]
+            if gap_started_at < format_instant(now):
+                effect_open_outage_window(
+                    self.conn,
+                    thread_id=CONNECTION_THREAD_ID,
+                    business_key=gap_started_at,
+                    detected_by=DETECTED_BY_STARTUP_GAP,
+                )
+            else:
+                # 存活戳比"现在"还新 ⇒ 机器时钟被往回调过。造窗口只会得到一段
+                # 负数长度的中断，⛔ 记一笔日志就过去，不猜也不编。
+                logger.warning(
+                    "存活戳时间 %s 不早于本次启动时间 %s，跳过停机窗口补记",
+                    gap_started_at,
+                    format_instant(now),
+                )
+        self._backfill_open_windows(now)
+        self._flush_pending_alerts(now)
+        self._state = STATE_STARTING
+        self._since = now
+        effect_write_liveness_stamp(
+            self.liveness_path, state=STATE_STARTING, now=now, since=now
+        )
+
+    # ── 连接事件 ──────────────────────────────────────────────────────
+    def on_connected(self, now: datetime) -> None:
+        """连上了（首次或重连）。把还开着的窗口闭合并告警。"""
+        for started_at in select_open_windows(self.conn):
+            effect_close_outage_window(
+                self.conn,
+                thread_id=CONNECTION_THREAD_ID,
+                business_key=started_at,
+                recovered_at=format_instant(now),
+                closed_by=CLOSED_BY_RECONNECT,
+            )
+        self._flush_pending_alerts(now)
+        self._state = STATE_CONNECTED
+        self._since = now
+        effect_write_liveness_stamp(
+            self.liveness_path, state=STATE_CONNECTED, now=now, since=now
+        )
+
+    def on_disconnected(self, now: datetime) -> None:
+        """断了。开窗 + 把存活戳定格在断线时刻，此后 `tick()` ⛔ 不再更新它。
+
+        已经是断开状态时直接返回：SDK 对同一次断线回调多次是常态，
+        ⛔ 一次中断只许有一个窗口。
+        """
+        if self._state == STATE_DISCONNECTED:
+            return
+        effect_open_outage_window(
+            self.conn,
+            thread_id=CONNECTION_THREAD_ID,
+            business_key=format_instant(now),
+            detected_by=DETECTED_BY_DISCONNECT,
+        )
+        self._state = STATE_DISCONNECTED
+        self._since = now
+        effect_write_liveness_stamp(
+            self.liveness_path, state=STATE_DISCONNECTED, now=now, since=now
+        )
+
+    # ── 心跳 ──────────────────────────────────────────────────────────
+    def tick(self, now: datetime) -> None:
+        """周期性盖存活戳。**判据只有连接状态**（7.1 逐字）。
+
+        ⛔ 不许在这里加任何"距离上一条消息多久"的判断——那正是参考服务踩过的
+        那个生产 bug：把空闲当成断线，于是安静的下午会收到一串假的中断告警，
+        而真正的断线反而被淹没在里面。
+        """
+        if self._state != STATE_CONNECTED:
+            return
+        effect_write_liveness_stamp(
+            self.liveness_path,
+            state=STATE_CONNECTED,
+            now=now,
+            since=self._since if self._since is not None else now,
+        )
+
+    # ── 内部 ──────────────────────────────────────────────────────────
+    def _backfill_open_windows(self, now: datetime) -> None:
+        for started_at in select_open_windows(self.conn):
+            effect_close_outage_window(
+                self.conn,
+                thread_id=CONNECTION_THREAD_ID,
+                business_key=started_at,
+                recovered_at=format_instant(now),
+                closed_by=CLOSED_BY_STARTUP_BACKFILL,
+            )
+
+    def _flush_pending_alerts(self, now: datetime) -> None:
+        """把"已闭合但还没告警"的窗口逐条补发。
+
+        送出**成功**才标记 `alerted_at`。失败 ⇒ 留着 ⇒ 下次启动再来一遍。
+        于是失败模式是"可能重复告警"，⛔ 不是"静默丢告警"——这个方向是刻意选的：
+        重复的告警看得见，丢掉的告警看不见。
+        """
+        for started_at, recovered_at in select_unalerted_closed_windows(self.conn):
+            text = liaison_alerts.compute_outage_alert_text(started_at, recovered_at)
+            if not liaison_alerts.effect_emit_outage_alert(self.alert_sink, text):
+                continue
+            effect_mark_window_alerted(
+                self.conn,
+                thread_id=CONNECTION_THREAD_ID,
+                business_key=started_at,
+                alerted_at=format_instant(now),
+            )
