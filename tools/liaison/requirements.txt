@@ -16,3 +16,7 @@ pytest==8.3.4
 #    实测过的那份与装上的那份必须是同一份，否则实测结论不成立（design D8）。
 # ⚠️ import 名是 `aibot`，不是 `wecom_aibot_python_sdk`。
 wecom-aibot-python-sdk==1.0.2
+
+# 准入名单用 yaml.safe_load 解析（第 3 章）。版本与根 venv 里已有的传递依赖对齐，
+# 避免"根 venv 跑测试用 6.0.3、tools venv 跑服务用另一个版本"的版本偏斜。
+PyYAML==6.0.3
