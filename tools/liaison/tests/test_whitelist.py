@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
+import inspect
+import logging
+import os
 import re
+import textwrap
 from pathlib import Path
 
+import pytest
 import yaml
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+from tools.liaison import whitelist as whitelist_module
+from tools.liaison.whitelist import admit, compute_admission, load_whitelist
+
+PACKAGE_ROOT = Path(whitelist_module.__file__).resolve().parent
 SHIPPED_CONFIG = PACKAGE_ROOT / "config" / "whitelist.yaml"
 
 D2_ADMITTED = ["汤丽萍", "邵培申"]
@@ -79,3 +89,117 @@ def test_shipped_config_excludes_the_three_d2_rejections():
     names = {entry["name"] for entry in document["members"]}
     for rejected in D2_REJECTED:
         assert rejected not in names
+
+
+def write_roster(path: Path, members: list[dict[str, object]]) -> Path:
+    """用 safe_dump 写名单，避免手写 YAML 的引号／缩进误差混进用例。"""
+    path.write_text(
+        yaml.safe_dump({"members": members}, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return path
+
+
+def source_fingerprint() -> str:
+    """tools/liaison 下全部 .py 的内容指纹，用于证明"名单变更没改代码"。"""
+    digest = hashlib.sha256()
+    for py in sorted(PACKAGE_ROOT.rglob("*.py")):
+        if "__pycache__" in py.parts:
+            continue
+        digest.update(py.relative_to(PACKAGE_ROOT).as_posix().encode("utf-8"))
+        digest.update(py.read_bytes())
+    return digest.hexdigest()
+
+
+def called_names(func) -> set[str]:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            target = node.func
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+            elif isinstance(target, ast.Attribute):
+                names.add(target.attr)
+    return names
+
+
+def error_records(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.levelno >= logging.ERROR and "whitelist" in r.name]
+
+
+def test_missing_file_yields_empty_whitelist(tmp_path, caplog):
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(tmp_path / "absent.yaml") == frozenset()
+    assert error_records(caplog)
+
+
+def test_unparsable_file_yields_empty_whitelist(tmp_path, caplog):
+    broken = tmp_path / "whitelist.yaml"
+    broken.write_text("members:\n  - userid: [unclosed\n", encoding="utf-8")
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(broken) == frozenset()
+    assert error_records(caplog)
+
+
+@pytest.mark.parametrize(
+    "content", ["", "members: []\n", "members:\n", "{}\n", "[]\n", "just a string\n"]
+)
+def test_empty_or_shapeless_roster_yields_empty_whitelist(tmp_path, caplog, content):
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(content, encoding="utf-8")
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert error_records(caplog)
+
+
+@pytest.mark.skipif(
+    getattr(os, "geteuid", lambda: -1)() == 0, reason="root 绕过文件权限，无法构造不可读文件"
+)
+def test_unreadable_file_yields_empty_whitelist(tmp_path, caplog):
+    blocked = write_roster(
+        tmp_path / "whitelist.yaml",
+        [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}],
+    )
+    blocked.chmod(0o000)
+    try:
+        with caplog.at_level(logging.ERROR):
+            assert load_whitelist(blocked) == frozenset()
+        assert error_records(caplog)
+    finally:
+        blocked.chmod(0o600)
+
+
+def test_corrupting_the_file_never_reuses_the_previous_roster(tmp_path):
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}],
+    )
+    assert load_whitelist(path) == frozenset({"TangLiPing"})
+
+    path.write_text("members:\n  - userid: [unclosed\n", encoding="utf-8")
+    assert load_whitelist(path) == frozenset()
+    assert admit("TangLiPing", path) is False
+
+
+def test_unexpected_exception_is_swallowed_into_empty_whitelist(tmp_path, monkeypatch, caplog):
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}],
+    )
+
+    def explode(_raw):
+        raise RecursionError("PyYAML 在畸形输入上可能抛出非 YAMLError")
+
+    monkeypatch.setattr(whitelist_module.yaml, "safe_load", explode)
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert error_records(caplog)
+
+
+@pytest.mark.parametrize(
+    "path_arg",
+    [Path("/nonexistent/deeply/absent.yaml"), Path("/"), Path("/dev/null"), Path("")],
+)
+def test_admit_never_raises_on_hostile_paths(path_arg):
+    assert admit("TangLiPing", path_arg) is False
