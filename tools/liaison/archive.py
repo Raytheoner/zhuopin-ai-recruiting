@@ -150,13 +150,24 @@ _REPO_ROOT: Final[pathlib.Path] = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_ARCHIVE_ROOT: Final[pathlib.Path] = _REPO_ROOT / "data" / "liaison" / "archive"
 
 
-def _validated_key(value: Any, field_name: str) -> str:
+def _validated_key(
+    value: Any, field_name: str, *, forbid_msgid_separator: bool = False
+) -> str:
     """校验一个要进路径的**键**（`thread_id` / `msgid`）。
 
     ⛔ **只校验、不改写。** 归一化会把两个不同的键磨成同一个字符串，
     两条消息就落到同一个路径上——「归档覆盖」那个生产 bug 换了个成因又回来了。
     键来自企微协议、本该是安全的标识符；不安全就说明上游给的东西有问题，
     这时候正确的方向是**响亮地失败**，不是安静地清洗。
+
+    `forbid_msgid_separator`：只有 `msgid` 需要传 `True`。叶子组件是
+    `msgid + "__" + 安全文件名`，"从左边第一个 `__` 切开 (msgid, 文件名)"
+    这条解析规则要唯一，前提是 `msgid` 本身不含 `__`——否则
+    `msgid="msg"` + `filename="1__file.txt"` 与
+    `msgid="msg__1"` + `filename="file.txt"` 会拼出同一个叶子
+    `msg__1__file.txt`，这是 4.1「归档覆盖」换了个成因（msgid/文件名边界
+    而不是日期边界）又回来了。`thread_id` 是独立的路径段，不参与这次拼接，
+    不受这条约束——不要在没有碰撞路径的地方加限制。
     """
     if not isinstance(value, str):
         raise ArchivePathError(f"{field_name} 必须是字符串，实际是 {type(value).__name__}")
@@ -167,6 +178,11 @@ def _validated_key(value: Any, field_name: str) -> str:
     for char in value:
         if char in _PATH_SEPARATORS or unicodedata.category(char) == "Cc":
             raise ArchivePathError(f"{field_name} 含路径分隔符或控制字符，⛔ 不清洗，直接拒绝")
+    if forbid_msgid_separator and _MSGID_SEPARATOR in value:
+        raise ArchivePathError(
+            f"{field_name} 含 '{_MSGID_SEPARATOR}'，会与 msgid/文件名分隔符混淆，"
+            f"制造归档路径碰撞（4.1「归档覆盖」）；⛔ 不清洗，直接拒绝"
+        )
     return value
 
 
@@ -208,7 +224,7 @@ def compute_archive_path(
     必须逐字相同——否则重投时会落出第二份，而幂等装饰器仍认为只处理了一次。
     """
     safe_thread_id = _validated_key(thread_id, "thread_id")
-    safe_msgid = _validated_key(msgid, "msgid")
+    safe_msgid = _validated_key(msgid, "msgid", forbid_msgid_separator=True)
     day = _yyyymmdd(received_at)
 
     prefix = safe_msgid + _MSGID_SEPARATOR

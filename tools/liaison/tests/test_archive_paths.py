@@ -350,3 +350,34 @@ def test_compute_archive_path_is_pure():
     }
     leaked = called & _FORBIDDEN_IN_PURE_FUNCTIONS
     assert not leaked, f"compute_archive_path 不再是纯函数，出现了 {sorted(leaked)}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# fix round 1 / reviewer finding：msgid 含 "__" 会与 msgid/文件名分隔符
+# 混淆，制造归档路径碰撞——4.1「归档覆盖」换了个成因（msgid/文件名边界而
+# 不是日期边界）又回来了。
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_msgid_containing_the_separator_is_rejected():
+    """reviewer 复现的具体输入：`msgid="msg__1"` 必须直接抛，⛔ 不清洗。"""
+    with pytest.raises(ArchivePathError):
+        _path(msgid="msg__1", filename="file.txt")
+
+
+def test_the_reported_collision_pair_no_longer_collides():
+    """`msgid="msg"` + `filename="1__file.txt"` 与
+    `msgid="msg__1"` + `filename="file.txt"` 曾经拼出同一个叶子
+    `msg__1__file.txt`。拒收后者后，两者不再可能撞到同一条路径——
+    前者仍然合法，后者必须抛。
+    """
+    survivor = _path(msgid="msg", filename="1__file.txt")
+    assert survivor.name == "msg__1__file.txt"
+    with pytest.raises(ArchivePathError):
+        _path(msgid="msg__1", filename="file.txt")
+
+
+def test_filename_containing_the_separator_is_still_accepted_verbatim():
+    """限制只加在 msgid 上，⛔ 不能漏到文件名——`IMG__001.jpg` 这类真实
+    企微附件名必须原样通过。"""
+    assert _path(msgid="msg", filename="IMG__001.jpg").name == "msg__IMG__001.jpg"
