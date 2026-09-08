@@ -686,7 +686,7 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    下次写 `.51` 发版 opener 时应把这条改成「**新进程起始行之后**无 `Traceback` /
    `OperationalError`」，⛔ 不要写「尾 N 行」（滚动日志里必然混入历史错误）。
 
-   🔴 **顺带查实的遗留缺陷（早于本次发版，未处置，登记待立项）**
+   ✅ **顺带查实的遗留缺陷（早于本次发版）—— 已修 `8ea7bd2` + `2853116`（2026-09-08，轻量通道）**
 
    ```
    File "app/web/server.py", line 400, in confirm
@@ -698,9 +698,50 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
    重复 `confirm` 同一岗位时，`idempotent_effect` **抛 `UNIQUE` 约束错误**而不是
    "已执行过 ⇒ 短路返回"，请求以 500 结束。⚠️ 幂等键的唯一索引本身是对的（工程铁律 1
-   要求它存在），错的是装饰器把"命中已存在的键"当成异常路径。现象是**用户可见的 500**，
-   不是数据损坏——`effect_log` 与业务表仍在同一事务里，恒等式未破。09-08 13:18 现网实发一次。
-   ⛔ 本轮 opener 范围内未修（发版是不可代项，⛔ 不在发版会话里顺手改代码）。
+   要求它存在），错的是装饰器把"命中已存在的键"当成异常路径。09-08 13:18 现网实发一次。
+
+   ⚠️ **本条原登记的「恒等式未破」判断是错的，出计划时实跑推翻**：`IntegrityError` 从
+   `conn.execute` 抛出后，本次已写入的业务行**仍留在未回滚的隐式事务里**（复现时刻
+   `job` 表 2 行、`effect_log` 1 行）。装饰器原有的 `try/except` 只包住被装饰函数体，
+   `INSERT effect_log` 在它外面，这条路径**没有任何回滚**。那批脏行会被之后任何一次
+   *不相关* 的 effect 成功 `conn.commit()` 悄悄落盘 —— 那一刻恒等式就破，且**没有任何症状**。
+   即：这不只是一个 500，是一条"平时表现为 500、偶尔顺手把恒等式破掉"的路径。
+
+   **修法**（`app/storage/idempotency.py`）：`INSERT effect_log` 撞 `UNIQUE` ⇒ `conn.rollback()`
+   撤掉本次业务写 ⇒ 回滚后重新 `SELECT` 确认该键确实存在（**语义判据**，⛔ 不匹配错误文案）
+   ⇒ 记 WARNING 并短路返回 `None`。键不存在 ⇒ 是别的完整性约束坏了，原样上抛。
+   回滚本身失败 ⇒ 记 ERROR 并抛出原始 `IntegrityError`，⛔ 不返回 `None` 冒充成功。
+   ⛔ 未用 `INSERT OR IGNORE`——那会让本次业务写照常 commit，业务表多一行而 `effect_log`
+   只有一行，恒等式当场破。变异验证：把"撞键即 rollback"改成"撞键照常 commit"，恒等式
+   测试立刻变红（`assert ['job-loser','job-winner'] == ['job-winner']`）。
+   回归覆盖：`tests/test_idempotency.py`（竞态短路 / 非唯一约束仍上抛 / 回滚失败不冒充成功）
+   与 `tests/test_confirm_replay.py`（重复 `POST /confirm` 端到端 2xx + 各表恰一行）。
+   ⛔ 本次一行未改 `app/web/server.py`。**⛔ 尚未发版到 `.51`**（发版是不可代项，另派）。
+
+   🔴 **终审登记、本轮刻意不修的观察项（下一轮立项用）**
+
+   1. **连接级 rollback 在现网单连接拓扑下不等于"只撤本次写"。** `create_app` 全应用
+      只持一个 `conn`，同步 handler 跑在线程池上且**无锁**，所以竞争者通常是**同一连接
+      上的另一个线程**。若对端线程在本次 `fn` 写完之后先 `conn.commit()`，本次的写已经
+      落盘，随后的 `conn.rollback()` 是**空操作** —— 结果 `job` 2 行 / `effect_log` 1 行，
+      HTTP 200 且不抛。修法把这一支从"显性 500"变成了"静默"，**这一支的症状消失了**。
+      反向的一支同样存在：对端的写尚未提交时，本次的连接级 rollback 会**连带清掉对端**
+      的业务行与 `effect_log` 行，随后回滚后 `SELECT` 查无此键 ⇒ 照旧抛 500。
+      真正的根治是**每请求一个连接**或 effect 串行化（M2 迁 Postgres 时一并解决），
+      装饰器内无法自愈：`conn.in_transaction` 在该处恒为 `True`，分辨不出这两种情形。
+      ⚠️ 该风险**早于本次修改就存在**（第 59 行既有的 `except Exception` 回滚同样是连接级），
+      本次只是新增了第二个更常被走到的回滚点。日志措辞已相应改成"尝试回滚、且回滚是
+      连接级、可能是空操作"，⛔ 不再断言"已回滚本次业务写"。
+   2. **"重复 confirm ⇒ 500"并未被本次完全关闭。** `effect_confirm_profile` 内部写
+      `human_review` 用的是确定性主键 `{job_id}-v{version}-{decision_type}` 且带唯一索引；
+      同一竞态下**该冲突在被装饰函数体内部**抛出，比现网 traceback 里的那个 effect 早一步，
+      走既有 `except Exception` 分支回滚并上抛，**仍是 500**。这条语义与本次修的不同
+      （"业务写自己重复了" vs "幂等键被抢先"），混在一起处理会把真 bug 吞掉，故不并轨。
+      ⇒ ⛔ 不要据此把 09-08 13:18 那一类事件标记为已彻底闭合。
+   3. **本修法只认 `sqlite3.IntegrityError`。** M2 迁 Postgres 时这段 `except` 必须同步换成
+      `psycopg.errors.UniqueViolation`，否则这个 500 会在 Postgres 上原样复活。
+      ⏸ **留步**：本条与第 1 条应补进 `docs/tech-debt.md` 的 TD 台账，但该文件不在本轮
+      opener 的 `git add` 白名单内，⛔ 未擅自改动，留待下一轮以专门 opener 落档。
 
    ℹ️ **文档口径订正**：`.51` 的应用日志真实路径是
    `C:\apps\zhuopin-recruit-agent\logs\app.log`，**不是** `…\data\logs\app.log`
