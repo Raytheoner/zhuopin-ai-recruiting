@@ -203,3 +203,63 @@ def test_unexpected_exception_is_swallowed_into_empty_whitelist(tmp_path, monkey
 )
 def test_admit_never_raises_on_hostile_paths(path_arg):
     assert admit("TangLiPing", path_arg) is False
+
+
+def test_compute_admission_hits_a_member():
+    assert compute_admission("TangLiPing", frozenset({"TangLiPing", "ShaoPeishen"})) is True
+
+
+def test_compute_admission_misses_a_non_member():
+    assert compute_admission("NieXin", frozenset({"TangLiPing"})) is False
+
+
+@pytest.mark.parametrize("sender", [None, "", "   ", 123, b"TangLiPing", ["TangLiPing"]])
+def test_compute_admission_rejects_malformed_sender(sender):
+    assert compute_admission(sender, frozenset({"TangLiPing"})) is False
+
+
+def test_compute_admission_is_pure():
+    """铁律 2：compute_* 是无副作用纯函数。新增 I/O 或日志会让这条断言失败。"""
+    assert called_names(compute_admission) <= {"isinstance", "strip"}
+
+
+def test_compute_admission_ignores_environment(monkeypatch):
+    monkeypatch.setenv("HR_LIAISON_WHITELIST", "NieXin")
+    monkeypatch.setenv("HR_LIAISON_WHITELIST_PATH", "/tmp/anything.yaml")
+    assert compute_admission("NieXin", frozenset({"TangLiPing"})) is False
+
+
+def test_admit_hits_a_member_from_file(tmp_path):
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"},
+            {"userid": "ShaoPeishen", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+    assert admit("TangLiPing", path) is True
+    assert admit("ShaoPeishen", path) is True
+    assert admit("NieXin", path) is False
+
+
+def test_blank_userid_entry_is_dropped(tmp_path, caplog):
+    """出厂配置的两条 userid 为空 ⇒ 谁都不准入，这是刻意的 fail-closed 出厂态。"""
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {"userid": "", "name": "汤丽萍", "role": "HR AI 专员"},
+            {"userid": "   ", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert error_records(caplog)
+
+
+def test_shipped_config_admits_nobody_until_userids_are_filled_in():
+    """⏸ 真实企微 userid 尚未取得，出厂态谁都不准入。
+
+    userid 填进去之后这条会失败——**这是正确的信号**，届时把它改成
+    断言两个 userid 均命中，那次改动本身就是"名单已生效"的证据。
+    """
+    assert load_whitelist(SHIPPED_CONFIG) == frozenset()
