@@ -19,9 +19,14 @@
 from __future__ import annotations
 
 import datetime
+import json
 import pathlib
 import unicodedata
+from dataclasses import dataclass
 from typing import Any, Final
+
+from tools.liaison.attachments import StoredAttachment, store_attachment
+from tools.liaison.storage.effects import effect_archive_message
 
 #: 文件名的默认字节预算。留出余量给 `<msgid>__` 前缀——最终路径组件的上限
 #: 是 255 字节（APFS/ext4 的单个 name component 限制），200 给文件名、
@@ -252,3 +257,87 @@ def compute_archive_path(
 
     safe_name = compute_safe_filename(filename, max_bytes=budget)
     return archive_root / safe_thread_id / day / (prefix + safe_name)
+
+
+@dataclass(frozen=True)
+class InboundAttachment:
+    """通道层递进来的一份附件：原始文件名 + 原始字节。
+
+    ⛔ `payload` 必须是 `bytes`。通道适配层（第 7 章）负责把 SDK 给的东西
+    转成字节，⛔ 不许在这里做任何"如果是 str 就 encode 一下"的兜底。
+    """
+
+    filename: Any
+    payload: bytes
+
+
+@dataclass(frozen=True)
+class ArchiveOutcome:
+    """一次归档的结果。
+
+    `newly_archived` 区分"这次真的写了台账"与"幂等命中、之前就写过了"——
+    第 5 章据此决定要不要入队，Task 6 据此决定要不要发礼貌回复。
+    ⛔ 不要用"台账里有没有这一行"去替代它：那在并发下是另一次查询、另一个时刻。
+    """
+
+    msgid: str
+    newly_archived: bool
+    attachments: tuple[StoredAttachment, ...]
+
+
+def archive_message(
+    conn,
+    *,
+    thread_id: str,
+    msgid: str,
+    sender_userid: str,
+    received_at: str,
+    msgtype: str,
+    content: str = "",
+    attachment: InboundAttachment | None = None,
+    archive_root: pathlib.Path = DEFAULT_ARCHIVE_ROOT,
+) -> ArchiveOutcome:
+    """归档一条消息：**先落材料、后写台账**（design D3 的顺序，⛔ 不许反）。
+
+    1. 有附件就先算路径、写临时文件、`fsync`、原子 `rename` 到最终路径；
+    2. 然后调第 2 章的 `effect_archive_message`——台账行与 `effect_log` 行
+       在**同一个事务**里提交，幂等键 `{thread_id}:effect_archive_message:{msgid}`。
+
+    ⛔ 本函数不 `commit()` 也不 `rollback()`：提交由 `idempotent_effect` 独占，
+    那是"业务写与幂等记录同一个 BEGIN"成立的结构前提。
+
+    两个中间态的方向（spec 原文）：
+    - **允许**"材料已在、台账未记"——重跑时 rename 幂等、台账行补上，收敛；
+    - ⛔ **禁止**"台账已记、材料缺失"——台账说材料收到了，材料却不在，
+      这是不可恢复的谎。所以落盘失败时本函数直接向上抛，一行台账都不写。
+
+    ⚠️ **一条消息最多一个附件**（aibot 协议：每条消息一个 msgtype、一个媒体项）。
+    `attachments_json` 仍是数组，长度 0 或 1。真出现多附件的消息类型时，
+    正确动作是**登记偏离、改 design D4 的路径形态**，⛔ 不是在这里加一个
+    没人验证过的分支。
+    """
+    stored: tuple[StoredAttachment, ...] = ()
+    if attachment is not None:
+        destination = compute_archive_path(
+            thread_id=thread_id,
+            msgid=msgid,
+            received_at=received_at,
+            filename=attachment.filename,
+            archive_root=archive_root,
+        )
+        stored = (store_attachment(attachment.payload, destination, archive_root=archive_root),)
+
+    # ⛔ 这一行必须在上面那段之后。顺序倒过来就是 design D3 明令禁止的那种谎。
+    applied = effect_archive_message(
+        conn,
+        thread_id=thread_id,
+        business_key=msgid,
+        sender_userid=sender_userid,
+        received_at=received_at,
+        msgtype=msgtype,
+        content=content,
+        # ensure_ascii=False：中文文件名在库里保持可读，排障时 sqlite3 直接看得懂。
+        attachments_json=json.dumps([item.as_dict() for item in stored], ensure_ascii=False),
+    )
+
+    return ArchiveOutcome(msgid=msgid, newly_archived=applied is not None, attachments=stored)
