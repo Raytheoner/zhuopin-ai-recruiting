@@ -30,6 +30,12 @@
 #   --chain            链式接续：一轮收敛后重扫编排，还有待执行条目就自动接着跑
 #   --max-rounds N     链式的轮次硬上限（默认 5），防标注没摘干净导致无限重跑
 #
+# 退出码：
+#   0  正常          10 找不到 claude CLI    11 计划文件不存在
+#   12 manifest 空   13 抽取预检不通过       14 带着 index.lock
+#   15 条目总数自检不通过（Σ泳道条目 ≠ manifest 行数 ≠ 泳道标注数，见下方同名段落）
+#   64 未知参数
+#
 # 关于 --budget 的语义（2026-08-27 查证 code.claude.com/docs/en/costs）：
 #   Max/Pro 订阅下用量**包含在订阅里**，那个美元数是 Claude Code 按标准价目**本地折算**
 #   的估值，不是账单。所以它是「跑飞保险丝」不是钱闸，提高它不产生额外收费。
@@ -94,6 +100,10 @@ done
 
 command -v claude >/dev/null || { echo "✗ 找不到 claude CLI"; exit 10; }
 [[ -f "$PLAN" ]] || { echo "✗ 计划文件不存在：$PLAN"; exit 11; }
+
+# 编排文件里待执行的泳道标注数。在**编排文件原文**上数，且必须在 --only 过滤之前取——
+# 过滤只动 manifest，不动文件。跑完被 mark_done 摘掉标注的条目不计入，正是要的语义。
+PLAN_LANE_M="$(LC_ALL=C grep -c '^>[[:space:]]*泳道：' "$PLAN" | tr -d ' ')"
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 # dry-run 把 manifest 落到临时目录，**不在仓库里留任何痕迹**。
@@ -309,6 +319,69 @@ if [[ -n "${EXEMPT_MISSING// /}" ]]; then
   echo "    > ⚠️ 本块不带 set_session_title 那一行，这是豁免不是漏写：由 run-lanes.sh"
   echo "    > 以 printf | claude -p 无头启动，print 模式下那个 MCP 工具未必挂载，"
   echo "    > 名字另由 -n 给。🔴 若改为手工贴进 CC Desktop，必须自行补上第 3 行。"
+fi
+
+# ---------------------------------------------------------------------------
+# 条目总数自检（2026-09-08 加，第十一批实证）
+#
+# 由来：第十一批 macOS awk 在 UTF-8 locale 下 `-v L="<中文泳道名>"` 时 `$1==L` 恒真，
+# 3 条泳道**各自领走全部 6 条** opener，18 个 claude 进程抢同一批 worktree，
+# 且不报任何错。2f14d2c 用 `export LC_ALL=C` 钉死了那个根因；这里加的是一道
+# **独立于根因**的机器护栏——不管以后是 locale、awk 版本、还是分组表达式本身出岔，
+# 只要"每条 opener 恰好归属一条泳道"这条不变式被破坏，当场拒跑。
+#
+# 判据（三个数必须相等）：
+#   Σ = 按泳道分组后各泳道条目数之和   ← 走的是 run_lane 真正喂 while 循环的同一条 awk
+#   N = manifest 行数                  ← 解析出来的 opener 总数
+#   M = 编排文件里 `> 泳道：` 标注数    ← 人在文件里写下的意图
+# Σ > N ⇒ 有条目被多条泳道重复领取（第十一批那次：Σ=18, N=6）
+# Σ < N ⇒ 有条目一条泳道都没领到，会被静默跳过
+# N ≠ M ⇒ 有 `> 泳道：` 标注下面的代码块首行不合抬头格式，manifest 里没这条
+#
+# 三个都要数：只比 Σ 与 N 抓不到"标注写了但没解析出来"，只比 N 与 M 抓不到重复领取。
+# ⚠️ --only 会缩小 manifest 但不动编排文件，此时 N≠M 是正常的 ⇒ 只判 Σ==N，M 仅供参考。
+# dry-run 同样跑这段：dry-run 阶段能拦住就别等实跑（同「抽取预检」的教训）。
+# ---------------------------------------------------------------------------
+LANE_SUM=0
+LANE_DETAIL=""
+for ln in "${LANES[@]}"; do
+  # 显式 LC_ALL=C，与 2f14d2c 一致；这条 awk 与 run_lane 里喂 while 的那条必须逐字相同，
+  # 否则自检检的就不是真正会跑的那条路径了。
+  lane_ids="$(LC_ALL=C awk -F'\t' -v L="$ln" '$1==L' "$MANIFEST" | cut -f2 | tr '\n' ' ')"
+  lane_n="$(LC_ALL=C awk -F'\t' -v L="$ln" '$1==L' "$MANIFEST" | wc -l | tr -d ' ')"
+  LANE_SUM=$(( LANE_SUM + lane_n ))
+  LANE_DETAIL="${LANE_DETAIL}      ◆ ${ln}  ${lane_n} 条： ${lane_ids}
+"
+done
+MANIFEST_N="$(wc -l < "$MANIFEST" | tr -d ' ')"
+
+SELFCHECK_BAD=0
+if [[ "$LANE_SUM" -ne "$MANIFEST_N" ]]; then SELFCHECK_BAD=1; fi
+if [[ -z "$ONLY" && "$MANIFEST_N" -ne "$PLAN_LANE_M" ]]; then SELFCHECK_BAD=1; fi
+
+if [[ $SELFCHECK_BAD -eq 1 ]]; then
+  echo
+  echo "✗ 条目总数自检不通过：Σ=${LANE_SUM}  N=${MANIFEST_N}  M=${PLAN_LANE_M}"
+  echo "    Σ = 各泳道条目数之和 ／ N = manifest 行数 ／ M = 编排文件 '> 泳道：' 标注数"
+  echo "    各泳道实际领到的条目："
+  printf '%s' "$LANE_DETAIL"
+  if [[ "$LANE_SUM" -gt "$MANIFEST_N" ]]; then
+    echo "    → Σ > N：同一条 opener 被多条泳道重复领取，实跑会有多个进程抢同一批 worktree。"
+    echo "      先查 locale：本脚本已 export LC_ALL=C，若被调用方或 wrapper 覆盖，中文泳道名比较会恒真。"
+  elif [[ "$LANE_SUM" -lt "$MANIFEST_N" ]]; then
+    echo "    → Σ < N：有条目一条泳道都没领到，实跑会被静默跳过。"
+  else
+    echo "    → N ≠ M：有 '> 泳道：' 标注下面的代码块首行不合抬头格式（现行格式 [Mac]MMDDX-<主题短名>），"
+    echo "      解析不出 id ⇒ manifest 里没有这条。用 --only 时本项不判，此处不该出现。"
+  fi
+  echo "    自查：cat $MANIFEST   ／   grep -n '^>[[:space:]]*泳道：' \"$PLAN\""
+  exit 15
+fi
+
+if [[ -n "$ONLY" ]]; then
+  echo "条目总数自检：Σ=N=${MANIFEST_N}（--only 生效，M=${PLAN_LANE_M} 不参与判据）"
+else
+  echo "条目总数自检：Σ=N=M=${MANIFEST_N}"
 fi
 
 # ---------------------------------------------------------------------------
