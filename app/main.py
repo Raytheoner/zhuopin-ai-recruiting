@@ -47,6 +47,13 @@ def _gateway_factory() -> LLMGateway:
         model=settings.llm_model,
         supports_json_schema=settings.llm_supports_json_schema,
         audit_hook=_audit_hook,
+        # WBS 2.3：备用供应商。四项全部来自 Settings 且都有默认值——.51 上
+        # 不改 .env 就是"无备用"，行为与今天逐字一致，⛔ 不需要配套改任何
+        # 部署产物。
+        fallback_api_key=settings.llm_fallback_api_key,
+        fallback_base_url=settings.llm_fallback_base_url,
+        fallback_model=settings.llm_fallback_model,
+        fallback_supports_json_schema=settings.llm_fallback_supports_json_schema,
     )
 
 
