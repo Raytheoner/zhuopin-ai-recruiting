@@ -675,3 +675,53 @@ def test_partial_batch_failure_keeps_identity(conn):
     _process(conn, thread_id="chat-9", msgid="m3")
     assert_effect_log_identity(conn)
     assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 3
+
+
+def test_constraint_violation_in_archive_write_leaves_no_trace(conn):
+    """真实失败形态：直接驱动生产函数 `effect_archive_message` 本体失败。
+
+    reviewer 指出前 5 条新测试里有 3 条（`test_no_effect_log_when_business_write_raises`、
+    `test_failed_effect_is_retried_on_next_run`、
+    `test_failed_effect_rolls_back_exactly_once_and_never_commits`）装饰的是测试内的
+    局部闭包，从未真正调用过生产的 `effect_archive_message`——证伪 A 改坏
+    `effects.py` 后 `test_no_effect_log_when_business_write_raises` 仍然 PASSED，
+    正是这个覆盖盲区的可见症状。本条直接调生产函数，用违反 `liaison_message.msgtype`
+    的 NOT NULL 约束触发真实 `sqlite3.IntegrityError`，断言不留幂等记录、不留半截
+    业务行，然后用合法入参重跑一次确认能正常成功写入。
+    """
+    with pytest.raises(sqlite3.IntegrityError):
+        effect_archive_message(
+            conn,
+            thread_id="u1",
+            business_key="m-bad",
+            sender_userid="u1",
+            received_at="2026-09-08T10:00:00+08:00",
+            msgtype=None,  # NOT NULL 违约：liaison_message.msgtype 无默认值
+        )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM effect_log WHERE business_key = 'm-bad'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM liaison_message WHERE msgid = 'm-bad'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert_effect_log_identity(conn)
+
+    # 重跑：同一个 business_key，这次用合法入参，应当正常成功写入。
+    result = effect_archive_message(
+        conn,
+        thread_id="u1",
+        business_key="m-bad",
+        sender_userid="u1",
+        received_at="2026-09-08T10:05:00+08:00",
+        msgtype="text",
+    )
+    assert result == "m-bad"
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 1
+    assert_effect_log_identity(conn)
