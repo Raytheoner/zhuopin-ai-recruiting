@@ -559,3 +559,41 @@ discard_thread_checkpoints(graph.checkpointer, job_id)   # 删 checkpoints / wri
 约束。下一个读它的人（或 reviewer）会把已经通过终审的 `testpaths` 那行当成越界改动，
 要么白白花一轮去"修"它，要么把 `tools/liaison/tests` 从 `testpaths` 摘掉——而摘掉的后果
 是静默的：不报错、不失败，只是本服务的 28 条测试从此没人跑。
+
+---
+
+## TD-15 · 准入名单出厂态下每条消息刷 3 条 ERROR 日志
+
+**欠的是什么**：`tools/liaison/whitelist.py` 的出厂态（`config/whitelist.yaml` 两条 `userid`
+留空，真实企微 userid 尚未取得）下，每次 `load_whitelist()` **必然**产生 3 条 ERROR
+（两条「userid 为空，整条丢弃」+ 一条「零条有效条目」）。而 spec 硬性禁止缓存名单，
+第 4／5 章又要**每条入站消息**调一次 `admit()` —— 于是机器人收到的每一条消息都会刷 3 条 ERROR。
+
+**为什么现在不改**：这不是 bug，出厂态"谁都不准入"是刻意的 fail-closed 设计；
+但把这几条降级会与模块 docstring 里「任何失败都记 ERROR」的契约冲突，
+**属于需要拍板的取舍，不是可以顺手改掉的东西**（终审 reviewer 原话：needs a decision
+rather than a quiet edit）。本章尚未接线第 4／5 章，实际日志量为零，故留到接线前处置。
+
+**触发条件**：**第 4／5 章把 `admit()` 接进入站消息路径之前**（以先到者为准：或真实
+userid 填入使出厂态消失时复核一次）。
+
+**不还的后果**：ERROR 级告警从上线第一天起持续误报，运维会很快学会忽略这个 logger ——
+而 `whitelist.py` 里真正的合规漏洞（如已修的 C1 值泄漏、I2 顶层字段静默忽略）
+恰恰也是靠 ERROR 日志暴露的。**噪声把唯一的告警通道淹掉**，真故障将无人察觉。
+
+## TD-16 · 终审延后的四条 Minor（准入名单）
+
+2026-09-08 交付单元 3 终审记录、当次未改：
+
+1. **YAML 重复键静默 last-wins**：文件里出现两个 `members:` 块（或条目内两个 `userid`）时，
+   PyYAML 静默取后者，**零日志**。运维若"追加一段"而不是扩写原有列表，名单会被静默替换。
+2. **非 UTF-8 配置被归为「未预期异常」**：`UnicodeDecodeError` 是 `ValueError` 不是 `OSError`，
+   落到兜底带。fail-closed 正确，但运维最可能犯的文件错误被报成内部异常。
+3. **`path` 传 `str`／`None` 之外的类型**：类型标注是 `Path`，传 `str` 会 fail-closed 但报
+   「未预期异常」。第 4／5 章调用方若传字符串，会得到一个永久拒绝且诊断错位的闸门。
+   低成本修法：`_read_roster` 顶部 `path = Path(path)`。
+4. **`config/README.md` 未警告失败面**：它告诉运维可以改活文件、不必重启，
+   但没说 YAML 写坏／存成非 UTF-8／存盘竞态会**拒绝所有人**，且唯一提示是 ERROR 日志。
+
+**触发条件**：第 4／5 章接线时一并处理（第 3 条尤其影响调用方）；第 4 条可随时补。
+**不还的后果**：1 与 4 都是**静默**失败——名单被改小或全员被拒，而闸门看起来健康。
