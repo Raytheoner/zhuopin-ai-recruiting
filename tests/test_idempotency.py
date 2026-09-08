@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.storage.db import get_connection, init_schema
@@ -184,3 +186,63 @@ def test_cleanup_rollback_failure_is_logged(tmp_path, caplog):
     assert any("job1:effect_masking_probe:1" in r.getMessage() for r in error_records), (
         "日志里应该包含 effect_key，方便定位是哪个 effect 的部分写入被泄漏"
     )
+
+
+def test_unique_key_race_short_circuits_and_rolls_back_this_write(tmp_path, caplog):
+    """
+    工程铁律1 的竞态落点。装饰器第 33 行的 SELECT 预检与随后的
+    INSERT effect_log 之间隔着被装饰函数的整个函数体；另一条路径（双击、
+    客户端超时重发、反向代理重试）完全可以在这段窗口里**完整**应用同一个
+    effect_key。唯一索引才是唯一权威，预检只是省一次无谓执行的优化。
+
+    命中这种情况时正确的语义是"已执行 ⇒ 短路"，⛔ 不是异常：
+    - 抛出去 = 用户看到 500（现网 2026-09-08 13:18 实发一次）
+    - 抛出去且不回滚 = 本次的业务写留在未提交事务里，被之后任何一次
+      不相关的 effect 的 conn.commit() 悄悄带下去 ⇒ 业务表多一行、
+      effect_log 仍一行 ⇒ 恒等式破，且没有任何症状。
+
+    时序靠两个连接构造，是确定性的、不靠线程抢跑：sqlite3 的 legacy
+    transaction control 下 SELECT 不开事务，所以预检之后 conn 尚未持写锁，
+    conn2 此刻可以自由提交；等 conn 写了业务行拿到写锁，conn2 就会被挡住，
+    所以抢先者必须抢在本次业务写之前。
+    """
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    init_schema(conn)
+    winner_conn = get_connection(db_path)
+
+    calls = []
+
+    @idempotent_effect("effect_race")
+    def send(conn, thread_id, business_key):
+        calls.append(business_key)
+        # 预检已过、本连接尚未持写锁：另一条路径此刻完整应用同一个 effect
+        winner_conn.execute(
+            "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))",
+            (f"{thread_id}:effect_race:{business_key}", thread_id, "effect_race", business_key),
+        )
+        winner_conn.execute(
+            "INSERT INTO job (id, title) VALUES (?, ?)", ("job-winner", "抢先者写的行")
+        )
+        winner_conn.commit()
+        # 本次的业务写（这一行必须被回滚掉）
+        conn.execute("INSERT INTO job (id, title) VALUES (?, ?)", ("job-loser", "本次写的行"))
+        return "sent"
+
+    with caplog.at_level(logging.WARNING, logger="app.storage.idempotency"):
+        result = send(conn, thread_id="job1", business_key="v1")
+
+    # ① 返回 None（按"已执行"短路）  ② 不抛（走到这里就说明没抛）
+    assert result is None
+    assert calls == ["v1"]  # 函数体确实跑过了——这不是预检短路，是冲突短路
+
+    # ③ 业务表只剩抢先者那一行：本次的写被整体回滚
+    #    ⛔ 这一条是 INSERT OR IGNORE 那种写法过不去的判据
+    assert [r[0] for r in conn.execute("SELECT id FROM job ORDER BY id")] == ["job-winner"]
+
+    # ④ effect_log 恰一行（恒等式：effect_log 条数 ≡ 业务表行数）
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 1
+
+    # 这条路径很罕见，必须在日志里留下痕迹，否则现网只能看见"什么都没发生"
+    assert any("effect_race" in r.getMessage() for r in caplog.records)
