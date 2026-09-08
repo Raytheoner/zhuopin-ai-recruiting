@@ -32,11 +32,11 @@ REASON_PROVIDER_UNAVAILABLE = "provider_unavailable"
 _REASON_TEXT = {
     REASON_SCHEMA_EXHAUSTED: (
         "系统连续几次都没能把这段需求解析成结构化画像，已转交 HR 人工处理。"
-        "已经采集到的内容都保留着，不用重新说一遍。"
+        "刚才这条消息没能被处理，请稍后重新发一次；此前已确认的画像内容不受影响。"
     ),
     REASON_PROVIDER_UNAVAILABLE: (
         "模型服务暂时不可用（主备两家都没能应答），本轮已转交 HR 人工处理。"
-        "已经采集到的内容都保留着，不用重新说一遍。"
+        "刚才这条消息没能被处理，请稍后重新发一次；此前已确认的画像内容不受影响。"
     ),
 }
 
@@ -51,7 +51,8 @@ def manual_handoff_text(reason_code: str) -> str:
     变成一个 500。"""
     return _REASON_TEXT.get(
         reason_code,
-        "本轮采集没能完成，已转交 HR 人工处理。已经采集到的内容都保留着。",
+        "本轮采集没能完成，已转交 HR 人工处理。"
+        "刚才这条消息没能被处理，请稍后重新发一次；此前已确认的画像内容不受影响。",
     )
 
 

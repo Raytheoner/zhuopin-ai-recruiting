@@ -119,8 +119,8 @@ def test_each_effect_gets_its_own_idempotency_key(tmp_path):
         )
     ]
     assert keys == [
-        "job1:effect_deliver_manual_handoff:2",
-        "job1:effect_mark_needs_manual:2",
+        "job1:effect_deliver_manual_handoff:2:schema_retry_exhausted",
+        "job1:effect_mark_needs_manual:2:schema_retry_exhausted",
     ]
 
 
@@ -246,3 +246,48 @@ def test_the_needs_manual_queue_can_finally_see_it(tmp_path):
         job_status=status, profile={}, revision_count=0, max_revisions=3
     )
     assert [reason["code"] for reason in reasons] == ["job_status"]
+
+
+class _SequencedGateway:
+    """按脚本逐次抛出不同异常。用于验证同一个 round_count 内先后两种不同原因
+    的转人工不会互相吞掉——round_count 来自 job_profile 行数，转人工轮不落
+    画像行，所以同一 round_count 会被连续两次命中（见 review I-2）。"""
+
+    def __init__(self, exceptions):
+        self._exceptions = list(exceptions)
+
+    def extract_structured(self, **kwargs):
+        raise self._exceptions.pop(0)
+
+    def extract_structured_with_meta(self, **kwargs):
+        raise self._exceptions.pop(0)
+
+
+def test_second_failure_in_the_same_round_with_a_different_reason_is_not_swallowed(tmp_path):
+    """review I-2：business_key 只用 round_count 时，同一轮内第二次转人工
+    （原因码不同）会被幂等键当成"已处理过"静默跳过，业务经理拿到的还是第一次
+    那条、原因码是错的。business_key 必须把 needs_manual_reason_code 也编进去，
+    真正的重放（同轮同因）仍然要正确去重。"""
+    conn = _seeded_conn(tmp_path)
+    channel = WebChannel(conn)
+    gateway = _SequencedGateway(
+        [
+            SchemaExtractionFailed("3 次尝试后仍未通过 Schema 校验"),
+            LLMProviderUnavailable("主备都不可用"),
+        ]
+    )
+    graph = build_intake_graph(str(tmp_path / "t.db"), gateway=gateway, conn=conn, channel=channel)
+    config = {"configurable": {"thread_id": "job1"}}
+
+    graph.invoke(_state(), config=config)  # round_count=2，schema 耗尽
+    graph.invoke(_state(), config=config)  # 仍是 round_count=2，这次是供应商故障
+
+    rows = conn.execute(
+        "SELECT message_type, payload_json FROM outbox WHERE thread_id='job1' ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 2, "两次不同原因的转人工都必须真实投递，不能被幂等键吞掉第二条"
+
+    import json
+
+    reason_codes = [json.loads(payload)["reason_code"] for _type, payload in rows]
+    assert reason_codes == [REASON_SCHEMA_EXHAUSTED, REASON_PROVIDER_UNAVAILABLE]

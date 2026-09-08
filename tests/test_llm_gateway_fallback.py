@@ -206,6 +206,29 @@ def test_both_providers_down_raises_provider_unavailable_with_two_events():
     assert [payload["failed_role"] for _record, payload in rows] == ["primary", "fallback"]
 
 
+def test_fallback_4xx_after_switch_raises_provider_unavailable_not_the_raw_error():
+    """review I-1：已切到备用之后，备用家的 4xx 语义是"主备两家都没答上"
+    （LLMProviderUnavailable 的定义），⛔ 不是"这次请求本身有问题"。
+
+    ⛔ 不违反"4xx 不许触发切换"：这里根本没有发生任何切换（已经是最后一家），
+    _is_switchable 的早抛只在"尚未切换"时才适用。"""
+    hook = RecordingHook()
+    gateway = _gateway([_status_error(503)], [_status_error(401)], hook=hook)
+
+    with pytest.raises(LLMProviderUnavailable):
+        _extract(gateway)
+
+    rows = _switch_rows(hook)
+    assert len(rows) == 2
+    (first_record, first_payload), (second_record, second_payload) = rows
+    assert first_payload["switched_to_role"] == "fallback"
+    assert second_payload["switched_to_role"] is None
+    assert second_payload["failed_role"] == "fallback"
+    assert second_payload["error_type"] == "APIStatusError"
+    # 备用家从没被真正调用出结果，⛔ 不应该多出第三行「成功应答」记录。
+    assert len(hook.records) == 2
+
+
 def test_attempt_numbers_are_unique_across_the_switch():
     """app/audit/hook.py 的 _event_id 拼了 attempt。重号 = 第二行被主键静默丢掉。"""
     hook = RecordingHook()
@@ -249,6 +272,9 @@ def test_partially_configured_fallback_runs_as_no_fallback(caplog):
         # ⛔ 缺 fallback_api_key：⛔ 不复用主家的 key
     )
     assert gateway._fallback is None
+    # T2-a：半填 .env 是最可能的首次部署错误，这条 WARNING 是运维在 .51 上
+    # 唯一的信号——⛔ 不能被"删掉整块 logger.warning 也全绿"这种改动吃掉。
+    assert "配置不全" in caplog.text
     with pytest.raises(LLMProviderUnavailable):
         _extract(gateway)
 

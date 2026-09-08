@@ -392,9 +392,19 @@ class LLMGateway:
             except Exception as exc:
                 latency_ms = (time.monotonic() - started) * 1000
                 total_latency_ms += latency_ms
-                if not _is_switchable(exc):
-                    # 4xx / 其他：换一家照样错，⛔ 不切、⛔ 不重试，原样抛给调用方。
+                switchable = _is_switchable(exc)
+                if not switchable and not switched:
+                    # 4xx / 其他，且尚未切换过：换一家照样错，⛔ 不切、⛔ 不重试，
+                    # 原样抛给调用方——这条分支管的是"4xx 不许触发切换"。
                     raise
+                # 走到这里，要么这次异常本身可切换，要么已经切到备用之后——
+                # 已经是最后一家了，无论备用家的异常是 4xx 还是 5xx，都不再有
+                # "切换"这个动作可做。switch_to 同时承担两层判断：本次异常是否
+                # 可切换、以及是否还有下一家可切。任何一层为否，这次调用的终局
+                # 都是同一句话——"主备两家都没答上"（review I-1）。
+                switch_to = (
+                    None if (not switchable or self._fallback is None or switched) else self._fallback
+                )
                 record_seq += 1
                 self._record_provider_switch(
                     provider=provider,
@@ -404,9 +414,9 @@ class LLMGateway:
                     latency_ms=latency_ms,
                     attempt=record_seq,
                     audit_context=audit_context,
-                    switched_to=None if (self._fallback is None or switched) else self._fallback,
+                    switched_to=switch_to,
                 )
-                if self._fallback is None or switched:
+                if switch_to is None:
                     raise LLMProviderUnavailable(
                         f"供应商不可用且已无可切换的备用（最后一家: {provider.role}/"
                         f"{provider.model}）: {exc!r}"

@@ -125,11 +125,14 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
         effect_mark_needs_manual(
             conn,
             thread_id=state["job_id"],
-            # business_key 用 round_count：这一轮**没有**落 job_profile 行，
-            # 所以重放/用户重试时 round_count 仍然是同一个值，幂等键命中、
-            # 这两个 effect 被正确跳过（job.status 已经是 needs_manual、消息
-            # 已经投递过一次）。⛔ 不要在这里用时间戳之类每次都变的值。
-            business_key=str(state.get("round_count", 0)),
+            # business_key 用 "round_count:reason_code"：这一轮**没有**落
+            # job_profile 行，所以重放/用户重试时 round_count 仍然是同一个值，
+            # 真正的重放（同轮同因）幂等键命中、正确跳过。⛔ 只用 round_count
+            # 会让同一轮内先后两种不同原因的转人工互相吞掉——第二次失败的
+            # 原因码会被幂等键当成"已处理过"静默丢弃，业务经理拿到的还是第
+            # 一次那条陈旧原因码（review I-2）。⛔ 不要在这里用时间戳之类
+            # 每次都变的值。
+            business_key=f"{state.get('round_count', 0)}:{state['needs_manual_reason_code']}",
             reason_code=state["needs_manual_reason_code"],
         )
         return state
@@ -138,7 +141,7 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
         effect_deliver_manual_handoff(
             conn,
             thread_id=state["job_id"],
-            business_key=str(state.get("round_count", 0)),
+            business_key=f"{state.get('round_count', 0)}:{state['needs_manual_reason_code']}",
             channel=channel,
             reason_code=state["needs_manual_reason_code"],
             round_count=state.get("round_count", 0),
