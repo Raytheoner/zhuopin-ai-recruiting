@@ -1,7 +1,7 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-03（Cowork 业务线）
+> 最后更新：2026-09-08（Cowork 业务线）
 
 ---
 
@@ -21,16 +21,16 @@ HR业务线-接力0903B
 
 ---
 
-## 一、状态快照（2026-09-04 13:40，第九批 + 0904F 跑完后）
+## 一、状态快照（2026-09-08 09:50，第十批 + 0905A 跑完后）
 
 | 项 | 现状 |
 |---|---|
-| main | `27f19df`，**与 origin 同步（ahead 0）**。`settings.local.json` 已进 `.gitignore` |
-| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`（第十批 + 号池）、`docs/openers/0904Y-泳道批次看护.md`。`0904Y`【二】提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
+| main | `2dfa499`，**与 origin 同步（ahead 0）**。⚠️ 另一条线在跑：`0908A`（HR 企微值守机器人 `openspec-propose`，09-08 09:31 派），`openspec/changes/hr-wecom-aibot-liaison/` 尚未跟踪——本线所有 opener ⛔ 不碰它 |
+| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`、`docs/openers/0908Z-*.md`、`0908B-*.md`、`0908I-*.md`。`0908Z`【二】提交前四个；`0908I` 未在其清单里，由 `0908B`/`0908I` 自己带上。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
 | `.51` 代码 | ✅ **已发版 `3f59842`（含 TD-9 修复）**（`0904Z` 2026-09-04 三次发版，Shao Peishen 本人点 Run 按钮执行 `sync-to-server.sh`（AI 直接调用被 Auto Mode 分类器拦截），冒烟 4 项全过：首页 200／相对资源无 404／`app.log` 无异常／`record_outbound_decision` 符号数 2，见 `docs/audit-and-outbound-ops.md` §五「2026-09-04 三次发版记录」） |
-| pytest | main 侧 **1008 passed / 1 skipped / 0 failed**（09-04 `0904Z` 独立复核）。⛔ 别抄进 opener 当基线，见【四】 |
+| pytest | main 侧 **1061 passed / 1 skipped**（09-04 `0904Y` 复核）＋ 0905A 后未复核（应更高）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
-| worktree | 三个已合入的遗留（`intake-unit6-approval` / `unit7-jd-grounding-export` / `td9-outbound-retry-audit-trace`，真未合均 0，含 TDD 台账，留着无害，不删） |
+| worktree | 已清空（三个遗留分支 intake-unit6 / unit7 / td9 仍在，真未合均 0，无害） |
 
 **变更包进度**
 
@@ -39,9 +39,9 @@ HR业务线-接力0903B
 | ~~`ai-audit-trail-and-outbound-gate`~~ | **53/53 ✅ 已归档** | `openspec/changes/archive/2026-09-04-ai-audit-trail-and-outbound-gate`；specs 折进 `ai-decision-audit` + `outbound-approval-gate` |
 | `m1-intake-quality-fixes` | **68/69** | 8.4 ✅（Shao Peishen 09-03 页面实跑，job `51b225f1`，0903L 取证）；只剩 **8.9**（归档，须 `m1-job-profile-intake` 先归档） |
 | ~~`outbound-retry-audit-trace`~~ | **15/15 ✅ 已归档** | `archive/2026-09-04-outbound-retry-audit-trace`；delta 已合进 `outbound-approval-gate/spec.md`；修复已随 `3f59842` 上 `.51` |
-| `m1-job-profile-intake` | **45/72** | 第 6 章确认断点 ✅（`be6322a`，含 6.1 缺陷修复、human_review 表、断言四）；第 7 章 JD 溯源与导出 ✅（`6ae57bf`）；9.6 规格已更新（`27f19df`，0904F）待修。剩 27 条未勾：第十批清 9.6 / 1.2b+5.8+5.9 / 8.1+8.2+8.4 / 账目对齐 4 条；余下要定时基础设施或人工评估或已移出 |
+| `m1-job-profile-intake` | **56/72** | 第十批：9.6 ✅、硬门槛 1.2b/5.8/5.9 ✅、账目对齐 4 条 ✅；0905A：Web 8.1/8.2/8.4 ✅（`05e90cc`）。剩 16：**8 条 C 类已移出企微通道**（1.5b/3.x/9.2 → 由 `0908A` 立的 `hr-wecom-aibot-liaison` 承接）、**3 条要定时基础设施**（1.7/5.6/6.8，等定是否移出）、9.1 人工评估、**4 条本批做**（2.3/2.5/4.4/5.3） |
 
-**已跑完的批次**：第四批（0827B/C）、第五批（0828A/C/D/B）、第六批（0830A）、第七批（0903F/G/H/I）、第八批（0903N/O/P/Q）、**第九批（0904B/C/D/E，报告 `lanes-20260904-093026-看护报告.md`）**。
+**已跑完的批次**：第四至第九批；**第十批（0904G–M，报告 `lanes-20260904-134429-看护报告.md`；M 预算耗尽 NO-SENTINEL，由 `0905A` 09-07 利旧 worktree 续跑收口）**。
 看护报告都在 `.claude/handoff/lanes-*-看护报告.md`。
 
 ---
@@ -117,14 +117,17 @@ Shao Peishen 亲自跑 `scripts/allow_run_lanes.py` 加白名单后解除。supe
 唯一验证有效的路径＝把命令贴成 bash 块、Shao Peishen 在 CC Desktop 点 Run（已写进 lane-dispatch skill）。C/E 各撞一次预算上限（$25）跳过全分支终审。
 C 发现断言四豁免线用 `created_at` 有洞 → Shao Peishen 裁决「现在修」→ `0904F` 出了规格（tasks 9.6）。
 
-### ⑩ 第十批已编排 → 等 `[Mac]0904Y` 发车（启动命令由 Shao Peishen 点 Run）
+### ~~⑩ 第十批~~ ✅ 跑完（G/H/I/J/K/L OK，M 预算耗尽）＋ ~~`0905A`~~ ✅ 续跑收口（`05e90cc`，09-07）
 
-三泳道并行（写代码的文件集合两两不交；唯一共同写者 intake `tasks.md` 各改不同章节、经 worktree merge 合回）：
-断言 `0904G` 账目对齐（1.3/2.6/1.6b/8.3 核证据回勾）→ `0904H` 9.6 plan → `0904I` 9.6 build；
-硬门槛 `0904J` plan → `0904K` build（1.2b 建表 + 5.8 规则草案提取 + 5.9 主观描述拦截）；
-Web `0904L` plan → `0904M` build（8.1 列表 / 8.2 详情与版本历史 / 8.4 needs_manual 队列）。
-dry-run 预期 3 泳道 7 条：G16 / H20 / I21 / J20 / K21 / L19 / M23 行。正文 `docs/openers/0904Y-泳道批次看护.md`。
-跑完后 intake 包若只剩「要定时基础设施 / 人工评估 / 已移出」的条目，下一步是把这些按 08-20 四类法再判一次、再决定归档。
+结果：9.6 合入（`3b3aac7`）、硬门槛 1.2b/5.8/5.9 合入（`46b84b9`，含 hard_requirement 新表）、账目对齐 4 条、Web 8.1/8.2/8.4 合入（`05e90cc`，登记 19 条落地偏离与 parked）。56/72，pytest 1008→1061+。
+🔴 0904I 留步：9.6 上 `.51` 后，留痕上线前的历史行会从"被豁免"翻成断言四违例（巡检 EXIT=1）——**预期结果**，处置＝人工逐条核实，⛔ 不挪豁免线。`0908B` 发版时抄清单。
+另一条线：`0908A` HR 企微值守机器人 `openspec-propose`（09-08 09:31，由别的 session 派）——它承接的正是本包 8 条 C 类企微条目。
+
+### ⑪ 09-08：`0908B` `.51` 四次发版（等「发」）＋ 第十一批已编排（等 `0908Z` 发车）
+
+- `0908B`：现网 `3f59842` 落后 main 五个交付单元（含 6.1 现网缺陷修复）。requirements 无变动只 sync。发版后跑巡检、把断言四历史行抄成清单待 Shao Peishen 核实。正文 `docs/openers/0908B-51四次发版与巡检.md`。🔴 不可代，**09-08 已回「发」**
+- 第十一批三泳道并行（文件两两不交）：网关 `0908C→D`（2.3 双供应商 + 2.5 重试转人工不产半成品）；识别 `0908E→F`（5.3 非用人需求不建单）；幂等 `0908G→H`（4.4 每个 effect_* 中断恢复恒等，清单自动收集防过期）。dry-run 预期 C21/D22/E19/F21/G20/H21。正文 `docs/openers/0908Z-泳道批次看护.md`
+- ✅ Shao Peishen 09-08 裁决「按推荐」：1.7/5.6/6.8 移出为 C 类（调度基础设施，待立项）→ `0908I`（🔴 须在 0908Z 收敛后跑，与 0908F 回勾行相邻）。之后本包 D 类只剩 9.1（人工评估），归档判定等他
 
 ---
 
