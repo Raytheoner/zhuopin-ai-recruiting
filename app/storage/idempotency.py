@@ -67,11 +67,60 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
                     )
                 raise
 
-            conn.execute(
-                "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
-                "VALUES (?, ?, ?, ?, datetime('now'))",
-                (effect_key, thread_id, node_name, business_key),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+                    "VALUES (?, ?, ?, ?, datetime('now'))",
+                    (effect_key, thread_id, node_name, business_key),
+                )
+            except sqlite3.IntegrityError as exc:
+                # 上面第一行的 SELECT 预检**永远不可能充分**：它和这条 INSERT 之间
+                # 隔着被装饰函数的整个函数体，另一条路径（双击、客户端超时重发、
+                # 反向代理重试）可以在这段窗口里完整应用同一个 effect_key。
+                # 唯一索引才是唯一权威，预检只是省一次无谓执行的优化。
+                #
+                # 撞上唯一键 = 这件事已经被别人做完了 = 幂等命中，是**正常路径**，
+                # ⛔ 不是异常。抛出去用户就看到 500（现网 2026-09-08 13:18 实发一次）。
+                #
+                # 但短路之前必须先回滚：fn 刚写的业务行还在这个未提交的事务里，
+                # 而 conn 是全应用共享的单连接（见 db.get_connection）。不回滚，
+                # 这些行会被之后任何一次*不相关*的 effect 的 conn.commit() 悄悄
+                # 落盘 —— 业务表多一行、effect_log 仍只有一行，工程铁律1 的恒等式
+                # 当场破掉，而且没有任何症状。
+                # ⛔ 同理不能用 INSERT OR IGNORE 之后照常 commit：那等于主动把
+                # 重复的业务行提交下去。
+                try:
+                    conn.rollback()
+                except Exception as rollback_exc:
+                    # 回滚失败 ⇒ 那批业务写仍留在未提交事务里，随时会被下一次
+                    # 不相关的 commit 带下去。此时**不能**假装幂等成功返回 None
+                    # （那会让调用方以为一切正常，而恒等式正悬在破掉的边缘），
+                    # 只能记 ERROR 并把原始异常抛给调用方。
+                    logger.error(
+                        "rollback failed while short-circuiting duplicate effect_key=%s; "
+                        "this call's business write was NOT undone and may be silently "
+                        "committed by a later, unrelated effect",
+                        effect_key,
+                        exc_info=rollback_exc,
+                    )
+                    raise exc from rollback_exc
+
+                # 语义判据，⛔ 不匹配错误文案（SQLite 的消息措辞不是契约）：
+                # 回滚后这把键确实在库里 ⇒ 是幂等命中；不在 ⇒ 坏的是别的完整性
+                # 约束（例如 thread_id 为 None 触发 NOT NULL），那是真 bug，原样上抛。
+                already_applied = conn.execute(
+                    "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
+                ).fetchone()
+                if already_applied is None:
+                    raise
+                logger.warning(
+                    "effect_key=%s was applied by another path between this call's "
+                    "pre-check and its effect_log insert; treating as already applied "
+                    "and rolling back this call's business write",
+                    effect_key,
+                )
+                return None
+
             conn.commit()
             return result
 
