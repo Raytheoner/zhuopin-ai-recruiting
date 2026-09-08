@@ -21,16 +21,16 @@ HR业务线-接力0903B
 
 ---
 
-## 一、状态快照（2026-09-08 14:40，第十一批 + 0908I/J/K 跑完后）
+## 一、状态快照（2026-09-08 18:00，第十二批跑完后）
 
 | 项 | 现状 |
 |---|---|
-| main | `206fefa`（第十一批三泳道已全部收敛并由看护者收尾提交），**与 origin 同步（ahead 0）**；其后 `0908I` 又提交一次账目改动（只碰 intake `tasks.md` + 编排 + 本文 + 自身 opener 正文）。⚠️ 另一条线在跑：`0908A`（HR 企微值守机器人 `openspec-propose`，09-08 09:31 派），`openspec/changes/hr-wecom-aibot-liaison/` 尚未跟踪——本线所有 opener ⛔ 不碰它 |
-| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`（第十二批 + 号池）、`docs/openers/0908Y-*.md`。`0908Y`【二】提交。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
-| `.51` 代码 | ✅ **已发版 `95b298c`**（`0908K` 2026-09-08 五次发版成功）。⚠️ **实际范围远大于该轮 opener 所述的「只发巡检 CLI 编码修复」**——`7a48a19..95b298c` 对 `app/ scripts/` ＝ 15 文件 / +905 −118，一并上线 **WBS 2.3 备用供应商切换**、**WBS 2.5 重试耗尽转人工**（两个新 `effect_*` 节点）、**tasks 5.3 离题轮不留岗位记录/丢弃**；⇒ 今后发版 opener 的「这次发什么」必须由 `git diff <现网 HEAD>..main` 现算。快照 `C:\apps\backups\20260908-1420`（`app\` 126 文件完整；`data\` 因 `demo.db-shm` 被占用中断，不影响回滚——回滚只用 `app\`）。纯 sync，⛔ 未装依赖、未重跑 `deploy-server.ps1`。冒烟 4 项：首页 200 ｜ `GET /api/jobs` JSON 列表 ｜ 新进程 PID 9600 于 `14:22:36` 启动、**其后零 Traceback**（尾 60 行里那段 `Traceback` 时间戳为 `13:18:32`，属上一版进程的历史错误，已取证非本次回归，未回滚）｜ 🔴 **不带 `PYTHONIOENCODING` 裸跑巡检 `EXIT=0`**、6 条断言全过、断言四豁免 7 条 ⇒ `19b8937` 修复现网生效。⇒ **`0908J` 那条「加 `PYTHONIOENCODING=utf-8` 才得真结果」已作废，⛔ 不要再加环境变量**。🔴 查实遗留缺陷（早于本次发版、未修）：重复 `confirm` 时 `idempotent_effect` 抛 `sqlite3.IntegrityError: UNIQUE constraint failed: effect_log.effect_key` 而非短路，用户可见 500（恒等式未破），待立项。ℹ️ 口径订正：`.51` 应用日志真实路径是 `logs\app.log`，**不是** `data\logs\app.log`。详见 `docs/audit-and-outbound-ops.md` §五 ｜ `0908B` 失败回滚见 `docs/findings/2026-09-08-51四次发版回滚.md` |
-| pytest | main 侧 **1061 passed / 1 skipped**（09-04 `0904Y` 复核）＋ 0905A 后未复核（应更高）。⛔ 别抄进 opener 当基线，见【四】 |
+| main | `3423684`，**与 origin 同步（ahead 0）**。第十二批 44 个 commit 全合入 |
+| 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`（第十三批 + 号池）、`docs/openers/0908U-*.md`、`0909Z-*.md`。`0908U`【五】先带走一部分，`0909Z`【二】收尾。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
+| `.51` 代码 | ✅ **已发版 `95b298c`**（`0908K` 2026-09-08 五次发版成功）。⚠️ **实际范围远大于该轮 opener 所述的「只发巡检 CLI 编码修复」**——`7a48a19..95b298c` 对 `app/ scripts/` ＝ 15 文件 / +905 −118，一并上线 **WBS 2.3 备用供应商切换**、**WBS 2.5 重试耗尽转人工**（两个新 `effect_*` 节点）、**tasks 5.3 离题轮不留岗位记录/丢弃**；⇒ 今后发版 opener 的「这次发什么」必须由 `git diff <现网 HEAD>..main` 现算。快照 `C:\apps\backups\20260908-1420`（`app\` 126 文件完整；`data\` 因 `demo.db-shm` 被占用中断，不影响回滚——回滚只用 `app\`）。纯 sync，⛔ 未装依赖、未重跑 `deploy-server.ps1`。冒烟 4 项：首页 200 ｜ `GET /api/jobs` JSON 列表 ｜ 新进程 PID 9600 于 `14:22:36` 启动、**其后零 Traceback**（尾 60 行里那段 `Traceback` 时间戳为 `13:18:32`，属上一版进程的历史错误，已取证非本次回归，未回滚）｜ 🔴 **不带 `PYTHONIOENCODING` 裸跑巡检 `EXIT=0`**、6 条断言全过、断言四豁免 7 条 ⇒ `19b8937` 修复现网生效。⇒ **`0908J` 那条「加 `PYTHONIOENCODING=utf-8` 才得真结果」已作废，⛔ 不要再加环境变量**。🔴 查实遗留缺陷（早于本次发版、未修）：重复 `confirm` 时 `idempotent_effect` 抛 `sqlite3.IntegrityError: UNIQUE constraint failed: effect_log.effect_key` 而非短路，用户可见 500（恒等式未破）→ ✅ 第十二批 `0908S/T` 已修合入（撞键即 rollback 业务写、按已执行返回），**尚未上 `.51`**。ℹ️ 口径订正：`.51` 应用日志真实路径是 `logs\app.log`，**不是** `data\logs\app.log`。详见 `docs/audit-and-outbound-ops.md` §五 ｜ `0908B` 失败回滚见 `docs/findings/2026-09-08-51四次发版回滚.md` |
+| pytest | main 侧 **1378 passed / 1 skipped / 0 failed**（09-08 17:xx `0908Y` 复核）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
-| worktree | 已清空（三个遗留分支 intake-unit6 / unit7 / td9 仍在，真未合均 0，无害） |
+| worktree | `/private/tmp/wt-0908M`（prunable，分支真未合 0，重启即消失，不管）；三个旧分支仍在、真未合 0 |
 
 **变更包进度**
 
@@ -39,6 +39,7 @@ HR业务线-接力0903B
 | ~~`ai-audit-trail-and-outbound-gate`~~ | **53/53 ✅ 已归档** | `openspec/changes/archive/2026-09-04-ai-audit-trail-and-outbound-gate`；specs 折进 `ai-decision-audit` + `outbound-approval-gate` |
 | `m1-intake-quality-fixes` | **68/69** | 8.4 ✅（Shao Peishen 09-03 页面实跑，job `51b225f1`，0903L 取证）；只剩 **8.9**（归档，须 `m1-job-profile-intake` 先归档） |
 | ~~`outbound-retry-audit-trace`~~ | **15/15 ✅ 已归档** | `archive/2026-09-04-outbound-retry-audit-trace`；delta 已合进 `outbound-approval-gate/spec.md`；修复已随 `3f59842` 上 `.51` |
+| `hr-wecom-aibot-liaison` | **18/66** | 第 1–3 章 ✅（第十二批：骨架 + SDK 1.0.2 在 3.14 实测走路线① / 存储基座与幂等不变式 / 准入名单两人 fail-closed）。第十三批做第 4、5、7 章；第 6 章要 Shao Peishen 给群 webhook；第 8 章灰度要他实操。**真实建连留步：他尚未在企微后台注册新 aibot 拿 BotID/Secret** |
 | `m1-job-profile-intake` | **60/72** | 第十批：9.6 ✅、硬门槛 1.2b/5.8/5.9 ✅、账目对齐 4 条 ✅；0905A：Web 8.1/8.2/8.4 ✅（`05e90cc`）；**第十一批：2.3+2.5 ✅（`7ef4bb2`）、5.3 ✅、4.4 ✅**。剩 12 条，🔴 **已全部有去向，本包内无待做代码**：**C 类 11 条已移出**——8 条企微（1.5b/3.x/9.2）→ `hr-wecom-aibot-liaison`（`0908A` 已立包），3 条调度（1.7/5.6/6.8）→ **调度基础设施（待立项）**（`0908I` 09-08 落档，依据 Shao Peishen「按推荐」裁决）；**D 类只剩 9.1**（10 个真实岗位重跑、HR 与业务经理双方评估，**要真人参与**）。⇒ **归档判定权在 Shao Peishen**，⛔ 代理人不代拍 |
 
 **已跑完的批次**：第四至第九批；**第十批（0904G–M，报告 `lanes-20260904-134429-看护报告.md`；M 预算耗尽 NO-SENTINEL，由 `0905A` 09-07 利旧 worktree 续跑收口）**。
@@ -126,12 +127,17 @@ C 发现断言四豁免线用 `created_at` 有洞 → Shao Peishen 裁决「现�
 ### ~~⑪ 09-08 上午~~ ✅ 全清：第十一批 6/6 合入（2.3/2.5/5.3/4.4，intake 60/72）；`0908B` 缺 tzdata 回滚 → `0908J` 重发成功 `7a48a19` → `0908K` 五次发版 `95b298c`（巡检裸跑 EXIT=0）；`0908I` 三条移出 C 类
 新发现：① 现网缺陷——重复 confirm 时 `idempotent_effect` 撞 UNIQUE 抛 IntegrityError 而非短路（500，恒等式未破）→ 第十二批修复泳道；② `run-lanes.sh` 静默错配（awk UTF-8 locale）已由 `2f14d2c` 钉 `LC_ALL=C`，护栏交第十二批机制泳道；③ 🔴 **备用 LLM 供应商选型（采购，不可代）**——2.3 链路已合入但 `LLM_FALLBACK_*` 全空等同未启用，等 Shao Peishen
 
-### ⑫ 第十二批已编排 → 等 `[Mac]0908Y` 发车（启动命令由 Shao Peishen 点 Run）
+### ~~⑫ 第十二批~~ ✅ 跑完（9/9，值守 18/66，pytest 1233→1378，幂等撞键修复合入，run-lanes 条目自检上线）
 
-三泳道并行（值守只碰 `tools/liaison/`，修复只碰 `app/storage/idempotency.py`+`server.py`，机制只碰 `run-lanes.sh`，两两不交）：
-值守 `0908L→M→N→O→P→Q`（`hr-wecom-aibot-liaison` 第 1 章骨架+SDK 3.14 实测 → 第 2 章存储基座 → 第 3 章准入名单，六条串行）；机制 `0908R`（条目总数自检 exit 15）；修复 `0908S→T`（轻量通道，撞键改短路+rollback）。
-dry-run 预期 L20/M23/N18/O23/P19/Q22/R23/S23/T22。正文 `docs/openers/0908Y-泳道批次看护.md`。
-明令不进泳道：第 6 章真实投递开关、第 8 章灰度（都要 Shao Peishen）；备用 LLM 供应商（采购）；intake 包归档判定（D 类只剩 9.1 人工，归档权在他）。
+🔴 事故：`0908R` 在泳道里改 `run-lanes.sh`，运行中的 bash 按旧字节偏移续读新文件 → 编排器自我损坏、六条被派两遍（产出未受损，泳道自己识别成复核）。
+根治＝脚本开跑先自拷贝到临时目录再 exec（`0908U`，永不进泳道，发车前单独跑）。规矩：**改 `run-lanes.sh` 的 opener 永远不进它自己驱动的泳道**（已写进 lane-dispatch skill）。
+SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走路线①，第 4–7 章按 SDK 正路排。
+
+### ⑬ 09-08 晚：先 `0908U`（护栏）→ 再发第十三批 `0909Z`
+
+- `0908U`：run-lanes.sh 自拷贝执行 + 零条目路径自检可达 + TD-17（`delivery.py:12` 非法转义）。CC 新开、不勾、单独跑。正文 `docs/openers/0908U-run-lanes自拷贝执行与TD17.md`
+- 第十三批（编号按发车日 0909，0908 字母池只剩 U–X）：归档队列泳道 `0909A→B→C→D`（第 4 章消息归档 → 第 5 章任务队列，同写 `storage/effects.py` 故串行）∥ 连接泳道 `0909E→F`（第 7 章连接生命周期，独占 `session*` `alerts*` `__main__.py`）。dry-run 预期 A20/B23/C19/D23/E20/F23，Σ=6。正文 `docs/openers/0909Z-泳道批次看护.md`
+- 等 Shao Peishen 的三件：① 备用 LLM 供应商（采购，推荐阿里云百炼 qwen-plus）；② 企微后台注册新 aibot 拿 `HR_LIAISON_BOT_ID/SECRET`（第 7 章真实建连、第 8 章灰度都要）；③ 「人力AI保障组」群 webhook 地址（第 6 章）
 
 ---
 

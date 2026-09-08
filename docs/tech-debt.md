@@ -597,7 +597,26 @@ userid 填入使出厂态消失时复核一次）。
 
 **触发条件**：第 4／5 章接线时一并处理（第 3 条尤其影响调用方）；第 4 条可随时补。
 **不还的后果**：1 与 4 都是**静默**失败——名单被改小或全员被拒，而闸门看起来健康。
-## TD-17 · `app/outbound/delivery.py:12` 的非法转义序列 SyntaxWarning
+## ~~TD-17~~ · `app/outbound/delivery.py:12` 的非法转义序列 SyntaxWarning ✅ 已还
+
+**2026-09-08 已处置（`0908U`，轻量通道）**：按下方登记的第一种改法，把该模块的
+模块级 docstring 前缀成原始字符串（`"""` → `r"""`）。**全文件只改了这 1 个字符**——
+本条 opener 明令「⛔ 不动该文件其它任何字符」，`git diff` 为 1 insertion / 1 deletion。
+
+选 `r"""` 而不是把反斜杠转义成 `\\`：那条 Windows 路径是给运维**照抄**的，
+`C:\\apps\\...` 在源码里读起来就不再是他要粘进去的那串。raw 前缀让源码与实际路径逐字一致。
+
+**验证**：`./venv/bin/python -W error` 下 `ast.parse` 与 `import app.outbound.delivery`
+均通过（修前 `ast.parse` 抛 `SyntaxError: "\z" is an invalid escape sequence`）；
+`tools/liaison/tests/test_app_does_not_import_tools.py` 5 passed 且 0 warning；
+全量 `pytest -q` 1378 passed / 3 skipped 与基线一致，warning 总数 7725 → 7715
+（正是这条贡献的 10 条），全量输出里 `invalid escape sequence` 归零。
+
+---
+
+### 原登记（保留备查）
+
+#### TD-17 · `app/outbound/delivery.py:12` 的非法转义序列 SyntaxWarning
 
 **欠的是什么**：该行 docstring 里写了 Windows 路径 `C:\apps\...\candidate_outbound.switch`，
 其中 `\z`（以及同类反斜杠序列）是**非法转义序列**，Python 3.14 会发 `SyntaxWarning:
