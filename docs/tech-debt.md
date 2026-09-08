@@ -735,7 +735,7 @@ SDK 事件到达时触发，而"启动后从未连上过"这种情形永远等�
 `effect_*`（幂等键 `{thread_id}:effect_reply_notice:{msgid}`），并在
 `EFFECT_NODE_TO_TABLE` 登记。届时删掉本条。
 
-## TD-20 · `msgid` 禁含 `_` 的规则未在真实企微 msgid 上验证过字符集
+## TD-22 · `msgid` 禁含 `_` 的规则未在真实企微 msgid 上验证过字符集
 
 **欠的是什么**：`tools/liaison/archive.py::_validated_key`（`forbid_underscore=True`
 那一支）拒收任何含 `_` 的 `msgid`——这是让 `<msgid>__<文件名>` 这条拼接
