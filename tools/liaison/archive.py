@@ -98,13 +98,16 @@ def _truncate_preserving_extension(name: str, max_bytes: int) -> str:
 
     suffix = "." + extension
     suffix_bytes = len(suffix.encode("utf-8"))
-    if suffix_bytes >= max_bytes:
+    if suffix_bytes > max_bytes:
         # 病态输入：扩展名本身就吃掉了全部预算。保不住扩展名，
         # 但**绝不能溢出**——溢出会在 open() 时报 ENAMETOOLONG，
         # 而那时候材料已经收到了却落不了盘。
         return _truncate_utf8(name, max_bytes) or FALLBACK_FILENAME
 
+    # `suffix_bytes <= max_bytes` 已在上面确认，所以 `truncated_stem`（预算
+    # 为 `max_bytes - suffix_bytes >= 0`）加上 `suffix` 必然不超预算——
+    # 即便 `truncated_stem` 恰好截成空串（含 4.9 边界：suffix 精确吃满预算，
+    # stem 预算为 0），单独返回 `suffix` 仍在预算内且比丢弃扩展名更贴合
+    # 「保留扩展名」的意图，⛔ 不要在这里回退到对整串做无差别截断。
     truncated_stem = _truncate_utf8(stem, max_bytes - suffix_bytes)
-    if not truncated_stem:
-        return _truncate_utf8(name, max_bytes) or FALLBACK_FILENAME
     return truncated_stem + suffix

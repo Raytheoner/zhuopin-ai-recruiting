@@ -121,6 +121,18 @@ def test_extension_longer_than_the_budget_still_yields_a_bounded_name():
     assert result != ""
 
 
+def test_extension_exactly_filling_the_budget_is_preserved():
+    """review fix round 1 边界钉子：扩展名字节数恰好等于预算时不许被牺牲。
+
+    `".pdf"` 正好 4 字节、`max_bytes=4`——stem 预算精确降到 0，但 `"" + suffix`
+    仍然不超预算，应该优先保住扩展名而不是回退去对整串做无差别截断。
+    此前 `_truncate_preserving_extension` 在这个边界上用 `>=` 提前放弃扩展名
+    （产出 `"a.pd"`），是本条测试要钉死的off-by-one。Task 2 会用消息实际
+    `msgid` 长度反推 `max_bytes`，短扩展名撞上这个边界是可达的，不是纯理论情形。
+    """
+    assert compute_safe_filename("a.pdf", max_bytes=4) == ".pdf"
+
+
 def test_dotfile_is_treated_as_a_whole_name_not_as_an_extension():
     """`.gitignore` 的"扩展名"是整个名字。⛔ 不许把它切成空 stem + 长后缀。"""
     result = compute_safe_filename(".gitignore", max_bytes=200)
