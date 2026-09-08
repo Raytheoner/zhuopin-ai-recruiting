@@ -126,7 +126,8 @@ from tools.liaison.storage.schema import (  # noqa: E402
 def conn(tmp_path):
     c = liaison_db.get_connection(tmp_path / "liaison.db")
     liaison_db.init_schema(c)
-    return c
+    yield c
+    c.close()
 
 
 def _insert_message(conn, msgid="m1", thread_id="u1", content="hello"):

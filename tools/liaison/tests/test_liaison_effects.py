@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 import sqlite3
 
 import pytest
@@ -31,7 +32,8 @@ TRANSACTION_OWNER_ALLOWLIST = {"storage/db.py": {"init_schema"}}
 def conn(tmp_path):
     c = liaison_db.get_connection(tmp_path / "liaison.db")
     liaison_db.init_schema(c)
-    return c
+    yield c
+    c.close()
 
 
 class SpyConnection:
@@ -153,13 +155,24 @@ def _scan_transaction_violations(
             scope = scope_name(func_stack)
             if scope not in allowlist:
                 offenders.append(f"{label}::{scope} 调了 {node.func.attr}()")
-        if isinstance(node, ast.With):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            keyword = "async with" if isinstance(node, ast.AsyncWith) else "with"
             for item in node.items:
-                if isinstance(item.context_expr, ast.Name):
+                expr = item.context_expr
+                # `ast.Name`（裸局部名，如 `with conn:`）、`ast.Attribute`
+                # （挂在对象上的连接，如 `with self.conn:` / `with self._conn:`——
+                # 第 3–5 章的服务对象几乎必然把连接挂成属性，只认 `ast.Name`
+                # 在那里是瞎的）、以及 `ast.Call`（如 `with get_connection() as c:`，
+                # Important 1 原文允许不处理，但覆盖成本低就顺手覆盖了）都要抓。
+                if isinstance(expr, (ast.Name, ast.Attribute, ast.Call)):
                     scope = scope_name(func_stack)
                     if scope not in allowlist:
+                        try:
+                            expr_repr = ast.unparse(expr)
+                        except Exception:
+                            expr_repr = getattr(expr, "attr", getattr(expr, "id", "<expr>"))
                         offenders.append(
-                            f"{label}::{scope} 用 `with {item.context_expr.id}:` "
+                            f"{label}::{scope} 用 `{keyword} {expr_repr}:` "
                             "隐式提交（sqlite3 连接的上下文管理器退出即 commit）"
                         )
         next_stack = func_stack
@@ -246,6 +259,71 @@ def bulk_write(conn):
     offenders = _scan_transaction_violations(source, "fake_bulk.py", allowlist=set())
     assert offenders, "扫描器应该把 executescript 当成事务边界动作"
     assert any("executescript" in o for o in offenders), offenders
+
+
+def test_scanner_catches_with_self_conn_attribute():
+    """终审四格表第 1 行：`with self.conn:`（`ast.Attribute`）。
+
+    这是 Important 1 要防的那个失效形态**最可能出现的一种**——第 3–5 章会把
+    连接挂在服务对象上（`self.conn` / `self._conn`），比裸局部名自然得多。
+    旧实现 `isinstance(item.context_expr, ast.Name)` 对 `ast.Attribute` 是瞎的，
+    这条把它变成会红的测试。
+    """
+    source = """
+class Service:
+    def handle(self, payload):
+        self.conn.execute("insert into liaison_message values (?)", (payload,))
+        with self.conn:
+            self.conn.execute("insert into liaison_task values (?)", (payload,))
+"""
+    offenders = _scan_transaction_violations(source, "fake_service.py", allowlist=set())
+    assert offenders, "扫描器应该报告 `with self.conn:` 的隐式提交"
+    assert any("handle" in o and "self.conn" in o for o in offenders), offenders
+
+
+def test_scanner_catches_with_call_expression():
+    """终审四格表第 2 行：`with get_connection() as c:`（`ast.Call`）。
+
+    Important 1 原文允许这一格不处理，但覆盖成本低（`ast.Call` 与
+    `ast.Name`/`ast.Attribute` 一样加进 isinstance 元组即可），顺手覆盖了。
+    """
+    source = """
+def handle(payload):
+    with get_connection() as c:
+        c.execute("insert into liaison_task values (?)", (payload,))
+"""
+    offenders = _scan_transaction_violations(source, "fake_call.py", allowlist=set())
+    assert offenders, "扫描器应该报告 `with get_connection() as c:` 的隐式提交"
+    assert any("handle" in o for o in offenders), offenders
+
+
+def test_scanner_catches_async_with_bare_name():
+    """终审四格表第 3 行：`async with conn:`——`ast.AsyncWith` 节点本身，
+    旧实现只遍历 `ast.With`，对协程里的 `async with` 结构上就够不到。
+    """
+    source = """
+async def handle_message(conn, payload):
+    async with conn:
+        conn.execute("insert into liaison_task values (?)", (payload,))
+"""
+    offenders = _scan_transaction_violations(source, "fake_async_with.py", allowlist=set())
+    assert offenders, "扫描器应该报告 `async with conn:` 的隐式提交"
+    assert any("async with conn" in o for o in offenders), offenders
+
+
+def test_scanner_still_catches_the_control_case_bare_with_name():
+    """终审四格表第 4 行（对照组）：`with conn:`（裸局部名）。
+
+    旧实现本就能抓到这个形态，改动扩大了覆盖面之后不能让这个对照组退化。
+    """
+    source = """
+def handle(conn, payload):
+    with conn:
+        conn.execute("insert into liaison_task values (?)", (payload,))
+"""
+    offenders = _scan_transaction_violations(source, "fake_control.py", allowlist=set())
+    assert offenders, "扫描器必须仍然能抓到裸局部名的 `with conn:`"
+    assert any("with conn" in o for o in offenders), offenders
 
 
 def test_scanner_still_allows_the_whitelisted_init_schema_shape():
@@ -374,6 +452,163 @@ def test_effect_node_to_table_matches_reality(conn):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Important 2（终审必修）：EFFECT_NODE_TO_TABLE 必须核对
+# "声称写的表" == "源码里真的 INSERT INTO 的表"，不止核对键集合与表存在性。
+# ─────────────────────────────────────────────────────────────────────────
+
+_INSERT_INTO_RE = re.compile(r"(?is)insert\s+into\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _decorator_node_name(decorator: ast.expr) -> str | None:
+    """从 `@idempotent_effect("effect_xxx")` 这类装饰器里取出字符串字面量参数。
+
+    只认『被调用的名字是 idempotent_effect』这一种形态；起别名导入
+    （`from ... import idempotent_effect as ie`）不在本轮范围内，效果层
+    目前也没有这么写。
+    """
+    if not isinstance(decorator, ast.Call):
+        return None
+    func = decorator.func
+    name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+    if name != "idempotent_effect":
+        return None
+    if not decorator.args:
+        return None
+    first = decorator.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    return None
+
+
+def _find_idempotent_effects_in_tree(tree: ast.AST) -> dict:
+    """扫一份已解析的 AST，收集所有被 `@idempotent_effect("...")` 装饰的函数，
+    键是装饰器里的 node_name 字面量，值是函数体本身（`FunctionDef` 或
+    `AsyncFunctionDef`）。
+
+    仓库级扫描时按这个函数逐文件调用再合并结果，就把"后续章节把 effect_*
+    定义在别的模块"这个前瞻缺口也堵住了——不再局限于 `storage/effects.py`。
+    """
+    found: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for decorator in node.decorator_list:
+                node_name = _decorator_node_name(decorator)
+                if node_name:
+                    found[node_name] = node
+    return found
+
+
+def _insert_table_from_function(node: ast.AST):
+    """在函数体内找第一个 `xxx.execute("INSERT INTO <table> ...")`，抽出
+    `<table>`。找不到就返回 None（调用方判定为无法核对，同样计入违规）。
+    """
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr == "execute"
+            and child.args
+            and isinstance(child.args[0], ast.Constant)
+            and isinstance(child.args[0].value, str)
+        ):
+            match = _INSERT_INTO_RE.search(child.args[0].value)
+            if match:
+                return match.group(1)
+    return None
+
+
+def _validate_node_to_table_mapping(mapping: dict, effects_by_node: dict) -> list:
+    """核对 mapping 里每一项，是否等于该 effect 函数体里真实 INSERT 的表。
+
+    这是 Important 2 的核心：`EFFECT_NODE_TO_TABLE` 曾经只被『键集合对不对』
+    『表存不存在』两件事守着，从未核对过『这一项对不对』。终审实测把两个
+    条目对调（`effect_archive_message→liaison_task`、
+    `effect_enqueue_task→liaison_message`）后，旧的两条检查依然全绿——映射
+    一旦写错或复制粘贴错位，出问题时不是报错，是『悄悄不检查』。
+    """
+    mismatches = []
+    for node_name, declared_table in mapping.items():
+        func_node = effects_by_node.get(node_name)
+        if func_node is None:
+            mismatches.append(f"{node_name}：源码里找不到对应的 @idempotent_effect 函数")
+            continue
+        actual_table = _insert_table_from_function(func_node)
+        if actual_table is None:
+            mismatches.append(f"{node_name}：函数体里没找到 INSERT INTO，无法核对")
+            continue
+        if actual_table != declared_table:
+            mismatches.append(
+                f"{node_name}：映射声称写 {declared_table}，源码实际写的是 {actual_table}"
+            )
+    return mismatches
+
+
+def test_effect_node_to_table_matches_the_insert_target_repo_wide():
+    """仓库级版本：不止扫 `storage/effects.py`，扫 `tools/liaison` 下所有被
+    `@idempotent_effect` 装饰的函数（测试目录除外）。这样第 3/4/5 章把新的
+    effect 定义在别的模块时，键要跟得上（`test_effect_node_to_table_matches_reality`
+    已守）、值（映射的表名对不对）也一并被这条守住，不必等第 3 章重新补一遍。
+    """
+    effects_by_node: dict = {}
+    for path in sorted(LIAISON_ROOT.rglob("*.py")):
+        if "tests" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        effects_by_node.update(_find_idempotent_effects_in_tree(tree))
+
+    mismatches = _validate_node_to_table_mapping(EFFECT_NODE_TO_TABLE, effects_by_node)
+    assert mismatches == [], "EFFECT_NODE_TO_TABLE 与源码实际写入的表不一致：" + "; ".join(
+        mismatches
+    )
+
+
+def test_validate_node_to_table_mapping_catches_a_swapped_mapping():
+    """证伪：把两个条目对调后喂给同一个校验函数，必须报错。
+
+    终审实测过这个具体的对调，在旧的两条检查（键集合、表存在性）下依然全绿。
+    这条用真实的 `effects.py` 源码 + 一份人为写错的映射，证明新校验函数真的
+    会抓到。⛔ 不改 `effects.py` 本体，只改喂进去的映射（monkeypatch 式构造，
+    不碰生产代码）。
+    """
+    tree = ast.parse((LIAISON_ROOT / "storage" / "effects.py").read_text(encoding="utf-8"))
+    effects_by_node = _find_idempotent_effects_in_tree(tree)
+
+    swapped_mapping = {
+        "effect_archive_message": "liaison_task",
+        "effect_enqueue_task": "liaison_message",
+    }
+    mismatches = _validate_node_to_table_mapping(swapped_mapping, effects_by_node)
+    assert mismatches, "对调后的映射必须被校验函数抓到，而不是悄悄通过"
+    assert any("effect_archive_message" in m for m in mismatches), mismatches
+    assert any("effect_enqueue_task" in m for m in mismatches), mismatches
+
+
+def test_validate_node_to_table_mapping_on_synthetic_source():
+    """再来一份完全内联构造的最小样本，跟真实 `effects.py` 解耦，防止将来
+    有人改了 `effects.py` 的写法导致上面两条测试的『真实性』打折扣。
+    """
+    source = """
+from app.storage.idempotency import idempotent_effect
+
+
+@idempotent_effect("effect_write_widget")
+def effect_write_widget(conn, *, thread_id, business_key):
+    conn.execute("INSERT INTO widget (id) VALUES (?)", (business_key,))
+    return business_key
+"""
+    tree = ast.parse(source, filename="fake_widget.py")
+    effects_by_node = _find_idempotent_effects_in_tree(tree)
+
+    correct_mapping = {"effect_write_widget": "widget"}
+    assert _validate_node_to_table_mapping(correct_mapping, effects_by_node) == []
+
+    wrong_mapping = {"effect_write_widget": "gadget"}
+    mismatches = _validate_node_to_table_mapping(wrong_mapping, effects_by_node)
+    assert mismatches, "映射写错表名必须被抓到"
+    assert "gadget" in mismatches[0] and "widget" in mismatches[0]
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # 2.4 恒等不变式脚手架
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -388,6 +623,19 @@ def assert_effect_log_identity(conn: sqlite3.Connection) -> None:
     那恰恰是最需要被抓住的那种错。按 thread_id 逐组比才有意义。
 
     第 4／5／7 章的测试应当直接 import 本函数在各自的场景末尾调一次。
+
+    ⚠️ **隐含前提（终审 Minor 4 补记，第 7 章落地前必读）**：本断言成立的前提是
+    业务表**只增不删**。第 7 章的 180 天留存期清理一旦落地，清理会让业务表的
+    行数低于 effect_log 里同一 thread 的记录数，这条断言会**因为一个完全正当的
+    理由变红**。
+
+    到那时正确的应对是下面两选一，⛔ 二选一之外的任何"修法"都不允许：
+      1. 留存期清理与对应的 effect_log 行在同一个事务里连带删除；或
+      2. 把本断言的比对范围限定在"尚未被清理"的 thread 集合内。
+
+    真正的危险不是测试变红，而是那时候最顺手的"修法"是去削弱这条断言本身
+    ——它是铁律 1 唯一的机器守卫，削弱它等于把守卫拆了。**⛔ 明确写死：
+    不许把它改成总数比较、不许削弱成"约等于"。**
     """
     for node_name, table in EFFECT_NODE_TO_TABLE.items():
         effect_counts = dict(
