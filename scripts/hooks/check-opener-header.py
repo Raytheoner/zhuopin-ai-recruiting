@@ -9,6 +9,19 @@
 判据（保守，宁可漏报不误报）——两条，各自独立报错：
   ① 代码块有「指令特征」（含【设置】，或同时含 界面：与 Session：）却无 `[Mac]MMDDX-` 标题行
   ② 代码块的【设置】写着「执行环境: CC」却没有 set_session_title 那一行
+  ③ 代码块的【设置】行缺 `派发:` 字段（出这份 opener 的母 session 编号）
+
+判据③的由来（2026-09-08，Shao Peishen 提）：
+  他在 Desktop 同时开多个 session，拿到一份 opener 却**回溯不到是谁派的**。
+  出问题时要回母 session 看派发上下文——`[Mac]0908J` 实例：opener §三 预告的
+  「断言四会翻成违例」在执行时已过时（`0904F` 先一步改了豁免线），执行方要判断
+  这是"漏跑"还是"前提已变"，就得回母 session 看它写这段时依据的是什么；
+  两种情况的处置**完全相反**。落了档的 opener 尚可用
+  `git log --diff-filter=A -- docs/openers/<件>.md` 反查（`0908J` 即由此查出母
+  session 是 `[Mac]0908B`），但**聊天里直接派、没落档的查无可查**——正是本判据的靶子。
+  ⚠️ 只判字段在不在，⛔ 不校验取值：取值有四种合法形态（编号／Cowork 会话名／
+  `Shao Peishen 口述`／`run-lanes.sh`），收紧成正则只会制造误报，
+  与本 hook「宁可漏报不误报」的一贯取向相悖。
 
 判据②的由来（2026-08-27，企业AI转型侧正本 §〇.0 补充三）：
   🔴 **标题行不会自动变成 session 名。** 不显式调 set_session_title，Claude Code 就用
@@ -74,6 +87,9 @@ FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 IS_CC_BLOCK = re.compile(r"【设置】[^\n]*执行环境\s*[:：]\s*CC")
 HAS_SET_TITLE = re.compile(r"set_session_title")
 
+# 判据③：【设置】行必须带「派发: <母 session 编号>」
+HAS_DISPATCHER = re.compile(r"【设置】[^\n]*派发[ \t]*[:：][ \t]*\S")
+
 # 指令特征：命中任一即认为这块是"要他去别处执行的东西"
 HAS_SETTING_LINE = re.compile(r"【设置】")
 HAS_LEGACY_FOUR_LINE = re.compile(r"界面\s*[:：].*\n(?:.*\n)?\s*Session\s*[:：]", re.MULTILINE)
@@ -106,9 +122,9 @@ def last_assistant_text(transcript_path: str) -> str:
     return "\n".join(chunks)
 
 
-def offending_blocks(text: str) -> tuple[list[str], list[str]]:
-    """返回 (缺标题行的块, CC 块里缺 set_session_title 的块)。"""
-    no_header, no_title_call = [], []
+def offending_blocks(text: str) -> tuple[list[str], list[str], list[str]]:
+    """返回 (缺标题行的块, CC 块里缺 set_session_title 的块, 缺 派发 字段的块)。"""
+    no_header, no_title_call, no_dispatcher = [], [], []
     for body in FENCED_BLOCK.findall(text):
         looks_like_instruction = bool(HAS_SETTING_LINE.search(body)) or bool(
             HAS_LEGACY_FOUR_LINE.search(body)
@@ -121,7 +137,10 @@ def offending_blocks(text: str) -> tuple[list[str], list[str]]:
         # 判据②：只判 CC 块；Cowork 没有这个工具
         if IS_CC_BLOCK.search(body) and not HAS_SET_TITLE.search(body):
             no_title_call.append(first)
-    return no_header, no_title_call
+        # 判据③：有【设置】行就得有 派发 字段（两端同等适用，与 CC/Cowork 无关）
+        if HAS_SETTING_LINE.search(body) and not HAS_DISPATCHER.search(body):
+            no_dispatcher.append(first)
+    return no_header, no_title_call, no_dispatcher
 
 
 def main() -> int:
@@ -144,8 +163,8 @@ def main() -> int:
         # fail open：转录读不动（不存在／权限／编码坏）一律放行，hook 自己坏掉不该挡住干活
         return 0
 
-    no_header, no_title_call = offending_blocks(text)
-    if not no_header and not no_title_call:
+    no_header, no_title_call, no_dispatcher = offending_blocks(text)
+    if not no_header and not no_title_call and not no_dispatcher:
         return 0
 
     msgs = []
@@ -178,6 +197,23 @@ def main() -> int:
             "  （session_id 传字面量 \"self\"），标题：[Mac]MMDDX-<主题短名>\n\n"
             "⚠️ 已在跑的 session 可补救，对它说一句同样的话即可，不必重开。\n"
             "⚠️ 这条只对 CC 生效；Cowork 侧没有该工具，名字是摘要生成的、首行无效。"
+        )
+
+    if no_dispatcher:
+        msgs.append(
+            "⛔ 指令代码块的【设置】行缺 `派发:` 字段。\n"
+            f"命中 {len(no_dispatcher)} 块，首行分别是：\n"
+            + "\n".join(f"  - {b[:60]}" for b in no_dispatcher)
+            + "\n\n"
+            "🔴 `派发` ＝ **出这份 opener 的母 session 编号**，也就是正在写它的你自己——\n"
+            "⛔ 不要填成「要执行它的那个 session」，那是子不是母。\n\n"
+            "他在 Desktop 同时开多个 session，拿到 opener 回溯不到是谁派的；出问题要回\n"
+            "母 session 看派发上下文时只能靠猜，而「漏跑」与「前提已变」的处置完全相反。\n\n"
+            "在【设置】行末尾追加一项（⛔ 不留空、不写「未知」、不写「上一个 session」）：\n"
+            "  ｜ 派发: [Mac]MMDDX          ← 母 session 有编号\n"
+            "  ｜ 派发: Cowork·<会话名>      ← Cowork 会话派的\n"
+            "  ｜ 派发: Shao Peishen 口述    ← 他本人直接口述、无母 session\n"
+            "  ｜ 派发: run-lanes.sh        ← 无头脚本起的块"
         )
 
     print("\n\n———\n\n".join(msgs), file=sys.stderr)

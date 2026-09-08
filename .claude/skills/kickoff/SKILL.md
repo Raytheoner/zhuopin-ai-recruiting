@@ -36,7 +36,7 @@ description: 生成新开会话用的开场 Prompt（Opener），把界面、Ses
 
 ```
 [Mac]MMDDX-<主题短名>
-【设置】执行环境: <CC / Cowork> ｜ Session: <新开 / 利旧+理由> ｜ 分支: <main / worktree 分支> ｜ worktree: <❌ 不勾 / ☑ 勾选>（<理由>）｜ 工作区: <绝对路径>
+【设置】执行环境: <CC / Cowork> ｜ Session: <新开 / 利旧+理由> ｜ 分支: <main / worktree 分支> ｜ worktree: <❌ 不勾 / ☑ 勾选>（<理由>）｜ 工作区: <绝对路径> ｜ 派发: <母 session 编号>
 ```
 
 - `MMDD` 取**中国时间**当天日期。⚠️ **动手编号前先真的跑一次** `TZ=Asia/Shanghai date +%m%d`，
@@ -65,7 +65,28 @@ description: 生成新开会话用的开场 Prompt（Opener），把界面、Ses
   > ⛔ 不要写成 `[CC]`：Code tab 下条条都是 CC，零分辨力。
 - **主题短名要短**——这一行就是侧边栏的 session 名，长了会被截断。能一眼看出干什么即可，
   不要写"继续上次的工作"；范围/章节写进正文的【任务】段，不占标题位
-- **【设置】五项一个都不能少**，用 ｜ 分隔写成**一行**，不要拆成多行；worktree 后面的括号写理由（如"只出分析与方案，不写代码"），不要只写符号
+- **【设置】六项一个都不能少**，用 ｜ 分隔写成**一行**，不要拆成多行；worktree 后面的括号写理由（如"只出分析与方案，不写代码"），不要只写符号
+- 🔴 **`派发` ＝ 出这份 opener 的母 session 编号**（2026-09-08 定，Shao Peishen 提）。
+
+  > *为什么*：他在 Desktop 同时开多个 session，拿到一份 opener 却**回溯不到是谁派的**。
+  > 出问题时要回母 session 看派发上下文——`[Mac]0908J` 实例：opener §三 预告的
+  > 「断言四会翻成违例」在执行时已过时（`0904F` 改了豁免线），执行方要判断这是"漏跑"
+  > 还是"前提已变"，就得回母 session 看它写这段时依据的是什么。查不到就只能猜，
+  > 而这两种情况的处置**完全相反**。
+  > ⚠️ 落了档的 opener 还能靠 `git log --diff-filter=A -- docs/openers/<件>.md` 反查
+  > （`0908J` 即由此查出母 session 是 `[Mac]0908B`），但**聊天里直接派、没落档的查不到**——
+  > 字段要解决的正是这一类。
+
+  四种取值，⛔ 不留空、不写"未知"、不写"上一个 session"这类指代：
+
+  | 情形 | 写法 |
+  |---|---|
+  | 母 session 有编号 | 照抄编号，如 `[Mac]0908B` |
+  | Cowork 会话派的 | 会话名，如 `Cowork·HR业务线-接力0903B` |
+  | 他本人直接口述、无母 session | `Shao Peishen 口述` |
+  | `run-lanes.sh` 无头起的块 | `run-lanes.sh` |
+
+  ⚠️ 母 session **就是正在写这份 opener 的自己**——⛔ 不要填成"要执行它的那个 session"，那是子不是母。机器判据见 `scripts/hooks/check-opener-header.py` 判据③（只判字段在不在，不校验取值）
 - **没有"小任务可以省略"这种例外**——省略就是让人猜，猜错的代价远大于多写两行
 
 ##### 🔴 序号必须查号池台账再出（2026-08-27 一天撞 4 次）
@@ -222,7 +243,7 @@ Cowork 侧要编号只有人手工改一条路。
   ````
   ```
   [Mac]MMDDX-<主题短名>
-  【设置】执行环境: CC ｜ Session: 新开 ｜ 分支: … ｜ worktree: … ｜ 工作区: 仓库根
+  【设置】执行环境: CC ｜ Session: 新开 ｜ 分支: … ｜ worktree: … ｜ 工作区: 仓库根 ｜ 派发: <母 session 编号>
   开工第一件事：调 mcp__ccd_session_mgmt__set_session_title（session_id 传字面量 "self"），标题：[Mac]MMDDX-<主题短名>
   第二件事：读 docs/openers/MMDDX-<主题短名>.md 全文并逐节执行，本 session 的全部指令以该文件为准。文件不存在、或其首行编号与本块不一致 → 停下报我，⛔ 不要凭标题猜任务
   ```
@@ -264,7 +285,7 @@ Cowork 侧要编号只有人手工改一条路。
 ````
 ```
 [Mac]MMDDX-<主题短名>
-【设置】执行环境: <CC / Cowork> ｜ Session: <新开 / 利旧+理由> ｜ 分支: <main / worktree 分支> ｜ worktree: <❌ 不勾 / ☑ 勾选>（<理由>）｜ 工作区: <绝对路径>
+【设置】执行环境: <CC / Cowork> ｜ Session: <新开 / 利旧+理由> ｜ 分支: <main / worktree 分支> ｜ worktree: <❌ 不勾 / ☑ 勾选>（<理由>）｜ 工作区: <绝对路径> ｜ 派发: <母 session 编号>
 
 【开工前自检 · 任一条不过就停下来告诉我，不要绕过】
 1. ...

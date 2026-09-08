@@ -54,7 +54,7 @@ ls -t docs/superpowers/plans/*.md | head -6   # 哪些单元的 plan 已就绪
 
 ​```
 [Mac]MMDDX-<主题短名>
-【设置】执行环境: CC ｜ Session: 新开 ｜ 分支: ... ｜ worktree: ... ｜ 工作区: ...
+【设置】执行环境: CC ｜ Session: 新开 ｜ 分支: ... ｜ worktree: ... ｜ 工作区: ... ｜ 派发: <母 session 编号；本 skill 产出的看护块填看护者自己的编号，run-lanes.sh 无头起的泳道块填 `run-lanes.sh`>
 ...
 ​```
 ```
