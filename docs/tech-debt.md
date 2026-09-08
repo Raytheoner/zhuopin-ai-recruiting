@@ -539,3 +539,23 @@ discard_thread_checkpoints(graph.checkpointer, job_id)   # 删 checkpoints / wri
 **不还的后果**：极低概率下，业务经理发了一句无关的话，屏幕上等来的是一个 500 错误
 而不是那句"没听懂是不是用人需求，可以试试…"，而**日志里不会有任何东西说明
 引导语其实已经生成过、只是连同 outbox 行一起被删了**。
+
+## TD-14 · `hr-wecom-aibot-liaison` 的 proposal「不触碰 pyproject.toml」与实现已不符
+
+**欠的是什么**：`openspec/changes/hr-wecom-aibot-liaison/proposal.md:37` 的「Impact ·
+不触碰」把 `pyproject.toml` 整份列为不触碰。但第 1 章（2026-09-08 落地）**改了它的
+`testpaths` 一行**，把 `tools/liaison/tests` 接进去，让全量 `pytest` 一次跑得到本服务的测试。
+
+两者的**本意其实不冲突**：该条要挡的是**依赖**从 `pyproject.toml` 溜到 `.51`（design D10
+通篇讲的都是依赖清单，`pyproject.toml` 在 `sync-to-server.sh` 的 `SYNC_PATHS` 里）。
+`testpaths` 不是依赖，且第 1 章自带 `test_no_liaison_dependency_leaked_into_pyproject`
+守住「不许往 `[project].dependencies` 加任何东西」。冲突的是**措辞**，不是事实。
+
+**触发条件**：**归档该变更包之前**（跑 `openspec-archive-change` 之前）。把那一行从
+「不触碰 `pyproject.toml`」订正为「⛔ 不往 `pyproject.toml` 添加任何依赖；`testpaths`
+因 `tools/liaison/tests` 接入而新增一条」。
+
+**不还的后果**：变更包归档进 `openspec/specs/` 之后，活文档里会留下一条**与代码相反**的
+约束。下一个读它的人（或 reviewer）会把已经通过终审的 `testpaths` 那行当成越界改动，
+要么白白花一轮去"修"它，要么把 `tools/liaison/tests` 从 `testpaths` 摘掉——而摘掉的后果
+是静默的：不报错、不失败，只是本服务的 28 条测试从此没人跑。

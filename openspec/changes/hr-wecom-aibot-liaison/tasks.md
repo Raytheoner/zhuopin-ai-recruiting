@@ -1,3 +1,5 @@
+> **进度**：6/66（第 1 章「通道可行性与服务骨架」已完成并合回 main，2026-09-08）
+>
 > **粒度约定**（CLAUDE.md「粒度映射」）：本文件的**一个 `##` 章节 = 一个 superpowers plan = 一条 worktree 分支 = 一个可独立测试并合并的交付单元**。章节的 checkbox 在该 plan 的 final review 通过后才勾。
 >
 > **落点约定**（design.md D10）：全部代码落 `tools/liaison/`，依赖落 `tools/liaison/requirements.txt`。⛔ 不落 `app/`、⛔ 不落 `scripts/`（二者都在 `sync-to-server.sh` 的 `SYNC_PATHS` 里，会被推到 `.51`）、⛔ 不进根 `requirements.txt`。允许 `tools/liaison` 单向 `import app.storage.idempotency`，⛔ `app/` 不得反向 import。
@@ -8,14 +10,34 @@
 
 对应能力：`liaison-channel-session`（凭据 fail-closed 启动校验部分）。**本章是全部后续章节的前置**：SDK 在 Python 3.14 上是否可用未经验证，未验证前不写业务代码（design.md D8）。
 
-- [ ] 1.1 建 `tools/liaison/` 目录骨架与 `tools/liaison/requirements.txt`（只含本服务依赖），加 `tools/liaison/README.md` 写明"开发期值守工具、永不部署 .51、不是产品功能"三条边界
-- [ ] 1.2 **SDK 兼容性实测（阻塞项）**：在 Python 3.14 环境安装 `wecom-aibot-python-sdk`，记录可安装性与 import 结果；结论写入 `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md`
-- [ ] 1.3 按 1.2 结论二选一并在 findings 文档里写明选了哪条：① SDK 可用 → 钉死具体版本号写进 `tools/liaison/requirements.txt`；② SDK 不可用 → 按 design.md D8 退路建最小 WS 客户端的模块骨架（只覆盖本服务用到的消息类型，不做通用 SDK）
-- [ ] 1.4 实现启动期凭据校验：`HR_LIAISON_BOT_ID` / `HR_LIAISON_BOT_SECRET` 缺失、空串、纯空白一律拒绝启动并指明缺失项，进程不驻留
-- [ ] 1.5 `.env.example` 追加 `HR_LIAISON_*` 占位（只写变量名与注释，⛔ 不写任何真实值）；加测试断言受版本管理的文件中不含真实密钥形态的取值
-- [ ] 1.6 单测覆盖 1.4／1.5：三种缺失形态各一条、版本管理无凭据一条
+- [x] 1.1 建 `tools/liaison/` 目录骨架与 `tools/liaison/requirements.txt`（只含本服务依赖），加 `tools/liaison/README.md` 写明"开发期值守工具、永不部署 .51、不是产品功能"三条边界
+- [x] 1.2 **SDK 兼容性实测（阻塞项）**：在 Python 3.14 环境安装 `wecom-aibot-python-sdk`，记录可安装性与 import 结果；结论写入 `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md`
+- [x] 1.3 按 1.2 结论二选一并在 findings 文档里写明选了哪条：① SDK 可用 → 钉死具体版本号写进 `tools/liaison/requirements.txt`；② SDK 不可用 → 按 design.md D8 退路建最小 WS 客户端的模块骨架（只覆盖本服务用到的消息类型，不做通用 SDK）
+- [x] 1.4 实现启动期凭据校验：`HR_LIAISON_BOT_ID` / `HR_LIAISON_BOT_SECRET` 缺失、空串、纯空白一律拒绝启动并指明缺失项，进程不驻留
+- [x] 1.5 `.env.example` 追加 `HR_LIAISON_*` 占位（只写变量名与注释，⛔ 不写任何真实值）；加测试断言受版本管理的文件中不含真实密钥形态的取值
+- [x] 1.6 单测覆盖 1.4／1.5：三种缺失形态各一条、版本管理无凭据一条
 
 **验收**：`liaison-channel-session` 中「凭据缺失时拒绝启动」一条要求的全部场景通过；SDK 路线已定且有 findings 落档。
+
+> **第 1 章落地偏离登记**（2026-09-08，run-build 收口时记）：
+>
+> - **1.3 选了路线 ①**：`wecom-aibot-python-sdk` 在 Python 3.14.6 上实测装得上（发行版本
+>   `1.0.2`）、`import aibot` 成功、`WSClient` / `WSClientOptions` 的建连＋心跳＋重连三样参数齐备，
+>   判据 A/B/C 全过。已在 `tools/liaison/requirements.txt` 钉死 `==1.0.2`。证据见
+>   `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md`。**路线 ② 的最小 WS 客户端骨架未建**
+>   （分支未命中，⛔ 不是漏做）。
+> - ⚠️ **发行名 ≠ import 名**：PyPI 是 `wecom-aibot-python-sdk`，顶层模块是 `aibot`。
+>   且模块 `__version__` 报 `1.0.0` 与发行版本 `1.0.2` 对不上——**一律以
+>   `importlib.metadata.version()` 为准**，任何拿 `__version__` 校验装对没有的写法都会误判。
+> - 🔴 **第 7 章 7.6 的接线约束**：`WSClientOptions.max_reconnect_attempts` 默认值是 **10**，
+>   与 spec「断线后自动恢复接收」要求的"重试直至成功、服务不退出"冲突。第 7 章必须显式传
+>   `-1`（SDK 里 `-1` = 无限重连），⛔ 不许用默认值。
+> - **超出原 1.5 范围的一处加固**：凭据扫描正则原本锚在行首不含缩进，终审实测发现**缩进的**
+>   真实赋值可以整条逃过扫描（嵌套代码块／YAML 里粘一条即中）。已放行前导空白并补回归用例。
+> - ⏸ **留步：真实建连未验**。需 Shao Peishen 在企业微信管理后台注册**新** aibot 应用取得
+>   `BotID` / `Secret`（账号级操作，无法代劳）。本章只验 SDK 能力面是否齐备，真实建连归第 7 章。
+> - **`tools/liaison/tests/` 已接进根 `pyproject.toml` 的 `testpaths`**，全量 `pytest` 一次跑到。
+>   与 `proposal.md`「Impact · 不触碰 `pyproject.toml`」的口径冲突，已登记 TD-14，归档前订正。
 
 ## 2. 存储基座与幂等不变式
 
