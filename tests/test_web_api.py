@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
@@ -1220,3 +1221,97 @@ def test_off_topic_turn_calls_the_model_exactly_once(tmp_path):
 
     assert resp.status_code == 200
     assert scripted.chat.completions.call_count == 1
+
+
+def _table_counts(db_path):
+    check = sqlite3.connect(db_path)
+    try:
+        counts = {
+            "job": check.execute("SELECT COUNT(*) FROM job").fetchone()[0],
+            "job_profile": check.execute("SELECT COUNT(*) FROM job_profile").fetchone()[0],
+            "conversation": check.execute("SELECT COUNT(*) FROM conversation").fetchone()[0],
+            "outbox": check.execute("SELECT COUNT(*) FROM outbox").fetchone()[0],
+            "effect_log": check.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0],
+        }
+        # checkpoints / writes 由 SqliteSaver 在首次 invoke 时才建表；某些用例
+        # 路径下它们可能尚不存在。用 sqlite_master 显式判存在，⛔ 不要用
+        # try/except 把 OperationalError 吞掉当 0——那样表名以后改了会静默变绿。
+        for table in ("checkpoints", "writes"):
+            exists = check.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            counts[table] = (
+                check.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] if exists else 0
+            )
+        return counts
+    finally:
+        check.close()
+
+
+def test_off_topic_first_message_creates_no_job_record(tmp_path):
+    """spec「需求描述为空或与招聘无关」：回引导语 **AND** 不创建岗位记录。
+
+    只断言 job 表是不够的：库里还留着 job_profile / conversation / outbox /
+    effect_log / checkpoint 就等于"岗位记录还在，只是列表里看不见"。
+    """
+    from app.agents.intake_agent import _GUIDANCE_TEXT
+
+    db_path = str(tmp_path / "web.db")
+    responses = [json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}})]
+    client, _ = make_app_with_scripted_client(tmp_path, responses)
+
+    resp = client.post("/api/jobs", json={"message": "今天中午吃什么"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # 引导语照常回给用户 —— "不建记录"不等于"不回话"。
+    assert body["message"]["type"] == "question"
+    assert [q["text"] for q in body["message"]["payload"]["questions"]] == [_GUIDANCE_TEXT]
+    # 没有岗位，就没有 job_id 可给。⛔ 不许回一个指向已删行的 id。
+    assert body["job_id"] is None
+
+    assert _table_counts(db_path) == {
+        "job": 0, "job_profile": 0, "conversation": 0,
+        "outbox": 0, "effect_log": 0, "checkpoints": 0, "writes": 0,
+    }
+
+
+def test_off_topic_first_message_leaves_the_job_list_empty(tmp_path):
+    """岗位列表走 LEFT JOIN（job_queries.latest_profile_rows 的注释写明是刻意的）：
+    只删 job_profile 不删 job，列表里会留一条「待确定 / drafting」的僵尸。"""
+    responses = [json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}})]
+    client = make_app(tmp_path, responses)
+
+    client.post("/api/jobs", json={"message": "今天中午吃什么"})
+
+    listing = client.get("/api/jobs")
+    assert listing.status_code == 200
+    assert listing.json()["jobs"] == []
+
+
+def test_a_real_request_after_an_off_topic_one_starts_clean(tmp_path):
+    """业务经理先随口说了句无关的，再正经提需求——第二条要能正常建岗位。"""
+    db_path = str(tmp_path / "web.db")
+    responses = [
+        json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}}),
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "是否涉及 AUTOSAR？"}],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+            }
+        ),
+    ]
+    client = make_app(tmp_path, responses)
+
+    client.post("/api/jobs", json={"message": "今天中午吃什么"})
+    second = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"})
+
+    assert second.status_code == 200
+    job_id = second.json()["job_id"]
+    assert job_id is not None
+    counts = _table_counts(db_path)
+    # 第一次那一轮的行一个都没剩下，第二次的行一个不少。
+    assert counts["job"] == 1
+    assert counts["job_profile"] == 1
+    assert counts["conversation"] == 1

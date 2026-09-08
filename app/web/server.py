@@ -40,6 +40,7 @@ from app.observability.middleware import (
 from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.storage import job_queries
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
+from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
 
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_TEMPLATE_PATH = STATIC_DIR / "index.html"
@@ -286,12 +287,35 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
     @router.post("/api/jobs")
     def create_job(req: CreateJobRequest):
         job_id = str(uuid.uuid4())
+        # 先建行、后判定，是外键逼出来的顺序而不是选择：job_profile.job_id
+        # 指向 job 且 PRAGMA foreign_keys=ON，而 is_job_related 要跑完 compute
+        # 才知道——那时同一次 invoke 里的 effect_persist_draft 已经在写
+        # job_profile 了。所以这里走"落后即删"（tasks 5.3 许可的形态之一）。
         conn.execute(
             "INSERT INTO job (id, title, status) VALUES (?, '待确定', 'drafting')", (job_id,)
         )
         conn.commit()
-        message = _run_turn(job_id, req.message).message
-        return {"job_id": job_id, "message": message}
+        outcome = _run_turn(job_id, req.message)
+
+        if not outcome.is_job_related:
+            # spec「需求描述为空或与招聘无关」：回引导语 **且不创建岗位记录**。
+            # 消息在 _run_turn 里已经从 outbox 读出来了，删在后面不影响回执。
+            #
+            # ⚠️ 已知残留风险：INSERT 与这次删除分属两个事务（中间
+            # graph.invoke 里的 idempotent_effect 必然提交），进程恰好崩在
+            # 两者之间会留下一行零版本的 drafting job。这与今天"第一轮抛
+            # 异常"留下的行是同一种，见 app/storage/job_queries.py 的
+            # latest_profile_rows 注释。消除它要把建 job 行挪进
+            # effect_persist_draft 的同一个事务，那要改 app/graph/nodes.py，
+            # 超出本交付单元边界。⛔ 不要在这里加"定期清理僵尸行"的兜底
+            # 逻辑掩盖它——那会把一个已登记的窗口变成一个隐形的窗口。
+            discard_unstarted_job(conn, job_id)
+            discard_thread_checkpoints(graph.checkpointer, job_id)
+            # 没有岗位就没有 id 可给。⛔ 不要回那个已删的 uuid：前端会拿它
+            # 去 POST /reply，撞上 404，错误信息与真正的原因毫无关系。
+            return {"job_id": None, "message": outcome.message}
+
+        return {"job_id": job_id, "message": outcome.message}
 
     @router.post("/api/jobs/{job_id}/reply")
     def reply(job_id: str, req: ReplyRequest):
