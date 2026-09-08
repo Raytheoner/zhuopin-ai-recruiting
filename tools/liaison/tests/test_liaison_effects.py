@@ -371,3 +371,192 @@ def test_effect_node_to_table_matches_reality(conn):
         assert table_name in existing_tables, (
             f"{node_name} 映射到不存在的表 {table_name}；实际表={sorted(existing_tables)}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 2.4 恒等不变式脚手架
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def assert_effect_log_identity(conn: sqlite3.Connection) -> None:
+    """铁律 1 的 reviewer 判据，做成可复用的断言。
+
+    对 EFFECT_NODE_TO_TABLE 里每个节点：
+      按 thread_id 分组，该节点的 effect_log 条数 == 其业务表的行数。
+
+    ⛔ **不要退化成"总数相等"**——总数相等可以由"A 会话多一行、B 会话少一行"凑出来，
+    那恰恰是最需要被抓住的那种错。按 thread_id 逐组比才有意义。
+
+    第 4／5／7 章的测试应当直接 import 本函数在各自的场景末尾调一次。
+    """
+    for node_name, table in EFFECT_NODE_TO_TABLE.items():
+        effect_counts = dict(
+            conn.execute(
+                "SELECT thread_id, COUNT(*) FROM effect_log WHERE node_name = ? "
+                "GROUP BY thread_id",
+                (node_name,),
+            ).fetchall()
+        )
+        business_counts = dict(
+            conn.execute(f"SELECT thread_id, COUNT(*) FROM {table} GROUP BY thread_id").fetchall()
+        )
+        assert effect_counts == business_counts, (
+            f"恒等不变式破裂：节点 {node_name} 的 effect_log 分组计数 {effect_counts} "
+            f"≠ 业务表 {table} 的分组计数 {business_counts}"
+        )
+
+
+def _process(conn, *, thread_id, msgid, content="hello"):
+    """把一条消息走完本章范围内的两个 effect：归档 + 入队。
+
+    顺序是钉死的：先台账后队列。队列条目的 FK 指向台账，反过来会撞 FK。
+    """
+    effect_archive_message(
+        conn,
+        thread_id=thread_id,
+        business_key=msgid,
+        sender_userid=thread_id,
+        received_at="2026-09-08T10:00:00+08:00",
+        msgtype="text",
+        content=content,
+    )
+    effect_enqueue_task(
+        conn,
+        thread_id=thread_id,
+        business_key=msgid,
+        sender_userid=thread_id,
+        received_at="2026-09-08T10:00:00+08:00",
+        summary=content[:40],
+    )
+
+
+def test_identity_holds_on_empty_database(conn):
+    """空库也必须恒等（两边都是空 dict）。边界条件，别跳过。"""
+    assert_effect_log_identity(conn)
+
+
+def test_identity_holds_across_a_batch_of_messages(conn):
+    """处理任意一批消息后核对（liaison-task-queue「幂等记录与条目数恒等」）。"""
+    for thread_id, msgids in (("u1", ["m1", "m2", "m3"]), ("chat-9", ["m4", "m5"])):
+        for msgid in msgids:
+            _process(conn, thread_id=thread_id, msgid=msgid)
+    assert_effect_log_identity(conn)
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 5
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 5
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 10
+
+
+def test_identity_holds_after_replaying_the_whole_batch(conn):
+    """重连后通道重投一批历史消息：归档与队列均无新增，恒等仍成立。
+
+    对应 liaison-message-archive「重连后重投历史消息」。
+    """
+    batch = [("u1", "m1"), ("u1", "m2"), ("chat-9", "m3")]
+    for thread_id, msgid in batch:
+        _process(conn, thread_id=thread_id, msgid=msgid)
+    before = (
+        conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0],
+        conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0],
+        conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0],
+    )
+    for _ in range(3):  # 重投三遍
+        for thread_id, msgid in batch:
+            _process(conn, thread_id=thread_id, msgid=msgid)
+    after = (
+        conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0],
+        conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0],
+        conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0],
+    )
+    assert after == before == (3, 3, 6)
+    assert_effect_log_identity(conn)
+
+
+def test_identity_scaffold_actually_catches_a_break(conn):
+    """脚手架本身要有牙——绕过 effect 直接写业务表，断言必须红。
+
+    ⛔ 不要删这条。一个永远为真的断言比没有断言更糟：它会让 reviewer 以为
+    这条不变式被守住了。这条是对断言本身的证伪测试。
+    """
+    _process(conn, thread_id="u1", msgid="m1")
+    assert_effect_log_identity(conn)
+    # 绕过 effect 层偷偷插一行业务数据
+    conn.execute(
+        "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+        "VALUES ('sneaky', 'u1', 'u1', 't', 'text')"
+    )
+    conn.commit()
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)
+
+
+def test_identity_is_per_thread_not_global(conn):
+    """跨会话的数量互相抵消也必须被抓住。
+
+    构造：u1 的业务表多一行、u2 的 effect_log 多一行，总数相等但分组不等。
+    如果断言写成"总数相等"，这条会绿——那就是它存在的意义。
+    """
+    _process(conn, thread_id="u1", msgid="m1")
+    conn.execute(
+        "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+        "VALUES ('extra', 'u1', 'u1', 't', 'text')"
+    )
+    conn.execute(
+        "INSERT INTO effect_log VALUES ('u2:effect_archive_message:ghost', 'u2', "
+        "'effect_archive_message', 'ghost', datetime('now'))"
+    )
+    conn.commit()
+    total_effect = conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_archive_message'"
+    ).fetchone()[0]
+    total_business = conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0]
+    assert total_effect == total_business == 2  # 总数相等，但……
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)
+
+
+def test_nasty_content_does_not_break_the_queue_structure(conn):
+    """含竖线/换行/控制字符的内容入队后，条目字段不错位、不串行。
+
+    对应 liaison-task-queue「内容含竖线」「内容含换行」两个场景在队列真身上的形态。
+    """
+    nasty = "标题|列二|列三\n---|---|---\n值\t制表\x00空字节"
+    _process(conn, thread_id="u1", msgid="m1", content=nasty)
+    _process(conn, thread_id="u1", msgid="m2", content="normal")
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 2
+    assert (
+        conn.execute("SELECT content FROM liaison_message WHERE msgid = 'm1'").fetchone()[0]
+        == nasty
+    )
+    assert_effect_log_identity(conn)
+
+
+def test_concurrent_style_interleaved_writes_do_not_overwrite(conn):
+    """多条消息交错入队，每条各自产生一条条目，无覆盖无丢失。
+
+    对应 liaison-task-queue「并发写入不互相覆盖」。本服务是单进程单连接
+    （design D6/D12），所以这里模拟的是**交错的调用顺序**而非真并发线程；
+    真并发不在本服务的模型内，⛔ 不要为了"更真"而引入线程池——那会引入一个
+    本服务不存在的假设。结构上的防护是 liaison_task.msgid 的 UNIQUE 约束。
+    """
+    msgids = [f"m{i}" for i in range(10)]
+    for msgid in msgids:
+        effect_archive_message(
+            conn,
+            thread_id="u1",
+            business_key=msgid,
+            sender_userid="u1",
+            received_at="2026-09-08T10:00:00+08:00",
+            msgtype="text",
+            content=f"body-{msgid}",
+        )
+    for msgid in reversed(msgids):  # 入队顺序与归档顺序刻意相反
+        effect_enqueue_task(
+            conn,
+            thread_id="u1",
+            business_key=msgid,
+            sender_userid="u1",
+            received_at="2026-09-08T10:00:00+08:00",
+        )
+    stored = [row[0] for row in conn.execute("SELECT msgid FROM liaison_task ORDER BY msgid")]
+    assert stored == sorted(msgids)
+    assert_effect_log_identity(conn)
