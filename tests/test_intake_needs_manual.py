@@ -1,12 +1,14 @@
 """WBS 2.5：校验失败重试至多 2 次，仍失败转 needs_manual，⛔ 不产出半成品。"""
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.manual_handoff import REASON_PROVIDER_UNAVAILABLE, REASON_SCHEMA_EXHAUSTED
 from app.graph.nodes import compute_intake_turn
-from app.llm.gateway import LLMProviderUnavailable, SchemaExtractionFailed
+from app.llm.gateway import LLMCallMeta, LLMProviderUnavailable, SchemaExtractionFailed
 from app.storage.db import get_connection, init_schema
 from app.storage.job_queries import derive_needs_manual_reasons
 
@@ -120,3 +122,82 @@ def test_each_effect_gets_its_own_idempotency_key(tmp_path):
         "job1:effect_deliver_manual_handoff:2",
         "job1:effect_mark_needs_manual:2",
     ]
+
+
+# ── review I-1：跨轮次恢复路径 ───────────────────────────────────────────
+
+
+class RecoveringGateway:
+    """第一次调用抛异常（网关内部重试已耗尽），此后转为正常应答。
+
+    用于验证"失败轮 → 成功轮"这条跨轮恢复路径：needs_manual 是 checkpoint 里
+    一个没有 reducer 的 LastValue 键，⛔ 不能因为上一轮置过 True 就粘滞到
+    下一轮——下一轮 compute_intake_turn 必须自己重新写定这个信号。
+    """
+
+    def __init__(self, exc):
+        self._exc = exc
+        self._call_count = 0
+
+    def extract_structured(self, **kwargs):
+        raise self._exc
+
+    def extract_structured_with_meta(self, **kwargs):
+        self._call_count += 1
+        if self._call_count == 1:
+            raise self._exc
+        parsed = SimpleNamespace(
+            is_job_related=True,
+            questions=[],
+            profile_patch={"team_size": 5},
+            unspecified_fields=[],
+        )
+        meta = LLMCallMeta(latency_ms=1.0, response_model="stub-model", attempts=1)
+        return parsed, meta
+
+
+def test_a_successful_turn_after_a_failing_one_resets_needs_manual_and_persists(tmp_path):
+    """
+    失败轮之后紧跟一个成功轮，必须恢复到正常落库路径。
+
+    修复前的故障：`compute_intake_turn` 的成功返回以 `**state` 开头、没有
+    显式写回 `needs_manual: False`，checkpoint 按 LastValue 语义把上一轮置的
+    `True` 原样带到这一轮，`_route_after_compute` 仍然导向 handoff 分支——
+    模型明明已经恢复、给出了合法的 profile_patch，这一轮内容却被当成"转人工"
+    丢弃，`job_profile` 不落新行，且不报任何错误。
+    """
+    conn = _seeded_conn(tmp_path)
+    channel = WebChannel(conn)
+    gateway = RecoveringGateway(SchemaExtractionFailed("x"))
+    graph = build_intake_graph(str(tmp_path / "t.db"), gateway=gateway, conn=conn, channel=channel)
+    config = {"configurable": {"thread_id": "job1"}}
+
+    # 第 1 轮：失败，转人工。
+    graph.invoke(_state(), config=config)
+    assert conn.execute("SELECT COUNT(*) FROM job_profile WHERE job_id='job1'").fetchone()[0] == 0
+
+    # 第 2 轮：模型已恢复。⚠️ 刻意不在这份输入里传 needs_manual——本用例要验
+    # 的正是"真源必须是本轮 compute 是否重新置位"，不能是 checkpoint 里那个
+    # 从未被复位过的旧值。
+    second_state = {
+        "job_id": "job1",
+        "history": [
+            {"role": "user", "content": "要个做嵌入式开发的"},
+            {"role": "user", "content": "团队 5 个人"},
+        ],
+        "profile_patch_accumulated": {"job_title": "嵌入式软件工程师"},
+    }
+    graph.invoke(second_state, config=config)
+
+    # 恢复后的这一轮必须真正落库——不能因为上一轮的信号粘滞而再次被丢弃。
+    assert conn.execute("SELECT COUNT(*) FROM job_profile WHERE job_id='job1'").fetchone()[0] == 1
+
+    # 不该再投递第二条 needs_manual 消息：这一轮走的是正常路径。
+    needs_manual_count = conn.execute(
+        "SELECT COUNT(*) FROM outbox WHERE thread_id='job1' AND message_type='needs_manual'"
+    ).fetchone()[0]
+    assert needs_manual_count == 1
+
+    # checkpoint 里的信号必须已经复位，不能是上一轮遗留的 True。
+    snapshot = graph.get_state(config)
+    assert snapshot.values.get("needs_manual") is False

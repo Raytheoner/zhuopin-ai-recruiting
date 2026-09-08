@@ -129,7 +129,7 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
             # 所以重放/用户重试时 round_count 仍然是同一个值，幂等键命中、
             # 这两个 effect 被正确跳过（job.status 已经是 needs_manual、消息
             # 已经投递过一次）。⛔ 不要在这里用时间戳之类每次都变的值。
-            business_key=str(state["round_count"]),
+            business_key=str(state.get("round_count", 0)),
             reason_code=state["needs_manual_reason_code"],
         )
         return state
@@ -138,10 +138,10 @@ def build_intake_graph(db_path: str, *, gateway, conn, channel):
         effect_deliver_manual_handoff(
             conn,
             thread_id=state["job_id"],
-            business_key=str(state["round_count"]),
+            business_key=str(state.get("round_count", 0)),
             channel=channel,
             reason_code=state["needs_manual_reason_code"],
-            round_count=state["round_count"],
+            round_count=state.get("round_count", 0),
         )
         return state
 

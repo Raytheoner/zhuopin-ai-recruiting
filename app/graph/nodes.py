@@ -209,6 +209,12 @@ def compute_intake_turn(state: IntakeState, *, gateway: LLMGateway) -> IntakeSta
         "profile_patch_accumulated": accumulated,
         "is_complete": result.is_complete,
         "round_count": round_count + 1,
+        # review C-1：这一轮成功了，必须由本轮**重新写定**信号，⛔ 不能让
+        # `**state` 把上一轮 checkpoint 里可能残留的 needs_manual=True 原样
+        # 带出来。IntakeState 没有 reducer，按 LastValue 语义"本轮没写就是
+        # 上一轮的值"——每轮信号必须由本轮重新写定，这是最小实现。
+        "needs_manual": False,
+        "needs_manual_reason_code": "",
         "unspecified_fields": result.unspecified_fields,
         "model_claimed_unspecified_fields": result.model_claimed_unspecified_fields,
         # 零产出轮判定与本轮台账增量，由 effect_persist_draft 与画像草案写在
