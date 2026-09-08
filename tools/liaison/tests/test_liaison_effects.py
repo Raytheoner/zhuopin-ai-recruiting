@@ -560,3 +560,118 @@ def test_concurrent_style_interleaved_writes_do_not_overwrite(conn):
     stored = [row[0] for row in conn.execute("SELECT msgid FROM liaison_task ORDER BY msgid")]
     assert stored == sorted(msgids)
     assert_effect_log_identity(conn)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 2.5 业务写抛异常 ⇒ effect_log 不留记录 ⇒ 重跑会重新尝试
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_no_effect_log_when_business_write_raises(conn):
+    """业务写失败时不留下幂等记录（liaison-task-queue 同名场景）。
+
+    ⛔ 这条红了**绝不能**靠"先写 effect_log 再写业务"来"修"——那正是事故本身。
+    """
+    from app.storage.idempotency import idempotent_effect
+
+    @idempotent_effect("effect_archive_message")
+    def failing_archive(c, *, thread_id, business_key):
+        c.execute(
+            "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+            "VALUES (?, ?, 'u1', 't', 'text')",
+            (business_key, thread_id),
+        )
+        raise RuntimeError("模拟业务写之后、提交之前的失败")
+
+    with pytest.raises(RuntimeError, match="模拟业务写"):
+        failing_archive(conn, thread_id="u1", business_key="m1")
+
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 0
+    assert_effect_log_identity(conn)
+
+
+def test_failed_effect_is_retried_on_next_run(conn):
+    """重新处理同一条消息时该动作会被重新尝试，并且这次成功。
+
+    这是上一条的另一半：不留幂等记录**的目的**就是让重试可能发生。
+    只断言"没留记录"而不断言"重试真的成功了"，等于只测了一半。
+    """
+    from app.storage.idempotency import idempotent_effect
+
+    attempts = {"n": 0}
+
+    @idempotent_effect("effect_archive_message")
+    def flaky_archive(c, *, thread_id, business_key):
+        attempts["n"] += 1
+        c.execute(
+            "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+            "VALUES (?, ?, 'u1', 't', 'text')",
+            (business_key, thread_id),
+        )
+        if attempts["n"] == 1:
+            raise RuntimeError("第一次失败")
+        return business_key
+
+    with pytest.raises(RuntimeError):
+        flaky_archive(conn, thread_id="u1", business_key="m1")
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+
+    assert flaky_archive(conn, thread_id="u1", business_key="m1") == "m1"
+    assert attempts["n"] == 2
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 1
+    assert_effect_log_identity(conn)
+
+
+def test_failed_effect_rolls_back_exactly_once_and_never_commits(conn):
+    """运行期判据：失败路径 = 0 次 commit、1 次 rollback。
+
+    0 次 commit 是关键——只要失败路径上有过一次 commit，那半截业务写就落盘了，
+    而 effect_log 是空的，恒等式当场破且无症状。
+    """
+    from app.storage.idempotency import idempotent_effect
+
+    @idempotent_effect("effect_enqueue_task")
+    def failing_enqueue(c, *, thread_id, business_key):
+        raise RuntimeError("boom")
+
+    spy = SpyConnection(conn)
+    with pytest.raises(RuntimeError):
+        failing_enqueue(spy, thread_id="u1", business_key="m1")
+    assert (spy.commits, spy.rollbacks) == (0, 1)
+
+
+def test_constraint_violation_in_business_write_leaves_no_trace(conn):
+    """真实失败形态而非人造异常：FK 违约（队列条目指向不存在的消息）。
+
+    比 `raise RuntimeError` 更接近现网会发生的事——顺序写反了就是这个报错。
+    """
+    with pytest.raises(sqlite3.IntegrityError):
+        effect_enqueue_task(
+            conn,
+            thread_id="u1",
+            business_key="never-archived",
+            sender_userid="u1",
+            received_at="2026-09-08T10:00:00+08:00",
+        )
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 0
+    assert_effect_log_identity(conn)
+
+
+def test_partial_batch_failure_keeps_identity(conn):
+    """一批消息中间有一条失败，其余照常，恒等式对每个会话仍成立。"""
+    _process(conn, thread_id="u1", msgid="m1")
+    with pytest.raises(sqlite3.IntegrityError):
+        effect_enqueue_task(
+            conn,
+            thread_id="u1",
+            business_key="orphan",
+            sender_userid="u1",
+            received_at="2026-09-08T10:00:00+08:00",
+        )
+    _process(conn, thread_id="u1", msgid="m2")
+    _process(conn, thread_id="chat-9", msgid="m3")
+    assert_effect_log_identity(conn)
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 3
