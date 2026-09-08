@@ -1315,6 +1315,10 @@ def test_a_real_request_after_an_off_topic_one_starts_clean(tmp_path):
     assert counts["job"] == 1
     assert counts["job_profile"] == 1
     assert counts["conversation"] == 1
+    # 这是唯一一处在"已经被丢弃过一次的库"上验铁律1不变式的地方：
+    # 第一轮全删干净、第二轮一条不少同时成立，才说明删除既没漏删也没多删。
+    assert counts["outbox"] == 1
+    assert counts["effect_log"] == 2
 
 
 def test_off_topic_reply_on_an_existing_job_keeps_everything(tmp_path):

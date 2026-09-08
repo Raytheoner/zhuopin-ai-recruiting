@@ -34,8 +34,16 @@ _BUSINESS_DELETES: tuple[tuple[str, str], ...] = (
 # ⛔ analysis_run **不在**上面这张表里，这是刻意的。那次模型调用真实发生过：
 # 铁律3/4 要求每一次调用的模型标识、版本、prompt 版本、输入哈希、原始响应
 # 可解释可审计，PIPL 第 24 条的说明权也建立在它上面。岗位可以当作从未成立，
-# "我们调过一次模型"这个事实不可以。analysis_run.job_id 是裸 TEXT、无外键，
-# 留一个指不到 job 的 job_id 不会破坏任何约束。
+# "我们调过一次模型"这个事实不可以。
+#
+# 留下来的这些行，job_id 今天是什么状态：intake 这条路径上从未把
+# audit_context 传给网关（见 app/web/server.py:677-699、docs/tech-debt.md
+# TD-1），所以它们的 job_id **是 NULL**，不是"指不到 job 的悬空 id"——
+# 今天关联不回被丢弃的那一轮，是因为压根没关联，不是关联断了。
+# 一旦 TD-1 第 ① 步落地、调用点接上 audit_context={"job_id": ...}，这些
+# NULL 才会变成真正悬空的 job_id（analysis_run.job_id 是裸 TEXT、无外键，
+# 指不到 job 不会报错）。**到那时**，任何把 analysis_run JOIN 到 job 的
+# 报表都必须用外连接——内连接会把这些行悄悄丢掉而不报错，报表会悄悄少算。
 
 
 def discard_unstarted_job(conn: sqlite3.Connection, job_id: str) -> None:
