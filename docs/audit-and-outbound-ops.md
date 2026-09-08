@@ -627,6 +627,85 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    或报告改用纯 ASCII 标记。⛔ 不要靠"调用方记得设环境变量"兜底——
    `0908B` 的教训正是"依赖没写进 `requirements.txt`，靠人记得"。
 
+   **2026-09-08 五次发版记录（`[Mac]0908K`）——✅ 成功**
+
+   执行人：`[Mac]0908K` session ｜ 依据：Shao Peishen 2026-09-08 回「请确保及时修复」
+   （对上一条 `0908J` 新发现的「巡检 CLI 在 GBK 控制台误报 `EXIT=1`」的处置裁决）。
+   与上面四条**并列**，不覆盖。
+
+   | 项 | 值 |
+   |---|---|
+   | 发版 HEAD | `95b298c`（sync 执行时 `main` 与 `origin/main` 同步、工作区干净，无并发提交插入） |
+   | 🔴 **实际上线范围远大于 opener §零 所述** | opener §零 写的是「本次只发 `19b8937` 巡检 CLI 编码修复」，**这句不准确**。现网上一版是 `7a48a19`（`0908J`），`git diff --stat 7a48a19..95b298c -- app/ scripts/ pyproject.toml` ＝ **15 文件 / +905 −118**。除编码修复外，本次一并上线：**WBS 2.3 备用供应商切换**（`195559e` `158ad72` `943a690`）、**WBS 2.5 重试耗尽转人工**（`50e7c60` `4bf2eeb` `abf8891` `a5de64d`，含两个新 `effect_*` 节点）、**tasks 5.3 离题轮不留岗位记录 / 丢弃**（`a30011a` `d466518` `6c04e5e` `fe20348` `a7a43ac` `eb7ab4e`）。⚠️ 这些是各泳道在 `0908J` 之后合入 `main` 的，**不是本 opener 引入的**——但发版发的是 `main` 的**当前全貌**，不是单个 commit。⇒ 今后 `.51` 发版 opener 的「这次发什么」必须由 `git diff <现网 HEAD>..main` 现算，⛔ 不能只写本轮那个 commit（那会让不可代项的授权范围被低估） |
+   | 快照目录 | `C:\apps\backups\20260908-1420`。`app\` **126 个文件完整**；`data\` 拷到 `demo.db-shm` 报 `IOException`（文件被运行中的服务占用）而中断——**不影响回滚能力**，§二.4 的回滚只用 `app\`，`data\` 本就不回滚 |
+   | 前置核对 4 项 | 全过（`git status -sb` ＝ `## main...origin/main` 干净同步 ｜ `ssh zp51` 回 `ok` ｜ 现网基线 `200` ｜ `git diff --stat 7a48a19..main -- requirements.txt` **为空** ⇒「纯 sync、⛔ 不装依赖、⛔ 不重跑 `deploy-server.ps1`」前提成立） |
+   | `sync-to-server.sh` 执行方式 | 同 09-04 / 09-08B / 09-08J，由 Shao Peishen 本人点 CC Desktop bash 块 Run；输出末尾 `HTTP 200` + 「发版完成」 |
+   | ℹ️ 远程重启计划任务输出 | ✅ **本次是可读中文**（「成功: 计划任务 "ZhuopinRecruitAgent" 已经被成功终止。」「成功: 尝试运行 "ZhuopinRecruitAgent"。」）——`cf308cc` 的 GBK→UTF-8 修复已随上一轮 scp 到位并生效 |
+   | 冒烟 1：首页 | `curl` → **200** |
+   | 冒烟 2：`GET /api/jobs` | 返回 **JSON 列表**（非 405），含 `stage_label` / `created_at_label` 等字段 |
+   | 冒烟 3：`app.log` 尾 60 行 | ⚠️ **字面不过、实质通过**，未回滚——判据与证据见下方专段 |
+   | 🔴 冒烟 4（**本次目标验收**）：不带 `PYTHONIOENCODING` 裸跑巡检 | **`EXIT=0`**，6 条断言全过，断言四 detail 报「豁免 7 条」。标记降级成 `[OK]` / `[X]` / `??`（`⚠️` 也降级）＝**预期**，`[OK]` 与 `[FAIL]` 可分辨 ⇒ `19b8937` 的修复在现网确认生效 |
+
+   冒烟 4 项按上述结论全部达标，未触发回滚。`.51` 现网自此为 `95b298c` 一线代码。
+   §五 第 1 项（`data\` 备份任务）状态不变，仍 ⏸。
+
+   **冒烟 4（目标验收）裸跑原文**（`ssh zp51`，⛔ 未设 `PYTHONIOENCODING`、⛔ 未改
+   `[Console]::OutputEncoding`；下面是把 GBK 字节 `iconv -f GBK -t UTF-8` 后的原文）：
+
+   ```
+   [OK] 以 AI 评分为理由的拒绝记录数恒为 0
+        rejection_record 表尚不存在（M1 现状）。?? 这个通过**不代表红线守住了**……
+   [OK] criterion_score 中 evidence_ref 为空的记录数恒为 0
+   [OK] criterion_score.criterion_key 不存在白名单外的取值
+   [OK] 每一个进入终态的画像版本都有对应的 human_review 记录
+        豁免 7 条决策发生在 2026-09-04 00:00:00 之前的历史画像版本……
+   [OK] JSONL 镜像的哈希链完整
+   [OK] SQLite 真身与 JSONL 镜像无未解释的差集
+
+   合规断言全部通过（6 条）。
+   EXIT=0
+   ```
+
+   ⇒ `0908J` 记的「加 `PYTHONIOENCODING=utf-8` 才得真结果」这条临时口径**自本次起作废**，
+   ⛔ 不要再往命令里加环境变量。
+
+   **冒烟 3 的判定过程（为什么"尾 60 行有 Traceback"没有触发回滚）**
+
+   opener §二.3 的字面判据是「尾 60 行无 `Traceback` / `OperationalError`」。实测尾 60 行
+   **含**一段 `Traceback`，但取证后确认**不是本次发版的回归**，故按通过处理：
+
+   | 证据 | 值 |
+   |---|---|
+   | 本次新进程 | PID `9600`，`2026-09-08 14:22:36,642` `Application startup complete` |
+   | 新进程之后的全部日志 | 4 行 uvicorn 启动 + 3 条 `200` 访问，**零 `Traceback` / `ERROR`** |
+   | 尾 400 行里 `Traceback` 的位置 | 4 处，行号 `73` / `165` / `177` / `287`，**全部早于**新进程起始行 `394` |
+   | 最后一段 `Traceback` 的时间戳 | `2026-09-08 13:18:32,558 ERROR uvicorn.error: Exception in ASGI application`——早于本次发版 **约 1 小时**，产生于**上一版（`7a48a19`）进程** |
+
+   ⇒ 回滚的效果是把产生该 `Traceback` 的**同一份旧代码**装回去，对这条错误零改善。
+   判据的意图是"本次发版没引入错误"，该意图**已满足**。⚠️ 但字面判据确实不过——
+   下次写 `.51` 发版 opener 时应把这条改成「**新进程起始行之后**无 `Traceback` /
+   `OperationalError`」，⛔ 不要写「尾 N 行」（滚动日志里必然混入历史错误）。
+
+   🔴 **顺带查实的遗留缺陷（早于本次发版，未处置，登记待立项）**
+
+   ```
+   File "app/web/server.py", line 400, in confirm
+       effect_generate_and_persist_jd(
+   File "app/storage/idempotency.py", line 70, in wrapper
+       conn.execute("INSERT INTO effect_log (effect_key, ...) VALUES (?, ?, ?, ?, ...)")
+   sqlite3.IntegrityError: UNIQUE constraint failed: effect_log.effect_key
+   ```
+
+   重复 `confirm` 同一岗位时，`idempotent_effect` **抛 `UNIQUE` 约束错误**而不是
+   "已执行过 ⇒ 短路返回"，请求以 500 结束。⚠️ 幂等键的唯一索引本身是对的（工程铁律 1
+   要求它存在），错的是装饰器把"命中已存在的键"当成异常路径。现象是**用户可见的 500**，
+   不是数据损坏——`effect_log` 与业务表仍在同一事务里，恒等式未破。09-08 13:18 现网实发一次。
+   ⛔ 本轮 opener 范围内未修（发版是不可代项，⛔ 不在发版会话里顺手改代码）。
+
+   ℹ️ **文档口径订正**：`.51` 的应用日志真实路径是
+   `C:\apps\zhuopin-recruit-agent\logs\app.log`，**不是** `…\data\logs\app.log`
+   （本轮 opener §二.3 按后者写，`Get-Content` 直接 `PathNotFound`）。全机只此一个 `*.log`。
+
 
 ---
 
