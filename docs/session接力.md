@@ -25,7 +25,7 @@ HR业务线-接力0903B
 
 | 项 | 现状 |
 |---|---|
-| main | `2dfa499`，**与 origin 同步（ahead 0）**。⚠️ 另一条线在跑：`0908A`（HR 企微值守机器人 `openspec-propose`，09-08 09:31 派），`openspec/changes/hr-wecom-aibot-liaison/` 尚未跟踪——本线所有 opener ⛔ 不碰它 |
+| main | `206fefa`（第十一批三泳道已全部收敛并由看护者收尾提交），**与 origin 同步（ahead 0）**；其后 `0908I` 又提交一次账目改动（只碰 intake `tasks.md` + 编排 + 本文 + 自身 opener 正文）。⚠️ 另一条线在跑：`0908A`（HR 企微值守机器人 `openspec-propose`，09-08 09:31 派），`openspec/changes/hr-wecom-aibot-liaison/` 尚未跟踪——本线所有 opener ⛔ 不碰它 |
 | 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`、`docs/openers/0908Z-*.md`、`0908B-*.md`、`0908I-*.md`。`0908Z`【二】提交前四个；`0908I` 未在其清单里，由 `0908B`/`0908I` 自己带上。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
 | `.51` 代码 | ✅ **已发版 `7a48a19`**（`0908J` 2026-09-08 四次发版重试成功；同刻的 `cf308cc` 只改 `sync-to-server.sh` 自身，对 `app/` 零差异，现网服务代码按 `7a48a19` 记）。与 `0908B` 唯一差别＝**先在 `.51` 装 `tzdata==2026.3` 再 sync**（装包对旧代码惰性、服务未停），ZoneInfo 验证打出 `UTC Asia/Shanghai`。快照 `C:\apps\backups\20260908-1150`；冒烟 5 项全过（首页 200 ｜ 无 404 ｜ `app.log` 无 Traceback、新进程 11:52:44 启动 ｜ `GET /api/jobs` **405→200** ｜ `hard_requirement`+`human_review` 建表就位）。第 6/7 章、9.6、硬门槛新表、Web 三页**均已上线**。巡检 CLI `EXIT=0`、6 条断言全过——`0904I` 预告的断言四违例**未发生**（`0904F` 改用决策时间戳后 7 条历史行被正确豁免，非违例，⛔ 不是漏跑）。🔴 新发现：巡检 CLI 在 `.51` 默认 GBK 控制台下 `print` 报告里的 `✅` 抛 `UnicodeEncodeError` 并**误报 `EXIT=1`**，加 `PYTHONIOENCODING=utf-8` 才得真结果——无人值守按退出码判成败会持续假阳性，修法待办见 `docs/audit-and-outbound-ops.md` §五 ｜ `0908B` 失败回滚详情见 `docs/findings/2026-09-08-51四次发版回滚.md`，原三次发版记录（`0904Z`）见 `docs/audit-and-outbound-ops.md` §五 |
 | pytest | main 侧 **1061 passed / 1 skipped**（09-04 `0904Y` 复核）＋ 0905A 后未复核（应更高）。⛔ 别抄进 opener 当基线，见【四】 |
@@ -39,7 +39,7 @@ HR业务线-接力0903B
 | ~~`ai-audit-trail-and-outbound-gate`~~ | **53/53 ✅ 已归档** | `openspec/changes/archive/2026-09-04-ai-audit-trail-and-outbound-gate`；specs 折进 `ai-decision-audit` + `outbound-approval-gate` |
 | `m1-intake-quality-fixes` | **68/69** | 8.4 ✅（Shao Peishen 09-03 页面实跑，job `51b225f1`，0903L 取证）；只剩 **8.9**（归档，须 `m1-job-profile-intake` 先归档） |
 | ~~`outbound-retry-audit-trace`~~ | **15/15 ✅ 已归档** | `archive/2026-09-04-outbound-retry-audit-trace`；delta 已合进 `outbound-approval-gate/spec.md`；修复已随 `3f59842` 上 `.51` |
-| `m1-job-profile-intake` | **56/72** | 第十批：9.6 ✅、硬门槛 1.2b/5.8/5.9 ✅、账目对齐 4 条 ✅；0905A：Web 8.1/8.2/8.4 ✅（`05e90cc`）。剩 16：**8 条 C 类已移出企微通道**（1.5b/3.x/9.2 → 由 `0908A` 立的 `hr-wecom-aibot-liaison` 承接）、**3 条要定时基础设施**（1.7/5.6/6.8，等定是否移出）、9.1 人工评估、**4 条本批做**（2.3/2.5/4.4/5.3） |
+| `m1-job-profile-intake` | **60/72** | 第十批：9.6 ✅、硬门槛 1.2b/5.8/5.9 ✅、账目对齐 4 条 ✅；0905A：Web 8.1/8.2/8.4 ✅（`05e90cc`）；**第十一批：2.3+2.5 ✅（`7ef4bb2`）、5.3 ✅、4.4 ✅**。剩 12 条，🔴 **已全部有去向，本包内无待做代码**：**C 类 11 条已移出**——8 条企微（1.5b/3.x/9.2）→ `hr-wecom-aibot-liaison`（`0908A` 已立包），3 条调度（1.7/5.6/6.8）→ **调度基础设施（待立项）**（`0908I` 09-08 落档，依据 Shao Peishen「按推荐」裁决）；**D 类只剩 9.1**（10 个真实岗位重跑、HR 与业务经理双方评估，**要真人参与**）。⇒ **归档判定权在 Shao Peishen**，⛔ 代理人不代拍 |
 
 **已跑完的批次**：第四至第九批；**第十批（0904G–M，报告 `lanes-20260904-134429-看护报告.md`；M 预算耗尽 NO-SENTINEL，由 `0905A` 09-07 利旧 worktree 续跑收口）**。
 看护报告都在 `.claude/handoff/lanes-*-看护报告.md`。
@@ -128,7 +128,7 @@ C 发现断言四豁免线用 `created_at` 有洞 → Shao Peishen 裁决「现�
 - `0908B`：现网 `3f59842` 落后 main 五个交付单元（含 6.1 现网缺陷修复）。requirements 无变动只 sync。发版后跑巡检、把断言四历史行抄成清单待 Shao Peishen 核实。正文 `docs/openers/0908B-51四次发版与巡检.md`。🔴 不可代，09-08 已回「发」，**已执行 → ❌ 失败已回滚**（缺 `tzdata`，见 `docs/findings/2026-09-08-51四次发版回滚.md`）。巡检与断言四历史行清单随之顺延，⛔ 不是漏跑
 - `0908J`：`.51` 四次发版**重试**。✅ Shao Peishen 09-08 回「补 tzdata」＝本条授权；`requirements.txt` 已补 `tzdata==2026.3`。🔴 与 `0908B` 唯一差别＝**先在 .51 装 `tzdata` 再 sync**（装包对旧代码惰性、服务不用停；颠倒顺序＝白白再停摆一次）。⛔ 不重跑 `deploy-server.ps1`，按手册阶段 D 只重跑装包步骤。正文 `docs/openers/0908J-51四次发版重试.md`。🔴 不可代，**等他点 Run**
 - 第十一批三泳道并行（文件两两不交）：网关 `0908C→D`（2.3 双供应商 + 2.5 重试转人工不产半成品）；识别 `0908E→F`（5.3 非用人需求不建单）；幂等 `0908G→H`（4.4 每个 effect_* 中断恢复恒等，清单自动收集防过期）。dry-run 预期 C21/D22/E19/F21/G20/H21。正文 `docs/openers/0908Z-泳道批次看护.md`
-- ✅ Shao Peishen 09-08 裁决「按推荐」：1.7/5.6/6.8 移出为 C 类（调度基础设施，待立项）→ `0908I`（🔴 须在 0908Z 收敛后跑，与 0908F 回勾行相邻）。之后本包 D 类只剩 9.1（人工评估），归档判定等他
+- ✅ Shao Peishen 09-08 裁决「按推荐」：1.7/5.6/6.8 移出为 C 类（调度基础设施，待立项）→ `0908I`（🔴 须在 0908Z 收敛后跑，与 0908F 回勾行相邻）。**✅ 已执行**（09-08，等第十一批 `206fefa` 收敛后跑，前置四项复核全过）：三条原位保留未勾并各追加「⤷ 已移出 → 调度基础设施（待立项）」；文末新增「→ 调度基础设施」小节（1.7/5.6/6.8 三行 + 依据 + 立项须带走的口径）；企微小节标题改指 `hr-wecom-aibot-liaison`（表格未动，⛔ 未碰该包任何文件）；1.7 原去向「M2 Postgres 迁移」同日改判，该小节留墓碑并注明现已空转；「12 条」改为 **11 条**并写明 12−3+2 的账目变动。`openspec validate` 通过。⇒ 本包 D 类只剩 9.1（人工评估），**归档判定等他**
 
 ---
 
