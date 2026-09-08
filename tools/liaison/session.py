@@ -165,3 +165,73 @@ def select_unalerted_closed_windows(conn: sqlite3.Connection) -> list[tuple[str,
             "WHERE recovered_at IS NOT NULL AND alerted_at IS NULL ORDER BY started_at"
         )
     ]
+
+
+#: tools/liaison/session.py → parents[0]=liaison, [1]=tools, [2]=仓库根
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+#: 存活戳落点。`data/` 已被 .gitignore:11 覆盖，⛔ 不会误入版本管理。
+#: ⛔ 不落 data/liaison.db：存活戳是每次心跳都覆写的诊断信息，落库意味着每次心跳
+#: 都要一次事务提交，而本模块**不许**自己提交（提交归 idempotent_effect 独占）。
+DEFAULT_LIVENESS_PATH = REPO_ROOT / "data" / "liaison" / "liveness.json"
+
+STATE_STARTING = "starting"
+STATE_CONNECTED = "connected"
+STATE_DISCONNECTED = "disconnected"
+
+#: 存活戳 JSON 的字段契约。少任何一个都当作"读不到上一次的记录"。
+LIVENESS_KEYS = ("state", "stamp_at", "since")
+
+
+def effect_write_liveness_stamp(
+    path: pathlib.Path,
+    *,
+    state: str,
+    now: datetime,
+    since: datetime | None = None,
+) -> None:
+    """盖一次存活戳（覆写语义，末次写入即真相）。
+
+    **⛔ 本函数刻意不挂 @idempotent_effect，这不是漏了。**
+    幂等键的语义是"这件事做过就不再做"。心跳恰恰要求每次都做——挂上装饰器，
+    存活戳会**只写一次然后永远不再更新**，而外部看到的现象是"服务好像十分钟前
+    就死了"。幂等在这里不是保护，是把功能反过来关掉。
+    它也不需要幂等：覆写不累积、重复执行的结果与执行一次完全相同，本来就没有
+    "重复"这个失败模式。
+
+    ⛔ 不做 fsync：这是心跳，掉电丢掉最后一次的代价是"看起来早停了一秒"；
+    `os.replace` 已经保证读者永远读到完整的一份。这与第 4 章附件落盘**必须**
+    fsync 是两回事——那边丢的是不可恢复的材料。
+
+    ⛔ 不用 `with open(...)`：见模块 docstring 第 1 条。
+    """
+    moment = format_instant(now)
+    payload = {
+        "state": state,
+        "stamp_at": moment,
+        "since": format_instant(since) if since is not None else moment,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    # 原子替换：外部读到的要么是上一份完整的，要么是这一份完整的，⛔ 不会是半截。
+    os.replace(tmp_path, path)
+
+
+def read_liveness_stamp(path: pathlib.Path) -> dict | None:
+    """读上一次的存活戳。读不到／坏了／缺字段一律返回 None。
+
+    ⛔ 不许因为存活戳坏了就拒绝启动：中断窗口的账在库里，存活戳只是诊断信息。
+    为一个坏掉的温度计停工，代价与收益完全不成比例。
+    """
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("存活戳读取失败，按「没有上一次记录」处理：%s", path, exc_info=True)
+        return None
+    if not isinstance(payload, dict) or any(key not in payload for key in LIVENESS_KEYS):
+        logger.warning("存活戳字段不完整，按「没有上一次记录」处理：%s", path)
+        return None
+    return payload
