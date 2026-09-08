@@ -87,6 +87,63 @@ def test_unrelated_message_returns_guidance_and_not_complete():
     assert result.asked_questions == result.questions
 
 
+def test_off_topic_turn_always_returns_the_deterministic_guidance():
+    """离题轮的文案是系统的，不是模型的。
+
+    合规红线「AI 只做排序推荐，不做自动淘汰」在文案上唯一可机器判据的形态，
+    就是这句话由系统固定给出。模型自由文本随时可能写出「已自动拒绝」这类
+    暗示淘汰的说法，而那是一条**没有任何症状**的红线破口：接口照样 200，
+    测试照样绿，只有业务经理在屏幕上看见。
+    """
+    from app.agents.intake_agent import _GUIDANCE_TEXT, run_intake_turn
+
+    gateway = make_gateway(
+        [
+            json.dumps(
+                {
+                    "is_job_related": False,
+                    "questions": [{"text": "不符合要求，AI 已自动拒绝该请求"}],
+                    "profile_patch": {"job_title": "不该被写进来"},
+                }
+            )
+        ]
+    )
+
+    result = run_intake_turn(gateway, history=[{"role": "user", "content": "今天中午吃什么"}], round_count=0)
+
+    assert result.is_job_related is False
+    assert [q.text for q in result.questions] == [_GUIDANCE_TEXT]
+    assert result.questions_text == _GUIDANCE_TEXT
+    assert "自动拒绝" not in result.questions_text
+    assert "淘汰" not in result.questions_text
+    # 离题轮不许有任何画像产出，也不许消耗追问预算。
+    assert result.profile_patch == {}
+    assert result.is_productive is False
+    # 引导语确实下发了，已问台账要如实记它。
+    assert [q.text for q in result.asked_questions] == [_GUIDANCE_TEXT]
+
+
+def test_blank_message_is_rejected_without_calling_the_model():
+    """spec 的 Scenario 标题是"需求描述**为空**或与招聘无关"——空是其中一半。
+
+    空输入送进模型只有两个结果：多花一次钱，或者模型自己脑补出一个岗位。
+    判定放在 L3 而不是 server：识别是 L3 的职责，server 只按结论分流
+    （Global Constraints 边界 2）。
+    """
+    from app.agents.intake_agent import _GUIDANCE_TEXT, run_intake_turn
+
+    gateway = make_gateway([])  # 队列为空：真调了模型就会 IndexError
+
+    result = run_intake_turn(gateway, history=[{"role": "user", "content": "   \n  "}], round_count=0)
+
+    assert result.is_job_related is False
+    assert [q.text for q in result.questions] == [_GUIDANCE_TEXT]
+    assert result.profile_patch == {}
+    assert result.is_productive is False
+    assert result.llm_latency_ms == 0.0
+    assert result.llm_response_model is None
+
+
 def test_job_related_message_returns_followup_questions():
     gateway = make_gateway(
         [

@@ -964,6 +964,26 @@ def run_intake_turn(
     asked_rounds = [list(item or []) for item in (asked_question_rounds or [])]
     productive_rounds = round_count if productive_round_count is None else productive_round_count
 
+    # 空白输入直接判非用人需求，⛔ 不调模型。
+    #
+    # spec「需求描述为空或与招聘无关」的前半句。放在这里而不是 server：
+    # 识别是 L3 的职责，server 只按 is_job_related 分流（边界 2）。
+    # 空串送进模型只有两种下场——白花一次调用，或者模型凭空脑补一个岗位
+    # 出来，而后者会真的建出一条岗位记录。
+    if not _last_user_text(history).strip():
+        blank_questions = [_guidance_question()]
+        return IntakeTurnResult(
+            is_job_related=False,
+            questions=blank_questions,
+            profile_patch={},
+            is_complete=False,
+            questions_text=render_questions_text(blank_questions),
+            # 没调模型，时序与模型标识都留默认值——⛔ 不要编一个 0 之外的
+            # 数字或配置里的模型名冒充（铁律 4：响应返回的才算）。
+            is_productive=False,
+            asked_questions=blank_questions,
+        )
+
     user_prompt = _build_user_prompt(history, accumulated, suggested_followups(history))
 
     # extract_structured_with_meta 而不是 extract_structured：本轮的 LLM 累计
@@ -985,7 +1005,15 @@ def run_intake_turn(
     )
 
     if not parsed.is_job_related:
-        questions = _to_intake_questions(parsed.questions) or [_guidance_question()]
+        # 引导语**恒为系统文案**，⛔ 不采用模型这一轮的自由文本。
+        #
+        # 原写法是「模型给了就用模型的，没给才兜底」。问题不在于模型说得
+        # 好不好，而在于这条路径上模型说的话没有任何机器判据：它随时可能
+        # 写出「已自动拒绝」「不符合条件」这类暗示淘汰的措辞，而合规红线
+        # 「AI 只做排序推荐，不做自动淘汰」被破时**没有任何症状**——接口
+        # 照样 200，测试照样绿，只有业务经理在屏幕上看见。固定文案之后，
+        # 这条红线才第一次有了可以断言的对象（tasks 5.3）。
+        questions = [_guidance_question()]
         return IntakeTurnResult(
             is_job_related=False,
             questions=questions,
