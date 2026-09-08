@@ -1,4 +1,4 @@
-> **进度**：12/66（第 1 章「通道可行性与服务骨架」、第 3 章「准入名单」已完成并合回 main，2026-09-08）
+> **进度**：18/66（第 1 章「通道可行性与服务骨架」、第 2 章「存储基座与幂等不变式」、第 3 章「准入名单」已完成并合回 main，2026-09-08。三章各 6/6）
 >
 > **粒度约定**（CLAUDE.md「粒度映射」）：本文件的**一个 `##` 章节 = 一个 superpowers plan = 一条 worktree 分支 = 一个可独立测试并合并的交付单元**。章节的 checkbox 在该 plan 的 final review 通过后才勾。
 >
@@ -43,12 +43,41 @@
 
 对应能力：跨全部能力的存储前提（design.md D3／D5）。
 
-- [ ] 2.1 建 `data/liaison.db` 的 schema 初始化：`effect_log` 表与 `app/storage/db.py:59-67` **同构**（同列、同主键、同唯一索引），`CREATE TABLE IF NOT EXISTS` 幂等建表
-- [ ] 2.2 建 `liaison_message`（消息台账）与 `liaison_task`（队列真身）两张表；`liaison_task.send_status` 用 `CHECK` 约束钉死三态枚举值（存枚举，⛔ 不存 emoji）
-- [ ] 2.3 接入 `app.storage.idempotency.idempotent_effect`（单向 import），确认装饰器在本服务的单连接模型下工作；写一条测试断言该连接上不存在第二个事务管理者
-- [ ] 2.4 写「恒等不变式」测试脚手架：给定任意一批消息，每个 `effect_*` 的 `effect_log` 条数与其业务表行数按 `thread_id` 恒等。⚠️ 幂等策略：本章不产生对外副作用，只建表与验证机制
-- [ ] 2.5 单测：业务写抛异常时 `effect_log` 不留记录、重跑会重新尝试（对应 `liaison-task-queue`「业务写失败时不留下幂等记录」场景）
-- [ ] 2.6 加断言测试：`app/` 下无任何模块 import `tools/`（结构性单向约束，design.md D5）
+> **第 2 章落地偏离登记**（2026-09-08，run-build 收口时记）：
+>
+> - **2.6 的证伪改用进程内 monkeypatch**：实现计划 Task 6 Step 3 原写法是
+>   `printf 'import tools.liaison...' > app/_tmp_violation.py` 再删除，即**往 `app/` 下真写一个文件**。
+>   本交付单元 opener 明令「测试进程内 monkeypatch，⛔ 不改文件」且「⛔ 不碰 `app/`」，**opener 优先**。
+>   落地为常驻测试 `test_scanner_catches_a_synthetic_violation_via_monkeypatched_app_modules`：
+>   patch 掉 `test_no_app_module_imports_tools` **真正调用的那个** `_app_modules`，再直接驱动真实的
+>   生产测试函数在 `pytest.raises` 下变红。全程零字节写入 `app/`；全分支 `git diff --name-only`
+>   无任何 `app/`／`scripts/` 路径。
+> - **计划缺陷（记在计划账上，非实现问题）**：Task 5 Step 3 的证伪 A「函数体内先写一行 `effect_log`
+>   再抛异常」**不可能**造成它自己声称的「`COUNT(*) FROM effect_log == 0` 不成立」。两条独立原因：
+>   ① `idempotent_effect` 的 `except Exception: conn.rollback()` 会把手工插入的那行一并撤销
+>   （`get_connection` 用默认 `isolation_level`，那行就在同一个隐式事务里）；
+>   ② 被 `-k` 选中的 `test_no_effect_log_when_business_write_raises` 装饰的是**测试内局部闭包**，
+>   根本不调 `effects.py`。实现者如实报告而非改断言迎合 brief。
+>   **控制方追加的变异**（把幂等记录挪到事务外，`fn` 内 `conn.commit()`）已使判据真正变红：
+>   `test_constraint_violation_in_business_write_leaves_no_trace` 失败于
+>   `tools/liaison/tests/test_liaison_effects.py:658: AssertionError` / `assert 1 == 0`。
+>   **教训带进第 3 章的 brief**：`-k` 选中的证伪目标必须是**会调用生产函数**的测试。
+> - **终审实证发现的两处守卫漏洞（已在合并前修完）**：① 事务扫描器原先只认裸局部名，漏掉
+>   `with self.conn:`（Attribute）、`with get_connection() as c:`（Call）、`async with conn:`
+>   —— 而第 3–5 章把连接挂在服务对象上比裸局部名自然得多；② `EFFECT_NODE_TO_TABLE` 的映射
+>   **正确性**从未被验证，终审把两个条目对调后恒等断言**依然通过**。二者均已补测试堵上
+>   （后者做成仓库级 AST 扫描，一并堵上「`effect_*` 定义在别的模块会同时逃过守卫」的缺口）。
+> - **`assert_effect_log_identity` 的前提已写进 docstring**：本断言成立的前提是**业务表只增不删**。
+>   第 7 章 180 天留存期清理落地后它会**因正当理由变红**，届时唯二的合法应对是「同事务连带删除
+>   对应 `effect_log` 行」或「把断言限定在未清理的 thread 范围」，⛔ **不许改成总数比较、不许削弱成约等于**
+>   —— 它是铁律 1 唯一的机器守卫。
+
+- [x] 2.1 建 `data/liaison.db` 的 schema 初始化：`effect_log` 表与 `app/storage/db.py:59-67` **同构**（同列、同主键、同唯一索引），`CREATE TABLE IF NOT EXISTS` 幂等建表
+- [x] 2.2 建 `liaison_message`（消息台账）与 `liaison_task`（队列真身）两张表；`liaison_task.send_status` 用 `CHECK` 约束钉死三态枚举值（存枚举，⛔ 不存 emoji）
+- [x] 2.3 接入 `app.storage.idempotency.idempotent_effect`（单向 import），确认装饰器在本服务的单连接模型下工作；写一条测试断言该连接上不存在第二个事务管理者
+- [x] 2.4 写「恒等不变式」测试脚手架：给定任意一批消息，每个 `effect_*` 的 `effect_log` 条数与其业务表行数按 `thread_id` 恒等。⚠️ 幂等策略：本章不产生对外副作用，只建表与验证机制
+- [x] 2.5 单测：业务写抛异常时 `effect_log` 不留记录、重跑会重新尝试（对应 `liaison-task-queue`「业务写失败时不留下幂等记录」场景）
+- [x] 2.6 加断言测试：`app/` 下无任何模块 import `tools/`（结构性单向约束，design.md D5）
 
 **验收**：`liaison-task-queue` 中「入队幂等且与幂等记录原子提交」一条要求的两个场景可在脚手架上跑通（队列写入逻辑本身在第 5 章）。
 

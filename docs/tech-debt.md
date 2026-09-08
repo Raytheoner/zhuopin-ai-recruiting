@@ -597,3 +597,40 @@ userid 填入使出厂态消失时复核一次）。
 
 **触发条件**：第 4／5 章接线时一并处理（第 3 条尤其影响调用方）；第 4 条可随时补。
 **不还的后果**：1 与 4 都是**静默**失败——名单被改小或全员被拒，而闸门看起来健康。
+## TD-17 · `app/outbound/delivery.py:12` 的非法转义序列 SyntaxWarning
+
+**欠的是什么**：该行 docstring 里写了 Windows 路径 `C:\apps\...\candidate_outbound.switch`，
+其中 `\z`（以及同类反斜杠序列）是**非法转义序列**，Python 3.14 会发 `SyntaxWarning:
+"\z" is an invalid escape sequence`，且明确警告「Such sequences will not work in the future」。
+
+**为什么现在才浮出来**：第 2 章新增的结构断言（`tools/liaison/tests/test_app_does_not_import_tools.py`）
+会 AST-parse `app/` 下全部 52 个模块，于是把这条既有告警**暴露成每次跑该测试文件都出现的 2 条 warning**。
+缺陷本体一直都在，只是此前没有任何测试去 parse 它。
+
+**为什么第 2 章不修**：本交付单元的 opener 明令「⛔ 只动 `tools/liaison/` 与测试；⛔ 不碰 `app/`、`scripts/`」。
+越界修它会让本章的"零 `app/` 改动"这条可机器核对的边界失效。
+
+**触发条件**：下一个**本来就要改 `app/outbound/`** 的变更包顺手修；或单独派一个 opener。
+修法是把该 docstring 改成原始字符串（前缀 `r`）或把反斜杠转义成 `\\`。
+
+**不还的后果**：Python 未来版本会把 `SyntaxWarning` 升级为 `SyntaxError`，届时
+`app/outbound/delivery.py` **直接 import 失败**——而它在 `.51` 的发送链路上。
+在那之前，它持续污染测试输出，让"测试输出应当干净"这条判据失去分辨力。
+
+## TD-18 · 值守服务事务扫描器对 `with <Call>:` 会误报
+
+**欠的是什么**：`tools/liaison/tests/test_liaison_effects.py` 的 `_scan_transaction_violations`
+在第 2 章终审后放宽为：`with` / `async with` 的 context expr 是 `ast.Name`、`ast.Attribute`
+**或 `ast.Call`** 一律判为「第二个事务管理者」。放宽是为了抓住 `with self._conn:` 这个
+第 3–5 章最可能出现的真实违规形态（终审实测原写法漏掉它）。
+
+**代价**：第 3–5 章一旦在 `tools/liaison/` 的**非测试**代码里写 `with open(...) as f:`、
+`with contextlib.suppress(...):` 这类与数据库无关的上下文管理器，会被误判为违规。
+
+**触发条件**：第 3–5 章第一次因此变红时。届时的正确处置是**给扫描器加白名单或细化判据**
+（例如只对名字里含 `conn` 的表达式、或对已知连接符号判违规）。
+
+**不还的后果**：可控——**这个失败是响亮的**（一条可见的测试失败），不是静默的。
+⚠️ 但要防的是**图省事把守卫改回只认裸局部名**：那会重新打开 `with self._conn:` 的口子，
+而那个口子的症状是**没有症状**（`effect_log` 与业务表静默劈叉，正是 `.51` 2026-08-10／08-12
+丢 `outbox` 的失败模式）。宁可留误报，⛔ 不许退回窄化。
