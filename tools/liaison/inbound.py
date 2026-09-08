@@ -1,17 +1,12 @@
 """一条入站消息的分支接线（tasks 4.10）。
 
-本章只接三件事：
+本章只接四件事：
 1. 用第 3 章的 `admit()` 判准入；
 2. **两条分支都归档**——spec 原文：名单外的消息"SHALL 仍然归档
    （以便事后可查'谁在什么时候发过什么'）"；
-3. 名单外回一条礼貌说明，且 ⛔ **MUST NOT 生成任何值守任务队列条目**。
-
-⛔ **本模块不入队。** `InboundRoute.should_enqueue` 是留给第 5 章的接线位——
-那一章在这个布尔值后面接上真正的入队 effect 即可（函数名见第 5 章 plan，
-本文件故意不提，见下）。
-tests/test_inbound_routing.py::test_inbound_module_never_references_the_enqueue_effect
-用纯文本扫描源码（含本 docstring）钉住"这个名字现在一次都不许出现"，
-把"现在还没写"钉成断言。
+3. **名单内的消息入队**——`InboundRoute.should_enqueue` 为真时调 `queue.enqueue_task`；
+   🔴 ⛔ **不加 `newly_archived` 门槛**，理由见 `handle_inbound_message` 里的注释。
+4. 名单外回一条礼貌说明，且 ⛔ **MUST NOT 生成任何值守任务队列条目**。
 
 ⚠️ **礼貌回复是 at-most-once，这是一个已登记的缺口**（见 docs/tech-debt.md）：
 它走注入的 reply port，不是 `effect_*`。台账已提交、回复还没发出去时进程被杀，
@@ -35,6 +30,7 @@ from tools.liaison.archive import (
     InboundAttachment,
     archive_message,
 )
+from tools.liaison.queue import compute_task_summary, enqueue_task
 from tools.liaison.whitelist import admit
 
 logger = logging.getLogger(__name__)
@@ -67,6 +63,7 @@ class InboundResult:
     route: InboundRoute
     outcome: ArchiveOutcome
     replied: bool
+    enqueued: bool = False
 
 
 def compute_inbound_route(admitted: bool) -> InboundRoute:
@@ -93,7 +90,7 @@ def handle_inbound_message(
     whitelist_path: pathlib.Path | None = None,
     reply: Callable[[str, str], Any] | None = None,
 ) -> InboundResult:
-    """归档 → （名单外）礼貌回复。⛔ 本章不入队。
+    """归档 → （名单内）入队 → （名单外）礼貌回复。
 
     顺序是**先归档、后回复**：材料落定了才告知对方"收到了但不受理"。
     反过来会出现"回复已发、材料没留住"，事后无从查证。
@@ -115,6 +112,24 @@ def handle_inbound_message(
         attachment=attachment,
         archive_root=archive_root,
     )
+
+    enqueued = False
+    if route.should_enqueue:
+        # 🔴 ⛔ 这里**不许**加 `and outcome.newly_archived`。
+        # 归档已提交、入队之前进程被杀 ⇒ 重投时归档幂等命中 ⇒ 跟着它走
+        # 这条待办就永远不会出现，且没有任何症状（工程铁律 1 的失效方向）。
+        # 重复由 effect_enqueue_task 的幂等键与 liaison_task.msgid 的 UNIQUE
+        # 两道防线挡住，代价只是一次空转。
+        # 礼貌回复相反（下面那段仍然跟 newly_archived 走）：丢一条告知可接受，
+        # 丢一条待办不可接受。
+        enqueued = enqueue_task(
+            conn,
+            thread_id=thread_id,
+            msgid=msgid,
+            sender_userid=sender_userid,
+            received_at=received_at,
+            summary=compute_task_summary(content, msgtype=msgtype),
+        )
 
     replied = False
     if route.reply_text is not None and outcome.newly_archived:
@@ -140,4 +155,4 @@ def handle_inbound_message(
                     exc_info=True,
                 )
 
-    return InboundResult(route=route, outcome=outcome, replied=replied)
+    return InboundResult(route=route, outcome=outcome, replied=replied, enqueued=enqueued)

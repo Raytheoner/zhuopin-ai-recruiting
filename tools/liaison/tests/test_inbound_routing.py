@@ -188,17 +188,18 @@ def test_admitted_message_is_archived_without_a_reply(conn, root, roster):
     assert_effect_log_identity(conn)
 
 
-def test_this_chapter_never_enqueues_even_for_admitted_senders(conn, root, roster):
-    """4.10 逐字："此处只接线并加断言'队列条目数不变'"。
+def test_distinct_admitted_messages_each_enqueue_exactly_once(conn, root, roster):
+    """第 5 章接线后的更新版："此处只接线并加断言'队列条目数不变'"这条 4.10 遗留断言
+    已随入队接通改为反向——名单内每条不同的消息都应各自入队一次。
 
-    名单内的入队是第 5 章的事。本章跑完，队列必须还是空的——
-    ⛔ 这条变红说明有人提前把第 5 章写进来了。
+    （原断言"本章跑完队列必须还是空的"是 4.10 阶段的钉子，第 5 章的入队接线
+    正是要让它变红——这条测试把它换成新阶段该有的样子，而不是删掉覆盖率。）
     """
     for n in range(3):
         _handle(conn, root, roster, sender=ADMITTED_USERID, msgid=f"m{n}", reply=ReplySpy())
 
     assert _message_count(conn) == 3
-    assert _task_count(conn) == 0
+    assert _task_count(conn) == 3
     assert_effect_log_identity(conn)
 
 
@@ -266,15 +267,102 @@ def test_broken_roster_file_falls_closed_to_outsider(conn, root, tmp_path):
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_inbound_module_never_references_the_enqueue_effect():
-    """4.10 的 ⛔ 逐字："⛔ 不生成队列条目——本章只接线"。
+def test_admitted_message_is_archived_and_enqueued(conn, root, roster):
+    """4.10 + 5.1：名单内 ⇒ 归档 + 入队，且两者都只发生一次。"""
+    result = handle_inbound_message(
+        conn,
+        thread_id=ADMITTED_USERID,
+        msgid="msg-1",
+        sender_userid=ADMITTED_USERID,
+        received_at=RECEIVED_AT,
+        msgtype="text",
+        content="报价单已发",
+        archive_root=root,
+        whitelist_path=roster,
+    )
 
-    源码里出现 `effect_enqueue_task` 这个名字就说明第 5 章被提前写进来了。
-    第 5 章要做的是在 `should_enqueue` 后面加一行，那时候把这条断言删掉，
-    ⛔ 但**不是现在**。
+    assert result.route.should_enqueue is True
+    assert result.enqueued is True
+    rows = conn.execute("SELECT msgid, summary, send_status FROM liaison_task").fetchall()
+    assert rows == [("msg-1", "报价单已发", "pending")]
+
+
+def test_outsider_message_is_archived_but_never_enqueued(conn, root, roster):
+    """4.10 逐字：名单外只归档 + 礼貌回复，⛔ 不生成任何队列条目。"""
+    result = handle_inbound_message(
+        conn,
+        thread_id=OUTSIDER_USERID,
+        msgid="msg-2",
+        sender_userid=OUTSIDER_USERID,
+        received_at=RECEIVED_AT,
+        msgtype="text",
+        content="你好",
+        archive_root=root,
+        whitelist_path=roster,
+        reply=lambda *_: None,
+    )
+
+    assert result.route.should_enqueue is False
+    assert result.enqueued is False
+    assert _task_count(conn) == 0
+    assert _message_count(conn) == 1
+
+
+def test_enqueue_happens_even_when_the_archive_was_an_idempotent_hit(conn, root, roster):
+    """🔴 本章最重要的一条回归。
+
+    模拟"归档已提交、入队之前进程被杀"：先只跑归档，再走完整入站。
+    第二次归档会幂等命中（`newly_archived is False`）；如果入队跟着这个布尔值走，
+    这条待办就**永远不会出现**且毫无症状。断言它照样入队。
     """
-    source = pathlib.Path(inbound_module.__file__).read_text(encoding="utf-8")
-    assert "effect_enqueue_task" not in source
+    from tools.liaison.archive import archive_message
+
+    archive_message(
+        conn,
+        thread_id=ADMITTED_USERID,
+        msgid="msg-1",
+        sender_userid=ADMITTED_USERID,
+        received_at=RECEIVED_AT,
+        msgtype="text",
+        content="报价单已发",
+        archive_root=root,
+    )
+    assert _task_count(conn) == 0
+
+    result = handle_inbound_message(
+        conn,
+        thread_id=ADMITTED_USERID,
+        msgid="msg-1",
+        sender_userid=ADMITTED_USERID,
+        received_at=RECEIVED_AT,
+        msgtype="text",
+        content="报价单已发",
+        archive_root=root,
+        whitelist_path=roster,
+    )
+
+    assert result.outcome.newly_archived is False, "前置没造对：这次归档应当是幂等命中"
+    assert result.enqueued is True, (
+        "归档幂等命中时没有入队——这条待办已经永久丢失。⛔ 入队不许用 newly_archived 做门槛"
+    )
+    assert _task_count(conn) == 1
+
+
+def test_redelivering_the_same_message_twice_yields_exactly_one_task(conn, root, roster):
+    """SDK 重连重投：待办 ⛔ 不许变成两条。"""
+    for _ in range(2):
+        handle_inbound_message(
+            conn,
+            thread_id=ADMITTED_USERID,
+            msgid="msg-1",
+            sender_userid=ADMITTED_USERID,
+            received_at=RECEIVED_AT,
+            msgtype="text",
+            content="报价单已发",
+            archive_root=root,
+            whitelist_path=roster,
+        )
+    assert _task_count(conn) == 1
 
 
 def test_inbound_module_never_commits_by_itself():
