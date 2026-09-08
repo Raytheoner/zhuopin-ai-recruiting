@@ -190,8 +190,8 @@ def _translate_transition_error(exc: sqlite3.IntegrityError, *, msgid: str, acti
     )
 
 
-def defer_task(conn: sqlite3.Connection, *, thread_id: str, msgid: str) -> bool:
-    """转入「暂缓」。返回 `True` 表示这次真的改了状态；**从不返回 `False`**。
+def defer_task(conn: sqlite3.Connection, *, thread_id: str, msgid: str) -> None:
+    """转入「暂缓」。成功即返回（无返回值）；非法转移一律抛异常，**从不返回 `False`**。
 
     ⚠️ 对一条已经是「暂缓」的条目再调一次会抛 `TaskTransitionRejected`
     （触发器的条件是 `OLD.send_status <> 'pending'`），⛔ 不许吞掉它——
@@ -220,7 +220,6 @@ def defer_task(conn: sqlite3.Connection, *, thread_id: str, msgid: str) -> bool:
             "「暂缓只能来自待发」使得再次转入必然非法（未重放 UPDATE，"
             "命中幂等键本身即可推出结论）。"
         )
-    return True
 
 
 def mark_task_pushed(

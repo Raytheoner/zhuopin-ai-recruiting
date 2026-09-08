@@ -1,7 +1,7 @@
 """名单内／外的分支接线（4.10）。
 
-本章只做三件事：**归档两条分支都做**、**名单外回一条礼貌说明**、
-**⛔ 队列条目数不变**。入队是第 5 章的事，本文件有一条 AST 断言把这条钉死。
+本章做三件事：**归档两条分支都做**、**名单外回一条礼貌说明**、
+**名单内在归档之外还会入队**（第 5 章接线到位后的行为，见下方测试）。
 """
 
 from __future__ import annotations
@@ -263,7 +263,7 @@ def test_broken_roster_file_falls_closed_to_outsider(conn, root, tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 结构性断言：本章 ⛔ 不实现入队
+# 名单内的分支已接线到第 5 章的入队
 # ─────────────────────────────────────────────────────────────────────────
 
 
@@ -346,6 +346,7 @@ def test_enqueue_happens_even_when_the_archive_was_an_idempotent_hit(conn, root,
         "归档幂等命中时没有入队——这条待办已经永久丢失。⛔ 入队不许用 newly_archived 做门槛"
     )
     assert _task_count(conn) == 1
+    assert_effect_log_identity(conn)
 
 
 def test_redelivering_the_same_message_twice_yields_exactly_one_task(conn, root, roster):
@@ -363,6 +364,7 @@ def test_redelivering_the_same_message_twice_yields_exactly_one_task(conn, root,
             whitelist_path=roster,
         )
     assert _task_count(conn) == 1
+    assert_effect_log_identity(conn)
 
 
 def test_inbound_module_never_commits_by_itself():

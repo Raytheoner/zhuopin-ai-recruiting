@@ -70,7 +70,7 @@ def test_new_task_starts_pending(conn, task):
 
 
 def test_defer_from_pending_is_allowed(conn, task):
-    assert defer_task(conn, thread_id="u_zhang", msgid=task) is True
+    assert defer_task(conn, thread_id="u_zhang", msgid=task) is None
     assert _status(conn, task) == ("deferred", None)
     assert_effect_log_identity(conn)
 
@@ -106,6 +106,29 @@ def test_defer_from_deferred_is_rejected(conn, task):
     with pytest.raises(TaskTransitionRejected):
         defer_task(conn, thread_id="u_zhang", msgid=task)
     assert _status(conn, task) == ("deferred", None)
+
+
+def test_the_defer_rejection_actually_comes_from_the_trigger_not_a_check(conn, task):
+    """5.9：证明「暂缓只能来自待发」这条拒绝真的来自
+    `trg_liaison_task_defer_only_from_pending`，而不是巧合地撞上了别的 CHECK。
+
+    直接绕过 `queue.py` 的翻译层，对一条「已推送」条目发 UPDATE：
+    `RAISE(ABORT, 'send_status: deferred may only be entered from pending')`
+    的原始文本必须原样出现在 `sqlite3.IntegrityError` 里，且**不含**
+    `CHECK constraint failed`——那是三态枚举 CHECK 与等式 CHECK 的报错形状，
+    如果这条测试意外撞上了它们中的一个而不是触发器，说明测的根本不是这条转移规则。
+    """
+    mark_task_pushed(conn, thread_id="u_zhang", msgid=task, pushed_at=PUSHED_AT)
+
+    with pytest.raises(sqlite3.IntegrityError) as excinfo:
+        conn.execute(
+            "UPDATE liaison_task SET send_status = 'deferred' WHERE msgid = ?", (task,)
+        )
+
+    detail = str(excinfo.value)
+    assert "send_status: deferred may only be entered from pending" in detail, detail
+    assert "CHECK constraint failed" not in detail, detail
+    assert _status(conn, task) == ("pushed", PUSHED_AT)
 
 
 def test_mark_pushed_twice_is_an_idempotent_no_op(conn, task):
