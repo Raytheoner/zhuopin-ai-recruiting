@@ -115,7 +115,7 @@ def test_off_topic_turn_always_returns_the_deterministic_guidance(tmp_path):
     """
     from app.agents.intake_agent import _GUIDANCE_TEXT, run_intake_turn
 
-    gateway = _scripted_gateway(
+    gateway = make_gateway(
         [
             json.dumps(
                 {
@@ -141,7 +141,7 @@ def test_off_topic_turn_always_returns_the_deterministic_guidance(tmp_path):
     assert [q.text for q in result.asked_questions] == [_GUIDANCE_TEXT]
 ```
 
-`_scripted_gateway` 若在 `tests/test_intake_agent.py` 里不存在同名 helper，就照该文件现有用例（例如围绕 `is_job_related` 的既有用例，`tests/test_intake_agent.py:75`）的构造方式原样复用，⛔ 不要新造一套 fake。
+`make_gateway(responses)` 是 `tests/test_intake_agent.py:63` 已有的模块级 helper（内部是 `FakeOpenAIClient`），直接用，⛔ 不要新造一套 fake。同文件 `:71` 的既有用例 `test_unrelated_message_returns_guidance_and_not_complete` 断言的只是「引导语非空」，本 Task 改完它仍然绿——⛔ 不许因为新增了更严的断言就把它删掉，两条覆盖的不是同一件事。
 
 - [ ] **Step 2: 跑测试确认它失败**
 
@@ -187,7 +187,7 @@ def test_blank_message_is_rejected_without_calling_the_model():
     """
     from app.agents.intake_agent import _GUIDANCE_TEXT, run_intake_turn
 
-    gateway = _scripted_gateway([])  # 队列为空：真调了模型就会 IndexError
+    gateway = make_gateway([])  # 队列为空：真调了模型就会 IndexError
 
     result = run_intake_turn(gateway, history=[{"role": "user", "content": "   \n  "}], round_count=0)
 
