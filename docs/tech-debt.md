@@ -461,3 +461,61 @@ Shao Peishen 能拍板。
 **不还的后果**：两个新节点没有崩溃-恢复用例覆盖，铁律 1 要求的"业务写与
 effect_log 同一事务提交"对它们无人验证过；一旦其中一个在提交前崩溃后重放，
 不会有任何测试事先发现——而这恰恰是本交付单元存在的全部意义要防的那类失败。
+
+## TD-13 · 丢弃岗位的两次删除之间没有原子性保护
+
+**登记**：2026-09-08，delivery unit 5.3（需求识别）终审 park 登记。**⚠️ 待 Shao Peishen 拍板。**
+
+**是什么**：`POST /api/jobs` 判定首轮不是用人需求时，`app/web/server.py` 的 `create_job`
+连着调两个函数把这一轮写下的东西抹掉：
+
+```
+discard_unstarted_job(conn, job_id)          # 删业务行，自己 commit
+discard_thread_checkpoints(graph.checkpointer, job_id)   # 删 checkpoints / writes
+```
+
+两者**不在同一个事务里**（前者已经 commit 了，后者走的是 checkpointer 自己那条连接）。
+第二个调用若抛异常，业务行已经删掉、`checkpoints` / `writes` 还留着。
+
+**这不是 5.3 计划里已登记的那个崩溃窗口。** 计划正文登记的是「`INSERT job` 与
+`discard_unstarted_job` 之间崩溃 → 留一行零版本的 drafting job」（`create_job` 里有
+逐字注释）。本条是**另一个**、更靠后的窗口，计划没有覆盖到。
+
+**真正的代价比"孤儿行"大**（终审订正了首轮 park ruling 的表述，这一条要写清）：
+`discard_thread_checkpoints` 抛出来会一路冒到 `create_job` 外面，调用方拿到的是
+**500，而不是那句引导语**——而承载引导语的 `outbox` 行已经被前一个调用删掉了。
+也就是说这条路径上 **spec 的前半句（"回复引导语说明可以怎么提需求"）也静默失效了**，
+不只是记账没做干净。不是数据丢失（那一轮本来就没有任何有价值的东西），
+但比"残留几行 checkpoint"严重。
+
+**为什么现在不还（park 的理由）**：
+
+1. **这段代码是 5.3 计划逐字钉死的**（`docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition.md`
+   的 Task 4 Step 3）。改它属于推翻计划，按工具链协作规则是**人的决定**；
+   5.3 是无人值守泳道跑的，⛔ 不替 Shao Peishen 拍板。
+2. **实践中近乎不可达**（终审给出、比首轮 ruling 更强的理由）：`get_connection`
+   设了 `journal_mode=WAL` 与 `busy_timeout=5000`（`app/storage/db.py`），图是严格线性的，
+   checkpointer 自己独占一条连接 —— 这两条 DELETE 要撞上 `SQLITE_BUSY`，得先熬过一个
+   5 秒重试窗口，而此刻并没有任何东西在跟它抢。另一个触发源是表改名，那会**立刻、
+   每一次**都失败，部署当场就能发现，不会静默。
+
+**⛔ 不要把它理解成"只有两种删除顺序可选"**（终审明确要求把这条记进来，免得
+"二选一"的框架被冻进记录里）。至少有三个选项：
+
+- **A（现状）**：先删业务行、再删 checkpoint。失败 → 不可见的孤儿 checkpoint 行 + 500
+- **B**：先删 checkpoint、再删业务行。失败 → 留下一行**可见的**「待确定 / drafting」僵尸 job
+  （岗位列表走 LEFT JOIN，`app/storage/job_queries.py`），业务经理会真的在屏幕上看见它。
+  **比 A 更糟**
+- **C（终审提出，两轮 review 都没考虑过）**：保持 A 的顺序，让**业务行删除**作为
+  "为准的那次事务"；在**调用点**把 `discard_thread_checkpoints` 的异常 catch 住、
+  按 ERROR 记日志、照常把引导语返回给用户。
+  `job_discard.py` 里那条 `⛔ 不要 try/except` 是对的——但它约束的是**函数内部**，
+  并不延伸到调用点：表改名会在**每一条**离题首轮消息上失败，ERROR 日志会持续刷，
+  部署当场暴露，所以"静默空转"在这个场景下不是真风险
+
+**触发条件**：Shao Peishen 复核本条时。若判 C 可接受，改动量约 5 行，只动
+`app/web/server.py` 的调用点，不动 `app/storage/job_discard.py`。
+
+**不还的后果**：极低概率下，业务经理发了一句无关的话，屏幕上等来的是一个 500 错误
+而不是那句"没听懂是不是用人需求，可以试试…"，而**日志里不会有任何东西说明
+引导语其实已经生成过、只是连同 outbox 行一起被删了**。

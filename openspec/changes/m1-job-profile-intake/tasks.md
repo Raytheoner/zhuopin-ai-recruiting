@@ -1,4 +1,4 @@
-**进度：57/72**（2026-09-08 `0908H` 回勾 4.4「幂等专项测试」——给仓库里**全部 10 个** `effect_*` 节点各建一条「业务写已入事务、`effect_log` 已 INSERT、`commit()` 尚未落盘 → 强制中断 → 换全新连接确认什么都没落盘 → 按同一 `thread_id`/`business_key` 重跑 → 断言副作用恰好一份」的用例，新增单一文件 `tests/test_effect_idempotency_suite.py`。节点清单由 `ast` 从 `app/` 现扫（⛔ 不用 grep——`app/audit/assertions.py` 与 `app/outbound/delivery.py` 的注释/docstring 里都有 `@idempotent_effect` 字面量，grep 会误报），与硬编码 `EFFECT_NODE_MANIFEST` 双向比对；终审又补两条守卫：**函数名以 `effect_` 开头却没加装饰器**、**两个节点复用同一 `node_name` 字面量**（后者本身就是铁律 1 隐患：`effect_key` 撞车会让第二个节点被短路、永不执行）。4 commits `97c496e`→`a1947e3`（rebase 后）；全量 1140 → **1168 passed, 1 skipped**，另有 1 条**既有失败** `test_boundary_guard::test_real_repository_dependency_diff_is_empty`（`requirements.txt` 自基线漂移，本单元合并前后完全一致、与本单元无关）。红灯 **0**——10 个节点全部真幂等。⛔ 未改 `app/` 一个字；落地偏离 3 条、观察项 O-1/O-2/O-3 与 parked 1 条见「4.4 落地偏离登记」，跨泳道协调登记为 `docs/tech-debt.md` TD-12）
+**进度：58/72**（2026-09-08 `0908H` 回勾 4.4「幂等专项测试」——给仓库里**全部 10 个** `effect_*` 节点各建一条「业务写已入事务、`effect_log` 已 INSERT、`commit()` 尚未落盘 → 强制中断 → 换全新连接确认什么都没落盘 → 按同一 `thread_id`/`business_key` 重跑 → 断言副作用恰好一份」的用例，新增单一文件 `tests/test_effect_idempotency_suite.py`。节点清单由 `ast` 从 `app/` 现扫（⛔ 不用 grep——`app/audit/assertions.py` 与 `app/outbound/delivery.py` 的注释/docstring 里都有 `@idempotent_effect` 字面量，grep 会误报），与硬编码 `EFFECT_NODE_MANIFEST` 双向比对；终审又补两条守卫：**函数名以 `effect_` 开头却没加装饰器**、**两个节点复用同一 `node_name` 字面量**（后者本身就是铁律 1 隐患：`effect_key` 撞车会让第二个节点被短路、永不执行）。4 commits `97c496e`→`a1947e3`（rebase 后）；全量 1140 → **1168 passed, 1 skipped**，另有 1 条**既有失败** `test_boundary_guard::test_real_repository_dependency_diff_is_empty`（`requirements.txt` 自基线漂移，本单元合并前后完全一致、与本单元无关）。红灯 **0**——10 个节点全部真幂等。⛔ 未改 `app/` 一个字；落地偏离 3 条、观察项 O-1/O-2/O-3 与 parked 1 条见「4.4 落地偏离登记」，跨泳道协调登记为 `docs/tech-debt.md` TD-12；`0908F` 回勾 5.3「需求识别」——spec Scenario「需求描述为空或与招聘无关」的两半（回引导语 **AND** 不创建岗位记录）第一次同时成立。识别本身早在 L3 `run_intake_turn` 里，缺的是编排侧那一半：`POST /api/jobs` 在第一句话**之前**就 `INSERT INTO job`，判非用人需求后那行还留着。做法＝把 L3 的 `is_job_related` 从 `graph.invoke()` 终态取出交给 server 分流（**server 只分流、⛔ 不二次判定模型**），首轮判否时**落后即删**（外键 `job_profile.job_id → job` ＋ `PRAGMA foreign_keys=ON` 逼出来的顺序，先判后建在结构上做不到），`job_id` 回 `null`。删除集刻意**包含** `effect_log`（否则铁律 1 的「`effect_log` 条数与业务表行数按 thread 恒等」当场破，且破得**没有任何症状**）、刻意**排除** `analysis_run`（铁律 3/5：那次模型调用真实发生过——岗位可以当作从未成立，「我们调过一次模型」这个事实不可以）。引导语同时改为**确定性系统文案**，⛔ 不再采用模型自由文本——合规红线「AI 只做排序推荐、不做自动淘汰」第一次有了可机器断言的对象。7 commits `a30011a`→`eb7ab4e`（rebase 后）；全量 1155 →（并入 4.4 后）**1183 passed, 1 skipped**，唯一失败仍是那条**既有的** `test_boundary_guard::test_real_repository_dependency_diff_is_empty`（与本单元无关，合并前后一致）。⛔ 未碰 `app/graph/nodes.py`/`build.py`/`app/llm/`/`app/audit/`/`db.py`/`job_queries.py`。反证与变异实证见「5.3 落地偏离登记」；parked 1 条已登记 `docs/tech-debt.md` TD-13，**待 Shao Peishen 拍板**）
 
 > ## 2026-08-20 对齐现实（执行于 2026-08-25，OP-0820-10）
 >
@@ -159,7 +159,14 @@
 
 - [x] 5.1 定义岗位画像 Pydantic Schema：通用字段 + ECU 特化字段（autosar_experience / functional_safety / mcu_family / diag_stack / sop_projects / toolchain） → **已实现**（同 0.2），见 `app/schemas/job_profile.py`：6 个 ECU 特化字段**逐个对上**，另有 `AutosarLayer` / `FunctionalSafetyLevel` 枚举与 `SkillItem` / `SopProject` 子模型。测试 `tests/test_job_profile_schema.py`
 - [x] 5.2 ECU 领域知识库：术语表与追问触发规则（"嵌入式开发"→ 追问 MCU 平台族/AUTOSAR/功能安全） → **已实现**（同 0.6），见 `app/agents/ecu_knowledge.py`（`FOLLOWUP_RULES` + `match_ambiguous_terms`）与 `app/agents/intake_agent.py:178-194` 的 `suggested_followups`（只看 `role="user"` 轮次，避免规则自我触发）。测试 `tests/test_ecu_knowledge.py`。⚠️ 词条只有 4 条、且全是 ECU 侧无采购侧——**扩充词条不属本条**，已在 `m1-intake-quality-fixes` 3.1/3.2 立项
-- [ ] 5.3 需求识别：区分"是用人需求"与"无关消息"，后者回引导语且不建岗位记录
+- [x] 5.3 需求识别：区分"是用人需求"与"无关消息"，后者回引导语且不建岗位记录
+      落地＝L3 侧 `app/agents/intake_agent.py` 离题分支**恒返回系统固定文案** `_GUIDANCE_TEXT`
+      （⛔ 不再采用模型自由文本——这是合规红线「AI 不做淘汰」在文案上第一次有了可断言的对象），
+      空白输入在调 gateway **之前**短路；存储侧新模块 `app/storage/job_discard.py`
+      （`discard_unstarted_job` / `discard_thread_checkpoints`）；编排侧 `app/web/server.py`
+      的 `_run_turn` 改返回 `TurnOutcome`，`create_job` 按 L3 的 `is_job_related` 分流，
+      判否即"落后即删"并回 `job_id: null`。计划见
+      `docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition.md`
       ⚠️ 前半**已实现**（`_IntakeTurnSchema.is_job_related` + `_guidance_question()`，`app/agents/intake_agent.py:262-284`），但**"不建岗位记录"被违反**：`app/web/server.py:127-131` 的 `create_job` 在跑这一轮之前就 `INSERT INTO job`，`effect_persist_draft` 也不看 `is_job_related` 照写 `job_profile` 草案行。所以随便发一句无关消息就会在库里留下一个岗位。保持未勾
 - [x] 5.4 多轮追问 Agent（纯函数）：每轮至多 3 个问题，上限 5 轮 → **已实现**（同 0.6），见 `app/agents/intake_agent.py`：`MAX_QUESTIONS_PER_ROUND = 3`、`MAX_ROUNDS = 5`，`run_intake_turn` 是纯函数（只调 gateway，不写库不发消息），截断在 :323-325。测试 `tests/test_intake_agent.py`。⚠️ `m1-intake-quality-fixes` 3.10 会把预算口径改成「有产出轮」+ `MAX_TOTAL_ROUNDS`，那是对本条的**改进**，不影响本条当前已达成
 - [x] 5.5 追问超限降级：用"未指定"填充并在确认卡片显式列出缺口 → **已实现**：`at_round_limit`/`stuck` 触发 `give_up` 并透出 `unspecified_fields`（`app/agents/intake_agent.py:322-341`）；`app/graph/build.py:61-67` 把它放进 `confirmation_prompt` payload；前端 `index.html:163-167` 渲染「以下字段未指定：…」；`app/web/server.py:170-174` 在确认时用 `"未指定"` 填充必填字段。⚠️ 这个提示**不够显著**（对话流里的一行文字），显著化属 `m1-intake-quality-fixes` 6.6，不是本条
@@ -184,6 +191,32 @@
 
   **⏸ 本单元刻意不做（登记，非漏跑）**：规则的**执行**（拿 `hard_requirement` 去筛简历）属简历筛选环节，合规上必须先有人工确认节点；规则的**启停开关**（UI/API）属 Web 泳道，表结构已能承载（一条规则一行、`blocking` 独立），加开关不需改表。
       ⚠️ 保持未勾，且**不能靠 5.2 的 prompt 约束替代**：`hard_requirement` 表根本不存在（1.2b/5.8），"不得进入"这条断言目前**无处可断**。现状只有 `SYSTEM_PROMPT` 里一句"不能因为用户说你决定就自己写进 profile_patch"和 `tests/test_intake_agent.py:378` 那个**只断言 prompt 文本里含某几个关键词**的测试——那验的是提示词写了什么，不是行为。随 5.8 一起做
+
+
+### 5.3 落地偏离登记
+
+> 交付执行期间与计划出现的偏离、观察项、以及裁决记录，逐条摘自
+> `.superpowers/sdd/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/progress.md`。
+> 本节是「哪里没按计划走、为什么」的记录，⛔ 不做概括性总结抹平细节。
+> ⚠️ 该 SDD 台账在 worktree 内、git-ignored，收口删 worktree 时会消失，已转写一份到主检出同名路径。
+> ⚠️ 本单元的 `superpowers:subagent-driven-development` **技能调不到**（报 `Unknown skill`，与既往一致），
+> 由 controller 读磁盘 `SKILL.md` 手工走完全套协议：每 Task 全新子代理 → 两阶段 review → 台账 → 终审。
+
+- **D-1 落地偏离**：计划 Task 1 Step 1 的测试函数签名带了一个用不到的 `tmp_path` 参数，实际去掉。纯风格，断言内容与计划逐字一致
+- **D-2 落地偏离（计划笔误）**：计划 Task 2 Step 4 写「Expected: 7 passed」，但计划自己给出的测试函数只有 **6** 个。按实跑的 6 条为准，⛔ 未为凑够数字硬造第 7 条测试
+- **D-3 落地偏离（按计划正文而非计划示例代码）**：计划 Task 4 Step 1 的示例 `_table_counts` 直接查询 `checkpoints`/`writes`，但同一 Step 的正文又要求「若表尚不存在，用 `sqlite_master` 判存在后再计数，⛔ 不要 try/except 吞掉」。取正文（显式判存在）。理由＝try/except 吞 `OperationalError` 会让表改名后零断言静默变绿，而这正是该测试要防的
+- **O-1 观察项（计划已登记、本单元不消除）**：`INSERT job` 与 `discard_unstarted_job()` 分属两个事务，进程恰好崩在两者之间会留下一行「待确定 / drafting、零个 `job_profile` 版本」的 job。与**今天已经存在**的故障模式（第一轮抛异常）完全一致，本单元不扩大它。消除它要把建 job 行挪进 `effect_persist_draft` 的同一事务，那要改 `app/graph/nodes.py`，超出本单元边界。⛔ 已按计划要求把这段风险逐字抄进 `create_job` 的代码注释，⛔ 未加「定期清理僵尸行」的兜底掩盖它
+- **O-2 观察项（终审订正了实现注释里的一处失实陈述）**：`job_discard.py` 原注释称保留下来的 `analysis_run` 行会带「一个指不到 job 的 job_id」。**今天不成立**——intake 路径从未传 `audit_context`，那一列是 `NULL`（`app/web/server.py` 已记录并指向 TD-1）。终审 fix wave 已改成三层陈述：今天是 `NULL` / TD-1 第①步落地后才会变成真悬空 id / 那时任何 `analysis_run` JOIN `job` 的报表**必须用外连接**
+- **O-3 观察项（不对称但正确）**：空白输入短路落在 L3，所以它**不只**在 `create_job` 生效，`/reply` 上同样生效（已有用例覆盖）。这在 spec「需求描述**为空**」的范围内，且不触发任何删除。`/revise` 不受影响——它本来就对空 feedback 返回 422
+- **终审 triage**：全分支 review（Opus）判 **Ready to merge**，零 Critical、零 Important。六条 deferred minor 逐条判「可以留」；其中两条值得动手的走了协议允许的**唯一一波** fix wave（O-2 的失实注释 + 给 `test_a_real_request_after_an_off_topic_one_starts_clean` 补 `outbox==1`/`effect_log==2` 断言——那是唯一一处在「已被丢弃过一次的库」上检查铁律 1 恒等式的地方），scoped re-review 判 **All findings addressed**
+- **parked（不阻塞合并，⚠️ 待 Shao Peishen 拍板，登记为 `docs/tech-debt.md` TD-13）**：两次 discard 之间无原子性保护。`discard_thread_checkpoints` 若抛异常 → 业务行已删、checkpoint 残留，**且调用方拿到 500 而不是引导语**（承载引导语的 outbox 行已被前一步删掉）⇒ 这条路径上 spec 的**前半句也静默失效**。该代码是计划逐字钉死的 ⇒ 属人的决定，无人值守泳道⛔ 不替决策人拍。终审补充：实践中近乎不可达（WAL + `busy_timeout=5000` + 严格线性图 + checkpointer 独占连接），且⛔ 不止「两种顺序」二选一——终审提出第三个选项 C（保持顺序，在**调用点** catch + ERROR 日志 + 照常回引导语），已一并写进 TD-13 免得二选一框架被冻进记录
+
+  **反证与变异实跑（controller 亲跑，非委派）**
+  - 反证 A：首轮发「今天天气不错」→ HTTP 200、`job_id` 为 `None`、回复文本**恒等于** `_GUIDANCE_TEXT`；表计数 `job=0 job_profile=0 conversation=0 outbox=0 effect_log=0 checkpoints=0 writes=0` ⇒ job 表行数不增。
+  - 反证 B：发「要招一个做嵌入式开发的工程师」→ HTTP 200、`job_id` 为真 uuid、`job=1 job_profile=1 conversation=1 outbox=1 effect_log=2`、岗位列表 1 条 ⇒ 建单照常，判「是用人需求」那条路径未受影响。
+  - ⚠️ 反证脚本未挂 audit hook，故两侧 `analysis_run` 都是 0 ——**这不构成「analysis_run 被保留」的证据**；该性质由 `tests/test_job_discard.py::test_discard_keeps_the_audit_record_of_the_model_call` 直接覆盖。
+  - 变异（在 `/tmp` 隔离副本上做，⛔ 未污染 worktree）：把 `create_job` 的 `if not outcome.is_job_related:` 改成 `if False:`（即去掉「不建单」整条分支）→ 由 163 passed 变成 **3 failed**，恰好是 5.3 的三条建单路径测试变红（`..._creates_no_job_record` / `..._leaves_the_job_list_empty` / `..._starts_clean`），首条失败输出 `AssertionError: assert '3d076bee-…' is None` ⇒ 测试**不是空转**。
+  - 反向护栏（Task 5）：已有岗位的后续离题轮 PASS，且经 reviewer 逐路径追证**非空转**——若 discard 溢出到 `/reply`，job 行被删 → `SELECT status` 返回 `None` → `[0]` 抛 `TypeError`，测试会真的红。
 
 ## 6. 确认断点（capability: job-profile-approval）
 
