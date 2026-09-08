@@ -1315,3 +1315,72 @@ def test_a_real_request_after_an_off_topic_one_starts_clean(tmp_path):
     assert counts["job"] == 1
     assert counts["job_profile"] == 1
     assert counts["conversation"] == 1
+
+
+def test_off_topic_reply_on_an_existing_job_keeps_everything(tmp_path):
+    """已有岗位的后续轮次里冒出一句无关的话：回引导语，⛔ 不改 job 状态、
+    ⛔ 不删已采集内容。这是 Task 4 那把"删除"的反向护栏——它一旦溢出到
+    /reply，删掉的就是业务经理已经答了好几轮的真实内容。"""
+    from app.agents.intake_agent import _GUIDANCE_TEXT
+
+    db_path = str(tmp_path / "web.db")
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "是否涉及 AUTOSAR？"}],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+            }
+        ),
+        json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}}),
+    ]
+    client = make_app(tmp_path, responses)
+
+    job_id = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"}).json()["job_id"]
+    assert job_id is not None
+
+    second = client.post(f"/api/jobs/{job_id}/reply", json={"message": "对了，食堂几点开饭"})
+
+    assert second.status_code == 200
+    assert [q["text"] for q in second.json()["message"]["payload"]["questions"]] == [_GUIDANCE_TEXT]
+
+    check = sqlite3.connect(db_path)
+    try:
+        # 岗位还在，状态没被这句无关的话改掉。
+        assert check.execute("SELECT status FROM job WHERE id=?", (job_id,)).fetchone()[0] == "drafting"
+        # 已采集内容原样保留 —— 离题轮的 profile_patch 是 {}，累积画像不变。
+        rows = check.execute(
+            "SELECT profile_json, is_productive FROM job_profile WHERE job_id=? ORDER BY version",
+            (job_id,),
+        ).fetchall()
+        assert len(rows) == 2
+        assert json.loads(rows[0][0])["job_title"] == "嵌入式软件工程师"
+        assert json.loads(rows[1][0])["job_title"] == "嵌入式软件工程师"
+        # 离题轮不消耗追问预算（is_productive=0），这是第 3 章既有口径。
+        assert rows[1][1] == 0
+    finally:
+        check.close()
+
+
+def test_blank_reply_on_an_existing_job_does_not_call_the_model(tmp_path):
+    """空白回复走 L3 的短路，同样不建/不删任何东西。"""
+    from app.agents.intake_agent import _GUIDANCE_TEXT
+
+    responses = [
+        json.dumps(
+            {
+                "is_job_related": True,
+                "questions": [{"text": "是否涉及 AUTOSAR？"}],
+                "profile_patch": {"job_title": "嵌入式软件工程师"},
+            }
+        )
+        # 只有一条：第二轮真调了模型就会 IndexError
+    ]
+    client, scripted = make_app_with_scripted_client(tmp_path, responses)
+
+    job_id = client.post("/api/jobs", json={"message": "要个做嵌入式开发的"}).json()["job_id"]
+    second = client.post(f"/api/jobs/{job_id}/reply", json={"message": "   "})
+
+    assert second.status_code == 200
+    assert [q["text"] for q in second.json()["message"]["payload"]["questions"]] == [_GUIDANCE_TEXT]
+    assert scripted.chat.completions.call_count == 1
