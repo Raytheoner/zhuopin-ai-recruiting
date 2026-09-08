@@ -103,7 +103,7 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
                         effect_key,
                         exc_info=rollback_exc,
                     )
-                    raise exc from rollback_exc
+                    raise exc
 
                 # 语义判据，⛔ 不匹配错误文案（SQLite 的消息措辞不是契约）：
                 # 回滚后这把键确实在库里 ⇒ 是幂等命中；不在 ⇒ 坏的是别的完整性
@@ -116,7 +116,9 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
                 logger.warning(
                     "effect_key=%s was applied by another path between this call's "
                     "pre-check and its effect_log insert; treating as already applied "
-                    "and rolling back this call's business write",
+                    "and attempting to roll back this call's business write. The "
+                    "rollback is connection-wide (conn is shared across the app) and "
+                    "may be a no-op if a peer thread already committed on it",
                     effect_key,
                 )
                 return None
