@@ -1,0 +1,16 @@
+# HR 值守通道服务的独立依赖清单。
+#
+# ⛔ 这份清单**不进**根 requirements.txt、**不进** pyproject.toml。
+#    那两份都在 sync-to-server.sh 的 SYNC_PATHS 里，会被推到 .51 并在那边 pip install。
+#    依赖隔离靠清单本身承担（design D10），不靠人记得别装错地方。
+#
+# 装法（Python 3.14，与产品同一版本区间，⛔ 不放宽 requires-python）：
+#     python3.14 -m venv tools/liaison/.venv
+#     tools/liaison/.venv/bin/pip install -r tools/liaison/requirements.txt
+
+# 与根 requirements.txt 同版本，避免两套 pytest 行为差异变成"这边绿那边红"。
+pytest==8.3.4
+
+# ── 通道 SDK ────────────────────────────────────────────────────────────
+# 由第 1 章 Task 3（路线 ①）或 Task 4（路线 ②）按兼容性实测结论填入。
+# ⛔ 在 docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md 有结论之前，这里保持为空。
