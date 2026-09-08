@@ -249,6 +249,31 @@ def test_render_on_an_empty_queue_still_produces_a_table(conn):
     assert text.count("\n|") >= 2  # 表头 + 分隔行仍在
 
 
+def test_render_escapes_an_illegal_send_status_value_in_the_fallback_branch(conn):
+    """终审 Minor-5：`⚠️ 未知(...)` 兜底分支存在的全部理由就是"CHECK 约束已经
+    破了"——也就是最不该假设 `send_status` 干净的时候。修复前这里直接把
+    DB 原值拼进单元格，若那时 `send_status` 恰好含 `|` 或换行，这一行的列数
+    就会错位。
+
+    用 `PRAGMA ignore_check_constraints = ON` 绕开表上的三态 CHECK，直接塞一个
+    含竖线的非法取值进去，断言渲染出来的表格每一行列数仍然一致。
+    """
+    _enqueue(conn, msgid="msg-1", content="待处理")
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    conn.execute(
+        "UPDATE liaison_task SET send_status = ? WHERE msgid = ?",
+        ("broken|status\nwith-newline", "msg-1"),
+    )
+    conn.commit()
+
+    text = render_queue_markdown(conn, generated_at=GENERATED_AT)
+    assert "⚠️ 未知(broken\\|status\\nwith-newline)" in text
+
+    table_rows = [line for line in text.splitlines() if line.startswith("|")]
+    unescaped_pipe_counts = {row.count("|") - row.count(r"\|") for row in table_rows}
+    assert len(unescaped_pipe_counts) == 1, f"列数不一致：{unescaped_pipe_counts}"
+
+
 # ── 单向性 ────────────────────────────────────────────────────────────
 
 def test_hand_edits_to_the_export_never_reach_the_database(conn, tmp_path):

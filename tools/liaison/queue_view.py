@@ -147,7 +147,9 @@ def render_queue_markdown(conn: sqlite3.Connection, *, generated_at: str) -> str
                 id=row["id"],
                 # 未知取值不该出现（表上有 CHECK），但真出现了要看得见，
                 # ⛔ 不要静默显示成空白——那会让一个约束破裂的行看起来正常。
-                status=STATUS_LABELS.get(row["send_status"], f"⚠️ 未知({row['send_status']})"),
+                status=STATUS_LABELS.get(
+                    row["send_status"], f"⚠️ 未知({escape_cell(row['send_status'])})"
+                ),
                 sender=escape_cell(row["sender_userid"]),
                 thread=escape_cell(row["thread_id"]),
                 received=escape_cell(row["received_at"]),

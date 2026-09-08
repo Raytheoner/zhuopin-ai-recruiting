@@ -115,16 +115,44 @@ def enqueue_task(
             summary=summary,
         )
     except sqlite3.IntegrityError as exc:
-        detail = str(exc)
-        if "UNIQUE" in detail:
+        # 语义判据，⛔ 不匹配错误文案——SQLite 的消息措辞不是契约
+        # （`app/storage/idempotency.py` 同一句注释）。
+        #
+        # ⚠️ 判据不能查 `liaison_task` 本身：这个 except 分支可能是在
+        # `effect_enqueue_task` 的业务 INSERT **已经成功、只是还没提交**的情况下
+        # 进来的（例如 `effect_log` 撞键、随后 `idempotent_effect` 尝试回滚也失败——
+        # 那种事故形态下这次调用自己刚写下的行仍留在这个连接自己的未提交事务里，
+        # 同连接的 SELECT 会看见它自己的这行，把"我刚写坏的"误判成"早就提交好的"，
+        # 原地重演一次同样的静默吞错）。
+        #
+        # `effect_log` 不会有这个问题：它是这条 INSERT 本身失败的那张表——无论是
+        # 真撞键还是这里刻意制造的失败，本次调用自己都**没有**在 `effect_log` 里
+        # 留下任何行（真撞键时没插进去，装饰器判定"命中"时也是探测到*别人*那行）。
+        # 用 `node_name` + `business_key` 两列查，不用组合出来的 `effect_key` 字符串
+        # ——这样查询天然不看 `thread_id`，与「一条消息最多一条队列条目」的判据
+        # （不是「一个 thread_id 一条」）对齐，跨 thread_id 撞 `liaison_task.msgid`
+        # UNIQUE 的第二道防线场景也能命中。
+        already_applied = conn.execute(
+            "SELECT 1 FROM effect_log WHERE node_name = 'effect_enqueue_task' AND business_key = ?",
+            (msgid,),
+        ).fetchone()
+        if already_applied is not None:
             # 第二道防线命中：这条消息早就有队列条目了（可能是另一个 thread_id 投的，
-            # 幂等键因此没命中）。这是**正常路径**，⛔ 不是异常——一条消息最多一条待办
-            # 本来就是 schema 的契约。装饰器已经回滚，库里没有半截写入。
+            # 幂等键因此没命中；也可能是幂等键本身撞车）。这是**正常路径**，
+            # ⛔ 不是异常——一条消息最多一条待办本来就是 schema 的契约。
             return False
-        if "NOT NULL" in detail or "FOREIGN KEY" in detail:
+        # 走到这里说明这次真的不是幂等命中。是否「缺来源消息」也用语义判据：
+        # msgid 为空，或者 `liaison_message` 里根本没有这条——两者都直接对应
+        # spec「条目缺少来源信息不允许写入」。其余任何完整性冲突（例如
+        # `thread_id`/`sender_userid`/`received_at` 的 `NOT NULL`，或本函数上面
+        # 那种 `effect_log` 回滚失败的真事故）都不是"缺来源"，⛔ 不许被这个分支
+        # 误标——原样把 `exc` 抛给调用方，SQLite 自己的报文已经点名是哪一列。
+        if not msgid or conn.execute(
+            "SELECT 1 FROM liaison_message WHERE msgid = ?", (msgid,)
+        ).fetchone() is None:
             raise MissingSourceMessage(
                 f"队列条目缺少可回指的来源消息：msgid={msgid!r} thread_id={thread_id!r}；"
-                f"⛔ 必须先归档再入队。原始约束：{detail}"
+                f"⛔ 必须先归档再入队。原始约束：{exc}"
             ) from exc
         raise
     return applied is not None

@@ -128,6 +128,124 @@ def test_same_msgid_from_another_thread_is_treated_as_an_idempotent_hit(conn):
     assert_effect_log_identity(conn)
 
 
+class _RollbackFailsAfterEffectLogRace:
+    """代理一个真实连接：`INSERT INTO effect_log` 让它假装撞键，随后 `rollback()`
+    也失败——终审 Important-1 描述的那个事故形态。
+
+    `idempotent_effect` 的第二个 `except sqlite3.IntegrityError` 分支只有在
+    真实并发（两条路径都跑过预检、都执行了 `fn`，只有一条能把 `effect_log` 那行
+    真正插进去）时才会自然触发；单线程测试里没有真的第二条路径，所以用代理
+    在 `effect_enqueue_task` 的业务 `INSERT INTO liaison_task` **真实成功**之后，
+    伪造 `INSERT INTO effect_log` 撞键、再让 `rollback()` 抛出异常，逼装饰器走到
+    "记 ERROR 然后 `raise exc`" 那一支。
+
+    ⚠️ 只拦 `INSERT INTO effect_log`：装饰器开头的 `SELECT 1 FROM effect_log ...`
+    预检、`fn` 自己那条 `INSERT INTO liaison_task`、以及 `enqueue_task` 出错后
+    做的语义判据查询都必须原样打到真实连接上，否则这条测试就不是在测真实代码
+    路径。
+    """
+
+    def __init__(self, real: sqlite3.Connection):
+        self._real = real
+        self.rollback_called = False
+
+    def execute(self, sql, params=()):
+        if sql.strip().startswith("INSERT INTO effect_log"):
+            raise sqlite3.IntegrityError("UNIQUE constraint failed: effect_log.effect_key")
+        return self._real.execute(sql, params)
+
+    def rollback(self):
+        self.rollback_called = True
+        raise sqlite3.OperationalError("cannot rollback - no transaction is active")
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_enqueue_reraises_when_effect_log_races_and_rollback_also_fails(conn):
+    """终审 Important-1：`effect_log` 撞键 + 回滚也失败 ⇒ 必须原样抛出，
+    ⛔ 不许被误判成幂等命中而返回 `False`（那会让 `liaison_task` 多一行、
+    `effect_log` 少一行，铁律 1 的恒等式静默破裂）。
+
+    修复前的实现只看异常文案里有没有 `"UNIQUE"`——这个事故形态下抛出的正是
+    `sqlite3.IntegrityError("UNIQUE constraint failed: effect_log.effect_key")`，
+    文案里同样有 `"UNIQUE"`，会被旧逻辑当场吞掉、返回 `False`。本测试的真实性
+    已经在实现旧逻辑下验证过会失败（见任务报告），不是空转。
+    """
+    _archive(conn, thread_id="u_zhang", msgid="msg-race")
+    proxy = _RollbackFailsAfterEffectLogRace(conn)
+
+    with pytest.raises(sqlite3.IntegrityError, match="effect_log"):
+        enqueue_task(
+            proxy,
+            thread_id="u_zhang",
+            msgid="msg-race",
+            sender_userid="u_zhang",
+            received_at=RECEIVED_AT,
+        )
+
+    assert proxy.rollback_called, "没走到 rollback 分支——这条测试没有真的触发目标代码路径"
+
+
+def test_enqueue_does_not_leave_a_half_written_row_after_the_race(tmp_path):
+    """把 `test_enqueue_reraises_when_effect_log_races_and_rollback_also_fails`
+    的事故重放一遍，但用真实文件库：关闭代理连接后重新打开，断言两张表都没有
+    留下任何半截痕迹——`rollback()` 失败不代表数据真的提交了（sqlite3 的隐式
+    事务在连接关闭时会被丢弃），只是这条连接自己在事后已经看不清真相，
+    所以 `enqueue_task` 才必须把异常原样抛出而不是自己拍板"当作幂等命中"。
+    """
+    db_path = tmp_path / "liaison.db"
+    setup_conn = liaison_db.get_connection(db_path)
+    liaison_db.init_schema(setup_conn)
+    _archive(setup_conn, thread_id="u_zhang", msgid="msg-race")
+    setup_conn.close()
+
+    conn = liaison_db.get_connection(db_path)
+    proxy = _RollbackFailsAfterEffectLogRace(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        enqueue_task(
+            proxy,
+            thread_id="u_zhang",
+            msgid="msg-race",
+            sender_userid="u_zhang",
+            received_at=RECEIVED_AT,
+        )
+    conn.close()
+
+    verify_conn = liaison_db.get_connection(db_path)
+    assert verify_conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 0
+    assert verify_conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_enqueue_task'"
+    ).fetchone()[0] == 0
+    verify_conn.close()
+
+
+def test_enqueue_rejects_a_null_thread_id_without_mislabeling_it_as_missing_source(conn):
+    """终审 Minor-4：`thread_id=None` 撞的是 `liaison_task.thread_id NOT NULL`，
+    跟"缺来源消息"是两件事——msgid 是好的、也已经归档过，运维照着
+    `MissingSourceMessage` 的提示去补归档不会有任何效果。
+
+    ⛔ 不靠文案匹配猜是哪个字段：语义判据先确认 msgid 本身没问题
+    （`liaison_message` 里确实有这条），再确认不是 `effect_log` 记录的
+    真幂等命中，剩下的完整性冲突原样抛出——SQLite 自己的报文已经点名了
+    是 `thread_id`。
+    """
+    _archive(conn, thread_id="u_zhang", msgid="msg-1")
+
+    with pytest.raises(sqlite3.IntegrityError, match="thread_id") as excinfo:
+        enqueue_task(
+            conn,
+            thread_id=None,
+            msgid="msg-1",
+            sender_userid="u_zhang",
+            received_at=RECEIVED_AT,
+        )
+    assert not isinstance(excinfo.value, MissingSourceMessage)
+
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 0
+    assert_effect_log_identity(conn)
+
+
 def test_summary_is_a_mechanical_truncation_never_a_generated_one():
     """⛔ 摘要只能是机械截断。本服务不调用任何 LLM（design D7 / 合规红线）。"""
     assert compute_task_summary("报价单已发", msgtype="text") == "报价单已发"

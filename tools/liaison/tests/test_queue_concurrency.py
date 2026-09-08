@@ -207,16 +207,39 @@ def test_concurrent_enqueue_from_real_threads_never_loses_a_row(db_path):
     conn.close()
 
 
-def test_the_barrier_actually_rejects_sequential_calls(db_path):
-    """证伪：证明上面那条测试的判据真的有判别力，而不是摆设。
+def test_the_worker_actually_calls_barrier_wait():
+    """证伪：证明上面 `test_concurrent_enqueue_from_real_threads_never_loses_a_row`
+    的并发判据真的钉在被测代码里，而不是摆设。
 
-    顺序地在同一个线程里连着 wait 两次 ⇒ 必然 BrokenBarrierError。
-    ⛔ 这条不许删——没有它，`barrier.wait()` 可能被后人改成一个永远通过的空操作
-    而没人发现。
+    fix round：这里原来是"新建一个 `threading.Barrier(2, timeout=0.5)` 自己
+    wait 一次"，完全不触碰 `worker`——纯 stdlib 同义反复，把 `worker` 里的
+    `barrier.wait()` 删掉它照样绿，达不到自己 docstring 声称的作用（同根因见
+    `enqueue_task` 那条：判据必须扎进被测代码，不能自证）。
+
+    改用 AST 直接断言 `worker` 的函数体里确实调用了 `barrier.wait()`——
+    这一行被删掉或换成 `time.sleep()`，这条测试立刻变红。
     """
-    barrier = threading.Barrier(2, timeout=0.5)
-    with pytest.raises(threading.BrokenBarrierError):
-        barrier.wait()
+    import ast
+    import inspect
+
+    source = inspect.getsource(test_concurrent_enqueue_from_real_threads_never_loses_a_row)
+    tree = ast.parse(source)
+    worker_defs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "worker"
+    ]
+    assert len(worker_defs) == 1, "在测试源码里没能唯一定位到 worker() 函数定义"
+    barrier_wait_calls = [
+        node
+        for node in ast.walk(worker_defs[0])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "wait"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "barrier"
+    ]
+    assert barrier_wait_calls, "worker() 里没有找到 barrier.wait() 调用——并发判据被拿掉了"
 
 
 def _enqueue_in_subprocess(db_path_str: str, index: int, ready, start):
