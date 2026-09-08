@@ -8,7 +8,17 @@ requires-python = ">=3.14,<3.15"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["tests"]
+# tools/liaison/tests 是 HR 值守通道服务（开发期工具，永不部署 .51）的测试。
+# 接进来是为了让全量 pytest 一次跑到它——不接，它就只有"记得手敲路径"的人跑得到，
+# 而那种失效是静默的：不报错、不失败，只是从此没人跑。
+#
+# ⚠️ 这份 pyproject.toml 会被 sync-to-server.sh 推到 .51，而 tools/ 不会。于是 .51 上
+# 这一条会指向一个不存在的目录——**这是安全的，已实测**：pytest 把 testpaths 当 glob
+# 处理，不匹配任何路径的条目被静默跳过，退出码仍为 0（pytest 8.3.4 与 9.1.1、
+# Python 3.14.6 上各验过一次）。
+# ⛔ 不要因此改成"给 tools/liaison 单起一套 pytest 配置"——两条测试通道是同一个问题
+#    换了个更贵的形式。
+testpaths = ["tests", "tools/liaison/tests"]
 # 合规断言（U6）。CI 在跑完全量之后**再单独跑一遍**打了这个标记的用例，
 # 让「红线被破坏」变成一个可归因的失败步骤，而不是埋在几百条用例里的一行红。
 # 重复执行是刻意的成本，⛔ 不要为了省几秒把全量那次改成 -m "not compliance"。
