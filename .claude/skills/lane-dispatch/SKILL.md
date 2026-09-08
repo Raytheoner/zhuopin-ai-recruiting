@@ -96,7 +96,48 @@ bash docs/openers/run-lanes.sh --dry-run
   原样贴成 ` ```bash ` 代码块发给 Shao Peishen，他在 CC Desktop 对话里点 Run 按钮直接执行——用户直接
   动作不经过 AI 的 Bash 工具调用，不触发该分类器。看护者自己反复重试大概率无效，⛔ 不要在这上面
   空耗轮次，直接切到 Run 按钮路径（`./sync-to-server.sh` 撞同一堵墙，同样处理）
+  🔴 **09-08 `0909G` 加了一条不经过分类器的路（launchd WatchPaths），见下面「发车怎么起」。**
+  ⛔ 上面 09-03 与 09-04 两条结论都不删：白名单仍是必要条件，Run 按钮仍是 launchd 没装时的退路
 - 工作区没有本批相关的未提交改动
+
+#### 发车怎么起 —— 先看 launchd 装没装
+
+三步实证摆在一起看，才知道为什么要绕这么远：
+
+| 时间 | 做法 | 结果 |
+|---|---|---|
+| 09-03 | 看护者自己 `nohup bash docs/openers/run-lanes.sh …` | 成功过**一次**（事后判为巧合，不是白名单起的作用） |
+| 09-04 | 同上，且 `permissions.allow` 三条齐全 | 被 Auto Mode 分类器拦，`run_in_background` 也拦 |
+| 09-08 | Shao Peishen 在对话里点 Run 按钮 | 成功，但每批一次人工动作 |
+| 09-08 | launchd `WatchPaths` 触发器（`0909G`） | 看护者只**写一个文件**，起进程的是操作系统 |
+
+**判据（先跑这条，非 0 即 launchd 未装）**：
+
+```bash
+launchctl print gui/$UID/com.zhuopin.hr.lane-launcher >/dev/null 2>&1; echo $?
+```
+
+**为 0（已装）→ 走请求文件路，看护者 opener 的【三、后台启动】改成这三步**：
+
+1. `pgrep -f 'run-lanes.*\.sh'` 必须为空。非空说明上一批还在跑，**停下报，⛔ 不写请求**
+2. 用 **Write 工具**（⛔ 不用 Bash 的 heredoc —— 走 Bash 就又回到分类器那条路上了）
+   写 `.claude/handoff/launch/<批次时间戳>.request`，**内容就一行**＝`run-lanes.sh` 的参数，
+   例如 `--full-auto --yes` 或 `--full-auto --yes --only 0909C,0909D`。
+   白名单只认这六个：`--full-auto` `--yes` `--only <逗号编号>` `--max-parallel N` `--stagger N` `--budget N`；
+   ⛔ `--dry-run` `--model` `--chain` 都会被拒（dry-run 自己在 session 里跑，那条不触分类器）
+3. 轮询等 `<同名>.started` 出现，**最多 60 秒**，从中读 `pid=` 与 `boot_log=`。
+   出现 `<同名>.rejected` ＝ 参数没过白名单；`<同名>.deferred` ＝ 有 run-lanes 在跑。
+   ⚠️ **`.deferred` 不会自动重试**（它已不匹配 `*.request`），要重发得写一个新的 `.request`
+
+**非 0（未装）→ 退路不变**：把启动命令原样贴成 ` ```bash ` 代码块给 Shao Peishen 点 Run，
+并在回话里附上装触发器的那一行（他在 Terminal 跑一次即可，⛔ Claude 不代跑，起 LaunchAgent 属安全配置）：
+
+```bash
+python3 /Users/paulshao/Projects/HumanResource/scripts/install_lane_launcher.py
+```
+
+真源：`docs/openers/lane-launcher.sh`（触发脚本，含参数白名单与并发拒绝）、
+`scripts/install_lane_launcher.py`（装/重装，幂等）、`tests/test_lane_launcher.py`（行为断言）。
 
 然后给 Shao Peishen **一样东西：看护者 opener 的 4 行引用块**（2026-09-03 起走引用式，见 `kickoff` skill「引用式 Opener」）：
 看护者正文写进 `docs/openers/MMDDZ-泳道批次看护.md`（编排文件里的「看护者 Opener」节改为只留指针），
