@@ -17,6 +17,22 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com/v1"
     llm_model: str = "deepseek-chat"
     llm_supports_json_schema: bool = False
+
+    # ── 备用供应商（WBS 2.3「双供应商切换与降级」）────────────────────────
+    # 全部默认空 = **不配就是没有备用**，网关行为与今天逐字一致。⛔ 不给它们
+    # 编一个"合理的默认供应商"：默认值一旦指向某家真实供应商，任何一台没改过
+    # .env 的机器都会在主家抖动时把简历数据发给一个谁也没批准过的境外端点。
+    #
+    # ⛔ 三项必须同时给全（api_key / base_url / model），配不全按「无备用」运行
+    # 并打 WARNING（判定在 app/llm/gateway.py 的 _build_fallback）。
+    #
+    # ⚠️ 合规红线：备用供应商同样**必须是境内模型**，简历数据不出境。这一条
+    # 代码校验不了（base_url 是个自由字符串），由 .env 的评审把关。
+    llm_fallback_api_key: str = ""
+    llm_fallback_base_url: str = ""
+    llm_fallback_model: str = ""
+    llm_fallback_supports_json_schema: bool = False
+
     db_path: str = "data/demo.db"
     root_path: str = "/hr/recruit-agent"
 
@@ -51,6 +67,24 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"禁止使用 latest 类别名锁定模型版本，收到: {self.llm_model!r}"
             )
+
+        # 备用供应商一视同仁（工程铁律 5）：备用家漂了版本，历史评分照样
+        # 失去解释力。空串是"没配备用"，跳过。
+        #
+        # ⛔ 这里刻意**不去顺手放宽上面那条 llm_model 的判定**（它漏了
+        # `-latest` 这种写法，网关的 __init__ 兜得住）：改动既有字段的校验
+        # 口径会让 .51 上一份今天能起来的 .env 明天起不来，而本交付单元的
+        # 范围里没有这一项。登记在计划的「范围外与登记」一节。
+        if self.llm_fallback_model:
+            if (
+                self.llm_fallback_model == "latest"
+                or self.llm_fallback_model.endswith(":latest")
+                or self.llm_fallback_model.endswith("-latest")
+            ):
+                raise ValueError(
+                    "禁止使用 latest 类别名锁定备用供应商的模型版本，"
+                    f"收到: {self.llm_fallback_model!r}"
+                )
 
 
 @lru_cache
