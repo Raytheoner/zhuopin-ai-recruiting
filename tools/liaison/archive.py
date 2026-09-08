@@ -87,14 +87,33 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
+def _truncate_whole_name(name: str, max_bytes: int) -> str:
+    """扩展名保不住时的整串截断兜底。
+
+    ⛔ 结果绝不能是 ``""``/``"."``/``".."``——它们拼进路径会指向目录本身，
+    最终 `os.replace` 会去覆盖一个目录，报出与根因无关的 `IsADirectoryError`。
+    `_truncate_utf8` 编码后为空串时是假值，但原名以多个 `.` 开头时，截断可能
+    恰好只剩下纯点号前缀（非空、真值）——`or FALLBACK_FILENAME` 挡不住这种，
+    必须显式再判一次。
+    """
+    truncated = _truncate_utf8(name, max_bytes)
+    if truncated in ("", ".", ".."):
+        return FALLBACK_FILENAME
+    return truncated
+
+
 def _truncate_preserving_extension(name: str, max_bytes: int) -> str:
     if len(name.encode("utf-8")) <= max_bytes:
         return name
 
     stem, dot, extension = name.rpartition(".")
     # `stem` 为空 ⇒ 形如 ".gitignore"，整个名字就是名字，没有扩展名可保。
-    if not dot or not stem:
-        return _truncate_utf8(name, max_bytes) or FALLBACK_FILENAME
+    # `extension` 为空 ⇒ 名字以字面 "." 收尾（如 "a."）——rpartition 会切出
+    # 一个空扩展名，`suffix` 会退化成裸 "."，没有值得保留的后缀；不挡在这里
+    # 会让下面的 `truncated_stem + suffix` 在 stem 预算精确为 0 时退化成单独
+    # 的 "."，违反上面的硬不变式（review round 2 finding）。
+    if not dot or not stem or not extension:
+        return _truncate_whole_name(name, max_bytes)
 
     suffix = "." + extension
     suffix_bytes = len(suffix.encode("utf-8"))
@@ -102,12 +121,14 @@ def _truncate_preserving_extension(name: str, max_bytes: int) -> str:
         # 病态输入：扩展名本身就吃掉了全部预算。保不住扩展名，
         # 但**绝不能溢出**——溢出会在 open() 时报 ENAMETOOLONG，
         # 而那时候材料已经收到了却落不了盘。
-        return _truncate_utf8(name, max_bytes) or FALLBACK_FILENAME
+        return _truncate_whole_name(name, max_bytes)
 
     # `suffix_bytes <= max_bytes` 已在上面确认，所以 `truncated_stem`（预算
     # 为 `max_bytes - suffix_bytes >= 0`）加上 `suffix` 必然不超预算——
     # 即便 `truncated_stem` 恰好截成空串（含 4.9 边界：suffix 精确吃满预算，
     # stem 预算为 0），单独返回 `suffix` 仍在预算内且比丢弃扩展名更贴合
     # 「保留扩展名」的意图，⛔ 不要在这里回退到对整串做无差别截断。
+    # 此时 `extension` 已确认非空，`suffix` 至少 2 字节（"." + 非空扩展名），
+    # 因此 `truncated_stem + suffix` 不可能退化成 "" / "." / ".."。
     truncated_stem = _truncate_utf8(stem, max_bytes - suffix_bytes)
     return truncated_stem + suffix

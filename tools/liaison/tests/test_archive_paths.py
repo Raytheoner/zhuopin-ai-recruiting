@@ -133,6 +133,40 @@ def test_extension_exactly_filling_the_budget_is_preserved():
     assert compute_safe_filename("a.pdf", max_bytes=4) == ".pdf"
 
 
+def test_trailing_dot_name_never_degrades_to_a_bare_dot():
+    """review fix round 2 回归钉子：round 1 为保住扩展名删掉整串截断兜底后，
+    以字面 "." 收尾、扩展名为空的名字（如 `"a."`）会在 `max_bytes=1` 时退化成
+    单独的 `"."`——`"" + "."` 没超预算，但 `"."` 拼进路径会指向目录本身，
+    直接违反本模块 `FALLBACK_FILENAME` 旁边写的硬不变式。
+
+    这不是"扩展名被牺牲"（round 1 修的是那个），是"根本没有值得保留的扩展名却
+    被当成有"——`rpartition(".")` 对字面收尾的 "." 切出空 `extension`，
+    必须在还没算 `suffix` 之前就挡掉，而不是走到后面才发现拼出来是裸 "."。
+    """
+    assert compute_safe_filename("a.", max_bytes=1) not in ("", ".", "..")
+    assert compute_safe_filename("ab.", max_bytes=1) not in ("", ".", "..")
+
+
+def test_degenerate_dot_heavy_names_never_produce_a_bare_dot_at_any_tiny_budget():
+    """同一条硬不变式的加宽版：不只是"扩展名为空"这一种形状会撞上它。
+
+    `_truncate_preserving_extension` 里两处"扩展名保不住，回退到整串截断"的
+    分支都是把 `name` 原样按字节砍——原名以多个 `.` 开头/结尾时，砍出来的前缀
+    可能恰好只剩纯点号（如 `"...a"` 在 `max_bytes=1` 下砍出的是单独 `"."`，
+    这条不属于 round 2 报告的那一个具体输入，是同一根因下顺带钉住的邻居用例，
+    ⛔ 不要因为"reviewer 没点名"就跳过）。用小范围笛卡尔积覆盖，不做组合爆炸。
+    """
+    degenerate_names = ("a.", "ab.", "...a", "..a..", "...", "....")
+    tiny_budgets = (1, 2, 3)
+    for name in degenerate_names:
+        for max_bytes in tiny_budgets:
+            result = compute_safe_filename(name, max_bytes=max_bytes)
+            assert result not in ("", ".", ".."), (
+                f"compute_safe_filename({name!r}, max_bytes={max_bytes}) "
+                f"== {result!r}，违反了「绝不返回空/./..」的硬不变式"
+            )
+
+
 def test_dotfile_is_treated_as_a_whole_name_not_as_an_extension():
     """`.gitignore` 的"扩展名"是整个名字。⛔ 不许把它切成空 stem + 长后缀。"""
     result = compute_safe_filename(".gitignore", max_bytes=200)
