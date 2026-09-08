@@ -303,7 +303,27 @@ test_approving_into_a_closed_switch_leaves_its_own_trail`（不同原因两条�
 
 ---
 
-## TD-10 · 边界守护 CI 的依赖基线钉死在立项 commit，有未声明的保质期
+## ~~TD-10~~ · 边界守护 CI 的依赖基线钉死在立项 commit，有未声明的保质期 ✅ 已还
+
+**2026-09-08 已处置（`0908B`）**：触发条件如期发生——补 `tzdata` 时这道守卫第一次红，
+与本条预测逐字吻合。按下方改法**二**（显式登记制）落地：判据从「相对立项 commit 的
+`requirements.txt` diff 必须为空」换成「每一条依赖都必须登记在
+`scripts/check_boundary.py` 的 `REGISTERED_DEPENDENCIES` 里并写明理由」。
+⛔ 不是删掉这道检查（本条明令禁止），是换判据。加依赖从此要改两个文件——
+两处都动才是一次刻意的决定。
+
+顺带修掉旧判据的两个毛病：① 不再需要 git，浅克隆的 `test` job 上不必再
+`pytest.skip`（那个 skip 是真实存在的覆盖缺口）；② 覆盖**全部**依赖而不只是
+「新增的那些」。反证：`tests/test_boundary_guard.py` 48→50 条。
+
+⏸ **「附带盲区」未随本次处置**：扫描范围仍只覆盖 `app/`，`tests/` 与 `scripts/`
+依然是缺口。⛔ 本条销号不含那一项——它另立门户，见下方原文。
+
+---
+
+### 原登记（保留备查）
+
+#### TD-10 · 边界守护 CI 的依赖基线钉死在立项 commit，有未声明的保质期
 
 **欠的是什么**：`scripts/check_boundary.py` 的 `BASELINE_COMMIT`
 （`e65f6857fe255634d49a3e8696b1dba0f5facbec`，立项 commit）钉死作为依赖 diff 的

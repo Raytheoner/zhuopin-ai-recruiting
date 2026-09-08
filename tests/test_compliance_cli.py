@@ -8,7 +8,9 @@ CI 侧的接法：既有 test job 里加一个**可归因**的步骤（不另起
 恒真是同一种谎，只是更隐蔽。
 """
 
+import io
 import json
+import sys
 
 import pytest
 
@@ -85,6 +87,79 @@ def test_exit_two_when_mirror_missing(db_path, tmp_path, capsys):
 
     assert code == 2
     assert "不存在" in capsys.readouterr().err
+
+
+# ── 控制台编码不该改变退出码（2026-09-08，.51 现网实测）─────────────────
+#
+# `.51` 的默认控制台是 GBK(CP936)，编码不了报告里的 ✅ / ❌ / ⛔。print 抛
+# UnicodeEncodeError → 未捕获 → 解释器退出码 1。而"断言真的有违例"也是 1：
+# **两种情况从退出码上完全无法区分**，而它们的处置完全相反。无人值守巡检
+# 按退出码判红绿会变成永久假阳性——今天在 .51 上就是加 PYTHONIOENCODING=utf-8
+# 才拿到真结果（EXIT=0、6 条全过）。
+#
+# ⛔ 不要把这几条测试"简化"成 mock 掉 print：要守的正是真实 TextIOWrapper
+# 在窄编码下的行为。
+
+
+def _narrow_console() -> io.TextIOWrapper:
+    """一个编码不了 ✅/❌/⛔ 的真实文本流，模拟 .51 的 GBK 控制台。"""
+    return io.TextIOWrapper(io.BytesIO(), encoding="gbk", errors="strict")
+
+
+def test_exit_zero_survives_a_console_that_cannot_encode_the_report(
+    db_path, mirror_path, monkeypatch
+):
+    """全绿的巡检不许因为控制台编码不了 ✅ 就变成 1。"""
+    console = _narrow_console()
+    monkeypatch.setattr(sys, "stdout", console)
+
+    code = main(["--db", str(db_path), "--mirror", str(mirror_path)])
+
+    assert code == 0
+    console.flush()
+    assert console.buffer.getvalue(), "报告一个字节都没写出去——静默吞掉比报错更糟"
+
+
+def test_exit_two_survives_a_console_that_cannot_encode_the_path_error(
+    tmp_path, mirror_path, monkeypatch
+):
+    """路径不存在必须仍是 2。⛔ 折成 1 会被读成"有违例"，处置完全走反。"""
+    console = _narrow_console()
+    monkeypatch.setattr(sys, "stderr", console)
+
+    code = main(["--db", str(tmp_path / "nope.db"), "--mirror", str(mirror_path)])
+
+    assert code == 2
+    console.flush()
+    assert "不存在".encode("gbk") in console.buffer.getvalue()
+
+
+def test_narrow_console_keeps_pass_and_fail_distinguishable(
+    db_path, mirror_path, monkeypatch, capsys
+):
+    """降级后 ✅ 与 ❌ 仍须长得不一样。
+
+    ⛔ 这正是不能用 errors="replace" 一刀切的原因：那会把两个标记都变成同一个
+    "?"，通过与失败在报告里完全同形——本次要消灭的就是这种歧义，不能在修它的
+    时候又造一个。
+    """
+    conn = get_connection(str(db_path))
+    run_id = insert_run(conn)
+    insert_score(  # 造一条违例，让报告里同时出现 ✅ 和 ❌
+        conn, run_id=run_id, score_id="s-face",
+        criterion_key="facial_expression", evidence_ref="video-1#0-10",
+    )
+    conn.close()
+
+    console = _narrow_console()
+    monkeypatch.setattr(sys, "stdout", console)
+    code = main(["--db", str(db_path), "--mirror", str(mirror_path)])
+    console.flush()
+    written = console.buffer.getvalue().decode("gbk", errors="replace")
+
+    assert code == 1
+    ok_marks = {line.split(" ", 1)[0] for line in written.splitlines() if " " in line}
+    assert "?" not in ok_marks, f"通过/失败标记被压成同一个字符：{written!r}"
 
 
 def test_exit_one_when_chain_is_broken(db_path, mirror_path, capsys):

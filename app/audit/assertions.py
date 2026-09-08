@@ -26,6 +26,7 @@ m1-job-profile-intake 建，缺表就是留痕没上线，不是"还没到能验
 from __future__ import annotations
 
 import sqlite3
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
@@ -627,17 +628,57 @@ def format_report(results: Sequence[AssertionResult]) -> str:
     return "\n".join(lines)
 
 
+# ── 窄编码控制台下的安全输出（2026-09-08，`.51` 现网实测）────────────────
+#
+# `.51` 的默认控制台是 GBK(CP936)，编码不了报告里的 ✅ / ❌ / ⛔。`print` 抛
+# UnicodeEncodeError → 无人捕获 → 解释器退出码 **1**。而"断言真的有违例"也是
+# 1：**两种情况从退出码上完全无法区分**，处置却完全相反（一个要去查数据，一个
+# 要去改终端）。09-08 四次发版后的首次巡检就撞上这个，加 PYTHONIOENCODING=utf-8
+# 才拿到真结果（EXIT=0、6 条全过）。⛔ 不要把修法退回成"调用方记得加环境变量"：
+# 无人值守的定时巡检没有调用方可提醒，它只会一直红着。
+#
+# 降级用的 ASCII 标记。⛔ 不要改成 errors="replace" 一刀切——那会把 ✅ 和 ❌
+# 压成同一个 "?"，通过与失败在报告里完全同形，等于在修一个歧义时造出另一个。
+# 守卫：tests/test_compliance_cli.py::test_narrow_console_keeps_pass_and_fail_distinguishable
+_ASCII_FALLBACK_MARKS = {"\u2705": "[OK]", "\u274c": "[FAIL]", "\u26d4": "[X]"}
+
+
+def _print_safely(text: str, stream: Any) -> None:
+    """把 text 打到 stream，**绝不因为控制台编码不了而改变退出码**。
+
+    先按原样打；只有真的编码不了时才降级成 ASCII 标记 + 逐字符 replace。
+    降级是有损的，所以只在必要时发生——UTF-8 终端上看到的仍是原来的报告。
+    """
+    try:
+        print(text, file=stream)
+        return
+    except UnicodeEncodeError:
+        pass
+
+    downgraded = text
+    for mark, ascii_mark in _ASCII_FALLBACK_MARKS.items():
+        downgraded = downgraded.replace(mark, ascii_mark)
+
+    # 正文里可能还有别的编不了的字符（岗位名等）。这一层兜底不再区分内容，
+    # 但上面已经把**判定结果**那几个标记保住了，红绿不会因此看不出来。
+    encoding = getattr(stream, "encoding", None) or "ascii"
+    downgraded = downgraded.encode(encoding, errors="replace").decode(
+        encoding, errors="replace"
+    )
+    print(downgraded, file=stream)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """退出码契约：0 全绿 · 1 有违例 · 2 路径不存在。
 
     ⚠️ **2 不能折成 0。** 一个指错路径的巡检命令若安静地返回 0，读的人会以为
     "三条红线都守住了"，而它一行数据都没查过——比空表恒真更隐蔽的同一种谎。
     """
-    import sys
     from pathlib import Path
 
     # 局部 import：这两个只有 CLI 路径用得到，模块被当库 import 时不该
-    # 顺带把 argparse 拖进来。sqlite3 本身模块级已 import，这里不重复引入。
+    # 顺带把 argparse 拖进来。sqlite3 与 sys 模块级已 import，这里不重复引入
+    # （sys 自 2026-09-08 起被 _print_safely 用到，已提到模块级）。
     import argparse
 
     from app.audit.recorder import AuditRecorder
@@ -657,10 +698,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     mirror_path = Path(args.mirror)
     for label, path in (("数据库", db_path), ("JSONL 镜像", mirror_path)):
         if not path.exists():
-            print(
+            _print_safely(
                 f"{label}不存在：{path}。⛔ 巡检未执行——路径错了就是没查过，"
                 "不要把这种情况当成通过。",
-                file=sys.stderr,
+                sys.stderr,
             )
             return 2
 
@@ -675,16 +716,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         results = run_compliance_assertions(conn)
         results.append(chain_assertion(recorder))
         results.append(reconciliation_assertion(recorder))
-        print(format_report(results))
+        _print_safely(format_report(results), sys.stdout)
 
         stats = outbound_block_stats(mirror_sink)
         if stats.always_blocked_types:
             # ⚠️ 只是**提示**，⛔ 不参与退出码：门禁刻意拦得更严，"某类一直
             # 被拦"是需要人去看的信号，不是断言失败。把它算进红绿会让 CI 因
             # 一个正常的观察期结论而长期红着。
-            print(
+            _print_safely(
                 f"\n⚠️ 以下消息类型拦过、且一次都没发出去过：{stats.always_blocked_types}。"
-                "确认是不是新增类型忘了登记（design.md Risks 第 2 条）。"
+                "确认是不是新增类型忘了登记（design.md Risks 第 2 条）。",
+                sys.stdout,
             )
     finally:
         conn.close()

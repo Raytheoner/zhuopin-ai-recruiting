@@ -18,9 +18,9 @@ from typing import Sequence
 import pytest
 
 from scripts.check_boundary import (
-    BASELINE_COMMIT,
     Violation,
-    check_dependency_diff,
+    check_registered_dependencies,
+    parse_requirement_names,
     run_all,
     scan_app_tree,
     scan_dependency_files,
@@ -224,7 +224,7 @@ def test_missing_app_dir_is_a_violation(tmp_path: Path) -> None:
     root = make_repo(tmp_path, app_files={"__init__.py": "", "leak.py": "import zhuopin_platform\n"})
     (root / "src").mkdir()
     (root / "app").rename(root / "src" / "app")
-    violations = run_all(root, skip_diff=True)
+    violations = run_all(root)
     assert "7.1-missing" in rules(violations)
 
 
@@ -292,7 +292,7 @@ def test_skip_dir_names_still_apply_inside_app(tmp_path: Path) -> None:
 
 def test_clean_tree_has_no_violations(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
-    assert run_all(root, skip_diff=True) == []
+    assert run_all(root) == []
 
 
 # ── 反证三（7.2）：依赖声明里的 zhuopin_platform 必须被抓 ─────────────────
@@ -379,88 +379,96 @@ def test_broken_pyproject_is_a_violation(tmp_path: Path) -> None:
     assert "7.2-pyproject" in rules(scan_dependency_files(root))
 
 
-# ── 反证五（7.2）：非空 diff 必须被抓 ─────────────────────────────────────
+# ── 反证五（7.2）：未登记依赖必须被抓 ─────────────────────────────────────
+#
+# 2026-09-08：判据从「相对立项 commit 的 diff 必须为空」换成「每条依赖都必须
+# 登记」，理由见 scripts/check_boundary.py 的 REGISTERED_DEPENDENCIES 注释与
+# TD-10。⛔ 换判据不是放松——旧判据在变更包归档后已经变成"任何正当新增依赖都
+# 让所有分支永久变红"，那种恒假的检查必然被人整条注释掉。
 
 
-def test_non_empty_dependency_diff_is_detected(tmp_path: Path) -> None:
+def _write_requirements(root: Path, body: str) -> Path:
+    (root / "requirements.txt").write_text(body, encoding="utf-8")
+    return root
+
+
+def test_unregistered_dependency_is_detected(tmp_path: Path) -> None:
     """真实仓库里这条永远绿，只靠真实仓库测不出它会不会红。"""
+    root = _write_requirements(make_repo(tmp_path), "fastapi==0.115.6\nrequests==2.32.0\n")
+    violations = check_registered_dependencies(root)
+
+    assert "7.2-unregistered" in rules(violations)
+    assert "requests" in violations[0].message
+    assert violations[0].line == 2, "违例要指到具体行，否则大文件里没法定位"
+
+
+def test_all_registered_dependencies_pass(tmp_path: Path) -> None:
+    root = _write_requirements(
+        make_repo(tmp_path), "fastapi==0.115.6\n# 注释行\n\nuvicorn[standard]==0.34.0\n"
+    )
+    assert check_registered_dependencies(root) == []
+
+
+def test_unreadable_requirements_is_a_violation_not_a_pass(tmp_path: Path) -> None:
+    """读不到 ≠ 没问题。⛔ 这条不许折成通过——静默绿是本文件全部反证的靶子。"""
     root = make_repo(tmp_path)
-    violations = check_dependency_diff(
-        root, runner=fake_git(stdout=" requirements.txt | 1 +\n 1 file changed, 1 insertion(+)\n")
-    )
-    assert "7.2-diff" in rules(violations)
-    assert "requirements.txt" in violations[0].message
+    (root / "requirements.txt").unlink()
+
+    assert "7.2-unregistered" in rules(check_registered_dependencies(root))
 
 
-def test_empty_dependency_diff_passes(tmp_path: Path) -> None:
-    assert check_dependency_diff(make_repo(tmp_path), runner=fake_git(stdout="\n")) == []
+def test_vcs_url_cannot_masquerade_as_a_registered_name(tmp_path: Path) -> None:
+    """`git+https://…/zhuopin-ai-transformation.git` 不许被切成 `git` 混过去。
 
-
-def test_git_failure_is_a_violation_not_a_pass(tmp_path: Path) -> None:
-    """取不到基线 commit（CI 浅克隆）必须红。
-
-    ⛔ 不许把 git 失败当成"没有 diff"——那正是 CI 上最容易出现的、
-    看起来是绿色的静默失效。
+    ⛔ 这是把包名正则放宽后最先出现的洞：跨仓库直连依赖正是 7.2 要挡的东西，
+    而它一旦被解析成某个恰好已登记的短名字，就会安静地通过。
     """
-    violations = check_dependency_diff(
+    root = _write_requirements(
         make_repo(tmp_path),
-        runner=fake_git(returncode=128, stderr="fatal: bad object"),
+        "git+https://github.com/Raytheoner/zhuopin-ai-transformation.git\n",
     )
-    assert "7.2-diff" in rules(violations)
-    assert "fetch-depth" in violations[0].message
+    violations = check_registered_dependencies(root)
+
+    assert "7.2-unregistered" in rules(violations)
+    assert "zhuopin-ai-transformation" in violations[0].message
+
+
+def test_parser_skips_comments_and_blanks_but_never_unknown_lines() -> None:
+    parsed = parse_requirement_names("# 头注释\n\nfastapi==0.115.6  # 行尾注释\n???\n")
+
+    assert parsed == [(3, "fastapi"), (4, "???")], (
+        "看不懂的行必须原样报出来去撞登记表，⛔ 不许静默跳过"
+    )
 
 
 # ── 真实仓库：今天必须是绿的 ──────────────────────────────────────────────
 
 
-def test_real_repository_tree_passes_boundary_guard() -> None:
+def test_real_repository_passes_boundary_guard() -> None:
     """反证证明"会红"，这条证明"今天不该红"。两条都要有。
 
-    **树扫描部分恒跑**（`skip_diff=True`）——它只读工作区文件，不需要 git 历史，
-    在浅克隆的 CI runner 上同样成立。diff 判据拆到下一条去，理由见那条。
+    2026-09-08 起**全套判据恒跑**：依赖判据改成只读工作区文件后不再需要 git
+    历史，浅克隆的 `test` job 上也成立。旧版这里要按基线可达性 `pytest.skip`，
+    那个 skip 是真实存在的覆盖缺口（`test` job 默认 `fetch-depth: 1`），
+    换判据顺带把它消掉了——⛔ 不要再加回任何形式的条件跳过。
     """
-    violations = run_all(REPO_ROOT, skip_diff=True)
+    violations = run_all(REPO_ROOT)
     assert violations == [], "\n".join(v.render() for v in violations)
 
 
-def _baseline_commit_is_reachable() -> bool:
-    """只读探测：本地对象库里有没有基线 commit。"""
-    result = subprocess.run(
-        ["git", "cat-file", "-e", f"{BASELINE_COMMIT}^{{commit}}"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
+def test_every_declared_dependency_is_registered_with_a_reason() -> None:
+    """登记表里不许有空理由——"登记"的价值全在那句为什么。"""
+    from scripts.check_boundary import REGISTERED_DEPENDENCIES
 
-
-def test_real_repository_dependency_diff_is_empty() -> None:
-    """真实仓库的依赖 diff 判据。取不到基线 commit 就 skip。
-
-    ⚠️ **这个 skip 不构成新的静默绿，理由必须留在这里，否则下一个人会以为
-    是在掩盖失败：** 权威判据不在本测试里，而在 `.github/workflows/ci.yml`
-    的 `hooks` job 上——那一步直接跑 `python scripts/check_boundary.py`，
-    该 job 的 checkout 带 `fetch-depth: 0`，基线 commit 必然可达；而
-    `check_dependency_diff()` 已经把"git 取不到基线"判成违例（见
-    `test_git_failure_is_a_violation_not_a_pass`），⇒ 硬判据在那里不会被跳过。
-
-    本条 skip 只针对 `test` job：它的 checkout **不带 `with:`**，即默认
-    `fetch-depth: 1`，浅克隆里 `e65f6857…` 这个 object 根本不存在
-    （实测 `git clone --depth 1` 后该 `git diff` 退出码 128
-    `fatal: Invalid revision range`）。⛔ 不从 CI 侧加 `fetch-depth: 0` 修，
-    因为本单元对 `ci.yml` 的硬约束是"纯追加、零删除零修改"。
-    """
-    if not _baseline_commit_is_reachable():
-        pytest.skip("浅克隆，基线 commit 不可达；硬判据在 hooks job（fetch-depth: 0）")
-    violations = check_dependency_diff(REPO_ROOT, baseline=BASELINE_COMMIT)
-    assert violations == [], "\n".join(v.render() for v in violations)
+    blank = [name for name, reason in REGISTERED_DEPENDENCIES.items() if not reason.strip()]
+    assert blank == [], f"这些依赖登记了但没写理由：{blank}"
 
 
 def test_cli_exits_1_on_violation(tmp_path: Path) -> None:
     """CI 靠退出码判成败，退出码本身要有测试。"""
     root = make_repo(tmp_path, app_files={"__init__.py": "", "leak.py": "import zhuopin_platform\n"})
     result = subprocess.run(
-        [sys.executable, "scripts/check_boundary.py", "--root", str(root), "--skip-diff"],
+        [sys.executable, "scripts/check_boundary.py", "--root", str(root)],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -473,7 +481,7 @@ def test_cli_exits_1_on_violation(tmp_path: Path) -> None:
 def test_cli_exits_0_on_clean_tree(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
     result = subprocess.run(
-        [sys.executable, "scripts/check_boundary.py", "--root", str(root), "--skip-diff"],
+        [sys.executable, "scripts/check_boundary.py", "--root", str(root)],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,

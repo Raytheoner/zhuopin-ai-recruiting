@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import ast
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -44,15 +45,54 @@ FORBIDDEN_PATH_MARKERS: tuple[str, ...] = (
     "zhuopin-ai-transformation",
 )
 
-# 依赖声明文件。两个都查内容，只有 requirements.txt 查 diff——理由见
-# `check_dependency_diff()` 的 docstring。
+# 依赖声明文件。两个都查内容，只有 requirements.txt 查登记——理由见
+# `check_registered_dependencies()` 的 docstring。
 DEPENDENCY_FILES: tuple[str, ...] = ("requirements.txt", "pyproject.toml")
-DIFF_GUARDED_FILES: tuple[str, ...] = ("requirements.txt",)
+REGISTRY_GUARDED_FILE = "requirements.txt"
 
-# 本变更包的起点＝立项 commit `e65f685 docs: AI 评分留痕与外发人工确认门禁——立项`
-# （2026-08-14）。写死是刻意的：写成 `origin/main` 会随 main 前进而漂移，
-# 「本变更没加依赖」这句话就失去了固定的参照物。
-BASELINE_COMMIT = "e65f6857fe255634d49a3e8696b1dba0f5facbec"
+# ── 依赖登记表（2026-09-08 起）─────────────────────────────────────────────
+#
+# **判据从「相对立项 commit 的 diff 必须为空」改成了「每一条依赖都必须登记在
+# 这里」。** 这是 TD-10 预告的触发点到期后的落地，⛔ 不是把检查放松了。
+#
+# 旧判据把基线钉死在立项 commit `e65f685`（2026-08-14），含义是"本变更包不许
+# 加依赖"。变更包 2026-09-04 归档后这句话没有了指涉对象，而 CI step 对此后每
+# 一次 push 仍然生效 ⇒ **任何一次正当新增依赖都会让所有分支永久变红**。
+# 2026-09-08 加 `tzdata` 时它第一次红，与 TD-10 的预测逐字吻合。
+#
+# TD-10 给了两条改法，取第二条（显式登记制）：滚动基线仍要挂在某个历史 commit
+# 上，且依赖本项目没有的发版 tag 纪律。⛔ TD-10 同时明令**不许图省事删掉这道
+# 检查**——那会连同它已经在守护的边界一起丢掉，所以这里是换判据、不是退休。
+#
+# 新判据顺带修掉旧判据的两个毛病：① 不再需要 git，浅克隆的 `test` job 上不必
+# 再 skip（旧的 skip 是真实存在的覆盖缺口）；② 覆盖**全部**依赖而不只是"新增
+# 的那些"，既有依赖被人悄悄换名也会红。
+#
+# 🔴 **加依赖的正确姿势＝改两个文件**：`requirements.txt` 加行，这里补一条带
+# 理由的登记。两处都动才是一次**刻意**的决定——这正是本判据要守的东西。
+REGISTERED_DEPENDENCIES: dict[str, str] = {
+    "fastapi": "Web 框架",
+    "uvicorn": "ASGI 服务器；`.51` 计划任务直接起它",
+    "pydantic": "schema 校验",
+    "pydantic-settings": "配置加载",
+    "langgraph": "L4 编排层；版本下限见 CLAUDE.md 工程铁律 7（GHSA-g48c-2wqr-h844）",
+    "langgraph-checkpoint-sqlite": "M1 的 checkpointer；M2 迁 Postgres 时替换",
+    "openai": "境内 LLM 的 OpenAI 兼容客户端（合规红线：模型全部走境内）",
+    "python-dotenv": "读 `.env`",
+    "tzdata": (
+        "Windows 没有系统 IANA 时区库，stdlib zoneinfo 的唯一兜底。"
+        "⛔ 别因为「没有任何代码 import 它」就删——删掉 `.51` 当场起不来，"
+        "见 docs/findings/2026-09-08-51四次发版回滚.md"
+    ),
+    "pytest": "测试",
+    "httpx": "测试用 HTTP 客户端（FastAPI TestClient 依赖）",
+}
+
+# `uvicorn[standard]==0.34.0` → `uvicorn`；`pytest>=8` → `pytest`。
+# ⛔ 不要放宽成"取到第一个非字母就停"：`git+https://…` 这类行会被切成 `git`，
+# 一条跨仓库直连依赖就此变成登记表里的合法名字。这里只认 PEP 508 的合法包名
+# 起头，取不出名字的行按**原样**当作未登记名报出来（fail-closed）。
+_REQUIREMENT_NAME_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[|[<>=!~;]|$)")
 
 SKIP_DIR_NAMES = frozenset({"__pycache__", ".git", ".pytest_cache", ".mypy_cache"})
 
@@ -460,68 +500,71 @@ def _default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProce
     )
 
 
-def check_dependency_diff(
-    root: Path,
-    baseline: str = BASELINE_COMMIT,
-    runner: Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]] = _default_runner,
-) -> list[Violation]:
-    """7.2 后半：本变更的依赖文件 diff 必须为空。
+def parse_requirement_names(text: str) -> list[tuple[int, str]]:
+    """把 requirements.txt 正文解析成 [(行号, 依赖名)]。
+
+    跳过空行与整行注释；行尾注释按 PEP 508 只在 ` #` 处截断。取不出合法包名的
+    非空行**原样返回**当作名字——让它去撞登记表并报红，⛔ 不要静默跳过：
+    静默跳过等于给"看不懂的行"发免检通行证，而看不懂的行正是最该看的。
+    """
+    names: list[tuple[int, str]] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split(" #", 1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _REQUIREMENT_NAME_RE.match(line)
+        names.append((lineno, match.group(1).lower() if match else line))
+    return names
+
+
+def check_registered_dependencies(root: Path) -> list[Violation]:
+    """7.2 后半：`requirements.txt` 里的每一条依赖都必须在登记表里。
 
     **判据只锁 `requirements.txt`，这是实测后的刻意收缩，不是漏写。**
-    `pyproject.toml` 自立项以来确有 6 行 diff——U6 往 `[tool.pytest.ini_options]`
-    加了 `markers` 段（合规断言的 pytest 标记）。那是测试配置，不是依赖。把
-    `pyproject.toml` 一起纳入 diff 判据，这条检查从上线第一天就是红的，
-    ⇒ 必然被加白名单或整条注释掉。**恒假的检查和恒真的检查一样没用。**
-    `pyproject.toml` 的依赖侧改由 `_scan_pyproject_dependency_tables()`
-    做结构性检查，那条不会被无关的配置编辑打扰。
+    `pyproject.toml` 的依赖侧改由 `_scan_pyproject_dependency_tables()` 做结构性
+    检查（"不得声明任何依赖表"），那条不会被无关的配置编辑打扰。
 
-    `runner` 参数是为了测试能注入非空 diff 做反证——真实仓库里这条永远是绿的，
-    只靠真实仓库测不出它会不会红。
+    读不到文件时**判违例**而不是通过——文件缺失由 `7.2-missing` 报，但这里
+    自己也不能把"没读到"当成"没问题"（与 `assert_every_decision_has_human_review`
+    的表不存在分支同一个方向：验不了不算守住了）。
     """
-    args = ["git", "diff", "--stat", f"{baseline}..HEAD", "--", *DIFF_GUARDED_FILES]
-    result = runner(args, root)
-
-    if result.returncode != 0:
+    path = root / REGISTRY_GUARDED_FILE
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
         return [
             Violation(
-                rule="7.2-diff",
-                path=" ".join(DIFF_GUARDED_FILES),
+                rule="7.2-unregistered",
+                path=REGISTRY_GUARDED_FILE,
                 line=0,
-                message=(
-                    f"`{' '.join(args)}` 退出码 {result.returncode}："
-                    f"{result.stderr.strip() or '无 stderr'}。"
-                    "CI 上最常见的原因是 checkout 深度不足取不到基线 commit，"
-                    "该 job 需要 fetch-depth: 0"
-                ),
+                message=f"读不到依赖声明文件：{exc}。⛔ 读不到不等于没问题。",
             )
         ]
 
-    if result.stdout.strip():
-        return [
+    violations: list[Violation] = []
+    for lineno, name in parse_requirement_names(text):
+        if name in REGISTERED_DEPENDENCIES:
+            continue
+        violations.append(
             Violation(
-                rule="7.2-diff",
-                path=" ".join(DIFF_GUARDED_FILES),
-                line=0,
+                rule="7.2-unregistered",
+                path=REGISTRY_GUARDED_FILE,
+                line=lineno,
                 message=(
-                    f"自基线 {baseline[:7]} 起依赖文件有改动，本变更不得新增依赖：\n"
-                    + result.stdout.rstrip()
+                    f"依赖 `{name}` 未登记。新增依赖必须同时在 "
+                    f"scripts/check_boundary.py 的 REGISTERED_DEPENDENCIES 里补一条"
+                    f"带理由的登记——两处都动才是一次刻意的决定（TD-10）。"
                 ),
             )
-        ]
-
-    return []
-
-
-def run_all(
-    root: Path,
-    baseline: str = BASELINE_COMMIT,
-    skip_diff: bool = False,
-    runner: Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]] = _default_runner,
-) -> list[Violation]:
-    violations = scan_app_tree(root) + scan_dependency_files(root)
-    if not skip_diff:
-        violations += check_dependency_diff(root, baseline=baseline, runner=runner)
+        )
     return violations
+
+
+def run_all(root: Path) -> list[Violation]:
+    """全部判据。**不再需要 git**——依赖判据自 2026-09-08 起只读工作区文件，
+    所以浅克隆的 CI runner 上也能跑全套，旧的 `skip_diff` 开关随之取消。
+    """
+    return scan_app_tree(root) + scan_dependency_files(root) + check_registered_dependencies(root)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -529,18 +572,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="边界守护：禁止 zhuopin_platform 依赖与跨仓库注入（tasks.md 7.1/7.2）"
     )
     parser.add_argument("--root", default=".", help="仓库根目录，默认当前目录")
-    parser.add_argument(
-        "--baseline", default=BASELINE_COMMIT, help="依赖 diff 的基线 commit"
-    )
-    parser.add_argument(
-        "--skip-diff",
-        action="store_true",
-        help="跳过 git diff 判据（无 git 历史的临时目录里用）",
-    )
     ns = parser.parse_args(argv)
 
     root = Path(ns.root).resolve()
-    violations = run_all(root, baseline=ns.baseline, skip_diff=ns.skip_diff)
+    violations = run_all(root)
 
     if violations:
         print(f"边界守护：{len(violations)} 条违例", file=sys.stderr)
@@ -554,7 +589,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    print(f"边界守护：通过（root={root}，基线={ns.baseline[:7]}）")
+    print(
+        f"边界守护：通过（root={root}，"
+        f"已登记依赖 {len(REGISTERED_DEPENDENCIES)} 条）"
+    )
     return 0
 
 
