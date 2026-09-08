@@ -45,6 +45,11 @@ from app.graph.jd_nodes import (
     effect_update_jd_text,
     jd_edit_business_key,
 )
+from app.graph.manual_handoff import (
+    REASON_PROVIDER_UNAVAILABLE,
+    effect_deliver_manual_handoff,
+    effect_mark_needs_manual,
+)
 from app.graph.nodes import (
     effect_abandon_profile,
     effect_confirm_profile,
@@ -79,6 +84,8 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_record_outbound_audit",
         "effect_update_jd_text",
         "effect_mark_jd_human_written",
+        "effect_mark_needs_manual",
+        "effect_deliver_manual_handoff",
     }
 )
 
@@ -644,6 +651,48 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "作者标记位设成同一个值，重复标记与只标记一次在这一列上的取值"
                 "完全相同——双发保护同样完全靠 effect_log 的 COUNT(*) == 1 断言。"
             ),
+        ),
+        "effect_mark_needs_manual": Recipe(
+            thread_id=_JOB,
+            seed=_seed_job,
+            invoke=lambda conn: effect_mark_needs_manual(
+                conn,
+                thread_id=_JOB,
+                business_key="0",
+                reason_code=REASON_PROVIDER_UNAVAILABLE,
+            ),
+            # ⚠️ value-idempotent：业务写是 UPDATE job SET status='needs_manual'
+            # （见 app/graph/manual_handoff.py），不是新增行——job 表本身的行数
+            # 恒为 1（种子已插入）。这里改用"处于 needs_manual 状态的 job 行数"
+            # 这个等价口径：生效一次前是 0、生效一次后是 1，与其余配方
+            # "rows_per_effect 份新增业务事实"的语义对齐，能分辨"没生效/生效
+            # 一次"，但和 effect_update_jd_text 等 value-idempotent 配方一样，
+            # 分不出「生效一次」与「生效两次」——双发保护同样完全靠 effect_log
+            # 的 COUNT(*) == 1 断言。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM job WHERE id = ? AND status = 'needs_manual'",
+                (_JOB,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：把 job.status 置为同一个值 'needs_manual'，"
+                "行数口径改用「处于该状态的行数」而非「新增行数」，因为这是"
+                "UPDATE 不是 INSERT。双发保护完全靠 effect_log 的 COUNT(*) == 1。"
+            ),
+        ),
+        "effect_deliver_manual_handoff": Recipe(
+            thread_id=_JOB,
+            seed=_seed_job,
+            invoke=lambda conn: effect_deliver_manual_handoff(
+                conn,
+                thread_id=_JOB,
+                business_key="0",
+                channel=WebChannel(conn),
+                reason_code=REASON_PROVIDER_UNAVAILABLE,
+                round_count=0,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM outbox WHERE thread_id = ?", (_JOB,)
+            ).fetchone()[0],
         ),
     }
 
