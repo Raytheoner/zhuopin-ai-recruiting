@@ -2,8 +2,14 @@
 #
 # 日常发版脚本 —— 从 macOS/Linux 开发机把代码同步到 51 服务器并重启计划任务。
 #
-# 不重建 venv、不重装依赖；requirements.txt 变更时需另外 RDP 登录服务器重跑
-# deploy-server.ps1（它对已存在的 venv 是幂等的，只会重新 pip install）。
+# 不重建 venv、不重装依赖。requirements.txt 变更时必须**先**在服务器上装依赖、
+# **再**跑本脚本（ssh 即可，不必 RDP）：
+#     ssh zp51 "powershell -NoProfile -Command \"cd C:\apps\zhuopin-recruit-agent; .venv\Scripts\python.exe -m pip install -r requirements.txt\""
+# 🔴 顺序不可颠倒——装包对正在跑的旧代码是惰性的、服务不用停；反过来先 sync 会
+# 把服务重启到缺依赖的新代码上，当场起不来。2026-09-08 的 tzdata 事故就是这么
+# 来的，见 docs/findings/2026-09-08-51四次发版回滚.md。
+# 按 05-发布运行手册.md 阶段 D 的口径只重跑装包步骤，不必重跑整个 deploy-server.ps1
+# （那还会连带重注册计划任务与防火墙规则）。
 #
 # 依赖：本机到目标服务器的 SSH 免密访问（配置见 05-发布运行手册.md 阶段 A）。
 # 自包含实现，不依赖「企业AI转型」仓库的 ZhuopinDeploy.psm1。
@@ -80,7 +86,15 @@ done
 echo "==> 远程重启计划任务: ${TASK_NAME}"
 # /end 在任务未运行时会返回非零退出码，用 & 而不是 && 让 /run 无论如何都执行。
 # 远端是 Windows，命令由 cmd 解释。
-ssh "$SERVER" "schtasks /end /tn \"${TASK_NAME}\" & schtasks /run /tn \"${TASK_NAME}\""
+#
+# 2026-09-08 修复乱码：中文 Windows 的 schtasks 按 GBK(CP936) 输出，本机按 UTF-8
+# 读就是一屏 `?J?: ?2?????`，成功与失败长得一模一样——发版时最该看清的两行反而
+# 读不了。⛔ 不要试图在远端 `chcp 65001`：实测在非控制台的 ssh 管道里它自己报
+# 「系统找不到指定的路径」，且不改变 schtasks 的输出编码。改在本机侧解码。
+# -c 丢弃无法转换的字节：个别脏字节不该让 pipefail 掐断整个发版。
+# ⚠️ ssh 的退出码经 pipefail 照常传出，`set -e` 的中断行为与加管道前一致。
+ssh "$SERVER" "schtasks /end /tn \"${TASK_NAME}\" & schtasks /run /tn \"${TASK_NAME}\"" \
+    | iconv -f CP936 -t UTF-8 -c
 
 echo "==> 等待服务重新监听"
 sleep 5
