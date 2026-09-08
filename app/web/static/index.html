@@ -466,7 +466,11 @@
         body: JSON.stringify({ message: message }),
       });
       const data = await resp.json();
-      if (!jobId) jobId = data.job_id;
+      // job_id 可能是 null —— 服务端判定这句话不是用人需求，没有建岗位记录
+      // （tasks 5.3）。这时**保持** jobId 为空，下一条消息重新走 POST api/jobs。
+      // ⛔ 不要无条件赋值：那会把 jobId 写成 null 之外的语义假象，也让这条
+      // 分支看起来像是"没考虑过"。
+      if (!jobId && data.job_id) jobId = data.job_id;
       renderMessage(data.message);
     });
 

@@ -872,3 +872,14 @@ def test_load_job_detail_guards_against_stale_responses_with_a_token():
         "先检查令牌 → 令牌仍最新才渲染」，任何一步挪到别的位置都会让守卫"
         "形同虚设（比如检查放在渲染之后，陈旧响应已经把内容写上屏幕了）。"
     )
+
+
+def test_frontend_keeps_no_job_when_the_server_returns_null_job_id():
+    """离题的第一句话不建岗位，服务端回 job_id: null。
+
+    前端必须**保持**"还没有岗位"的状态，下一条消息重新走 POST api/jobs。
+    原写法 `if (!jobId) jobId = data.job_id;` 碰巧也是对的（null 仍是假值），
+    但看不出这是有意的——下一个人把它改成无条件赋值，行为一样对；再改成
+    `jobId = data.job_id ?? jobId` 之类就开始出错，而且不会有任何东西变红。
+    """
+    assert "if (!jobId && data.job_id)" in INDEX_HTML

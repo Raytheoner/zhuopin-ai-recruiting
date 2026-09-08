@@ -266,6 +266,13 @@ def replay_live(user_turns: list[str], *, out_db_path: str) -> str:
         response = client.post("/api/jobs", json={"message": first})
         response.raise_for_status()
         job_id = response.json()["job_id"]
+        if job_id is None:
+            # 服务端判定第一句话不是用人需求，没建岗位（tasks 5.3）。
+            # ⛔ 不要带着 None 往下走：拼出来的 /api/jobs/None/reply 会 404，
+            # 错误信息与真正的原因毫无关系。
+            raise RuntimeError(
+                f"回放的第一句话被判定为非用人需求，没有建出岗位，无法继续回放：{first!r}"
+            )
         for message in rest:
             reply = client.post(f"/api/jobs/{job_id}/reply", json={"message": message})
             reply.raise_for_status()
