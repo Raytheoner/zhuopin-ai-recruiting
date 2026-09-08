@@ -381,3 +381,88 @@ def test_filename_containing_the_separator_is_still_accepted_verbatim():
     """限制只加在 msgid 上，⛔ 不能漏到文件名——`IMG__001.jpg` 这类真实
     企微附件名必须原样通过。"""
     assert _path(msgid="msg", filename="IMG__001.jpg").name == "msg__IMG__001.jpg"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# fix round 2 / reviewer finding：round 1 的规则（只禁 msgid 里的 "__"）
+# 不够——`msgid="ms_"` 不含 "__"，会被那条规则放行，但它跟 filename 拼接后
+# 仍能与另一对 (msgid, filename) 撞出同一条叶子（单个下划线跟分隔符的头
+# 一个字符黏成三连下划线，边界不可逆推）。真正让编码可逆的条件是 msgid
+# 里一个 "_" 都不能有。
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_single_trailing_underscore_msgid_is_rejected():
+    """reviewer round 2 复现的反例：`msgid="ms_"` 不含 "__"，但仍必须拒收——
+    它会跟分隔符的头一个字符黏成三个连续下划线，边界不可逆推。"""
+    with pytest.raises(ArchivePathError):
+        _path(msgid="ms_", filename="filename")
+
+
+def test_the_round_2_collision_pair_no_longer_collides():
+    """`msgid="ms_"` + `filename="filename"` 与
+    `msgid="ms"` + `filename="_filename"` 曾经都拼出 `ms___filename`。
+    拒收含 "_" 的 msgid 后，前者必须抛；后者（msgid 干净、文件名带下划线）
+    仍然合法。
+    """
+    with pytest.raises(ArchivePathError):
+        _path(msgid="ms_", filename="filename")
+    survivor = _path(msgid="ms", filename="_filename")
+    assert survivor.name == "ms___filename"
+
+
+def test_filename_with_underscores_is_still_accepted_verbatim():
+    """限制只加在 msgid 上，⛔ 不能漏到文件名——下划线、双下划线都是
+    真实文件名里的常见字符，必须原样通过。"""
+    assert (
+        _path(msgid="msg", filename="_leading_and__double.jpg").name
+        == "msg___leading_and__double.jpg"
+    )
+
+
+def test_no_two_adversarial_msgid_filename_pairs_collide():
+    """性质测试，不是逐个反例测试：round 1 和 round 2 的两条手写规则都在
+    各自的「逐个反例」测试里通过、却仍然各自留了一个漏洞——能抓住漏洞的是
+    「跑一批对抗性输入，看是否有两个不同的 (msgid, filename) 撞出同一条
+    路径」这条不变式本身，而不是我们恰好想到的那一两个具体例子。
+
+    覆盖矩阵：干净的与含下划线（含开头/中间/结尾、单/双/三连）的 msgid，
+    叉乘同样含下划线各种花样的 filename。不合法的 msgid（含 "_"）会抛，
+    直接跳过——只对**存活**下来的路径做"互不相同"这条断言；跳过本身也
+    被测（下面的自检断言矩阵没有被误配置成全员拒收）。
+    """
+    msgid_candidates = [
+        "msg",
+        "m",
+        "msg1",
+        "abc123",
+        "ms_",  # 会被拒收——验证"拒收的组合不参与碰撞判定"这条跳过逻辑本身
+        "_ms",
+        "m_s",
+        "ms__",
+    ]
+    filename_candidates = [
+        "file.txt",
+        "_file.txt",
+        "__file.txt",
+        "___file.txt",
+        "file_.txt",
+        "file__.txt",
+        "fi_le.txt",
+        "_",
+        "__",
+    ]
+
+    paths = []
+    for msgid in msgid_candidates:
+        for filename in filename_candidates:
+            try:
+                paths.append(_path(msgid=msgid, filename=filename))
+            except ArchivePathError:
+                continue  # 被拒收的组合不产生路径，不参与碰撞判定
+
+    assert len(paths) > 0  # 自检：矩阵没有被误配置成全员拒收
+    assert len(set(paths)) == len(paths), (
+        "存在两个不同的 (msgid, filename) 拼出了同一条归档路径——"
+        "「归档覆盖」的缝隙还开着"
+    )

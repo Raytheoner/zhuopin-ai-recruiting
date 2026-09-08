@@ -151,7 +151,7 @@ DEFAULT_ARCHIVE_ROOT: Final[pathlib.Path] = _REPO_ROOT / "data" / "liaison" / "a
 
 
 def _validated_key(
-    value: Any, field_name: str, *, forbid_msgid_separator: bool = False
+    value: Any, field_name: str, *, forbid_underscore: bool = False
 ) -> str:
     """校验一个要进路径的**键**（`thread_id` / `msgid`）。
 
@@ -160,14 +160,28 @@ def _validated_key(
     键来自企微协议、本该是安全的标识符；不安全就说明上游给的东西有问题，
     这时候正确的方向是**响亮地失败**，不是安静地清洗。
 
-    `forbid_msgid_separator`：只有 `msgid` 需要传 `True`。叶子组件是
-    `msgid + "__" + 安全文件名`，"从左边第一个 `__` 切开 (msgid, 文件名)"
-    这条解析规则要唯一，前提是 `msgid` 本身不含 `__`——否则
-    `msgid="msg"` + `filename="1__file.txt"` 与
-    `msgid="msg__1"` + `filename="file.txt"` 会拼出同一个叶子
-    `msg__1__file.txt`，这是 4.1「归档覆盖」换了个成因（msgid/文件名边界
-    而不是日期边界）又回来了。`thread_id` 是独立的路径段，不参与这次拼接，
-    不受这条约束——不要在没有碰撞路径的地方加限制。
+    `forbid_underscore`：只有 `msgid` 需要传 `True`。叶子组件是
+    `msgid + "__" + 安全文件名`。review round 1 曾试过"只禁 `msgid` 里的
+    `__`"，那条规则不够：`msgid="ms_"`（不含 `__`，会被那条规则放行）与
+    `msgid="ms"` + `filename="_filename"` 都会拼出同一个叶子
+    `ms___filename`——单个下划线跟分隔符的头一个字符黏在一起，边界照样
+    不可逆推。真正让编码可逆的条件是 **`msgid` 里一个 `_` 都不能有**：
+    这样叶子里第一个 `_` 必然落在 `len(msgid)` 这个位置（分隔符 `__` 的
+    第一个字符），因此
+
+        msgid    = leaf[:leaf.index("_")]
+        filename = leaf[leaf.index("_") + 2:]
+
+    对任意文件名（哪怕文件名开头就是下划线）都能唯一还原回 `(msgid,
+    filename)`——这是单射编码，不同的消息不可能拼出同一条路径。
+    `thread_id` 是独立的路径段，不参与这次拼接，不受这条约束——不要在
+    没有碰撞路径的地方加限制。
+
+    ⚠️ 这条是刻意保守的方向：若第 7 章接通道后发现真实企微 `msgid` 本身
+    含 `_`，这里会抛异常拒绝整条消息。届时要改的是 D4 的路径形态（例如
+    换一个不会出现在合法 `msgid` 里的分隔符，或把 `msgid` 单独放一段
+    路径），⛔ **不是**把这条检查放松成清洗——放松等于把「归档覆盖」的
+    缝隙重新打开。
     """
     if not isinstance(value, str):
         raise ArchivePathError(f"{field_name} 必须是字符串，实际是 {type(value).__name__}")
@@ -178,9 +192,9 @@ def _validated_key(
     for char in value:
         if char in _PATH_SEPARATORS or unicodedata.category(char) == "Cc":
             raise ArchivePathError(f"{field_name} 含路径分隔符或控制字符，⛔ 不清洗，直接拒绝")
-    if forbid_msgid_separator and _MSGID_SEPARATOR in value:
+    if forbid_underscore and "_" in value:
         raise ArchivePathError(
-            f"{field_name} 含 '{_MSGID_SEPARATOR}'，会与 msgid/文件名分隔符混淆，"
+            f"{field_name} 含 '_'，会与 msgid/文件名分隔符 '__' 的边界混淆，"
             f"制造归档路径碰撞（4.1「归档覆盖」）；⛔ 不清洗，直接拒绝"
         )
     return value
@@ -224,7 +238,7 @@ def compute_archive_path(
     必须逐字相同——否则重投时会落出第二份，而幂等装饰器仍认为只处理了一次。
     """
     safe_thread_id = _validated_key(thread_id, "thread_id")
-    safe_msgid = _validated_key(msgid, "msgid", forbid_msgid_separator=True)
+    safe_msgid = _validated_key(msgid, "msgid", forbid_underscore=True)
     day = _yyyymmdd(received_at)
 
     prefix = safe_msgid + _MSGID_SEPARATOR
