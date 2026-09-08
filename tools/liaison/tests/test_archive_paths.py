@@ -454,14 +454,21 @@ def test_no_two_adversarial_msgid_filename_pairs_collide():
     ]
 
     paths = []
+    surviving_msgids = set()
     for msgid in msgid_candidates:
         for filename in filename_candidates:
             try:
                 paths.append(_path(msgid=msgid, filename=filename))
             except ArchivePathError:
                 continue  # 被拒收的组合不产生路径，不参与碰撞判定
+            surviving_msgids.add(msgid)
 
-    assert len(paths) > 0  # 自检：矩阵没有被误配置成全员拒收
+    # 自检：矩阵不能被误配置成全员拒收，也不能悄悄放行了本该拒收的 msgid——
+    # `len(paths) > 0` 太弱：哪怕未来的规则改动把 8 个 msgid 里的 7 个都错判
+    # 成拒收，只要剩下的 1 个 × 9 个 filename 还有 9 条路径，这条自检照样绿。
+    # 直接钉住"存活下来的 msgid 集合"才说得清矩阵到底覆盖了什么。
+    assert surviving_msgids == {"msg", "m", "msg1", "abc123"}
+    assert len(paths) == len(surviving_msgids) * len(filename_candidates)
     assert len(set(paths)) == len(paths), (
         "存在两个不同的 (msgid, filename) 拼出了同一条归档路径——"
         "「归档覆盖」的缝隙还开着"

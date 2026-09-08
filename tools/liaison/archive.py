@@ -278,6 +278,14 @@ class ArchiveOutcome:
     `newly_archived` 区分"这次真的写了台账"与"幂等命中、之前就写过了"——
     第 5 章据此决定要不要入队，Task 6 据此决定要不要发礼貌回复。
     ⛔ 不要用"台账里有没有这一行"去替代它：那在并发下是另一次查询、另一个时刻。
+
+    ⚠️ **`attachments` 只在 `newly_archived is True` 时权威**，它描述的是
+    "这次调用落了什么材料"，不是"台账现在指向什么材料"。幂等命中时（同一
+    `msgid` 再次投递，哪怕带了不同的 `filename`）`store_attachment` 仍会返回
+    这次调用实际算出的落点——那可能是本次请求带来的新路径，而台账那一行
+    早就写死了第一次成功时的 `relative_path`，两者不保证相同。调用方要读
+    "台账记的是哪份材料"，必须去查 `liaison_message.attachments_json`，
+    ⛔ 不能拿幂等命中时的 `outcome.attachments` 当数。
     """
 
     msgid: str

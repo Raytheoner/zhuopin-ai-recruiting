@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import pathlib
 
 import pytest
 
@@ -18,6 +20,15 @@ from tools.liaison.consistency import (
 from tools.liaison.storage import db as liaison_db
 
 RECEIVED_AT = "2026-09-09T10:30:00+08:00"
+
+MODULE_PATH = pathlib.Path(verify_ledger_against_archive.__globals__["__file__"]).resolve()
+
+#: 模块 docstring 逐字："本模块不删任何东西"——本核对器是第 8 章留存清理的
+#: **前置**，不是清理本身。这几个名字出现在 `consistency.py` 里，就说明
+#: 有人把删除/改写动作接了进来。
+_FORBIDDEN_CALLEES: frozenset[str] = frozenset(
+    {"unlink", "rmtree", "remove", "write_bytes", "write_text"}
+)
 
 
 @pytest.fixture
@@ -136,6 +147,23 @@ def test_checker_reads_bytes_never_text(conn, root):
     assert verify_ledger_against_archive(conn, archive_root=root) == []
 
 
+def test_all_rows_are_visited_even_when_a_malformed_row_sorts_between_two_failures(conn, root):
+    """`continue`（坏 JSON 行）换成 `break` 后，扫描会在坏行处提前终止——
+    `test_all_rows_are_visited_even_after_the_first_failure` 只走 `_verify_entry`
+    那条失败路径，从来没经过第 55 行的 `continue`，所以那个 mutation 能在
+    11/11 全绿的情况下潜伏。这里把 msgid 排序钉死成 m1 < m2(坏) < m3——
+    坏行落在两条"材料缺失"记录中间，`break` 会吞掉 m2 自己的问题，
+    还会让排在它后面的 m3 整条从没被摸到。"""
+    outcomes = {m: _archive(conn, root, m, payload=m.encode()) for m in ("m1", "m2", "m3")}
+    for msgid in ("m1", "m3"):
+        (root / outcomes[msgid].attachments[0].relative_path).unlink()
+    conn.execute("UPDATE liaison_message SET attachments_json = ? WHERE msgid = ?", ("{坏", "m2"))
+    conn.commit()
+
+    problems = verify_ledger_against_archive(conn, archive_root=root)
+    assert sorted(p.msgid for p in problems) == ["m1", "m2", "m3"]
+
+
 def test_ledger_records_enough_to_re_verify_without_the_original(conn, root):
     """台账里存的元数据必须自足：路径 + 字节长度 + SHA-256，三样齐了才核对得了。"""
     _archive(conn, root, "m1", payload=b"payload")
@@ -143,3 +171,64 @@ def test_ledger_records_enough_to_re_verify_without_the_original(conn, root):
         conn.execute("SELECT attachments_json FROM liaison_message WHERE msgid = 'm1'").fetchone()[0]
     )
     assert set(recorded[0]) == {"filename", "relative_path", "byte_length", "sha256"}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 结构性断言：本模块 ⛔ 不删任何东西（模块 docstring 逐字）
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def scan_deletion_and_write_violations(source: str, filename: str) -> list[str]:
+    """扫一份源码，找出「本模块不删任何东西」的破线：`unlink` / `rmtree` /
+    `os.remove` / `write_bytes` / `write_text` 调用。
+
+    做成独立函数是为了能证伪——先喂一份**故意写坏**的源码证明它抓得到，
+    再拿它扫真实模块。⛔ 不要把它内联进测试里，那样就没法证伪了。
+    """
+    violations: list[str] = []
+    tree = ast.parse(source, filename=filename)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = None
+        if isinstance(func, ast.Attribute):
+            name = func.attr
+        elif isinstance(func, ast.Name):
+            name = func.id
+        if name in _FORBIDDEN_CALLEES:
+            violations.append(f"{filename}:{node.lineno} 出现 {name}(...)——⛔ 本模块不删/不写任何东西")
+    return violations
+
+
+def test_scanner_catches_a_deliberately_broken_consistency_module():
+    """证伪：扫描器必须抓到全部五种写法，否则下面对真实源码的断言不成立。"""
+    bad = (
+        "import os\n"
+        "import shutil\n"
+        "def wipe(path):\n"
+        "    path.unlink()\n"
+        "    shutil.rmtree(path)\n"
+        "    os.remove(path)\n"
+        "    path.write_bytes(b'x')\n"
+        "    path.write_text('x')\n"
+    )
+    violations = scan_deletion_and_write_violations(bad, "bad.py")
+    assert len(violations) == 5, violations
+    for name in ("unlink", "rmtree", "remove", "write_bytes", "write_text"):
+        assert any(name in v for v in violations), violations
+
+
+def test_scanner_allows_a_read_only_module():
+    good = "def check(path):\n    return path.exists()\n"
+    assert scan_deletion_and_write_violations(good, "good.py") == []
+
+
+def test_consistency_module_never_deletes_or_writes():
+    """真实源码上的断言（模块 docstring 逐字：⛔ 本模块不删任何东西）。
+
+    ⛔ 变红时不许给违规行加豁免——第 8 章的留存清理是独立模块，
+    删除/改写动作不许混进这个只读核对器。
+    """
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    assert scan_deletion_and_write_violations(source, str(MODULE_PATH)) == []

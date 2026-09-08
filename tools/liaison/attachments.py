@@ -85,7 +85,7 @@ def verify_archived_file(path: pathlib.Path, *, byte_length: int, sha256: str) -
             actual = handle.read()
     except OSError:
         return False
-    return (len(actual), hashlib.sha256(actual).hexdigest()) == (byte_length, sha256)
+    return compute_digest(actual) == (byte_length, sha256)
 
 
 def store_attachment(
@@ -104,8 +104,10 @@ def store_attachment(
     ⛔ 不重写（重写会把一个正被读取的文件在中途换掉）。已存在但字节不一致
     ⇒ `AttachmentIntegrityError`。
     """
-    byte_length, digest = compute_digest(payload)
+    # 先转一次 bytes，把它同时喂给 compute_digest 和后面的写盘——
+    # 避免 bytearray/memoryview 输入被隐式拷贝两遍。
     data = bytes(payload)
+    byte_length, digest = compute_digest(data)
 
     if destination.exists():
         if verify_archived_file(destination, byte_length=byte_length, sha256=digest):

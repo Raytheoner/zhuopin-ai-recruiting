@@ -734,3 +734,44 @@ SDK 事件到达时触发，而"启动后从未连上过"这种情形永远等�
 **还债动作**：第 6／7 章落真实外发通道时，把回复改成带 outbox 行的
 `effect_*`（幂等键 `{thread_id}:effect_reply_notice:{msgid}`），并在
 `EFFECT_NODE_TO_TABLE` 登记。届时删掉本条。
+
+## TD-20 · `msgid` 禁含 `_` 的规则未在真实企微 msgid 上验证过字符集
+
+**欠的是什么**：`tools/liaison/archive.py::_validated_key`（`forbid_underscore=True`
+那一支）拒收任何含 `_` 的 `msgid`——这是让 `<msgid>__<文件名>` 这条拼接
+可逆的必要条件（详见该函数 docstring 的推导）。但**企微 aibot 的 `msgid`
+是不透明字符串，字符集从未被真实流量验证过**，只是"看起来"像 base64url——
+而 base64url 的字母表本身就含 `_`。这条规则目前完全建立在假设上。
+
+**症状会是困惑而不是显而易见**：`compute_archive_path` 只在
+`if attachment is not None` 分支下才会被调用（见 `archive_message`）。
+一旦真实 `msgid` 含 `_`：
+- **纯文本消息照常归档成功**（不走这条路径）；
+- **每一条带附件的消息**都会在 `compute_archive_path` 里抛
+  `ArchivePathError`，一路冒出 `archive_message` → `handle_inbound_message`，
+  连**名单外的礼貌回复**也发不出去（不止是名单内候选人受影响）。
+
+排障的人看到的现象是"带附件的消息全部失败、纯文本正常"，第一反应大概率
+是查通道/网络，而不是去查 `msgid` 的字符集——症状与根因隔了一层。
+
+**为什么当时这么定**：round 1/2 的两条局部规则都被对抗性测试
+（`test_no_two_adversarial_msgid_filename_pairs_collide`）找出过碰撞漏洞，
+"msgid 里禁止一切 `_`" 是唯一能让编码可逆、经得住批量对抗输入验证的规则。
+第 4 章的 opener 约束不允许为了迁就假设中的 `msgid` 字符集而改 design D4
+的路径形态——那需要先看到真实数据。
+
+**还债动作（remediation，代码 docstring 已写明方向）**：如果第 7 章接通道
+后发现真实 `msgid` 确实含 `_`，要改的是 **D4 的叶子路径形态**（例如把
+`msgid` 单独放一段路径、不再靠 `__` 分隔符做单射编码），⛔ **不是**把
+`_validated_key` 的检查放松成"清洗掉 `_`"——放松等于把「归档覆盖」
+（同一路径落两份不同材料）的缝隙重新打开，`archive.py` 模块 docstring
+与 `_validated_key` docstring 对此有逐字说明。
+
+**触发条件**：第 7 章接通真实企微通道、**在真实消息流量到来前**，先把
+真实 `msgid` 打进日志核对字符集是否含 `_`（不要等第一批真实带附件消息
+批量失败才发现）。字符集确认不含 `_` ⇒ 本条注销；确认含 `_` ⇒ 按上面
+的还债动作改 D4 叶子形态，然后注销。
+
+**不还的后果**：第 7 章上线当天，如果真实 msgid 恰好含 `_`，带附件消息
+会整批失败且外部看起来毫无规律（时好时坏取决于具体 msgid 内容），
+且没有任何提前预警——这条 TD 就是那份预警。
