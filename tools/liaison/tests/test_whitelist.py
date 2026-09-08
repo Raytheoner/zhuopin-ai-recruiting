@@ -361,3 +361,35 @@ def test_yaml_python_tags_are_not_constructed(tmp_path):
     path = tmp_path / "whitelist.yaml"
     path.write_text("members: !!python/object/apply:os.system ['echo pwned']\n", encoding="utf-8")
     assert load_whitelist(path) == frozenset()
+
+
+def test_entry_missing_userid_is_dropped(tmp_path, caplog):
+    """缺失字段测试此前只覆盖了缺 `role`；缺 `userid` 是另一条独立路径
+    （终审 Minor：移动 `entry["userid"]` 到字段校验之前，此前全部 38 条用例仍绿）。
+    """
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {"name": "汤丽萍", "role": "HR AI 专员"},
+            {"userid": "ShaoPeishen", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset({"ShaoPeishen"})
+
+
+def test_yaml_parse_error_log_does_not_leak_source_text(tmp_path, caplog):
+    """解析失败必须报错，但不能把源文本（可能含真实字段值）带进日志。
+
+    PyYAML 的 YAMLError 消息里内嵌了出错行的源码片段（`Mark.get_snippet()`）——
+    如果运维往名单里填了手机号，恰好又把文件写坏了，这个片段就会把号码原样
+    转印进 ERROR 日志，绕开 `_validated_userid` 里做的全部字段名/值区分。
+    """
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        "members:\n  - userid: 'unterminated string 13800138000\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert "13800138000" not in caplog.text
