@@ -44,6 +44,24 @@
 # ===========================================================================
 set -uo pipefail
 
+# ---------------------------------------------------------------------------
+# 🔴 locale 钉死（2026-09-08 加，第十一批实测）
+#
+# 由来：macOS 自带的 awk 20200816 在 UTF-8 locale 下，`-v L="<中文>"` 传进来的变量
+# 与 `$1==L` 比较会**恒真**，于是泳道过滤器 `awk -F'\t' -v L="$lane" '$1==L'`
+# 把 manifest 的每一行都判给每一条泳道 —— 3 条泳道各自领走全部 6 条 opener，
+# 18 个 claude 进程抢同一批 worktree，且**不报任何错**。C locale 下同一条命令正确。
+# 同一个 locale 还会让 bash 3.2 把紧跟变量名的全角标点首字节吞进变量名
+# （`$MAX_PARALLEL，` → 变量 `MAX_PARALLEL\xef`，set -u 直接退出）。
+#
+# 前十批之所以没事，是因为都从 LANG 未设置（C locale）的环境起的；第十一批换了
+# 交互 shell 起，UTF-8 生效，才炸出来。不能靠调用方记得加 LC_ALL=C —— 在这里钉死。
+# 中文字节比较、grep、正文抽取在 C locale 下全部按字节走，行为与前十批一致。
+# ---------------------------------------------------------------------------
+export LC_ALL=C
+export LANG=C
+
+
 REPO="/Users/paulshao/Projects/HumanResource"
 PLAN="$REPO/docs/openers/OP-0820-全量编排.md"
 
@@ -228,7 +246,7 @@ if [[ $FULL_AUTO -eq 1 ]]; then PERM_DESC="dangerously-skip-permissions（全自
 else PERM_DESC="acceptEdits（写文件免问，Bash/push 仍会问——无人值守请加 --full-auto）"; fi
 
 echo "计划文件：$PLAN"
-echo "泳道 ${#LANES[@]} 条（并行上限 $MAX_PARALLEL，错峰 ${STAGGER}s，单条预算上限 \$$BUDGET）："
+echo "泳道 ${#LANES[@]} 条（并行上限 ${MAX_PARALLEL}，错峰 ${STAGGER}s，单条预算上限 \$${BUDGET}）："
 
 PRECHECK_BAD=0
 EXEMPT_MISSING=""
@@ -435,7 +453,7 @@ run_lane() {
 
     # PARTIAL 继续跑本泳道后续（留步是预期内的）；FAIL / NO-SENTINEL 停
     if [[ "$status" == FAIL* || "$status" == "NO-SENTINEL" ]]; then
-      echo "  ⏹ 泳道「$lane」在 $id 停下（$status），其余泳道不受影响"
+      echo "  ⏹ 泳道「${lane}」在 $id 停下（${status}），其余泳道不受影响"
       return 1
     fi
   done < <(awk -F'\t' -v L="$lane" '$1==L' "$MANIFEST")
@@ -455,7 +473,7 @@ for ln in "${LANES[@]}"; do
     echo "  … 错峰等待 ${STAGGER}s"
     sleep "$STAGGER"
   fi
-  echo "━━ 泳道「$ln」启动 $(date +%H:%M:%S)"
+  echo "━━ 泳道「${ln}」启动 $(date +%H:%M:%S)"
   run_lane "$ln" &
   PIDS+=("$!")
   started=$((started+1))
@@ -508,14 +526,14 @@ if [[ $CHAIN -eq 1 ]]; then
 
   if [[ -n "$failed" ]]; then
     echo
-    echo "⏹ 链式接续中止：本轮有 FAIL/NO-SENTINEL（$failed）。"
+    echo "⏹ 链式接续中止：本轮有 FAIL/NO-SENTINEL（${failed}）。"
     echo "   这类条目不会自动摘标注，接着跑只会原地重复失败。先看日志。"
   elif [[ "$remain" -eq 0 ]]; then
     echo
     echo "✅ 链式接续结束：编排文件里已无带泳道标注的待执行条目。"
   elif [[ "$ROUND" -ge "$ROUND_CAP" ]]; then
     echo
-    echo "⏹ 链式接续停在第 $ROUND 轮（上限 $ROUND_CAP）。仍剩 $remain 条带标注。"
+    echo "⏹ 链式接续停在第 $ROUND 轮（上限 ${ROUND_CAP}）。仍剩 $remain 条带标注。"
     echo "   若确属正常进度，加 --max-rounds N 再起一次。"
   else
     echo
@@ -532,7 +550,7 @@ fi
 
 if [[ -n "$failed" ]]; then
   echo
-  echo "✗ 失败/无哨兵：$failed（只停了各自所在泳道）"
+  echo "✗ 失败/无哨兵：${failed}（只停了各自所在泳道）"
   echo "  续跑：bash docs/openers/run-lanes.sh --only $failed  （记得带上其泳道内的后续编号）"
   exit 1
 fi
