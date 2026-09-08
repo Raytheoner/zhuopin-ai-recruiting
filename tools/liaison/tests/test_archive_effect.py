@@ -96,6 +96,7 @@ def test_attachments_json_keeps_chinese_readable(conn, root):
     """
     _archive(conn, root, filename="反馈表.xlsx", payload=b"x")
     assert "反馈表" in _rows(conn)[0][2]
+    assert_effect_log_identity(conn)
 
 
 def test_store_is_called_before_the_ledger_write(conn, root, monkeypatch):
@@ -117,6 +118,7 @@ def test_store_is_called_before_the_ledger_write(conn, root, monkeypatch):
     _archive(conn, root, filename="a.bin", payload=b"x")
 
     assert calls == ["store", "ledger"], f"D3 的顺序被反了：{calls}"
+    assert_effect_log_identity(conn)
 
 
 def test_source_order_puts_store_attachment_before_the_effect_call():
@@ -224,6 +226,7 @@ def test_same_name_different_content_can_both_be_retrieved(conn, root):
 
     assert (root / first.attachments[0].relative_path).read_bytes() == b"AAAA"
     assert (root / second.attachments[0].relative_path).read_bytes() == b"BBBB"
+    assert_effect_log_identity(conn)
 
 
 def test_two_senders_do_not_share_a_directory(conn, root):
@@ -231,6 +234,7 @@ def test_two_senders_do_not_share_a_directory(conn, root):
     b = _archive(conn, root, thread_id="shaops", msgid="m2", filename="表.xlsx", payload=b"B")
     assert a.attachments[0].relative_path.split("/")[0] == "tanglp"
     assert b.attachments[0].relative_path.split("/")[0] == "shaops"
+    assert_effect_log_identity(conn)
 
 
 # ─────────────────────────────────────────────────────────────────────────
