@@ -27,7 +27,7 @@ HR业务线-接力0903B
 |---|---|
 | main | `2dfa499`，**与 origin 同步（ahead 0）**。⚠️ 另一条线在跑：`0908A`（HR 企微值守机器人 `openspec-propose`，09-08 09:31 派），`openspec/changes/hr-wecom-aibot-liaison/` 尚未跟踪——本线所有 opener ⛔ 不碰它 |
 | 工作区 | 未提交（Cowork 侧）：本文、`OP-0820-全量编排.md`、`docs/openers/0908Z-*.md`、`0908B-*.md`、`0908I-*.md`。`0908Z`【二】提交前四个；`0908I` 未在其清单里，由 `0908B`/`0908I` 自己带上。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
-| `.51` 代码 | ⚠️ **仍是 `3f59842`（含 TD-9 修复）——四次发版 `6bb1d90` 于 2026-09-08 失败已回滚**（`0908B`：Windows 无系统时区库、venv 缺 `tzdata`，`job_queries.py` 顶层 `ZoneInfo("UTC")` 在 import 期抛 `ZoneInfoNotFoundError`，服务起不来；已从快照 `C:\apps\backups\20260908-1004` 回滚，现网 200，停摆约 3 分钟。⏸ 第 6/7 章、9.6、硬门槛新表、Web 三页**均未上线**；修复＝`requirements.txt` 补 `tzdata`，且下次**必须「先装依赖、再 sync」，顺序不可颠倒**——✅ Shao Peishen 09-08 回「补 tzdata」已裁决，`requirements.txt` 已补 `tzdata==2026.3`，重发走 `0908J`（等他点 Run）。见 `docs/findings/2026-09-08-51四次发版回滚.md`） ｜ 原三次发版记录（`0904Z` 2026-09-04，冒烟 4 项全过）见 `docs/audit-and-outbound-ops.md` §五 |
+| `.51` 代码 | ✅ **已发版 `7a48a19`**（`0908J` 2026-09-08 四次发版重试成功）。与 `0908B` 唯一差别＝**先在 `.51` 装 `tzdata==2026.3` 再 sync**（装包对旧代码惰性、服务未停），ZoneInfo 验证打出 `UTC Asia/Shanghai`。快照 `C:\apps\backups\20260908-1150`；冒烟 5 项全过（首页 200 ｜ 无 404 ｜ `app.log` 无 Traceback、新进程 11:52:44 启动 ｜ `GET /api/jobs` **405→200** ｜ `hard_requirement`+`human_review` 建表就位）。第 6/7 章、9.6、硬门槛新表、Web 三页**均已上线**。巡检 CLI `EXIT=0`、6 条断言全过——`0904I` 预告的断言四违例**未发生**（`0904F` 改用决策时间戳后 7 条历史行被正确豁免，非违例，⛔ 不是漏跑）。🔴 新发现：巡检 CLI 在 `.51` 默认 GBK 控制台下 `print` 报告里的 `✅` 抛 `UnicodeEncodeError` 并**误报 `EXIT=1`**，加 `PYTHONIOENCODING=utf-8` 才得真结果——无人值守按退出码判成败会持续假阳性，修法待办见 `docs/audit-and-outbound-ops.md` §五 ｜ `0908B` 失败回滚详情见 `docs/findings/2026-09-08-51四次发版回滚.md`，原三次发版记录（`0904Z`）见 `docs/audit-and-outbound-ops.md` §五 |
 | pytest | main 侧 **1061 passed / 1 skipped**（09-04 `0904Y` 复核）＋ 0905A 后未复核（应更高）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
 | worktree | 已清空（三个遗留分支 intake-unit6 / unit7 / td9 仍在，真未合均 0，无害） |
@@ -120,7 +120,7 @@ C 发现断言四豁免线用 `created_at` 有洞 → Shao Peishen 裁决「现�
 ### ~~⑩ 第十批~~ ✅ 跑完（G/H/I/J/K/L OK，M 预算耗尽）＋ ~~`0905A`~~ ✅ 续跑收口（`05e90cc`，09-07）
 
 结果：9.6 合入（`3b3aac7`）、硬门槛 1.2b/5.8/5.9 合入（`46b84b9`，含 hard_requirement 新表）、账目对齐 4 条、Web 8.1/8.2/8.4 合入（`05e90cc`，登记 19 条落地偏离与 parked）。56/72，pytest 1008→1061+。
-🔴 0904I 留步：9.6 上 `.51` 后，留痕上线前的历史行会从"被豁免"翻成断言四违例（巡检 EXIT=1）——**预期结果**，处置＝人工逐条核实，⛔ 不挪豁免线。`0908B` 发版时抄清单——⏸ **09-08 发版失败回滚，9.6 未上线，本条顺延到下次发版**。
+🔴 0904I 留步：9.6 上 `.51` 后，留痕上线前的历史行会从"被豁免"翻成断言四违例（巡检 EXIT=1）——**预期结果**，处置＝人工逐条核实，⛔ 不挪豁免线。✅ **已闭合（`0908J` 09-08）：9.6 已随 `7a48a19` 上线，巡检 `EXIT=0`，预告的违例未发生**——`0904F` 把豁免线改成决策时间戳后，7 条历史行被正确豁免而非翻成违例，故无「待核实清单」可抄（⛔ 不是漏跑）。7 条明细存证于 `docs/audit-and-outbound-ops.md` §五。
 另一条线：`0908A` HR 企微值守机器人 `openspec-propose`（09-08 09:31，由别的 session 派）——它承接的正是本包 8 条 C 类企微条目。
 
 ### ⑪ 09-08：`0908B` `.51` 四次发版（等「发」）＋ 第十一批已编排（等 `0908Z` 发车）

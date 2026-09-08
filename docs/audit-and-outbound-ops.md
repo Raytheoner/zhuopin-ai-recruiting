@@ -552,6 +552,82 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    完整时间线、四道闸门为何全部放行、备选方案与不采纳理由见
    `docs/findings/2026-09-08-51四次发版回滚.md`。
 
+   **2026-09-08 四次发版记录（重试，`[Mac]0908J`）——✅ 成功**
+
+   执行人：`[Mac]0908J` session ｜ 依据：Shao Peishen 2026-09-08 回「补 tzdata」
+   （对上一条 `0908B` 失败回滚的处置裁决）。与上一条**并列**，不覆盖。
+
+   | 项 | 值 |
+   |---|---|
+   | 发版 HEAD | `7a48a19`（含 `0908B` 拟发的全部内容 + `bc1a0d0` 补 `tzdata==2026.3`） |
+   | 快照目录 | `C:\apps\backups\20260908-1150`（`app\` + `data\`） |
+   | 前置核对 4 项 | 全过（main 与 origin 同步；`ssh zp51` 回 `ok`；`git show HEAD:requirements.txt` 命中 `tzdata==2026.3`；现网基线 `200`）。⚠️ `requirements.txt` 本轮有改动，`0908B` 的「diff 必须为空」闸门本轮不适用 |
+   | 🔴 装依赖（先于 sync） | `pip install tzdata==2026.3` → `Successfully installed tzdata-2026.3`；随即验证 `ZoneInfo("UTC"), ZoneInfo("Asia/Shanghai")` → 打出 `UTC Asia/Shanghai` ✅。**服务未停**（旧代码无人 import tzdata，装包对其惰性）。⛔ 未重跑 `deploy-server.ps1` |
+   | `sync-to-server.sh` 执行方式 | 同 09-04 / 09-08B，由 Shao Peishen 本人点 CC Desktop bash 块 Run；输出末尾 `HTTP 200` + 「发版完成」 |
+   | 冒烟 1：首页 | `curl` → **200** |
+   | 冒烟 2：相对资源 | 首页 51 070 字节全内联，无外部静态资源引用；唯一 `href="/hr/recruit-agent/"`（即 `root_path` 自身，已验 200）；前端 `fetch` 全为相对路径（`api/jobs/${jobId}/confirm` 等）→ **无 404** |
+   | 冒烟 3：`logs\app.log` 尾 60 行 | 无 `Traceback` / `OperationalError`；新进程 PID `7296` 于 `2026-09-08 11:52:44` `Application startup complete` |
+   | 冒烟 4：`GET /api/jobs`（8.1 新端点） | 返回 **JSON 列表**（3 个 job，含 `stage_label` / `created_at_label` 等新字段）。对照：回滚态下同一端点 `10:19:48` 记录为 **405**，此处 `11:55:37` 为 **200**——这是新代码确实上线的硬证据 |
+   | 冒烟 5：`data\demo.db` 建表 | `sqlite_master` 含 `hard_requirement`、`human_review`（全表：`analysis_run` `checkpoints` `conversation` `criterion_score` `effect_log` `hard_requirement` `human_review` `job` `job_profile` `outbox` `pending_approval` `sqlite_sequence` `writes`） |
+
+   冒烟 5 项全过，未触发回滚。`.51` 现网自此为 `7a48a19` 一线代码：第 6/7 章、
+   9.6、硬门槛新表、Web 三页**全部已上线**。§五 第 1 项（`data\` 备份任务）
+   状态不变，仍 ⏸。
+
+   **U6 巡检 CLI（2026-09-08，9.6 上线后首次）：`EXIT=0`，6 条断言全部通过**
+
+   ```
+   ✅ 以 AI 评分为理由的拒绝记录数恒为 0
+        rejection_record 表尚不存在（M1 现状）
+   ✅ criterion_score 中 evidence_ref 为空的记录数恒为 0
+   ✅ criterion_score.criterion_key 不存在白名单外的取值
+   ✅ 每一个进入终态的画像版本都有对应的 human_review 记录
+        豁免 7 条决策发生在 2026-09-04 00:00:00 之前的历史画像版本
+   ✅ JSONL 镜像的哈希链完整
+   ✅ SQLite 真身与 JSONL 镜像无未解释的差集
+   合规断言全部通过（6 条）。
+   ```
+
+   🟢 **`0908J` opener §三 预告的「断言四 fail-closed 违例」没有发生，这不是漏跑。**
+   预告写于 `0904I`，当时豁免线还锚在**留痕功能上线时刻**，历史行会被翻成违例；
+   `0904F`（断言四豁免线改用决策时间戳）落地后，判据变成「决策时刻早于
+   2026-09-04 00:00:00 即豁免」，7 条历史行被**正确豁免**而非违例。因此
+   opener §三 要求新增的「待 Shao Peishen 核实的历史行清单」**前提不成立**，
+   未新增该清单；改为在此存证被豁免的 7 条（只读查询，未改任何数据）：
+
+   | job_id | version | status | created_at |
+   |---|---|---|---|
+   | `20888223-b7cb-48eb-bc28-d989f4414e8d` | 5 | approved | 2026-08-10 06:06:59 |
+   | `1cabfb91-74a4-46e2-8679-ded1939759cb` | 7 | approved | 2026-08-12 09:57:16 |
+   | `a478499c-b195-4ae8-8f51-6acbe00ae844` | 6 | approved | 2026-08-13 01:56:44 |
+   | `19b6ec6d-0824-4aaf-afd0-e44901d53f82` | 6 | approved | 2026-08-18 01:19:38 |
+   | `2494103e-4110-48a9-a484-e87eeac89d94` | 6 | approved | 2026-08-18 01:37:13 |
+   | `78a9fb7c-c146-445e-8fab-6cda0c386516` | 6 | approved | 2026-08-19 06:12:19 |
+   | `51b225f1-1ede-49a1-8c6f-06b6ce401058` | 6 | approved | 2026-09-03 07:18:38 |
+
+   共 7 条，与 CLI 自报的豁免数一致。
+
+   🔴 **本轮新发现的真缺陷：巡检 CLI 在 `.51` 默认控制台下崩溃并误报 `EXIT=1`。**
+   首次实跑原文：
+
+   > `UnicodeEncodeError: 'gbk' codec can't encode character '\u2705' in position 0:
+   > illegal multibyte sequence`
+   > （`app/audit/assertions.py:678` `print(format_report(results))`）→ `EXIT=1`
+
+   `format_report()` 输出的 `✅` 在 Windows 默认 GBK 控制台编不出来，`print` 抛异常、
+   进程非零退出。加 `$env:PYTHONIOENCODING='utf-8'` +
+   `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8` 后重跑即得上面的
+   `EXIT=0`。**断言本身从未失败，失败的是把结果打出来这一步。**
+
+   ⚠️ 危害不在这次——在无人值守：巡检若挂进计划任务按退出码判成败，会把
+   「6 条全过」读成「有违例」，而且**每次都报、永远查不出违例是哪条**（报告正是
+   打不出来的那段）。这是假阳性告警，且方向是"虚报有事"而非"漏报没事"，
+   因此不阻断本次发版。修法二选一（未实施，登记待办）：`assertions.py` 的
+   `main()` 里对 stdout 强制 UTF-8（`sys.stdout.reconfigure(encoding='utf-8')`），
+   或报告改用纯 ASCII 标记。⛔ 不要靠"调用方记得设环境变量"兜底——
+   `0908B` 的教训正是"依赖没写进 `requirements.txt`，靠人记得"。
+
+
 ---
 
 ## 关联
