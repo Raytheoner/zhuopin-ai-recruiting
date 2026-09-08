@@ -90,5 +90,37 @@ BEGIN
 END;
 """
 
+#: 第 7 章·连接生命周期。窗口的键是**起始时间**——7.3 的幂等策略「按窗口起始时间
+#: 去重」在这里有两道防线：主键（结构）与 idempotent_effect 的幂等键（机制），
+#: 与第 2 章 liaison_task 的 UNIQUE + 装饰器同一手法。
+#:
+#: ⛔ 不要把 recovered_at 设成 NOT NULL DEFAULT ''：本表全靠 `recovered_at IS NULL`
+#: 表达"这个窗口还没闭合"，空串会让"未闭合"与"闭合于空时间"两件事无法区分，
+#: 而"未闭合"正是 7.3 启动期补记要找的那批行。
+OUTAGE_WINDOW_SCHEMA = """
+CREATE TABLE IF NOT EXISTS liaison_outage_window (
+    -- 窗口起始时间（ISO8601、带 +08:00、精确到微秒），同时是幂等键的 business_key。
+    started_at TEXT PRIMARY KEY,
+    -- 恒等分组用。连接不是一个会话，取固定哨兵值 __liaison_connection__。
+    thread_id TEXT NOT NULL,
+    detected_by TEXT NOT NULL
+        CHECK (detected_by IN ('disconnect_event', 'startup_gap')),
+    recovered_at TEXT,
+    closed_by TEXT
+        CHECK (closed_by IS NULL OR closed_by IN ('reconnect', 'startup_backfill')),
+    -- 告警**送出成功**后才落。⛔ 闭窗时不许顺手填——填了就等于宣称一条可能
+    -- 根本没送出去的告警已经送到了，而这正是本章要消灭的那类静默缺口。
+    alerted_at TEXT,
+    -- 「闭合」必须两列同时有值。写成等式而不是两条 CHECK：拆开写容易只加一半。
+    CHECK ((recovered_at IS NULL) = (closed_by IS NULL)),
+    -- 没闭合的窗口不可能已经告警过（告警文本必须含恢复时间）。
+    CHECK (alerted_at IS NULL OR recovered_at IS NOT NULL)
+);
+
+-- 启动期补记要找 recovered_at IS NULL 的行；补发告警要找 alerted_at IS NULL 的行。
+CREATE INDEX IF NOT EXISTS idx_liaison_outage_open
+    ON liaison_outage_window (recovered_at, started_at);
+"""
+
 #: 本服务的全量 DDL。
-SCHEMA = EFFECT_LOG_SCHEMA + MESSAGE_AND_TASK_SCHEMA
+SCHEMA = EFFECT_LOG_SCHEMA + MESSAGE_AND_TASK_SCHEMA + OUTAGE_WINDOW_SCHEMA
