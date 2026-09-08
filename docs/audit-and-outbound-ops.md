@@ -528,6 +528,30 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    对话里点 bash 代码块的 Run 按钮直接执行（用户直接动作，不经 AI 的 Bash
    工具调用，不触发该分类器）。
 
+   **2026-09-08 四次发版记录（`[Mac]0908B`）——❌ 失败，已回滚**
+
+   执行人：`[Mac]0908B` session ｜ 依据：Shao Peishen 2026-09-08 在 Cowork
+   会话 `HR业务线-接力0903B` 回「发」。
+
+   | 项 | 值 |
+   |---|---|
+   | 拟发版 HEAD | `6bb1d90`（第 6 章确认断点含 6.1 现网缺陷修复 + 第 7 章 JD 溯源/标识保护/一键复制 + 9.6 断言四豁免线修复 + 硬门槛 `hard_requirement` 新表 + Web 列表/详情/转人工队列） |
+   | 快照目录 | `C:\apps\backups\20260908-1004`（`app\` + `data\`） |
+   | 前置核对 5 项 | 全过（main 与 origin 同步；`requirements.txt`/`pyproject.toml` 对 `3f59842` 无 diff；`ssh zp51` 通；venv python 存在） |
+   | `sync-to-server.sh` 执行方式 | 同 09-04，由 Shao Peishen 本人点 CC Desktop bash 块 Run（Auto Mode 分类器拦 AI 直接调用） |
+   | 结果 | ❌ scp 全部成功、计划任务重启，但**服务起不来**：脚本自带远程健康检查报 `HTTP 000` / `Connection refused`（8095）；计划任务「上次结果 = 1」；`8095` 无监听；`app.log` 一行未写 |
+   | 根因 | `21af03a` 在 `app/storage/job_queries.py` **模块顶层**求值 `ZoneInfo("UTC")`，而 Windows 无系统 IANA 时区库、venv 里没有 `tzdata`（`requirements.txt` 也没写）⇒ import 期 `ZoneInfoNotFoundError`，进程死在日志初始化之前 |
+   | 回滚 | 按 opener §二.4：`Remove-Item app` → 从快照 `Copy-Item` 回 → `schtasks /end` + `/run` → `curl` 首页 **200**（10:18:51 `Application startup complete`）。⛔ `data\` 未回滚未改动 |
+   | 现网停摆 | 约 3 分钟（10:16 → 10:18:51） |
+   | 冒烟 5 项 | ⛔ **未通过**——第 1 项即失败，其余 4 项无从执行。回滚后的 200 是恢复确认，不是本次发版的冒烟 |
+   | 巡检 CLI（opener §三） | ⏸ **未跑**（不是漏跑）：整节前提是 9.6 已上线，9.6 随回滚退回；在旧代码上跑只会污染台账。断言四历史行清单顺延 |
+
+   ⏸ **`.51` 现网仍是 `3f59842` 一线代码**：第 6/7 章、9.6、硬门槛新表、Web 三页
+   全部**尚未上线**。修复方案（`requirements.txt` 补 `tzdata`，且下次发版必须
+   「装依赖 + sync」而非只 sync）待 Shao Peishen 裁决——`.51` 发版为不可代项。
+   完整时间线、四道闸门为何全部放行、备选方案与不采纳理由见
+   `docs/findings/2026-09-08-51四次发版回滚.md`。
+
 ---
 
 ## 关联
