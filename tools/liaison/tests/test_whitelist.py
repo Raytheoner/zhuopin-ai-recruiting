@@ -124,6 +124,45 @@ def called_names(func) -> set[str]:
     return names
 
 
+def impure_nodes(func) -> list[str]:
+    """AST 侧写：抓非调用型副作用。
+
+    `called_names` 只看 `ast.Call`，对不经过函数调用的副作用是瞎的——
+    终审用这个反例实测过：给 `compute_admission` 加一行模块级计数器自增
+    `_CALL_COUNT[0] += 1`（`AugAssign`，目标是 `Subscript`，全程没有一个
+    `Call` 节点），`test_compute_admission_is_pure` 原样通过。这里把口子
+    补上，但只咬"写入逃逸到函数外"的目标（`Attribute` / `Subscript`）：
+    普通局部变量赋值（目标是 `Name`）必须放行——
+    `candidate = sender_userid.strip()` 正是这种合法写法，把它也判违规
+    会直接把现有实现钉成假阳性。
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    violations: list[str] = []
+
+    def escapes(target: ast.expr) -> bool:
+        if isinstance(target, (ast.Attribute, ast.Subscript)):
+            return True
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return any(escapes(elt) for elt in target.elts)
+        if isinstance(target, ast.Starred):
+            return escapes(target.value)
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(escapes(t) for t in node.targets):
+            violations.append("Assign->escaping-target")
+        elif isinstance(node, ast.AugAssign) and escapes(node.target):
+            violations.append("AugAssign->escaping-target")
+        elif isinstance(node, ast.AnnAssign) and escapes(node.target):
+            violations.append("AnnAssign->escaping-target")
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            violations.append(type(node).__name__)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            violations.append(type(node).__name__)
+
+    return violations
+
+
 def error_records(caplog) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.levelno >= logging.ERROR and "whitelist" in r.name]
 
@@ -209,6 +248,11 @@ def test_compute_admission_hits_a_member():
     assert compute_admission("TangLiPing", frozenset({"TangLiPing", "ShaoPeishen"})) is True
 
 
+def test_compute_admission_normalizes_surrounding_whitespace():
+    """钉住 `.strip()`：去掉它 33 条用例全绿也不会发现——终审实测过。"""
+    assert compute_admission(" TangLiPing ", frozenset({"TangLiPing"})) is True
+
+
 def test_compute_admission_misses_a_non_member():
     assert compute_admission("NieXin", frozenset({"TangLiPing"})) is False
 
@@ -221,6 +265,7 @@ def test_compute_admission_rejects_malformed_sender(sender):
 def test_compute_admission_is_pure():
     """铁律 2：compute_* 是无副作用纯函数。新增 I/O 或日志会让这条断言失败。"""
     assert called_names(compute_admission) <= {"isinstance", "strip"}
+    assert impure_nodes(compute_admission) == []
 
 
 def test_compute_admission_ignores_environment(monkeypatch):
