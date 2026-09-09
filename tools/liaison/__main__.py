@@ -1,11 +1,16 @@
 """HR 值守通道服务的入口：`python -m tools.liaison`。
 
-**两条线程，各管各的**（第 7 章）：
+**三条线程，各管各的**（第 7 章 + TD-39）：
 - **值守线程**独占 sqlite 连接与 `LiaisonSession`——库与状态机只有它一个人碰。
   它的循环是 `events.get(timeout=心跳间隔)`：有事件就处理，超时就盖存活戳。
 - **主线程**只跑 `run_forever(connect)`。SDK 回调唯一做的事是把
   `(事件名, 当时的时间)` 放进队列，⛔ 回调里不碰库、不碰文件——sqlite 连接
   默认只能在创建它的线程里用，在断线回调里碰库会在最不该出错的那一刻抛异常。
+- **看门狗线程**（2026-09-09 加，TD-39·N-0）只读 `liveness.json` 的 `stamp_at`，
+  停更超阈值就停掉 SDK 的事件循环。⛔ 它不碰库、不碰状态机、不发消息。
+  *为什么需要第三条*：主线程被 `client.run()` 里的 `loop.run_forever()` 占死，
+  接收 task 一旦被异常打掉，那个 loop 照样挂着 ⇒ `run()` 永不返回 ⇒ 外层
+  `run_forever` 一次都不会触发。没有一条独立线程，就没人能把它叫醒。
 
 ⛔ 消息处理（归档=第 4 章、入队=第 5 章、群通知=第 6 章）不在本文件里。
 tests/test_main_wiring.py::test_this_chapter_wires_no_message_handling 守着这条。
@@ -122,6 +127,22 @@ def now() -> datetime:
     return datetime.now(session.CHINA_TZ)
 
 
+def read_liveness_stamp_at(
+    path: Path = session.DEFAULT_LIVENESS_PATH,
+) -> str | None:
+    """读存活戳里的 `stamp_at`（看门狗的唯一输入）。读不到一律 None。
+
+    ⚠️ **默认值必须直接引用 `session.DEFAULT_LIVENESS_PATH`**，⛔ 不许在本文件
+    另写一份路径字面量：看门狗读的必须是值守线程**真的在写**的那一份。两处真源
+    一旦漂移，看门狗要么盯着一个永远不更新的文件（每 3 分钟拆一次健康连接），
+    要么盯着一个不存在的文件（永远不触发）——两种都没有任何症状。
+    """
+    payload = session.read_liveness_stamp(path)
+    if payload is None:
+        return None
+    return payload.get("stamp_at")
+
+
 def build_session() -> session.LiaisonSession:
     """在**调用它的那条线程里**建连接与状态机。⛔ 不许在别处建好再传进来。"""
     conn = liaison_db.get_connection()
@@ -172,10 +193,11 @@ def main(
     session_builder=build_session,
     client_builder=session_client.build_client,
     runner=session_client.run_forever,
+    watchdog=session_client.run_liveness_watchdog,
     self_check: bool = False,
 ) -> int:
-    """⚠️ 三个接线缝关键字参数只给测试注入 fake 用，⛔ 不是配置项——
-    ⛔ 不要给它们加环境变量开关。
+    """⚠️ 四个接线缝关键字参数（`session_builder` / `client_builder` / `runner` /
+    `watchdog`）只给测试注入 fake 用，⛔ 不是配置项——⛔ 不要给它们加环境变量开关。
 
     `self_check=True` 见 `SELF_CHECK_ARG` 的说明：跑完整条启动路径（含 SDK 表面
     校验），**在建立任何网络连接之前**返回 0。⛔ 它不跳过任何一项校验。
@@ -197,6 +219,11 @@ def main(
 
     events: queue.Queue = queue.Queue()
 
+    # 🔴 **必须在这里造、并且传进去**（TD-39·N-0）：`make_sdk_connect` 不传就自己造
+    # 一个，那个外面拿不到，看门狗于是停不了任何东西——兜底层看起来在跑、实际
+    # 什么都没做，且 ⛔ 没有任何症状。
+    loop_stopper = session_client.LoopStopper()
+
     try:
         # ⚠️ 传的是**工厂**不是对象：SDK 的 `_started` 闩锁让同一个连接对象没法
         # 重连第二次（详见 session_client.make_sdk_connect 的 docstring）。
@@ -204,6 +231,7 @@ def main(
             lambda: client_builder(credentials),
             on_connected=lambda: events.put((EVENT_CONNECTED, now())),
             on_disconnected=lambda: events.put((EVENT_DISCONNECTED, now())),
+            loop_stopper=loop_stopper,
         )
     except ImportError as exc:
         print(
@@ -235,11 +263,35 @@ def main(
     )
     worker.start()
 
+    # ── 第三条线程：存活戳看门狗（TD-39·N-0 兜底）────────────────────────
+    # 主线程被 `client.run()` 占着（它内部 `loop.run_forever()`），值守线程独占库，
+    # 所以这一层只能自己起一条线程。它什么都不碰，只读 `liveness.json` 的
+    # `stamp_at`：停更超阈值就用 `loop_stopper` 把 SDK 的事件循环停掉，
+    # `client.run()` 才会返回，外层 `run_forever` 才接得上手。
+    #
+    # ⚠️ `sleep` 用 `stop_event.wait`：停服时看门狗立刻醒来退出，⛔ 不许让它在
+    # `time.sleep` 里再挂满一个轮询周期。
+    threading.Thread(
+        target=watchdog,
+        kwargs={
+            "read_stamp_at": read_liveness_stamp_at,
+            "clock": now,
+            "request_rebuild": loop_stopper.request_stop,
+            "should_stop": stop_event.is_set,
+            "sleep": stop_event.wait,
+        },
+        name="liaison-watchdog",
+        daemon=True,
+    ).start()
+
     try:
         runner(connect)
     except KeyboardInterrupt:
-        stop_event.set()
         logger.warning("收到中断信号，值守通道停止接收")
+    finally:
+        # ⛔ 必须放 finally：`runner` 无论怎么结束，两条后台线程都得收到停的信号。
+        # 只在 KeyboardInterrupt 分支里 set，`runner` 正常返回时看门狗会一直空转。
+        stop_event.set()
     return 0
 
 

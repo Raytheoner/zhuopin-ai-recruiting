@@ -296,7 +296,10 @@ def test_main_wires_both_callbacks_into_the_queue(credentials_in_env, tmp_path):
         )
         == 0
     )
-    assert set(handlers) == {session_client.EVENT_CONNECTED, session_client.EVENT_DISCONNECTED}
+    # ⚠️ 2026-09-09（TD-39）从「恰好两个」改成「恰好等于 SUBSCRIBED_EVENTS」：
+    # `error` 事件必须一并接上，漏掉它 pyee 会直接 raise、打断整条重连链。
+    # ⛔ 这不是放宽——判据仍是**相等**，多接一个没登记的事件同样红。
+    assert set(handlers) == set(session_client.SUBSCRIBED_EVENTS)
     assert callable(captured["connect"])
 
 
@@ -374,3 +377,110 @@ def test_the_main_module_structural_guard_actually_catches_a_break():
         n for n in _liveness_identifiers(tree) if _FORBIDDEN_LIVENESS_IDENTIFIER.search(n)
     )
     assert offenders == ["idle_since"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-39·N-0 兜底：存活戳看门狗必须真的被接进 main()
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
+    credentials_in_env, tmp_path
+):
+    """🔴 **没有这条，看门狗就是一段没人调的死代码。**
+
+    TD-39 的第二层（N-0）是：接收 task 死掉之后 `loop.run_forever()` 照样挂着 ⇒
+    `client.run()` 永不返回 ⇒ 外层 `run_forever` **一次都不会触发**。补看门狗只有
+    在它①真的被起起来、②`request_rebuild` 真的接到**同一个** `LoopStopper`
+    （就是 `make_sdk_connect` 用的那个）时才有意义。接错对象 ⇒ 停的是 `None`，
+    兜底层看起来在跑、实际什么都停不了，且 ⛔ 没有任何症状。
+    """
+    stoppers = []
+    watchdog_kwargs = {}
+
+    class FakeClient:
+        def on(self, event, handler):
+            pass
+
+        def run(self):
+            raise AssertionError("本用例不应真的建连")
+
+    real_make = session_client.make_sdk_connect
+
+    def spying_make(factory, *, on_connected, on_disconnected, loop_stopper=None):
+        stoppers.append(loop_stopper)
+        return real_make(
+            factory,
+            on_connected=on_connected,
+            on_disconnected=on_disconnected,
+            loop_stopper=loop_stopper,
+        )
+
+    def fake_watchdog(**kwargs):
+        watchdog_kwargs.update(kwargs)
+
+    def session_builder():
+        conn = liaison_db.get_connection(tmp_path / "liaison.db")
+        liaison_db.init_schema(conn)
+        return session.LiaisonSession(
+            conn, RecordingSink(), liveness_path=tmp_path / "liveness.json"
+        )
+
+    def fake_runner(connect):
+        raise KeyboardInterrupt
+
+    original = session_client.make_sdk_connect
+    session_client.make_sdk_connect = spying_make
+    try:
+        assert (
+            liaison_main.main(
+                session_builder=session_builder,
+                client_builder=lambda _c: FakeClient(),
+                runner=fake_runner,
+                watchdog=fake_watchdog,
+            )
+            == 0
+        )
+    finally:
+        session_client.make_sdk_connect = original
+
+    assert len(stoppers) == 1 and isinstance(stoppers[0], session_client.LoopStopper), (
+        "main() 必须把一个 LoopStopper 传给 make_sdk_connect，⛔ 不许让它自己造一个"
+        "——自己造的那个外面拿不到，看门狗就停不了任何东西"
+    )
+    assert watchdog_kwargs, "看门狗必须被真的起起来，⛔ 不许只定义不调用"
+    assert watchdog_kwargs["request_rebuild"] == stoppers[0].request_stop, (
+        "看门狗的 request_rebuild 必须是**同一个** LoopStopper 的 request_stop"
+    )
+    assert callable(watchdog_kwargs["read_stamp_at"])
+    assert callable(watchdog_kwargs["clock"])
+    assert callable(watchdog_kwargs["should_stop"])
+
+
+def test_main_reads_the_stamp_the_session_thread_actually_writes(credentials_in_env, tmp_path):
+    """看门狗读的戳必须是值守线程**真的在写**的那一份。
+
+    ⛔ 挡的是两处路径各写各的：看门狗盯着一个永远不更新的文件 ⇒ 每 3 分钟拆一次
+    健康连接；或盯着一个不存在的文件 ⇒ 永远不触发。两种都无症状。
+    """
+    stamp_path = tmp_path / "liveness.json"
+    session.effect_write_liveness_stamp(stamp_path, state=session.STATE_CONNECTED, now=T0)
+    assert liaison_main.read_liveness_stamp_at(stamp_path) == session.format_instant(T0)
+    assert liaison_main.read_liveness_stamp_at(tmp_path / "缺席.json") is None
+
+
+def test_watchdog_default_path_matches_the_default_liveness_path():
+    """默认路径两边必须是**同一个常量**，⛔ 不许各写各的字面量。"""
+    source = MAIN_SOURCE.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(MAIN_SOURCE))
+    funcs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "read_liveness_stamp_at"
+    ]
+    assert len(funcs) == 1, "期望恰好一处 read_liveness_stamp_at 定义"
+    default = funcs[0].args.defaults[-1]
+    assert isinstance(default, ast.Attribute) and default.attr == "DEFAULT_LIVENESS_PATH", (
+        "默认存活戳路径必须直接引用 session.DEFAULT_LIVENESS_PATH，"
+        "⛔ 不许在本文件里另写一份路径字面量——两处真源必然漂移，且漂移无症状"
+    )

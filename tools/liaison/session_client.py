@@ -12,10 +12,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,49 @@ DEFAULT_HEARTBEAT_MS = 30_000
 #: `make_sdk_connect` 会在启动时**当场报错**，⛔ 不会静默错接线。
 EVENT_CONNECTED = "connected"
 EVENT_DISCONNECTED = "disconnected"
+
+#: 🔴 **`error` 事件必须有监听器，这不是可选的日志改良**（TD-39 根因）。
+#:
+#: SDK 把 `on_error` 接成 `self.emit("error", error)`（`aibot/client.py:76`），而
+#: pyee 对**没有监听器**的 `error` 事件直接 `raise` 载荷本身
+#: （`pyee/base.py:178-184` `_emit_handle_potential_error`）。于是
+#: `aibot/ws.py:152` 的 `self.on_error(e)` 当场炸掉，**下一行**的
+#: `await self._schedule_reconnect()`（153 行）永远走不到；异常再冒出
+#: `_receive_loop()`（`ws.py:208`）把那个 task 杀死——而它是唯一还会调
+#: `_schedule_reconnect` 的地方。结果是断线后**只重连一次**，之后进程仍活着、
+#: 日志一片正常、`liveness.json` 永远停在 `disconnected`、中断窗口永不闭合、
+#: 恢复告警永不发出。⛔ 没有任何一处会报错。
+#: 实证：2026-09-09 断线实测，见 `docs/findings/2026-09-09-断线重连实测.md`。
+EVENT_ERROR = "error"
+
+#: 本模块必须订阅的全部事件。**清单即契约**：`_prepare_client` 逐条接线，
+#: `tests/test_session_client_reconnect.py::test_every_event_in_the_contract_is_actually_subscribed`
+#: 断言"列了就必须真的接上"。⛔ 加常量不接线 = 该类事件永远到不了本模块，
+#: 与 TD-39 同形、同样无症状。
+SUBSCRIBED_EVENTS = (EVENT_CONNECTED, EVENT_DISCONNECTED, EVENT_ERROR)
+
+#: 存活戳停更多久算"loop 还活着但连接已死"（N-0 兜底的判据）。
+#:
+#: ⚠️ **取值依据是实测，⛔ 不许拍脑袋改小**：2026-09-09 实测 SDK 的判死时延是
+#: **55.75 秒**（心跳 30 秒 × 2 次未回 pong）。阈值必须**明显大于**它，否则会把
+#: 正常的判死过程本身误判成假死，看门狗于是主动拆掉一条正在自愈的连接——
+#: 一个"修复"反过来制造断线。180 秒 ≈ 3.2×，且让 SDK 自己的重连（退避封顶 30 秒）
+#: 有好几轮完整的机会先跑，兜底层才接手。
+#:
+#: ⚠️ **已知且刻意接受的行为**：真实长断网（比如网线拔了一小时）期间存活戳同样
+#: 一直停在断线时刻（`tick()` 只在 `connected` 状态下刷新），于是看门狗每 ~180 秒
+#: 就拆一次连接、由外层 `run_forever` 造一个全新的连接对象重来。
+#: ⛔ 这不是 bug，⛔ 也不要为它加"断网期间不看门"的例外：
+#: ① 一小时约 17 次重建，远达不到企微限流的量级（TD-38 那次是 44 秒 1399 次心跳）；
+#: ② 本条修的正是"SDK 自己的重连链会被打断"，长断网恰恰是它最可能卡死的时候，
+#:    定期从头重建是**保护**不是浪费；
+#: ③ 要加例外就得先分辨"真断网"与"假死"，而这两者从进程外部看**完全一样**——
+#:    分辨得了的话，一开始就不需要看门狗了。
+STALE_LIVENESS_SECONDS = 180.0
+
+#: 看门狗两次检查之间等多久。比 `__main__.TICK_INTERVAL_SECONDS`（15 秒）不快，
+#: ⛔ 不许设成 0——0 就是满速自旋（与 `compute_backoff_delay` 永不返回 0 同理）。
+WATCHDOG_POLL_SECONDS = 15.0
 
 #: 本模块真正依赖的两个方法。⚠️ 2026-09-09（TD-19）把 `connect` 从这份清单里
 #: **移走、换成 `run`**：实测 `WSClient.connect` 是 `async def` 且建连后立即返回，
@@ -175,7 +220,16 @@ def verify_client_surface(client) -> None:
     if not callable(client.on):
         raise SdkSurfaceUnverifiedError(
             "SDK 连接对象的 on 不可调用，订阅不了 "
-            f"{EVENT_CONNECTED!r}/{EVENT_DISCONNECTED!r} 两个连接事件。"
+            f"{list(SUBSCRIBED_EVENTS)} 这几个连接事件。"
+        )
+    # ⚠️ 校验的是**清单本身**，⛔ 不是"接了几个就算几个"。`error` 在 2026-09-09
+    # 之前不在清单里，那个缺口正是 TD-39 能发生的原因之一：漏订阅不报错，
+    # 只是 pyee 改走 raise 分支，把整条重连链一并打掉。
+    if EVENT_ERROR not in SUBSCRIBED_EVENTS:
+        raise SdkSurfaceUnverifiedError(
+            f"{EVENT_ERROR!r} 必须在 SUBSCRIBED_EVENTS 里。缺了它，pyee 对没有"
+            "监听器的 error 事件会直接 raise，aibot/ws.py:152 当场炸掉，"
+            "153 行的 _schedule_reconnect() 永远走不到（TD-39）。⛔ 不要绕过本检查。"
         )
     run = client.run
     if not callable(run):
@@ -204,15 +258,132 @@ def verify_client_surface(client) -> None:
         ) from exc
 
 
-def _prepare_client(client_factory, on_connected, on_disconnected):
+class LoopStopper:
+    """跨线程把 `client.run()` 逼返回的把手（N-0 兜底用）。
+
+    🔴 **为什么需要它**：`make_sdk_connect` 的注释曾断言「`client.run()` 几乎不会
+    返回，外层 `run_forever` 是兜底那一层」。TD-39 的故障下这条假设**不成立**——
+    SDK 的 `run()` 是 `loop.run_until_complete(connect())` 后接 `loop.run_forever()`
+    （`aibot/client.py:345-362`）。接收 task 死掉之后 `loop.run_forever()` 照样挂着
+    ⇒ `run()` **仍然不返回** ⇒ 外层 `run_forever` 永远等不到那次返回，
+    **兜底一次都不会触发**。两层重连被同一个异常一并打掉。
+    ⇒ 必须有人从**另一条线程**把那个 loop 停下来，`run()` 才会返回、外层才接得上。
+
+    `loop.call_soon_threadsafe` 是 asyncio 唯一有文档保证的跨线程入口，
+    ⛔ 不许改成直接调 `loop.stop()`（那不是线程安全的）。
+
+    ⛔ **本类不写 `with`**（连 `threading.Lock` 都不用）：`tools/liaison/` 下非测试
+    代码里任何 `with <名字|属性|调用>:` 都会被
+    `test_liaison_effects.py::test_no_second_transaction_manager_in_source` 判违规。
+    这里也确实不需要锁——持有的只是一个引用，赋值与读取在 GIL 下都是原子的。
+    """
+
+    def __init__(self) -> None:
+        self._loop = None
+
+    def remember(self, loop) -> None:
+        """记住一个 loop。⛔ 只该在该 loop **自己**的线程里被调用。"""
+        self._loop = loop
+
+    def capture(self) -> bool:
+        """在事件回调里抓当前正在跑的 loop。回调由 SDK 在 loop 内触发，抓得到。
+
+        抓不到（没有正在跑的 loop）返回 False，⛔ 不抛——事件回调抛异常正是
+        本条要修的那个 bug 的形状。
+        """
+        try:
+            self.remember(asyncio.get_running_loop())
+        except RuntimeError:
+            return False
+        return True
+
+    def forget(self) -> None:
+        """丢掉上一次的把手。**每次新建连接前必须调**。
+
+        ⛔ 留着的后果：看门狗去停一个早就 `loop.close()` 掉的 loop（`run()` 的
+        `finally` 会关它），`request_stop` 报成功，而真正卡住的那个 loop 没人动——
+        兜底层看起来在工作，实际什么都没做。
+        """
+        self._loop = None
+
+    def request_stop(self) -> bool:
+        """请求停掉 loop，让 `client.run()` 返回。成功返回 True。
+
+        ⛔ 失败一律返回 False 并留日志，**不许静默假装停成功了**——调用方要靠
+        这个返回值决定是否升级成 ERROR。看门狗自己变成静默故障源，就是把
+        TD-39 原样复制了一份。
+        """
+        loop = self._loop
+        if loop is None:
+            logger.error(
+                "存活戳已陈旧，但没有可停的事件循环把手（本次连接从未触发过任何"
+                "SDK 事件）。⛔ 本轮兜底重建没能执行，连接可能仍卡在假死状态。"
+            )
+            return False
+        try:
+            if loop.is_closed():
+                logger.warning("事件循环已关闭，无需停它——`client.run()` 应当已经返回")
+                return False
+            loop.call_soon_threadsafe(loop.stop)
+        except RuntimeError:
+            logger.warning("停事件循环失败（它可能刚刚已经关掉）", exc_info=True)
+            return False
+        return True
+
+
+def _handle_sdk_error(loop_stopper: "LoopStopper", error) -> None:
+    """`error` 事件的监听器。**记日志，⛔ 不重新抛出。**
+
+    存在的意义只有一个：让 pyee 走「有监听器 ⇒ 分发、不 raise」的那条分支，
+    好让 `aibot/ws.py:153` 的 `await self._schedule_reconnect()` 能正常执行。
+    ⛔ 不许在这里 `raise`、也 ⛔ 不许把异常放回 SDK——那就等于没修。
+
+    ⛔ 同时**不许吞掉当没事发生**：至少 WARNING，且写清"已交给 SDK 重连"，
+    否则一条真实的连接错误会连一行日志都不留。日志走 `logging.getLogger(__name__)`
+    ⇒ 沿 `tools.liaison` 包 logger 的 handler 链走 `logsetup` 的脱敏过滤器
+    （异常文本里可能带 URL/凭据片段），⛔ 不许裸 `print`。
+    """
+    loop_stopper.capture()
+    logger.warning("值守通道连接报错，已交给 SDK 重连（⛔ 不回抛，回抛会打断重连链）：%r", error)
+
+
+def _prepare_client(client_factory, on_connected, on_disconnected, loop_stopper):
     """造一个连接对象、核表面、接事件。返回**尚未 run** 的那个对象。
 
     先核表面再接线：对不上就 raise，⛔ 不许"能接的先接上、接不上的算了"。
+
+    接线**逐条走 `SUBSCRIBED_EVENTS`**，⛔ 不许手写三行 `client.on(...)`：清单与
+    接线一旦是两处真源，加了常量忘了接线就不会有任何症状（TD-39 的缺口正是这个）。
+
+    每个回调都顺手 `loop_stopper.capture()`：SDK 的事件都在它自己的事件循环里
+    触发，这是**唯一**能从外部拿到那个 loop 的时机（`run()` 内部
+    `asyncio.new_event_loop()` 之后不对外暴露）。
     """
     client = client_factory()
     verify_client_surface(client)
-    client.on(EVENT_CONNECTED, lambda *args, **kwargs: on_connected())
-    client.on(EVENT_DISCONNECTED, lambda *args, **kwargs: on_disconnected())
+
+    def wrap(callback):
+        def handler(*args, **kwargs):
+            loop_stopper.capture()
+            callback()
+        return handler
+
+    handlers = {
+        EVENT_CONNECTED: wrap(on_connected),
+        EVENT_DISCONNECTED: wrap(on_disconnected),
+        EVENT_ERROR: lambda *args, **kwargs: _handle_sdk_error(
+            loop_stopper, args[0] if args else None
+        ),
+    }
+    # ⛔ 断言清单与实现一一对应：漏一个就当场炸，⛔ 不许静默少接一个事件。
+    missing = [event for event in SUBSCRIBED_EVENTS if event not in handlers]
+    if missing:
+        raise SdkSurfaceUnverifiedError(
+            f"SUBSCRIBED_EVENTS 里的 {missing} 没有对应的处理函数——"
+            "列了却没接线的事件永远到不了本模块，且没有任何症状。"
+        )
+    for event in SUBSCRIBED_EVENTS:
+        client.on(event, handlers[event])
     return client
 
 
@@ -221,6 +392,7 @@ def make_sdk_connect(
     *,
     on_connected: Callable[[], None],
     on_disconnected: Callable[[], None],
+    loop_stopper: "LoopStopper | None" = None,
 ) -> Callable[[], None]:
     """返回一个交给 `run_forever` 用的、真正阻塞到断开为止的调用。
 
@@ -247,22 +419,131 @@ def make_sdk_connect(
     ⚠️ **线程归属**：`client.run()` 自己 `new_event_loop()`。它必须跑在**主线程**
     （第 7 章接线：值守线程独占库、主线程跑连接），⛔ 不许挪进子线程，也 ⛔ 不许
     在一个已经有事件循环在跑的线程里调它。
+
+    `loop_stopper` 是 N-0 兜底的把手（见 `LoopStopper`）。不传就自己造一个——
+    调用方不接看门狗时，行为与从前完全一致。
     """
-    prepared = _prepare_client(client_factory, on_connected, on_disconnected)
+    if loop_stopper is None:
+        loop_stopper = LoopStopper()
+    prepared = _prepare_client(client_factory, on_connected, on_disconnected, loop_stopper)
 
     def connect_once() -> None:
         nonlocal prepared
         client = prepared
         prepared = None
         if client is None:
-            client = _prepare_client(client_factory, on_connected, on_disconnected)
+            client = _prepare_client(
+                client_factory, on_connected, on_disconnected, loop_stopper
+            )
+        # ⛔ 必须在 run() **之前**丢掉上一轮的 loop 把手：`run()` 的 finally 会
+        # `loop.close()`，留着旧把手会让看门狗去停一个已经关掉的 loop 并报成功。
+        loop_stopper.forget()
         # ⚠️ `client.run()` 在真实 SDK 上几乎不会返回：建连失败由 SDK 内部
         # `_schedule_reconnect()` 接手（`max_reconnect_attempts=-1` ⇒ 无限重试），
         # `loop.run_forever()` 就一直挂着。外层 `run_forever` 因此是**兜底**那一层，
         # ⛔ 不是主重连路径——主重连是 SDK 的（design D8）。
+        #
+        # 🔴 **但"兜底"只有在 `run()` 真的会返回时才成立**（TD-39·N-0）：接收 task
+        # 被异常打死之后 `loop.run_forever()` 照样挂着，`run()` 于是永不返回，外层
+        # 这一层**一次都不会触发**。`run_liveness_watchdog` 就是补这个洞的——它在
+        # 另一条线程上盯 `liveness.json` 的 `stamp_at`，停更超阈值就用
+        # `loop_stopper` 把这个 loop 停掉，`run()` 才返回、外层才接得上。
         client.run()
 
     return connect_once
+
+
+# ── N-0 兜底：存活戳看门狗 ──────────────────────────────────────────────────
+
+
+def compute_liveness_is_stale(
+    stamp_at: str | None,
+    now: datetime,
+    *,
+    threshold_seconds: float = STALE_LIVENESS_SECONDS,
+) -> bool:
+    """存活戳是不是已经陈旧到该判"假死"了。**纯函数**（铁律 2）：不读文件、不打日志。
+
+    `stamp_at` 是 `liveness.json` 里的 ISO8601 字符串（`session.format_instant` 的
+    输出，带 +08:00）。
+
+    **三种"看不清"一律返回 False，⛔ 不猜**：
+    - 读不到／空（进程刚起、值守线程还没盖第一个戳）——判 True 会让**每一次启动**
+      都先炸一轮兜底重建；
+    - 解析不了（文件被写坏）——存活戳只是诊断信息，⛔ 不许因为温度计坏了就拆连接；
+    - 戳比"现在"还新（机器时钟被往回调过）——负数的"停更时长"没有意义。
+    """
+    if not stamp_at:
+        return False
+    try:
+        stamped = datetime.fromisoformat(stamp_at)
+    except (TypeError, ValueError):
+        return False
+    if stamped.tzinfo is None:
+        # naive 时间与带时区的 `now` 相减会抛 TypeError。⛔ 不猜它是哪个时区。
+        return False
+    age_seconds = (now - stamped).total_seconds()
+    if age_seconds < 0:
+        return False
+    return age_seconds > threshold_seconds
+
+
+def check_liveness_once(
+    *,
+    read_stamp_at: Callable[[], str | None],
+    clock: Callable[[], datetime],
+    request_rebuild: Callable[[], bool],
+    threshold_seconds: float = STALE_LIVENESS_SECONDS,
+) -> bool:
+    """看一眼存活戳；陈旧就请求重建。返回"本轮是否触发了重建请求"。
+
+    ⚠️ 时间与读戳都由调用方注入：几分钟的场景要在单测里毫秒跑完，
+    ⛔ 不许用真实 `sleep` 等时间过去。
+    """
+    stamp_at = read_stamp_at()
+    if not compute_liveness_is_stale(stamp_at, clock(), threshold_seconds=threshold_seconds):
+        return False
+    logger.warning(
+        "存活戳已 %.0f 秒以上没有刷新（末次 %s），判定为「事件循环还活着但连接已死」，"
+        "主动停掉事件循环让外层重连接手",
+        threshold_seconds,
+        stamp_at,
+    )
+    if not request_rebuild():
+        # ⛔ 不许静默：兜底层没能兜住，必须留下一个能被看见的症状。
+        logger.error(
+            "兜底重建请求未能执行——连接可能仍卡在假死状态，且外层 run_forever 接不上手"
+        )
+    return True
+
+
+def run_liveness_watchdog(
+    *,
+    read_stamp_at: Callable[[], str | None],
+    clock: Callable[[], datetime],
+    request_rebuild: Callable[[], bool],
+    should_stop: Callable[[], bool],
+    sleep: Callable[[float], None] = time.sleep,
+    poll_seconds: float = WATCHDOG_POLL_SECONDS,
+    threshold_seconds: float = STALE_LIVENESS_SECONDS,
+) -> None:
+    """看门狗主体，跑在自己的线程上（主线程被 `client.run()` 占着）。
+
+    🔴 **看门狗自己 ⛔ 不许成为新的静默故障源。** 本轮检查抛异常时：记 ERROR
+    并继续下一轮，⛔ 不许写成 `except Exception: pass`——那样看门狗死了没人知道，
+    兜底层等于不存在，而这正是 TD-39 那一类无症状故障的形状。
+    """
+    while not should_stop():
+        try:
+            check_liveness_once(
+                read_stamp_at=read_stamp_at,
+                clock=clock,
+                request_rebuild=request_rebuild,
+                threshold_seconds=threshold_seconds,
+            )
+        except Exception:  # noqa: BLE001 —— 看门狗 ⛔ 不许被任何一轮的失败打死
+            logger.error("存活戳看门狗本轮检查失败，本轮跳过、继续守着", exc_info=True)
+        sleep(poll_seconds)
 
 
 def build_client(credentials):

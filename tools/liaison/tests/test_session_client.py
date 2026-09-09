@@ -360,7 +360,7 @@ def test_make_sdk_connect_accepts_the_real_sdk_shape_async_connect_plus_sync_run
     connect = session_client.make_sdk_connect(
         RealShapeClient, on_connected=lambda: None, on_disconnected=lambda: None
     )
-    assert set(events) == {session_client.EVENT_CONNECTED, session_client.EVENT_DISCONNECTED}
+    assert set(events) == set(session_client.SUBSCRIBED_EVENTS)
     connect()
     assert ran == [1], "交给 run_forever 的 callable 必须真的调到 client.run()"
 
@@ -387,7 +387,9 @@ def test_make_sdk_connect_subscribes_both_events_and_returns_a_blocking_callable
         on_connected=lambda: fired.append("connected"),
         on_disconnected=lambda: fired.append("disconnected"),
     )
-    assert set(events) == {session_client.EVENT_CONNECTED, session_client.EVENT_DISCONNECTED}
+    # ⚠️ 2026-09-09（TD-39）：清单从两个变成三个（补 `error`）。判据仍是**相等**，
+    # ⛔ 不是"至少包含"——多接一个没登记的事件同样必须红。
+    assert set(events) == set(session_client.SUBSCRIBED_EVENTS)
     events[session_client.EVENT_CONNECTED]()
     events[session_client.EVENT_DISCONNECTED]("对端断开")  # SDK 会带 reason 参数
     assert fired == ["connected", "disconnected"]
@@ -425,7 +427,10 @@ def test_make_sdk_connect_builds_a_fresh_client_for_every_attempt():
     connect()
     assert len(built) == 3, f"三次尝试应当造出三个连接对象，实际 {len(built)}"
     assert [c.runs for c in built] == [1, 1, 1], "⛔ 同一个对象不许被 run 两次"
-    assert len(wired) == 6, "每一个新对象都要重新订阅两个连接事件"
+    expected = 3 * len(session_client.SUBSCRIBED_EVENTS)
+    assert len(wired) == expected, (
+        f"每一个新对象都要重新订阅 SUBSCRIBED_EVENTS 里的全部事件（期望 {expected} 次）"
+    )
     assert len({ident for ident, _ in wired}) == 3
 
 
