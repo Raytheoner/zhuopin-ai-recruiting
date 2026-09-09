@@ -1060,7 +1060,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 原样取得，⛔ 不变成沉默行。两个口径构成对 `pending_resend` 的一个划分，有测试守着。
 ⏸ 重发驱动器本身仍属第 8 章，本次 ⛔ 未接。
 
-## ~~TD-26~~ 令牌桶无进程级单例，且降级投递第一步 2 次 HTTP 只扣 1 个令牌 ✅ 已还（124f259）
+## ~~TD-26~~ 令牌桶无进程级单例，且降级投递第一步 2 次 HTTP 只扣 1 个令牌 ✅ 已还（5ca1f50）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **位置**：`tools/liaison/notify/webhook.py:286`（`bucket` 由调用方注入）、`webhook.py:184-196` + `:236`
@@ -1079,7 +1079,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 请求，由 `effect_deliver_with_backoff` 按数取令牌。
 **触发条件**：第 8 章给群通知接上真实调用方之前。
 
-**已还**（2026-09-09，`124f259`，[Mac]0909AL）：触发条件已满足——`0909AD` 的 followup CLI
+**已还**（2026-09-09，`5ca1f50`，[Mac]0909AL）：触发条件已满足——`0909AD` 的 followup CLI
 就是第一个真实调用方。两条按还债动作逐字落地：
 ① `ratelimit.get_group_webhook_bucket(*, monotonic, sleep)` 是**模块级单例**，
    生产代码取桶的唯一入口。**断言**＝第二个调用方带着自己的时钟来一律 `RuntimeError`，
@@ -1117,7 +1117,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 `test_notify_webhook.py::test_reject_mode_refuses_to_produce_a_delivery_object` 断言它真的抛
 且抛在任何 HTTP 之前。`store` 那条提前短路是正路，⛔ 未动。
 
-## ~~TD-28~~ `liaison_group_notify` 的 CHECK 只守字段取值域，跨字段的荒唐组合能写进去 ✅ 已还（124f259）
+## ~~TD-28~~ `liaison_group_notify` 的 CHECK 只守字段取值域，跨字段的荒唐组合能写进去 ✅ 已还（5ca1f50）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **位置**：`tools/liaison/storage/schema.py` `GROUP_NOTIFY_SCHEMA`
@@ -1132,7 +1132,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 **还债动作**：补 `CHECK ((state='rejected') = (mode='reject'))` 与
 `CHECK (attempts >= 0 AND byte_length >= 0 AND limit_bytes > 0)`。
 
-**已还**（2026-09-09，`124f259`，[Mac]0909AL）：两条按原文逐字补进 `GROUP_NOTIFY_SCHEMA`。
+**已还**（2026-09-09，`5ca1f50`，[Mac]0909AL）：两条按原文逐字补进 `GROUP_NOTIFY_SCHEMA`。
 **只新增**——⛔ 未删任何既有列、⛔ 未改既有 CHECK（含 `(state='sent') = (sent_at IS NOT NULL)`）
 的语义。`limit_bytes > 0` 而不是 `>= 0`：阈值为 0 意味着任何正文都超限，那不是阈值是死锁；
 `byte_length = 0`（空正文）与 `attempts = 0`（还没发过）都是合法值，四条对照组用例
@@ -1158,7 +1158,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 ② `sent_at` 从微秒降到秒级（与 `created_at` 的 `datetime('now')` 对齐的必然结果），
    同一秒内多条通知在 `sent_at` 上不再可分辨，排序另有 `thread_id, digest` 兜底。
 
-## TD-29 第 6 章包边角：再导出面不对称、死代码、测试脚手架三处复制粘贴、异常文案错位 🟡 部分已还（124f259）
+## TD-29 第 6 章包边角：再导出面不对称、死代码、测试脚手架三处复制粘贴、异常文案错位 🟡 部分已还（5ca1f50）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **级别**：不阻塞第 6 章，全部是可读性/可维护性
@@ -1185,7 +1185,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 全仓零引用、两条漏调的 `assert_group_notify_identity` 确实还漏着、`config.py:75` 确实还在
 复用 `MissingCredentialsError`。
 
-**已还三条**（`124f259`）：
+**已还三条**（`5ca1f50`）：
 1. ✅ `notify/__init__.py` 再导出面补齐并**对称**：补 `MODE_DIRECT/DEGRADED/REJECT`、
    transport 的五个名字（`Transport` / `UrllibTransport` / `WebhookResponse` /
    `WebhookTransportError` / `WEBHOOK_TIMEOUT_SECONDS`）、`NotifyRecord` /
