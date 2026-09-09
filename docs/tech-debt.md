@@ -1060,7 +1060,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 
 ---
 
-## ~~TD-30~~ 日志留存期只有容量上界，缺时间维度的清理 ✅ 已还（COMMIT_0909T）
+## ~~TD-30~~ 日志留存期只有容量上界，缺时间维度的清理 ✅ 已还（ac686d1）
 
 **2026-09-09 已处置（`0909T`）**：按下方「还债动作」逐字落地。新增独立的
 `HR_LIAISON_LOG_RETENTION_DAYS`（默认 **30**，非法值走 `RetentionConfigError` 同一套
@@ -1178,7 +1178,7 @@ fail-closed），`run_cleanup` 里按 **mtime** 清 `data/liaison/logs/*.log.*`�
 
 ---
 
-## ~~TD-34~~ · `test_file_appearing_after_the_scan_is_not_deleted` 并不能区分修复前后 ✅ 已还（COMMIT_0909T）
+## ~~TD-34~~ · `test_file_appearing_after_the_scan_is_not_deleted` 并不能区分修复前后 ✅ 已还（ac686d1）
 
 **2026-09-09 已处置（`0909T`）**：新写
 `test_ledger_row_committed_after_the_scan_still_protects_its_file`，它对读顺序**真正敏感**。
