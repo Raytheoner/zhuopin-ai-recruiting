@@ -129,7 +129,12 @@ launchctl print gui/$UID/com.zhuopin.hr.lane-launcher >/dev/null 2>&1; echo $?
    出现 `<同名>.rejected` ＝ 参数没过白名单；`<同名>.deferred` ＝ 有 run-lanes 在跑。
    ⚠️ **`.deferred` 不会自动重试**（它已不匹配 `*.request`），要重发得写一个新的 `.request`
 
-**非 0（未装）→ 退路不变**：把启动命令原样贴成 ` ```bash ` 代码块给 Shao Peishen 点 Run，
+> 🔴 **09-09 首次实跑（`0909Y`）：请求文件路只成了一半**——监听→白名单→认领→`.started` 六秒走通，但 run-lanes 被 launchd **连坐杀掉**：
+> plist 缺 `AbandonProcessGroup`（launcher 退出时 launchd 回收整个进程组，`nohup` 挡不住 SIGKILL），且 `EnvironmentVariables` 没设 `PATH`（launchd 默认 PATH 无 `~/.local/bin`，`command -v claude` 会 exit 10）。
+> 两处都在 `scripts/install_lane_launcher.py` 生成的 plist 里，**重装不修脚本只会复现**。修好前每批仍走下面的退路；修好的验收＝写一份 `.request` 后 `lanes-*` 目录真建出来。
+> ⚠️ 退路命令**不要带 `echo "PID=$!"`**——粘进 zsh 会卡在 `dquote>` 一字不跑（09-09 实测）；日志路径**带批次号**（`/tmp/run-lanes-<批次>.log`），别冲掉上一批的 `/tmp/run-lanes-boot.log`。
+
+**非 0（未装）或 launchd 被坐实杀进程 → 退路**：把启动命令原样贴成 ` ```bash ` 代码块给 Shao Peishen 点 Run（无引号版：`cd /Users/paulshao/Projects/HumanResource && nohup bash docs/openers/run-lanes.sh --full-auto --yes … > /tmp/run-lanes-<批次>.log 2>&1 &`），
 并在回话里附上装触发器的那一行（他在 Terminal 跑一次即可，⛔ Claude 不代跑，起 LaunchAgent 属安全配置）：
 
 ```bash

@@ -58,7 +58,7 @@
 
 并发安全靠机器自愈，**不靠"他记得别同时开"**。每条并行指令内必须逐字内嵌这四条：
 
-1. **只 `git add` 本条明确列出的路径。** ⛔ 禁止 `git add -A` / `git add .` / `git commit -a`——这是并行成立的唯一前提
+1. **只 `git add` 本条明确列出的路径。** ⛔ 禁止 `git add -A` / `git add .` / `git commit -a` / `git stash`（含 `-u`，会卷走别的泳道未提交的工作，09-09 `0909M` 虚惊一次）——这是并行成立的唯一前提
 2. `git status` 里出现别人的改动是正常的，不要停下、不要问、不要顺手提交
 3. push 被拒 → `git pull --rebase --autostash origin main` 后重试，最多 3 次。⛔ 不要在 commit 前 pull——并发下别人的未提交改动会挡住 rebase（实测 `error: cannot pull with rebase`），`--autostash` 才能带着它们跑完
 4. 报 `.git/index.lock` 已存在 → 等 5 秒重试最多 5 次，⛔ **默认绝不删除该锁**（另一个 session 正在用，删了会毁掉它的提交）。
