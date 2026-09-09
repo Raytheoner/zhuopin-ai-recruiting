@@ -1,18 +1,18 @@
 """`tools/liaison/tests` 的公共夹具。
 
-**为什么必须有这个文件**：8.4 Task 4 会把 `setup_logging()` 接进 `main()`，
-届时现存的一批 `test_main_*` 用例会是真的会调 `liaison_main.main()` 的。没有
-下面这条 autouse fixture，本机跑一次 pytest 就会在 `data/liaison/logs/` 下拉出
-真实日志文件——`data/` 虽在 `.gitignore` 里不会被提交，但「日志是个人信息的
-第二份拷贝」（`.gitignore:17` 原话），让它在开发机上无声堆积不是可以接受的
-默认。
+**为什么必须有这个文件**：`main()` 的第一句就是 `setup_logging()`（8.4 Task 4，
+commit `046bdf9` 已落地），现存的一批 `test_main_*` 用例是真的会调
+`liaison_main.main()` 的。没有下面这条 autouse fixture，本机跑一次 pytest 就
+会在 `data/liaison/logs/` 下拉出真实日志文件——`data/` 虽在 `.gitignore` 里不会
+被提交，但「日志是个人信息的第二份拷贝」（`.gitignore:17` 原话），让它在开发机
+上无声堆积不是可以接受的默认。
 
-⚠️ 截至本 commit，Task 4 的接线尚未落地，`main()` 还不会调 `setup_logging()`，
-本 fixture 今天是空转的——没有它也不会有文件落盘。它的负载能力已用模拟实验
-验证：按 Task 4 即将接的方式手工调一次 `setup_logging()` 再跑全量套件，去掉
-本 fixture 会在 `data/liaison/logs/liaison.log` 写入 37,607 字节；接上本
-fixture 后写入量为 0。等 Task 4 落地，这条 fixture 从「预防性」变成
-「真正兜底」，行为不必等到那时候再验证。
+⚠️ **这条 fixture 今天是真正兜底的，⛔ 不是空转、不可删**：它的负载能力已用
+模拟实验验证过——按 Task 4 接线的方式手工调一次 `setup_logging()` 再跑全量
+套件，去掉本 fixture 会在 `data/liaison/logs/liaison.log` 写入 37,607 字节；
+接上本 fixture 后写入量为 0。`main()` 的接线已经落地，任何 `test_main_*` 用例
+今天就在真实调用它——把本 fixture 当"预防性、还没派上用场"的东西删掉，下一次
+跑测试就会往仓库外的 `data/liaison/logs/` 写真实个人信息。
 """
 
 from __future__ import annotations
@@ -28,7 +28,17 @@ def liaison_logs_to_tmp(tmp_path, monkeypatch):
 
     ⚠️ teardown 里的 `teardown_logging()` ⛔ 不能省：不摘的话，上一条用例挂的
     file handler 会一直攥着一个已被 pytest 删掉的目录。
+
+    ⚠️ **level/max-bytes/backup-count 三个环境变量也要清空**（final review
+    Minor 4）：只顶 `LOG_DIR` 的话，开发者本机 shell 里若导出了
+    `HR_LIAISON_LOG_LEVEL`（比如调试时设过 `ERROR`），会漏进每一条调
+    `setup_logging()` 不显式传 `level=` 的用例，让它们的通过与否跟着宿主环境
+    漂——同一批用例，装了这三行 delenv 前后应该在「导出/不导出」两种环境下
+    结果一致，这条本身就是「测试套件是否 hermetic」的判据。
     """
     monkeypatch.setenv(logsetup.LOG_DIR_ENV, str(tmp_path / "liaison-logs"))
+    monkeypatch.delenv(logsetup.LOG_LEVEL_ENV, raising=False)
+    monkeypatch.delenv(logsetup.LOG_MAX_BYTES_ENV, raising=False)
+    monkeypatch.delenv(logsetup.LOG_BACKUP_COUNT_ENV, raising=False)
     yield
     logsetup.teardown_logging()

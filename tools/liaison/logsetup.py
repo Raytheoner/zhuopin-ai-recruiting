@@ -305,27 +305,50 @@ def _resolve_level(raw: str | None) -> str:
     里很容易手抖多打一个空格）或数字级别（`20` 是很常见的约定）没有理由把整个
     进程在装配日志之前——`setup_logging()` 是 `main()` 的第一句，此时还没有任何
     handler——就用一条未捕获异常打死。取不到、非法一律回落到 `DEFAULT_LEVEL`。
+
+    ⚠️ **`NOTSET` 被排除在外**（final review Minor 6）：`logging.NOTSET`（值 0）
+    技术上是一个合法级别名，但语义是「没有设置，跟随父级 effective level」——
+    包级 logger 的父级是 root，root 默认 `WARNING`。原样接受的话，运维传一个
+    望文生义的 `HR_LIAISON_LOG_LEVEL=NOTSET`（期望"什么都记录"）会静默变成
+    "只记 WARNING 以上"，比压根不设这个变量更容易让人误解。宁可回落
+    `DEFAULT_LEVEL`，也不放这个反直觉的行为过去。
     """
     candidate = (raw or DEFAULT_LEVEL).strip().upper()
     names = logging.getLevelNamesMapping()
-    if candidate in names:
+    if candidate in names and candidate != "NOTSET":
         return candidate
     try:
         numeric = int(candidate)
     except ValueError:
         return DEFAULT_LEVEL
+    if numeric == logging.NOTSET:
+        return DEFAULT_LEVEL
     for name, value in names.items():
-        if value == numeric:
+        if value == numeric and name != "NOTSET":
             return name
     return DEFAULT_LEVEL
 
 
 def _resolve_log_dir(explicit: "str | os.PathLike[str] | None") -> pathlib.Path:
+    """⚠️ **两个 `expanduser()` 调用都必须被兜住**（final review Important 1）：
+    对形如 `~nosuchuser/…` 的路径，`expanduser()` 抛的是 `RuntimeError`
+    （"Could not determine home directory"），⛔ 不是 `OSError`——下游
+    `_probe_writable` 只兜 `OSError`，这个异常会直接穿透 `setup_logging()`
+    （`main()` 的第一句，此时还没有任何 handler），变成一次无日志、无
+    `LoggingStatus` 的 launchd 崩溃循环。取不到就回落 `DEFAULT_LOG_DIR`，让
+    `_probe_writable` 按老路径继续走「不可写就降级」，而不是让路径解析本身
+    成为第二条会崩溃的路。"""
     if explicit is not None:
-        return pathlib.Path(explicit).expanduser()
+        try:
+            return pathlib.Path(explicit).expanduser()
+        except (RuntimeError, OSError, ValueError):
+            return DEFAULT_LOG_DIR
     override = os.environ.get(LOG_DIR_ENV)
     if override and override.strip():
-        return pathlib.Path(override.strip()).expanduser()
+        try:
+            return pathlib.Path(override.strip()).expanduser()
+        except (RuntimeError, OSError, ValueError):
+            return DEFAULT_LOG_DIR
     return DEFAULT_LOG_DIR
 
 
@@ -440,7 +463,14 @@ def setup_logging(
     stream_handler = logging.StreamHandler(sys.stderr)
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(RedactionFilter())
-    stream_handler.setLevel(resolved_level)
+    # ⛔ 不设 stream_handler.setLevel(...)（final review Important 2）：包级
+    # logger 自己的 setLevel(resolved_level) 已经在 callHandlers 派发前把低于
+    # 级别的 record 挡掉了，handler 级别的 setLevel 只是重复同一道闸门——而
+    # `Logger.callHandlers` 是先比较 `record.levelno` 和 `hdlr.level`、比较不过
+    # 才连 `hdlr.handle()`（也就是本 handler 的 `RedactionFilter`）都不会跑，
+    # 直接把这条 record 原样甩给下一个 handler。`propagate=True` 是本模块刻意
+    # 保留的，于是任何比 handler level 低的记录会在完全跳过脱敏的情况下明文
+    # 传到 root 上的其它 handler——这道多余的闸门不省事，只白白开一扇泄露窗。
     setattr(stream_handler, MANAGED_HANDLER_ATTR, True)
     logger.addHandler(stream_handler)
 
@@ -461,7 +491,8 @@ def setup_logging(
         else:
             file_handler.setFormatter(formatter)
             file_handler.addFilter(RedactionFilter())
-            file_handler.setLevel(resolved_level)
+            # ⛔ 同上不设 file_handler.setLevel(...)——理由见 stream_handler 那条
+            # 注释，两处是同一个漏洞的两个实例。
             setattr(file_handler, MANAGED_HANDLER_ATTR, True)
             logger.addHandler(file_handler)
             handler_names.append("file")

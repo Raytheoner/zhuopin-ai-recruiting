@@ -10,6 +10,7 @@ level、`RedactingFormatter.formatException` 源头脱敏）。本文件只负�
 from __future__ import annotations
 
 import ast
+import io
 import logging
 import logging.handlers
 import pathlib
@@ -294,3 +295,101 @@ def test_logsetup_imports_no_app_module():
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 assert not alias.name.startswith("app"), f"⛔ 不许 import {alias.name}"
+
+
+# ---------------------------------------------------------------------------
+# 8. Final review fix wave（三条 Important/Minor，均落在计划/前几轮 review 已
+#    通过的代码里）：`~nosuchuser` 路径不许崩、handler 级 setLevel 泄露窗口已
+#    拆除、包级门控仍然生效。
+# ---------------------------------------------------------------------------
+
+
+def test_setup_logging_does_not_crash_when_log_dir_env_names_an_unresolvable_user(
+    monkeypatch, tmp_path
+):
+    """final review Important 1：`~nosuchuser_zz/logs` 这类取不到 home 目录的路径，
+    `pathlib.Path.expanduser()` 抛的是 `RuntimeError`（"Could not determine home
+    directory"），不是 `_probe_writable` 兜的 `OSError`——修复前这个异常直接穿透
+    `setup_logging()`（`main()` 第一句，此时还没有任何 handler），变成一次无日志、
+    无 `LoggingStatus` 的 launchd 崩溃循环。
+
+    ⚠️ 把 `DEFAULT_LOG_DIR` monkeypatch 到 `tmp_path` 下：回落分支今天落的是这个
+    模块常量，不隔离的话本用例会真的在仓库的 `data/liaison/logs/` 下创建文件。
+    """
+    monkeypatch.setattr(logsetup, "DEFAULT_LOG_DIR", tmp_path / "fallback-logs")
+    monkeypatch.setenv(logsetup.LOG_DIR_ENV, "~nosuchuser_zz/logs")
+
+    status = logsetup.setup_logging()
+
+    assert status.configured is True
+
+
+def test_setup_logging_does_not_crash_when_log_dir_kwarg_names_an_unresolvable_user(
+    monkeypatch, tmp_path
+):
+    """同一个洞的另一个入口：显式传 `log_dir=` 走的是 `_resolve_log_dir` 的
+    `explicit is not None` 分支，⛔ 两个分支都要兜，不能只兜环境变量那一条。"""
+    monkeypatch.setattr(logsetup, "DEFAULT_LOG_DIR", tmp_path / "fallback-logs")
+
+    status = logsetup.setup_logging(log_dir="~nosuchuser_zz/logs")
+
+    assert status.configured is True
+
+
+def test_handler_level_setlevel_removal_stops_a_root_sink_plaintext_leak(tmp_path):
+    """final review Important 2：`Logger.callHandlers` 先比较 `record.levelno` 与
+    `hdlr.level`，比不过连 `hdlr.handle()`（含本 handler 挂的 `RedactionFilter`）
+    都不会跑，`propagate=True`（本模块刻意保留）下这条完全未脱敏的 record 会
+    原样传到 root 上的其它 handler。复现场景：包级 logger 钉在 ERROR，某个子
+    logger 自己单独调低到 DEBUG（绕开包级门控），root 挂一个裸 `StreamHandler`
+    + 裸 `logging.Formatter`。泄露的是**整条消息体**，不只是 traceback。
+    """
+    logsetup.setup_logging(log_dir=tmp_path, level="ERROR")
+    child = logging.getLogger("tools.liaison.inbound")
+    child.setLevel(logging.DEBUG)
+
+    root = logging.getLogger()
+    sink = io.StringIO()
+    root_handler = logging.StreamHandler(sink)
+    root_handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(root_handler)
+    try:
+        child.warning("候选人手机 13812345678 邮箱 a@b.com")
+    finally:
+        root.removeHandler(root_handler)
+        child.setLevel(logging.NOTSET)
+
+    leaked = sink.getvalue()
+    assert "13812345678" not in leaked, f"手机号明文泄露到了 root sink：{leaked!r}"
+    assert "a@b.com" not in leaked, f"邮箱明文泄露到了 root sink：{leaked!r}"
+
+
+def test_package_level_still_gates_records_after_handler_level_removal(tmp_path):
+    """摘掉 handler 级 `setLevel` 之后，包级 `logger.setLevel(resolved_level)`
+    必须仍然是唯一、有效的那道闸门：包级钉在 ERROR 时，一条 DEBUG 记录不许
+    被写进文件（回归——防止「删两行」被人顺手删多了，把门控整个删没）。
+    """
+    status = logsetup.setup_logging(log_dir=tmp_path, level="ERROR")
+    logging.getLogger("tools.liaison.gating_probe").debug("不该出现在文件里")
+    for handler in logging.getLogger(logsetup.PACKAGE_LOGGER_NAME).handlers:
+        handler.flush()
+
+    assert status.log_file is not None
+    contents = pathlib.Path(status.log_file).read_text(encoding="utf-8")
+    assert "不该出现在文件里" not in contents
+
+
+def test_notset_log_level_falls_back_to_default_instead_of_meaning_warning(tmp_path):
+    """final review Minor 6：`NOTSET`（值 0）技术上是合法级别名，但语义是"跟随
+    父级 effective level"——包级 logger 的父级 root 默认 WARNING。原样接受会让
+    望文生义的 `HR_LIAISON_LOG_LEVEL=NOTSET`（期望"什么都记录"）静默变成"只记
+    WARNING 以上"。两种拼法（字符串名与数字 `'0'`）都要回落到 `DEFAULT_LEVEL`。
+    """
+    logger = logging.getLogger(logsetup.PACKAGE_LOGGER_NAME)
+    default_value = logging.getLevelNamesMapping()[logsetup.DEFAULT_LEVEL]
+
+    logsetup.setup_logging(log_dir=tmp_path, level="NOTSET")
+    assert logger.level == default_value
+
+    logsetup.setup_logging(log_dir=tmp_path, level="0")
+    assert logger.level == default_value
