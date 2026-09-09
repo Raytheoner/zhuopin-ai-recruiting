@@ -172,6 +172,32 @@ def test_log_dir_comes_from_the_process_environment(tmp_path, monkeypatch):
     assert status.log_file == str(target / logsetup.LOG_FILENAME)
 
 
+def test_resolve_log_dir_is_the_single_source_of_truth_for_the_log_directory(
+    tmp_path, monkeypatch
+):
+    """🔴 TD-30：留存期清理要清的是**这个**目录下的轮转产物。
+
+    `resolve_log_dir()` 是公开入口，它与 `setup_logging` 实际写日志的目录必须
+    是同一个——⛔ 不许在清理侧另写一遍"读 `HR_LIAISON_LOG_DIR`、读不到用默认"。
+    那种分叉的症状是"清理跑得很成功，清的却是一个没人往里写的空目录"，
+    没有任何报错、没有任何日志能说明它。
+    """
+    # ⚠️ 先摘掉 conftest 那条 autouse fixture 顶上去的 LOG_DIR，才能看到"没配"
+    # 这一支；⛔ 不要把 delenv 挪到用例外面——那条 fixture 是本目录全部用例的
+    # 真实数据护栏（见 tools/liaison/tests/conftest.py），只该在这一条里让位。
+    monkeypatch.delenv(logsetup.LOG_DIR_ENV, raising=False)
+    assert logsetup.resolve_log_dir() == logsetup.DEFAULT_LOG_DIR
+    target = tmp_path / "from-env"
+    monkeypatch.setenv(logsetup.LOG_DIR_ENV, str(target))
+    assert logsetup.resolve_log_dir() == target
+    # 显式入参优先于环境变量（与 setup_logging 的 log_dir= 同一条口径）。
+    explicit = tmp_path / "explicit"
+    assert logsetup.resolve_log_dir(explicit) == explicit
+    # 与真正写日志的那个目录逐字一致。
+    status = logsetup.setup_logging()
+    assert pathlib.Path(status.log_file).parent == logsetup.resolve_log_dir()
+
+
 def test_bad_env_values_fall_back_to_defaults_instead_of_crashing(tmp_path, monkeypatch):
     """手抖的环境变量 ⛔ 不许把进程的第一个动作打死。"""
     monkeypatch.setenv(logsetup.LOG_MAX_BYTES_ENV, "不是数字")

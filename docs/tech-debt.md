@@ -1060,7 +1060,19 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 
 ---
 
-## TD-30 日志留存期只有容量上界，缺时间维度的清理
+## ~~TD-30~~ 日志留存期只有容量上界，缺时间维度的清理 ✅ 已还（COMMIT_0909T）
+
+**2026-09-09 已处置（`0909T`）**：按下方「还债动作」逐字落地。新增独立的
+`HR_LIAISON_LOG_RETENTION_DAYS`（默认 **30**，非法值走 `RetentionConfigError` 同一套
+fail-closed），`run_cleanup` 里按 **mtime** 清 `data/liaison/logs/*.log.*`。
+⛔ **没有**复用 `HR_LIAISON_RETENTION_DAYS`（180）——D13 明写两者刻意不对齐，
+`test_log_retention_days_has_its_own_env_var` 把这条钉死。
+三处刻意的收窄：① ⛔ 不删当前活动日志 `liaison.log` 本体（`RotatingFileHandler`
+正攥着它的 fd，unlink 之后日志会静默进黑洞直到下一次轮转）；② ⛔ 不递归子目录、
+⛔ 不跟符号链接；③ 日志那一遍与归档那两遍**完全解耦**——一条读不出来的
+`attachments_json` 会停住归档清理，但 ⛔ 不该连坐日志（两者之间没有任何引用关系）。
+清理目录取自 `logsetup.resolve_log_dir()`，与 `setup_logging` 真正写日志的目录同一个
+真源，⛔ 不在清理侧另读一遍环境变量。
 
 **登记时间**：2026-09-09（第 8 章 8.4 run-build 收口，[Mac]0909M）
 **位置**：`tools/liaison/logsetup.py`（缺的动作不在任何文件里）
@@ -1166,7 +1178,22 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 
 ---
 
-## TD-34 · `test_file_appearing_after_the_scan_is_not_deleted` 并不能区分修复前后
+## ~~TD-34~~ · `test_file_appearing_after_the_scan_is_not_deleted` 并不能区分修复前后 ✅ 已还（COMMIT_0909T）
+
+**2026-09-09 已处置（`0909T`）**：新写
+`test_ledger_row_committed_after_the_scan_still_protects_its_file`，它对读顺序**真正敏感**。
+两处改动缺一不可：① 那个文件在 `fake_iter` 调 `real_iter` **之前**就落盘，因此
+**包含在返回的候选快照里**（旧用例的致命处正是它不在快照里，而「不在快照里的文件
+不会被删」是恒真的）；② 它的台账行在**扫盘之后**才提交（`_archive` 内部 commit），
+模拟 `archive_message` 先写文件后写台账行的真实顺序。
+
+**自证（⛔ 未用 `git stash`，CLAUDE.md 并行铁律禁止）**：用
+`git worktree add --detach` 在修复前的 `1f2d018` 上开一个一次性 worktree，把新旧两条
+用例的等价探针一起丢进去跑，实测 **新用例 FAILED（`deleted_files` 里真的出现了
+`u1/20260101/late__c.bin`，即 design D3 禁止的「台账已记、材料缺失」）、旧用例 PASSED**，
+与本条登记的判断逐字吻合。探针与该 worktree 已删除，⛔ 未进版本管理。
+旧用例**保留**并改了 docstring，说明它守的是另一件事（「不在快照里的文件不会被删」
+这条自愈性质），⛔ 不再把它当 finding 5(a) 的回归测试。
 
 **登记**：2026-09-09 [Mac]0909K（8.1–8.2 终审后 scoped re-review 实测发现）
 **位置**：`tools/liaison/tests/test_retention.py`（该用例）
@@ -1184,3 +1211,46 @@ checkout（`1f2d018`）跑，**通过**。
 **触发条件**：下一条泳道再动 `run_cleanup` 的读顺序之前（8.3/8.4 或 8.6 灰度）。
 **不还的后果**：未来某次重构悄悄把读顺序改回去，整套测试仍然全绿——
 症状是"归档文件在台账行还没写完时被删掉"，即 design D3 明令禁止的那个中间态。
+
+---
+
+## TD-35 · `assert_effect_log_identity` 对 `liaison_task` 的严格恒等与裁决一冲突
+
+**登记**：2026-09-09 `0909T`（还冲突 B / 裁决一时当场发现）
+**位置**：`tools/liaison/tests/test_liaison_effects.py` 的 `assert_effect_log_identity`
+（第 775 行那个 `if table == "liaison_message":` 收窄）
+**级别**：不阻塞 8.6 灰度（队列侧的账目已有等价强度的替代断言，见下）
+
+**欠的是什么**：8.1–8.2 终审的 finding 2 把「清理会让业务表行数变少」这条豁免
+**刻意收窄**到只对 `liaison_message` 成立，理由逐字是「`liaison_task` 从不被清理删除
+（opener 约束 2）」。裁决一（2026-09-09）推翻了那个前提——终态（`pushed`）且超期的
+队列行现在会被连带清掉，于是在**被清理过的 thread** 上，
+`effect_enqueue_task` 的 `effect_log` 行数必然大于 `liaison_task` 的行数，
+`assert_effect_log_identity` 会因为一个**完全正当**的理由变红。
+
+**当次为什么不改**：那个文件由别的泳道持有，`0909T` 的 opener 明确列了可动文件清单
+（⛔ 只动 `retention.py` / `logsetup.py` / 两个对应测试 / 两份规格 / TD-30·34 两段），
+擅自改一个共享的机器守卫会和并行泳道撞在同一个函数上。
+
+**当次的兜底（⛔ 不是"没管"）**：
+1. `test_retention.py` 的 `assert_retention_accounting` 加了**第二条记账等式**
+   ——`入队 effect 行数 == 存活队列行数 + 连带已清的队列行数`，右边那一项完全从
+   `effect_log`（一行不删）推出来：既留下过 `effect_enqueue_task` 又留下过
+   `RETENTION_DELETE_NODE` 的那些 `business_key`。⛔ 不是宽松判据，强度与原恒等式相当。
+2. `test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row` 用
+   `pytest.raises(AssertionError)` 把这个缺口**钉成可见的**，⛔ 不让它静默。
+
+**还债动作**：把 `assert_effect_log_identity` 的豁免从「只对 `liaison_message`」放开到
+「`liaison_message` 与 `liaison_task` 都对 `cleaned_threads` 豁免」，
+并在 docstring 里把 finding 2 的理由更新成裁决一之后的口径。
+🔴 ⛔ **不许**顺手把它削弱成总数比较或「约等于」——那是原 docstring 明令禁止的，
+它是铁律 1 唯一的机器守卫。⛔ 也不许删掉
+`test_identity_assertion_still_catches_a_break_in_an_uncleaned_thread`。
+还完之后 `test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row` 必须
+**改成正断言**（直接调 `assert_effect_log_identity(conn)` 且通过），⛔ 不许删掉了事
+——删掉就等于把这个缺口重新变成静默的。
+
+**触发条件**：下一条持有 `test_liaison_effects.py` 的泳道；最迟不得晚于 8.6 单机灰度
+（灰度会真的产生终态队列行，那之后这条守卫的覆盖缺口开始有实际影响）。
+**不还的后果**：`effect_enqueue_task` ↔ `liaison_task` 这一对在被清理过的 thread 上
+不再有任何断言检查——那正是铁律 1 的核心不变式，而缺口是静默的。

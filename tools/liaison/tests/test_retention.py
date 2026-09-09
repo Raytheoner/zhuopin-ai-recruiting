@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import pathlib
 import sys
 
@@ -19,13 +20,29 @@ CHINA_TZ = datetime.timezone(datetime.timedelta(hours=8))
 NOW = datetime.datetime(2026, 9, 9, 12, 0, 0, tzinfo=CHINA_TZ)
 
 
-def _row(msgid, *, archived_at, has_queue_row=False, attachments_json="[]", thread_id="u1"):
+def _row(
+    msgid,
+    *,
+    archived_at,
+    queue_send_status=None,
+    queue_pushed_at=None,
+    attachments_json="[]",
+    thread_id="u1",
+):
+    """构造一行台账。
+
+    🔴 裁决一之后队列侧有**两列**：`queue_send_status is None` ＝ 没有队列行；
+    `"pending"` / `"deferred"` ＝ 活台账；`"pushed"` 必须同时给 `queue_pushed_at`
+    （表级等式 CHECK 在库里就是这么钉的，替身也照这个形状给，⛔ 不许只给状态
+    不给时间——那会让用例在一个库里不可能出现的形状上通过）。
+    """
     return MessageRow(
         msgid=msgid,
         thread_id=thread_id,
         archived_at=archived_at,
         attachments_json=attachments_json,
-        has_queue_row=has_queue_row,
+        queue_send_status=queue_send_status,
+        queue_pushed_at=queue_pushed_at,
     )
 
 
@@ -99,12 +116,114 @@ def test_compute_expired_keeps_the_row_exactly_on_the_boundary():
     assert split.deletable == ()
 
 
-def test_compute_expired_puts_queued_rows_in_their_own_bucket():
-    """🔴 冲突 B：有队列行的消息 ⛔ 不删，但也 ⛔ 不静默——单独成桶。"""
-    queued = _row("m-queued", archived_at="2026-01-01 00:00:00", has_queue_row=True)
+@pytest.mark.parametrize("status", ["pending", "deferred"])
+def test_compute_expired_keeps_non_terminal_queue_rows_in_their_own_bucket(status):
+    """🔴 裁决一：**非终态**（🆕 待发 / ⏸ 暂缓）队列行仍是活台账，⛔ 不删，
+    但也 ⛔ 不静默——单独成桶。"""
+    queued = _row("m-queued", archived_at="2026-01-01 00:00:00", queue_send_status=status)
     split = retention.compute_expired(NOW, 180, [queued])
     assert split.deletable == ()
+    assert split.deletable_with_task == ()
     assert [item.msgid for item in split.blocked_by_queue] == ["m-queued"]
+
+
+def test_compute_expired_deletes_terminal_queue_row_together_with_its_archive():
+    """🔴 裁决一 / 方案 ②：终态（✅ 已推送）且**两个时间都过期** ⇒ 连队列行一起清。"""
+    row = _row(
+        "m-pushed",
+        archived_at="2026-01-01 00:00:00",
+        queue_send_status="pushed",
+        queue_pushed_at="2026-01-02T08:00:00+08:00",
+    )
+    split = retention.compute_expired(NOW, 180, [row])
+    assert split.deletable == ()
+    assert split.blocked_by_queue == ()
+    assert [item.msgid for item in split.deletable_with_task] == ["m-pushed"]
+    assert split.deletable_with_task[0].deletes_task_row is True
+    # 两个可删桶合起来才是"本轮要删的全部"。
+    assert [item.msgid for item in split.all_deletable] == ["m-pushed"]
+
+
+def test_compute_expired_needs_both_timestamps_expired_before_touching_the_queue_row():
+    """🔴 裁决一逐字：新桶要求**两个时间都过期**，少一个就不删。
+
+    这一条是新桶唯一的收窄判据，⛔ 不要"简化"成只看 `archived_at`：材料旧了
+    只说明材料旧了，`pushed_at` 还在回溯窗口内意味着"这份材料几时递出去过"
+    仍是活信息，删掉它就是让这件事当场失忆。
+    """
+    # archived_at 过期、pushed_at 没过期（昨天才推送）⇒ 仍 blocked。
+    fresh_push = _row(
+        "m-fresh-push",
+        archived_at="2026-01-01 00:00:00",
+        queue_send_status="pushed",
+        queue_pushed_at="2026-09-08T08:00:00+08:00",
+    )
+    split = retention.compute_expired(NOW, 180, [fresh_push])
+    assert split.deletable_with_task == ()
+    assert [item.msgid for item in split.blocked_by_queue] == ["m-fresh-push"]
+
+    # 反向：pushed_at 过期、archived_at 没过期 ⇒ 连"超期"都不成立，四桶全空。
+    fresh_archive = _row(
+        "m-fresh-archive",
+        archived_at="2026-09-01 00:00:00",
+        queue_send_status="pushed",
+        queue_pushed_at="2026-01-02T08:00:00+08:00",
+    )
+    split = retention.compute_expired(NOW, 180, [fresh_archive])
+    assert split.deletable == ()
+    assert split.deletable_with_task == ()
+    assert split.blocked_by_queue == ()
+    assert split.undecidable == ()
+
+
+def test_compute_expired_boundary_pushed_at_exactly_on_cutoff_is_kept():
+    """`pushed_at` 恰好落在 cutoff 上 ⇒ 保留（与 `archived_at` 同一条严格小于口径）。
+
+    ⛔ 不许改成 `<=`：边界上多留一天是安全方向，少留一天是不可逆的删除。
+    """
+    cutoff = retention.compute_cutoff(NOW, 180)
+    row = _row(
+        "m-boundary",
+        archived_at="2026-01-01 00:00:00",
+        queue_send_status="pushed",
+        queue_pushed_at=cutoff.isoformat(),
+    )
+    split = retention.compute_expired(NOW, 180, [row])
+    assert split.deletable_with_task == ()
+    assert [item.msgid for item in split.blocked_by_queue] == ["m-boundary"]
+
+
+def test_compute_expired_reports_unparseable_pushed_at_instead_of_deleting():
+    """终态却读不出 `pushed_at`（库里被表级等式 CHECK 挡着，但坏数据仍要有出口）
+    ⇒ 进 `undecidable`、⛔ 不删。
+
+    🔴 刻意**不**落进 `blocked_by_queue`：那个桶的语义是"一条正常的活台账"，
+    一条坏数据混进去就再也不会有任何信号被看见（`blocked_by_queue` 只在有失败
+    时才进告警文本，而 `undecidable` ⇒ `skipped` 每轮都会独立触发一条告警）。
+    """
+    row = _row(
+        "m-bad-push",
+        archived_at="2026-01-01 00:00:00",
+        queue_send_status="pushed",
+        queue_pushed_at="前天",
+    )
+    split = retention.compute_expired(NOW, 180, [row])
+    assert split.deletable == ()
+    assert split.deletable_with_task == ()
+    assert split.blocked_by_queue == ()
+    assert [item.subject for item in split.undecidable] == ["m-bad-push"]
+
+
+def test_compute_expired_treats_an_unknown_queue_status_as_a_live_ledger():
+    """将来真多出第四个状态时，默认必须落到**保留**那一侧。
+
+    ⛔ 不许把判据写成"等于 pending 或 deferred 才保留"——那会让一个未知状态
+    默认走进删除路径，而删除是不可逆的。
+    """
+    row = _row("m-future", archived_at="2026-01-01 00:00:00", queue_send_status="escalated")
+    split = retention.compute_expired(NOW, 180, [row])
+    assert split.deletable_with_task == ()
+    assert [item.msgid for item in split.blocked_by_queue] == ["m-future"]
 
 
 def test_compute_expired_reports_unparseable_rows_instead_of_guessing():
@@ -157,6 +276,7 @@ def test_compute_expired_is_pure_and_takes_no_clock(monkeypatch):
 import sqlite3
 
 from tools.liaison.storage import db as liaison_db
+from tools.liaison import logsetup, queue
 from tools.liaison.storage.effects import effect_archive_message, effect_enqueue_task
 from tools.liaison.tests.test_liaison_effects import assert_effect_log_identity
 
@@ -217,8 +337,8 @@ def test_effect_log_is_never_deleted(conn):
     assert nodes == ["effect_archive_message", "effect_delete_expired_message"]
 
 
-def test_message_with_queue_row_is_never_deleted(conn):
-    """🔴 冲突 B：有队列行的超期消息 ⛔ 不删，且队列行一行不少。"""
+def test_message_with_a_non_terminal_queue_row_is_never_deleted(conn):
+    """🔴 裁决一：队列行还是 `pending`（活台账）⇒ 超期消息 ⛔ 不删，队列行一行不少。"""
     _archive(conn, "m-queued", archived_at=OLD)
     effect_enqueue_task(
         conn,
@@ -235,6 +355,181 @@ def test_message_with_queue_row_is_never_deleted(conn):
     assert [item.msgid for item in split.blocked_by_queue] == ["m-queued"]
     assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
+
+
+def _enqueue(conn, msgid, *, thread_id="u1"):
+    effect_enqueue_task(
+        conn, thread_id=thread_id, business_key=msgid, sender_userid=thread_id,
+        received_at="2026-01-01T08:00:00+08:00", summary="s",
+    )
+    conn.commit()
+
+
+def _push(conn, msgid, *, thread_id="u1", pushed_at="2026-01-02T08:00:00+08:00"):
+    """把队列行推进终态。⛔ 不直接 UPDATE：走 `queue.mark_task_pushed` 才会同时
+    受到三态 CHECK、`pushed_at` 等式 CHECK 与幂等装饰器的约束，用例里的形状
+    因此和生产里可能出现的形状一致。"""
+    assert queue.mark_task_pushed(conn, thread_id=thread_id, msgid=msgid, pushed_at=pushed_at)
+    conn.commit()
+
+
+def test_the_test_connection_really_enforces_foreign_keys(conn):
+    """🔴 下面那批"删除顺序 FK 安全"的用例全部依赖外键**真的在生效**。
+
+    `PRAGMA foreign_keys` 默认是 **OFF**，是 `storage/db.py` 显式打开的。这一条
+    钉住它——否则"先删 task 再删 message 能跑通"这件事可能只是因为根本没人检查
+    外键，那批用例会变成一组无声通过的空壳。
+    """
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_terminal_queue_row_is_deleted_together_with_its_message(conn):
+    """🔴 裁决一 / 方案 ②：终态且两个时间都超期 ⇒ 队列行与台账行一起没了。
+
+    **删除顺序的 FK 安全性就由这一条证**：`liaison_task.msgid` 外键指向
+    `liaison_message(msgid)`，且上一条用例已钉死本连接真的在执行外键。若顺序
+    反了（先删 message），SQLite 会在这里抛 `IntegrityError`（正是
+    `test_foreign_key_is_the_second_line_of_defence` 演示的那个异常），本用例
+    当场变红。它能绿，只可能是因为顺序是 task → message。
+    """
+    _archive(conn, "m-pushed", archived_at=OLD)
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    split = retention.compute_expired(NOW, 180, retention.load_message_rows(conn))
+    assert [item.msgid for item in split.deletable_with_task] == ["m-pushed"]
+    deleted, failures = retention.delete_expired_ledger_rows(conn, split.all_deletable)
+    assert deleted == ("m-pushed",)
+    assert failures == ()
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 0
+    # ⛔ effect_log 一行不删：入队与归档那两行都必须还在，另外多出清理那一行。
+    nodes = sorted(r[0] for r in conn.execute("SELECT node_name FROM effect_log"))
+    assert nodes == [
+        "effect_archive_message",
+        "effect_delete_expired_message",
+        "effect_enqueue_task",
+        "effect_mark_task_pushed",
+    ]
+    assert_retention_accounting(conn)
+
+
+def test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row(conn):
+    """⚠️ **这条用例钉的是一个已登记的缺口，⛔ 不是在庆祝断言变红。**
+
+    `assert_effect_log_identity`（`test_liaison_effects.py`，本泳道 ⛔ 不许改的
+    文件）在终审 finding 2 时把"清理会让业务表行数变少"的豁免**刻意收窄**到只对
+    `liaison_message` 成立，理由逐字是「`liaison_task` 从不被清理删除（opener
+    约束 2）」。裁决一（2026-09-09）推翻了那个前提：终态且超期的队列行现在会被
+    连带清掉，于是 `effect_enqueue_task` ↔ `liaison_task` 这一对在**被清理过的
+    thread 上**必然不再严格恒等。
+
+    队列侧的账目由 `assert_retention_accounting` 的第二条等式接住（入队 == 存活
+    + 连带已清，两边都从 `effect_log` 推出来，⛔ 不是宽松判据）。真正欠的是把
+    `assert_effect_log_identity` 的豁免范围一起放开——那要改另一个泳道持有的
+    文件，已登记为技术债（见 `docs/tech-debt.md`「`assert_effect_log_identity`
+    的 liaison_task 严格恒等与裁决一冲突」一条）。
+
+    🔴 那条债还完之后，本用例必须改成正断言（`assert_effect_log_identity(conn)`
+    直接通过），⛔ 不许删掉了事——删掉就等于把这个缺口重新变成静默的。
+    """
+    _archive(conn, "m-pushed", archived_at=OLD)
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    retention.delete_expired_ledger_rows(
+        conn, retention.compute_expired(NOW, 180, retention.load_message_rows(conn)).all_deletable
+    )
+    assert_retention_accounting(conn)          # 队列侧的账目是平的
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)       # 但那条守卫的豁免范围还没放开
+
+
+def test_no_new_effect_node_name_was_introduced(conn):
+    """🔴 裁决一逐字：幂等键沿用 `RETENTION_DELETE_NODE`，⛔ 不新增 effect 节点名。
+
+    那个名字同时是 `assert_effect_log_identity` 判断"哪些 thread 被清理过"的依据
+    （冲突 A 方案 2），新增一个名字会让连带删队列行的那些 thread 从排除集合里
+    漏出去——两处同时断，且都是静默的。
+    """
+    _archive(conn, "m-pushed", archived_at=OLD)
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    retention.delete_expired_ledger_rows(
+        conn, retention.compute_expired(NOW, 180, retention.load_message_rows(conn)).all_deletable
+    )
+    keys = [r[0] for r in conn.execute(
+        "SELECT effect_key FROM effect_log WHERE node_name = ?",
+        (retention.RETENTION_DELETE_NODE,),
+    )]
+    assert keys == ["u1:effect_delete_expired_message:m-pushed"]
+
+
+def test_queue_row_delete_is_rolled_back_when_the_message_delete_fails(conn):
+    """🔴 铁律 1：两条删除在**同一个事务**里——消息行那一条失败时，队列行那一条
+    必须被一起回滚，且 ⛔ 不许留下幂等记录（留下就等于"已执行"，永不重试）。
+
+    ⚠️ 构造方式说明：`liaison_task` 的外键只约束 `msgid`，**不约束 `thread_id`**，
+    所以可以造出"队列行记在 u1、消息行记在 u2"这种库里合法但业务上不该出现的
+    形状。它让 `delete_task_row` 那条 DELETE 命中 1 行、紧随其后的消息行 DELETE
+    命中 0 行（`rowcount != 1` ⇒ `RetentionLedgerError`）。这是本模块唯一能在
+    不打桩 sqlite 的前提下让"第二条删除失败"真实发生的路径——⛔ 不要改成
+    monkeypatch `conn.execute`，那样测到的就不再是真实的事务边界了。
+    """
+    _archive(conn, "m-x", thread_id="u2", archived_at=OLD)
+    conn.execute(
+        "INSERT INTO liaison_task (msgid, thread_id, sender_userid, received_at, summary) "
+        "VALUES ('m-x', 'u1', 'u1', '2026-01-01T08:00:00+08:00', 's')"
+    )
+    conn.commit()
+    with pytest.raises(retention.RetentionLedgerError):
+        retention.effect_delete_expired_message(
+            conn, thread_id="u1", business_key="m-x", delete_task_row=True
+        )
+    # 队列行必须还在（被回滚回来了），消息行也还在，且没有任何幂等记录。
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name = ?",
+        (retention.RETENTION_DELETE_NODE,),
+    ).fetchone()[0] == 0
+
+
+def test_deleting_a_terminal_row_twice_is_a_no_op(conn):
+    """重复执行安全（tasks 8.1）在新桶上同样成立：第二遍既不再删、也不报失败。"""
+    _archive(conn, "m-pushed", archived_at=OLD)
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    first = retention.delete_expired_ledger_rows(
+        conn, retention.compute_expired(NOW, 180, retention.load_message_rows(conn)).all_deletable
+    )
+    second = retention.delete_expired_ledger_rows(
+        conn, retention.compute_expired(NOW, 180, retention.load_message_rows(conn)).all_deletable
+    )
+    assert first[0] == ("m-pushed",)
+    assert second == ((), ())
+
+
+def test_load_message_rows_brings_back_the_queue_status_and_push_time(conn):
+    """🔴 队列侧两列由一条 `LEFT JOIN` 一次取回，⛔ 不在 Python 里逐行回查。
+
+    同时钉住"一条消息最多一行"——`liaison_task.msgid` 的 UNIQUE 掉了的话，
+    `LEFT JOIN` 会静默把一行放大成多行，进而把同一条消息删两次。
+    """
+    _archive(conn, "m-plain", archived_at=OLD)
+    _archive(conn, "m-pending", archived_at=OLD)
+    _enqueue(conn, "m-pending")
+    _archive(conn, "m-pushed", archived_at=OLD)
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    rows = {row.msgid: row for row in retention.load_message_rows(conn)}
+    assert len(rows) == 3
+    assert rows["m-plain"].queue_send_status is None
+    assert rows["m-plain"].queue_pushed_at is None
+    assert rows["m-plain"].has_queue_row is False
+    assert rows["m-pending"].queue_send_status == "pending"
+    assert rows["m-pending"].queue_pushed_at is None
+    assert rows["m-pending"].has_queue_row is True
+    assert rows["m-pushed"].queue_send_status == "pushed"
+    assert rows["m-pushed"].queue_pushed_at == "2026-01-02T08:00:00+08:00"
 
 
 def test_foreign_key_is_the_second_line_of_defence(conn):
@@ -279,11 +574,17 @@ def test_running_twice_is_a_no_op(conn):
 
 
 def assert_retention_accounting(conn):
-    """被清理过的 thread 上，铁律 1 的恒等式换成这条**更强**的等式：
+    """被清理过的 thread 上，铁律 1 的恒等式换成这两条**更强**的等式：
 
         归档 effect 行数 == 台账行数 + 清理 effect 行数
+        入队 effect 行数 == 队列行数 + 「被连带清理掉的队列行数」
 
     差额必须被"清理过多少条"逐条解释干净，⛔ 不许有解释不掉的余数。
+
+    🔴 第二条是裁决一（连带删终态队列行）逼出来的。`effect_log` 一行不删，所以
+    "被连带清理掉的队列行数"完全可以从 `effect_log` 自己推出来：既留下过
+    `effect_enqueue_task` 又留下过 `RETENTION_DELETE_NODE` 的那些 `business_key`。
+    ⛔ 不许改成"差额 >= 0"之类的宽松判据——那等于放弃这条不变式。
     """
     for (thread_id,) in conn.execute(
         "SELECT DISTINCT thread_id FROM effect_log WHERE node_name = ?",
@@ -302,6 +603,24 @@ def assert_retention_accounting(conn):
         ).fetchone()[0]
         assert archived == alive + cleaned, (
             f"留存清理记账不平：thread={thread_id} 归档 {archived} != 存活 {alive} + 已清 {cleaned}"
+        )
+        enqueued = conn.execute(
+            "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_enqueue_task' "
+            "AND thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+        alive_tasks = conn.execute(
+            "SELECT COUNT(*) FROM liaison_task WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+        cleaned_tasks = conn.execute(
+            "SELECT COUNT(*) FROM effect_log AS q WHERE q.node_name = 'effect_enqueue_task' "
+            "AND q.thread_id = ? AND EXISTS(SELECT 1 FROM effect_log AS d "
+            "WHERE d.node_name = ? AND d.thread_id = q.thread_id "
+            "AND d.business_key = q.business_key)",
+            (thread_id, retention.RETENTION_DELETE_NODE),
+        ).fetchone()[0]
+        assert enqueued == alive_tasks + cleaned_tasks, (
+            f"队列侧记账不平：thread={thread_id} 入队 {enqueued} != 存活 {alive_tasks} "
+            f"+ 连带已清 {cleaned_tasks}"
         )
 
 
@@ -495,7 +814,7 @@ def test_run_cleanup_deletes_ledger_row_then_file(conn, tmp_path):
     )
     sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink
     )
     assert report.deleted_messages == ("m-old",)
     assert report.deleted_files == ("u1/20260101/m-old__a.xlsx",)
@@ -514,20 +833,77 @@ def test_run_cleanup_keeps_files_of_surviving_rows(conn, tmp_path):
         attachments_json='[{"filename": "a.xlsx", "relative_path": "u1/20260901/m-new__a.xlsx",'
                          ' "byte_length": 1, "sha256": "x"}]',
     )
-    retention.run_cleanup(conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink())
+    retention.run_cleanup(conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=RecordingSink())
     assert (root / "u1/20260901/m-new__a.xlsx").exists()
 
 
-def test_file_appearing_after_the_scan_is_not_deleted(conn, tmp_path, monkeypatch):
-    """finding 5(a)（终审）：扫盘之后才落地的文件根本没进这一轮的候选快照，
-    因此天然不是候选——⛔ 不靠"它的年龄恰好没到"侥幸活下来。
+def test_ledger_row_committed_after_the_scan_still_protects_its_file(conn, tmp_path, monkeypatch):
+    """finding 5(a)（终审）的**能咬住**的回归测试 —— TD-34 的还债。
 
-    `archive_message` 先写文件、后写台账行（design D3）。这里用
-    `iter_archive_files` 的替身模拟"扫描完成的那一刻之后，daemon 才把材料
-    落盘"（backlog 重放的真实形状）：如果文件那一遍先读台账建 `referenced`
-    再扫盘（修复前的顺序），这份文件会被扫描到、又因为它从未进过台账而被
-    判定"无人引用"，只剩年龄一条线保它——它的路径日期是 `OLD`，早已过期，
-    修复前的顺序会把它删掉。
+    ⚠️ **旧用例（`test_file_appearing_after_the_scan_is_not_deleted`）咬不住**：
+    它的 `fake_iter` 先调 `real_iter` 拿到列表、**之后**才把"迟到"文件写到盘上
+    再返回那份旧列表，所以那个文件**根本不在返回值里**。不在候选快照里的文件在
+    任何读顺序下都不会被删，于是把它原样丢进修复前的 checkout（`1f2d018`）跑
+    **也通过**——它测的是"不在列表里的文件不会被删"，而那是恒真的。
+
+    🔴 本用例改成对读顺序敏感，靠的是**两件事同时成立**：
+      ① 那个文件**包含在 `fake_iter` 的返回列表里**（模拟"扫盘时它已在盘上"，
+         也就是 design D3 允许的中间态"材料已在、台账未记"）；
+      ② 它的台账行在**扫盘之后**才提交（模拟 `archive_message` 的真实顺序：
+         先写文件、后写台账行；`_archive` 内部会 commit）。
+
+    于是两种读顺序被真正区分开：
+      - 修复后（先扫盘、后读台账）：读 `referenced` 时台账行已提交 ⇒ 文件被判
+        "仍被引用" ⇒ 受保护。本用例绿。
+      - 修复前（先读台账建 `referenced`、后扫盘）：读 `referenced` 时台账行还
+        没提交 ⇒ 判定"无人引用"；而它**在**扫盘快照里，路径日期 `20260101`
+        早已过期 ⇒ 被删。本用例红，且红在 design D3 明令禁止的那个中间态上
+        （台账已记、材料缺失）。
+
+    ⛔ 不要把 `archived_at` 改成 `OLD`：那样这条新台账行自己就成了本轮的清理
+    对象，`surviving` 里没有它，文件照样会被删——用例会因为一个与读顺序无关的
+    理由变红，从此再也说不清它在测什么。
+    """
+    root = tmp_path / "archive"
+    real_iter = retention.iter_archive_files
+    attachments_json = (
+        '[{"filename": "c.bin", "relative_path": "u1/20260101/late__c.bin",'
+        ' "byte_length": 1, "sha256": "x"}]'
+    )
+    # ① 扫盘之前文件就已经在盘上，因此它**会**进候选快照。
+    _touch(root, "u1/20260101/late__c.bin")
+
+    def fake_iter(archive_root):
+        listing = real_iter(archive_root)
+        assert "u1/20260101/late__c.bin" in [item.relative_path for item in listing], (
+            "本用例的全部咬合力来自'这个文件在候选快照里'——不在快照里就退化成旧用例"
+        )
+        # ② 扫盘完成之后，daemon 才把台账行提交（design D3 的真实写入顺序）。
+        _archive(conn, "late", archived_at=NEW, attachments_json=attachments_json)
+        return listing
+
+    monkeypatch.setattr(retention, "iter_archive_files", fake_iter)
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root,
+        log_dir=tmp_path / "logs", log_retention_days=30, sink=RecordingSink(),
+    )
+    assert "u1/20260101/late__c.bin" not in report.deleted_files
+    assert (root / "u1/20260101/late__c.bin").exists()
+    # 台账行也还在：这条断言把"文件被保住"与"台账指向它"绑在一起，
+    # 否则一个"顺手把 late 也删掉"的实现也能让上面两条通过。
+    assert conn.execute(
+        "SELECT COUNT(*) FROM liaison_message WHERE msgid = 'late'"
+    ).fetchone()[0] == 1
+
+
+def test_file_appearing_after_the_scan_is_not_deleted(conn, tmp_path, monkeypatch):
+    """扫盘**之后**才落地的文件根本没进这一轮的候选快照，因此天然不是候选。
+
+    ⚠️ 这一条**不区分修复前后的读顺序**（TD-34 的登记内容），保留它的理由只有
+    一个：它守的是另一件事——"不在快照里的文件不会被删"这条自愈性质。会咬住
+    读顺序的那一条是上面的
+    `test_ledger_row_committed_after_the_scan_still_protects_its_file`。
+    ⛔ 不要把这条当成 finding 5(a) 的回归测试。
     """
     root = tmp_path / "archive"
     real_iter = retention.iter_archive_files
@@ -540,7 +916,7 @@ def test_file_appearing_after_the_scan_is_not_deleted(conn, tmp_path, monkeypatc
 
     monkeypatch.setattr(retention, "iter_archive_files", fake_iter)
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink()
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=RecordingSink()
     )
     assert "u1/20260101/late__c.bin" not in report.deleted_files
     assert (root / "u1/20260101/late__c.bin").exists()
@@ -559,7 +935,7 @@ def test_file_deletion_failure_raises_exactly_one_alert(conn, tmp_path, monkeypa
     )
     sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink
     )
     assert len(report.failures) == 2
     assert len(sink.texts) == 1
@@ -577,7 +953,7 @@ def test_alert_text_carries_no_personal_information(conn, tmp_path, monkeypatch)
         retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
     )
     sink = RecordingSink()
-    retention.run_cleanup(conn, now=NOW, retention_days=180, archive_root=root, sink=sink)
+    retention.run_cleanup(conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink)
     text = sink.texts[0]
     for forbidden in ("tangliping", "msg-9527", "身份证扫描件", ".pdf", "20260101"):
         assert forbidden not in text, f"告警文本泄露了 {forbidden!r}：{text}"
@@ -592,7 +968,7 @@ def test_alert_channel_failure_never_breaks_the_round(conn, tmp_path, monkeypatc
         retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
     )
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink(explode=True)
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=RecordingSink(explode=True)
     )
     assert report.failures  # 轮次照常跑完并返回
 
@@ -608,7 +984,7 @@ def test_blocked_and_skipped_items_are_reported_not_swallowed(conn, tmp_path):
     )
     conn.commit()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink()
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=RecordingSink()
     )
     assert report.blocked_by_queue == ("m-queued",)
     assert [item.subject for item in report.skipped] == ["stray.txt"]
@@ -624,7 +1000,7 @@ def test_skipped_ledger_row_triggers_exactly_one_alert_with_count_only(conn, tmp
     _archive(conn, "m-bad-time", archived_at="不是时间")
     sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink
     )
     assert report.failures == ()
     assert [item.subject for item in report.skipped] == ["m-bad-time"]
@@ -642,7 +1018,7 @@ def test_skipped_archive_file_triggers_exactly_one_alert_with_count_only(conn, t
     _touch(root, "stray.txt")
     sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink
     )
     assert report.failures == ()
     assert [item.subject for item in report.skipped] == ["stray.txt"]
@@ -663,7 +1039,7 @@ def test_dry_run_changes_nothing(conn, tmp_path):
     _archive(conn, "m-old", archived_at=OLD)
     sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=sink, dry_run=True
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink, dry_run=True
     )
     assert report.dry_run is True
     assert report.deleted_messages == ("m-old",)          # 报"会删这些"
@@ -685,7 +1061,7 @@ def test_dry_run_with_unparseable_attachments_json_sends_zero_alerts(conn, tmp_p
     _archive(conn, "m-broken", archived_at=NEW, attachments_json="{")
     sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=sink, dry_run=True
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink, dry_run=True
     )
     assert any(f.stage == "scan" for f in report.failures)  # 预览确实撞上了这条失败
     assert sink.texts == []                                 # 但 ⛔ 一条告警都不许发
@@ -713,6 +1089,7 @@ def test_dry_run_preview_agrees_with_real_run_for_self_owned_attachment(conn, tm
     _archive(conn, "m-old", archived_at=OLD, attachments_json=attachments_json)
     preview = retention.run_cleanup(
         conn, now=NOW, retention_days=180, archive_root=root_preview,
+        log_dir=root_preview.parent / "logs", log_retention_days=30,
         sink=RecordingSink(), dry_run=True,
     )
 
@@ -726,7 +1103,8 @@ def test_dry_run_preview_agrees_with_real_run_for_self_owned_attachment(conn, tm
     _touch(root_real, "u1/20260101/m-old__a.xlsx")
     _archive(real_conn, "m-old", archived_at=OLD, attachments_json=attachments_json)
     real = retention.run_cleanup(
-        real_conn, now=NOW, retention_days=180, archive_root=root_real, sink=RecordingSink(),
+        real_conn, now=NOW, retention_days=180, archive_root=root_real,
+        log_dir=root_real.parent / "logs", log_retention_days=30, sink=RecordingSink(),
     )
     real_conn.close()
 
@@ -752,7 +1130,7 @@ def test_unparseable_ledger_row_stops_the_file_pass(conn, tmp_path):
     _touch(root, "u1/20260101/old__a.bin")
     _archive(conn, "m-broken", archived_at=NEW, attachments_json="{")
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink()
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=RecordingSink()
     )
     assert report.deleted_files == ()
     assert any(f.stage == "scan" for f in report.failures)
@@ -775,13 +1153,325 @@ def test_alert_text_includes_blocked_by_queue_count_when_round_has_failures(conn
     )
     sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+        conn, now=NOW, retention_days=180, archive_root=root, log_dir=root.parent / "logs", log_retention_days=30, sink=sink
     )
     assert report.blocked_by_queue == ("m-queued",)
     assert len(sink.texts) == 1
     text = sink.texts[0]
     assert f"保留 {len(report.blocked_by_queue)} 条" in text
     assert "m-queued" not in text
+
+
+# ---------------------------------------------------------------------------
+# TD-30 · 轮转日志的留存期（时间维度）。容量上界由 RotatingFileHandler 早已满足，
+# 欠的是"超过留存期的日志 MUST 被清理"这一条。
+# ---------------------------------------------------------------------------
+
+LOG_OLD = datetime.datetime(2026, 7, 1, 12, 0, tzinfo=CHINA_TZ)    # 距 NOW > 30 天
+LOG_FRESH = datetime.datetime(2026, 9, 8, 12, 0, tzinfo=CHINA_TZ)  # 距 NOW < 30 天
+
+
+def _log(log_dir, name, *, mtime):
+    """造一个日志文件并把 mtime 钉到给定时刻。⛔ 不 sleep、⛔ 不用真实时钟。"""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    target = log_dir / name
+    target.write_bytes(b"x")
+    stamp = mtime.timestamp()
+    os.utime(target, (stamp, stamp))
+    return target
+
+
+def test_log_retention_days_defaults_to_30_not_180():
+    """🔴 D13：日志 30 天、归档 180 天，两者**刻意不对齐**。"""
+    assert retention.DEFAULT_LOG_RETENTION_DAYS == 30
+    assert retention.load_log_retention_days({}) == 30
+
+
+def test_log_retention_days_has_its_own_env_var():
+    """⛔ 不复用 `HR_LIAISON_RETENTION_DAYS`：只配归档那个，日志仍走自己的默认 30。"""
+    assert retention.LOG_RETENTION_DAYS_ENV == "HR_LIAISON_LOG_RETENTION_DAYS"
+    env = {"HR_LIAISON_RETENTION_DAYS": "365"}
+    assert retention.load_log_retention_days(env) == 30
+    assert retention.load_retention_days(env) == 365
+    env2 = {"HR_LIAISON_LOG_RETENTION_DAYS": "7"}
+    assert retention.load_log_retention_days(env2) == 7
+    assert retention.load_retention_days(env2) == 180
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "三十", "30天", "30.5"])
+def test_invalid_log_retention_days_is_fail_closed(bad):
+    """非法值走 `RetentionConfigError` 同一套，⛔ 不许"只是日志"就退回默认值继续跑。"""
+    with pytest.raises(RetentionConfigError) as excinfo:
+        retention.load_log_retention_days({"HR_LIAISON_LOG_RETENTION_DAYS": bad})
+    assert "HR_LIAISON_LOG_RETENTION_DAYS" in str(excinfo.value)
+
+
+def test_compute_deletable_logs_only_takes_the_ones_older_than_the_cutoff():
+    """纯函数：判据只有 mtime 一条，严格小于 cutoff。"""
+    logs = (
+        retention.RotatedLog("liaison.log.1", LOG_OLD),
+        retention.RotatedLog("liaison.log.2", LOG_FRESH),
+    )
+    assert retention.compute_deletable_logs(NOW, 30, logs) == ("liaison.log.1",)
+
+
+def test_compute_deletable_logs_keeps_the_file_exactly_on_the_boundary():
+    """恰好落在 cutoff 上的保留——与归档同一条口径，⛔ 不许改成 `<=`。"""
+    cutoff = retention.compute_cutoff(NOW, 30)
+    logs = (retention.RotatedLog("liaison.log.1", cutoff),)
+    assert retention.compute_deletable_logs(NOW, 30, logs) == ()
+
+
+def test_iter_rotated_logs_never_sees_the_active_log_file(tmp_path):
+    """🔴 ⛔ 当前活动日志 `liaison.log` 本体不在候选里。
+
+    它正被一个打开的 `RotatingFileHandler` 攥着；unlink 之后 handler 仍往那个
+    已消失的 inode 写，日志会静默进黑洞直到下一次轮转——为了"清干净"制造出的
+    观测盲区，代价远大于收益。
+    """
+    log_dir = tmp_path / "logs"
+    _log(log_dir, "liaison.log", mtime=LOG_OLD)         # 活动日志，⛔ 不许出现
+    _log(log_dir, "liaison.log.1", mtime=LOG_OLD)       # 轮转产物
+    _log(log_dir, "other.txt", mtime=LOG_OLD)           # 不是日志，⛔ 不碰
+    (log_dir / "sub").mkdir()
+    _log(log_dir / "sub", "liaison.log.9", mtime=LOG_OLD)  # ⛔ 不递归子目录
+    assert [item.name for item in retention.iter_rotated_logs(log_dir)] == ["liaison.log.1"]
+
+
+def test_iter_rotated_logs_returns_empty_when_the_directory_is_absent(tmp_path):
+    """日志目录还不存在（首次运行、或降级成只有 stderr）⇒ 空元组，⛔ 不报错。"""
+    assert retention.iter_rotated_logs(tmp_path / "nope") == ()
+
+
+def test_iter_rotated_logs_skips_symlinks(tmp_path):
+    """⛔ 跟着符号链接删会删到日志目录之外去。"""
+    log_dir = tmp_path / "logs"
+    outside = _log(tmp_path / "outside", "secret.log.1", mtime=LOG_OLD)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "liaison.log.1").symlink_to(outside)
+    assert retention.iter_rotated_logs(log_dir) == ()
+
+
+def test_run_cleanup_deletes_expired_rotated_logs_by_mtime(conn, tmp_path):
+    """TD-30 端到端：超期的轮转日志没了、未超期的与活动日志一个字节不动。"""
+    root = tmp_path / "archive"
+    log_dir = tmp_path / "logs"
+    _log(log_dir, "liaison.log", mtime=LOG_OLD)
+    _log(log_dir, "liaison.log.1", mtime=LOG_OLD)
+    _log(log_dir, "liaison.log.2", mtime=LOG_FRESH)
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root,
+        log_dir=log_dir, log_retention_days=30, sink=RecordingSink(),
+    )
+    assert report.deleted_logs == ("liaison.log.1",)
+    assert report.log_retention_days == 30
+    assert report.failures == ()
+    assert not (log_dir / "liaison.log.1").exists()
+    assert (log_dir / "liaison.log.2").exists()
+    assert (log_dir / "liaison.log").exists()
+
+
+def test_log_cleanup_uses_the_log_retention_days_not_the_archive_one(conn, tmp_path):
+    """🔴 两个留存期是两个数：归档 180 天的日子里，一份 40 天前的日志仍必须被清掉。
+
+    ⛔ 这一条变红时的正确修法**不是**把两个参数并成一个——D13 明写两者刻意不对齐。
+    """
+    log_dir = tmp_path / "logs"
+    _log(log_dir, "liaison.log.1", mtime=datetime.datetime(2026, 7, 31, 12, 0, tzinfo=CHINA_TZ))
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=tmp_path / "archive",
+        log_dir=log_dir, log_retention_days=30, sink=RecordingSink(),
+    )
+    assert report.deleted_logs == ("liaison.log.1",)
+
+
+def test_log_cleanup_still_runs_when_the_ledger_scan_failed(conn, tmp_path):
+    """日志与台账之间没有任何引用关系 ⇒ `scan` 阶段失败 ⛔ 不该连坐日志那一遍。
+
+    反过来做会让"一条读不出来的 attachments_json"无限期地把含个人信息的历史
+    日志留在盘上，而那条坏数据和日志毫无关系。
+    """
+    root = tmp_path / "archive"
+    log_dir = tmp_path / "logs"
+    _touch(root, "u1/20260101/old__a.bin")
+    _log(log_dir, "liaison.log.1", mtime=LOG_OLD)
+    _archive(conn, "m-bad", archived_at=NEW, attachments_json="{")
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root,
+        log_dir=log_dir, log_retention_days=30, sink=RecordingSink(),
+    )
+    assert any(f.stage == "scan" for f in report.failures)
+    assert report.deleted_files == ()                      # 归档那一遍照旧被停住
+    assert report.deleted_logs == ("liaison.log.1",)       # 日志那一遍照跑
+    assert not (log_dir / "liaison.log.1").exists()
+
+
+def test_dry_run_never_deletes_a_log_file(conn, tmp_path):
+    """`--dry-run` 只报不动，日志也一样。"""
+    log_dir = tmp_path / "logs"
+    _log(log_dir, "liaison.log.1", mtime=LOG_OLD)
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=tmp_path / "archive",
+        log_dir=log_dir, log_retention_days=30, sink=RecordingSink(), dry_run=True,
+    )
+    assert report.deleted_logs == ("liaison.log.1",)       # "本来会删这些"
+    assert (log_dir / "liaison.log.1").exists()            # 但一个字节没动
+
+
+def test_log_deletion_failure_is_collected_and_does_not_stop_the_round(conn, tmp_path, monkeypatch):
+    """单条失败不中止整轮，且进 `CleanupFailure(stage="log")`、⛔ 不静默。"""
+    log_dir = tmp_path / "logs"
+    _log(log_dir, "liaison.log.1", mtime=LOG_OLD)
+    _log(log_dir, "liaison.log.2", mtime=LOG_OLD)
+    monkeypatch.setattr(
+        retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
+    )
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=tmp_path / "archive",
+        log_dir=log_dir, log_retention_days=30, sink=sink,
+    )
+    assert report.deleted_logs == ()
+    assert [f.subject for f in report.failures] == ["liaison.log.1", "liaison.log.2"]
+    assert {f.stage for f in report.failures} == {"log"}
+    assert len(sink.texts) == 1                            # 一轮一条，⛔ 不是每个失败一条
+    assert "阶段：log" in sink.texts[0]
+
+
+def test_setup_logging_and_the_cleanup_look_at_the_same_directory(tmp_path, monkeypatch):
+    """🔴 清理清的必须是 `setup_logging` 真正写日志的那个目录。
+
+    两处各读一遍 `HR_LIAISON_LOG_DIR` 就会有"改一处漏一处"的分叉，症状是
+    "清理跑得很成功，清的却是一个没人往里写的空目录"——毫无报错。
+    """
+    monkeypatch.setenv("HR_LIAISON_LOG_DIR", str(tmp_path / "logs"))
+    status = logsetup.setup_logging()
+    try:
+        assert status.log_file is not None
+        assert pathlib.Path(status.log_file).parent == logsetup.resolve_log_dir()
+    finally:
+        logsetup.teardown_logging()
+
+
+# ---------------------------------------------------------------------------
+# 裁决一 · run_cleanup 端到端 + 三处计数口径一致
+# ---------------------------------------------------------------------------
+
+
+def test_run_cleanup_deletes_a_terminal_queue_row_with_its_archive_file(conn, tmp_path):
+    """🔴 裁决一端到端：名单内发送人的归档不再无限期驻留。
+
+    这正是冲突 B 的原始症状——`liaison_task.msgid` 的外键让"有队列行的消息"
+    永远删不掉，于是汤丽萍/邵培申（名单内、必然入队）的归档全部落进
+    `blocked_by_queue`，只有名单外的会被 180 天清掉。与 D13 直接相悖。
+    """
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-pushed__a.xlsx")
+    _archive(
+        conn, "m-pushed", archived_at=OLD,
+        attachments_json='[{"filename": "a.xlsx", "relative_path": '
+                         '"u1/20260101/m-pushed__a.xlsx", "byte_length": 1, "sha256": "x"}]',
+    )
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root,
+        log_dir=tmp_path / "logs", log_retention_days=30, sink=sink,
+    )
+    assert report.deleted_messages == ("m-pushed",)
+    assert report.deleted_with_task == ("m-pushed",)
+    assert report.blocked_by_queue == ()
+    assert report.deleted_files == ("u1/20260101/m-pushed__a.xlsx",)
+    assert report.failures == ()
+    assert sink.texts == []                                 # 没失败没跳过 ⇒ ⛔ 不发告警
+    assert not (root / "u1/20260101/m-pushed__a.xlsx").exists()
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 0
+
+
+def test_run_cleanup_keeps_a_pending_queue_row_and_its_archive_file(conn, tmp_path):
+    """反面：队列行还是 🆕 待发 ⇒ 台账行、队列行、归档文件三样都不动。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-pending__a.xlsx")
+    _archive(
+        conn, "m-pending", archived_at=OLD,
+        attachments_json='[{"filename": "a.xlsx", "relative_path": '
+                         '"u1/20260101/m-pending__a.xlsx", "byte_length": 1, "sha256": "x"}]',
+    )
+    _enqueue(conn, "m-pending")
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root,
+        log_dir=tmp_path / "logs", log_retention_days=30, sink=RecordingSink(),
+    )
+    assert report.deleted_messages == ()
+    assert report.deleted_with_task == ()
+    assert report.blocked_by_queue == ("m-pending",)
+    assert report.deleted_files == ()
+    assert (root / "u1/20260101/m-pending__a.xlsx").exists()
+    assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 1
+
+
+def test_deleted_with_task_is_a_subset_of_deleted_messages(conn, tmp_path):
+    """`deleted_with_task` ⊂ `deleted_messages`，⛔ 不是与它并列的第二批。
+
+    两个字段相加会把这些条目算两遍——报告里的"本轮清了几条"从此虚高。
+    """
+    root = tmp_path / "archive"
+    _archive(conn, "m-plain", archived_at=OLD)
+    _archive(conn, "m-pushed", archived_at=OLD)
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root,
+        log_dir=tmp_path / "logs", log_retention_days=30, sink=RecordingSink(),
+    )
+    assert sorted(report.deleted_messages) == ["m-plain", "m-pushed"]
+    assert report.deleted_with_task == ("m-pushed",)
+    assert set(report.deleted_with_task) <= set(report.deleted_messages)
+
+
+def test_report_and_alert_agree_on_every_bucket_count(conn, tmp_path, monkeypatch):
+    """🔴 三处口径必须一致：`CleanupReport` 的计数、`render_report` 的明细行、
+    `compute_retention_alert_text` 的计数。
+
+    ⛔ 只改其中一处会让"报告说清了 N 条、告警说清了 M 条"这种静默偏差活下来，
+    而告警是 launchd 下唯一会被人看见的通道。
+    """
+    root = tmp_path / "archive"
+    log_dir = tmp_path / "logs"
+    _touch(root, "stray.txt")                       # ⇒ skipped（形态不认识）
+    _log(log_dir, "liaison.log.1", mtime=LOG_OLD)   # ⇒ deleted_logs
+    _archive(conn, "m-plain", archived_at=OLD)      # ⇒ deletable
+    _archive(conn, "m-pushed", archived_at=OLD)     # ⇒ deletable_with_task
+    _enqueue(conn, "m-pushed")
+    _push(conn, "m-pushed")
+    _archive(conn, "m-pending", archived_at=OLD)    # ⇒ blocked_by_queue
+    _enqueue(conn, "m-pending")
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root,
+        log_dir=log_dir, log_retention_days=30, sink=sink,
+    )
+    assert len(report.deleted_messages) == 2
+    assert len(report.deleted_with_task) == 1
+    assert len(report.blocked_by_queue) == 1
+    assert len(report.deleted_logs) == 1
+
+    rendered = retention.render_report(report)
+    assert "其中连队列行一起已删（裁决一：终态且超期的队列行） 1 条：m-pushed" in rendered
+    assert "轮转日志 已删 1 个（留存期 30 天）：liaison.log.1" in rendered
+    assert "不参与自动清理） 1 条：m-pending" in rendered
+
+    assert len(sink.texts) == 1
+    text = sink.texts[0]
+    assert "留存期 180 天（日志 30 天）" in text
+    assert "其中连队列行一起清 1 条" in text
+    assert "轮转日志 1 个" in text
+    assert "保留 1 条" in text
+    # 🔴 合规：告警只带计数，⛔ 不带 msgid、发送人、文件名。
+    for secret in ("m-plain", "m-pushed", "m-pending", "stray.txt", "liaison.log.1"):
+        assert secret not in text
 
 
 def test_cleanup_main_runs_without_any_credentials(tmp_path, monkeypatch, capsys):
@@ -792,6 +1482,11 @@ def test_cleanup_main_runs_without_any_credentials(tmp_path, monkeypatch, capsys
     """
     monkeypatch.delenv("HR_LIAISON_BOT_ID", raising=False)
     monkeypatch.delenv("HR_LIAISON_BOT_SECRET", raising=False)
+    # 🔴 TD-30 起 `cleanup_main` 多了**第三个**真实数据接缝：日志目录。
+    # `tools/liaison/tests/conftest.py` 的 autouse fixture 已经把它顶到了
+    # tmp_path，这里再显式顶一次是按本文件既有的 finding 7 口径办——每条用例
+    # 自己把它碰得到的真实数据接缝全部 patch 掉，⛔ 不依赖别处的护栏还在。
+    monkeypatch.setenv("HR_LIAISON_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
     monkeypatch.setattr(
         retention.archive, "DEFAULT_ARCHIVE_ROOT", tmp_path / "archive"
@@ -809,6 +1504,7 @@ def test_cleanup_main_rejects_unknown_arguments(tmp_path, monkeypatch, capsys):
     `load_retention_days()` 之后，这条测试会在毫无提示的情况下开始碰
     真实 `data/`。
     """
+    monkeypatch.setenv("HR_LIAISON_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
     monkeypatch.setattr(
         retention.archive, "DEFAULT_ARCHIVE_ROOT", tmp_path / "archive"
@@ -819,6 +1515,7 @@ def test_cleanup_main_rejects_unknown_arguments(tmp_path, monkeypatch, capsys):
 
 def test_cleanup_main_fails_closed_on_bad_config(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HR_LIAISON_RETENTION_DAYS", "0")
+    monkeypatch.setenv("HR_LIAISON_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
     # 🔴 controller fix-round-1 override（覆盖 plan line 1641-1646 的原样例）：
     # 两个真实数据接缝（DB 路径 + 归档根）在每条新测试里都必须一起 patch，
@@ -834,6 +1531,7 @@ def test_cleanup_main_fails_closed_on_bad_config(tmp_path, monkeypatch, capsys):
 
 
 def test_cleanup_main_returns_5_when_the_round_had_failures(tmp_path, monkeypatch):
+    monkeypatch.setenv("HR_LIAISON_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
     root = tmp_path / "archive"
     _touch(root, "u1/20260101/a__1.bin")

@@ -352,6 +352,17 @@ def _resolve_log_dir(explicit: "str | os.PathLike[str] | None") -> pathlib.Path:
     return DEFAULT_LOG_DIR
 
 
+def resolve_log_dir(explicit: "str | os.PathLike[str] | None" = None) -> pathlib.Path:
+    """日志目录的**公开**解析入口（`HR_LIAISON_LOG_DIR` ⇒ 回落 `DEFAULT_LOG_DIR`）。
+
+    TD-30 的留存期清理要清的是**这个**目录下的轮转产物，而它必须与
+    `setup_logging` 真正写日志的那个目录是同一个。⛔ 不许在清理侧另写一遍
+    "读 `HR_LIAISON_LOG_DIR`、读不到用默认"——同一件事两处真源，改一处漏一处
+    的后果是"清理跑得很成功，清的却是一个没人往里写的空目录"，且毫无症状。
+    """
+    return _resolve_log_dir(explicit)
+
+
 def _probe_writable(directory: pathlib.Path) -> str | None:
     """返回 None 表示可写，否则返回不可写的原因（人类可读）。
 
