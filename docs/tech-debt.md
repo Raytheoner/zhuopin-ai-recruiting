@@ -969,7 +969,7 @@ Shao Peishen 拍板改法、⛔ 执行方不得自行改动 `session.py` 的状�
 
 ---
 
-## TD-23 `defer_task` 用「幂等键命中」推断状态，而不是读状态
+## ~~TD-23~~ `defer_task` 用「幂等键命中」推断状态，而不是读状态 ✅ 已还（80715c6）
 
 **登记时间**：2026-09-09（第 5 章 run-build 收口，[Mac]0909D）
 **位置**：`tools/liaison/queue.py` `defer_task` 的幂等短路分支
@@ -1003,9 +1003,22 @@ Shao Peishen 拍板改法、⛔ 执行方不得自行改动 `session.py` 的状�
 钉死 `tools/liaison/` **不含 langgraph/checkpointer**，「节点从头重跑」的重放场景在此服务
 不存在；且当前零生产调用方。终审 reviewer 独立核查确认该裁定依据成立。
 
+**已还**（2026-09-09，`80715c6`，[Mac]0909AK）：采用方案 ②（**读状态**），**未加 TRIGGER**。
+两条理由：① 方案 ① 那条禁止 `deferred → pending` 的 TRIGGER 会让第 6 章的「撤销暂缓」
+在存储层**永远不可能实现**——那是用删掉功能来消灭场景，而这个场景正是本条 TD 自己写明
+的触发场景；② 它落在 `storage/schema.py`，不在本次还债的触碰区内。
+实现分两层，**判断状态的地方只有一处**：幂等键改带**代际号**
+（`{代际}#{msgid}`，代际在前且为纯数字 ⇒ 按首个 `#` 切分永远唯一，⛔ 不会踩 TD-22 那类
+分隔符串味的坑），于是一次**新的**暂缓拿到新键、照常走到存储层触发器由它裁定；
+只有键仍被占用（并发下两条路径撞同一代际）才**读一次真状态**再决定返回还是抛什么。
+异常文案改成只陈述读到的真状态，⛔ 不再硬编码"此前已成功从待发转入过暂缓"
+（那句在 `pending→deferred→pushed→再 defer` 路径下是假话）。
+⛔ 仍然从不返回 `False`。见 `tools/liaison/queue.py::_next_defer_generation` 与
+`defer_task` 的代码注释；`test_queue_status.py` 有 3 条用例守着。
+
 ---
 
-## TD-24 `mark_task_pushed` 的推送时间戳只有 thread 级幂等保护，缺第二道防线
+## ~~TD-24~~ `mark_task_pushed` 的推送时间戳只有 thread 级幂等保护，缺第二道防线 ✅ 已还（80715c6）
 
 **登记时间**：2026-09-09（第 5 章 run-build 收口，[Mac]0909D）
 **位置**：`tools/liaison/queue.py` `mark_task_pushed`
@@ -1034,6 +1047,18 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 
 **触发条件**：第 6 章要调用 `mark_task_pushed` 之前。
 **不还的后果**：推送时间戳被静默改写，审计上「第一次推送时刻」不再可信，且无告警。
+
+**已还**（2026-09-09，`80715c6`，[Mac]0909AK）：采用方案 ②（**从任务行读回 `thread_id`**），
+**未加 TRIGGER**——方案 ① 落在 `storage/schema.py`，不在本次触碰区；而且 ② 才是治本的
+那条：它让幂等键回到 `msgid` 这个真正的业务身份上，调用方再也**凑不出**第二把键，
+① 只是在凑出第二把键之后再拦一道。方案 ① 的效果由**同一层**的
+`AND send_status <> 'pushed'`（`effect_mark_task_pushed` 的 UPDATE 条件）等价补上，
+两者合起来就是这条时间戳的两道防线：UPDATE 命中 0 行时区分「条目不存在」（抛
+`TaskNotFound`）与「已经是已推送」（内部信号翻成 `False`，且装饰器回滚 ⇒
+`effect_log` ⛔ 不会多出第二行）。
+入参 `thread_id` 保留但不再参与任何判定（删它会连累不在触碰区的 `test_retention.py`），
+docstring 已写明。`test_queue_status.py` 有 2 条用例守着（换 `thread_id` 重复标记、
+以及绕过业务层伪造幂等键）。
 
 ## ~~TD-25~~ · 非限流错误也落 `pending_resend`，第 8 章重发驱动器会拿到永远重发不成的行 ✅ 已还（26986e8）
 
