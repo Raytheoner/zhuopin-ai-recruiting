@@ -57,7 +57,8 @@ tools/liaison/tests/test_liaison_no_secrets_in_vcs.py
 开工前必须先读懂的**八条判断**，改动前逐条对照：
 
 **1. 🚨 `tools/liaison/` 下的非测试代码禁止写 `with <名字|属性|调用>:`。**
-第 2 章的 `tests/test_liaison_effects.py::test_no_second_transaction_manager_in_source` 扫 `tools/liaison/**/*.py`（`tests` 目录除外），把任何 `with X:` 判为"隐式提交事务边界"违规——它认的是 `ast.With` 的形状，只对一份**正面白名单**里的被调用者放行：`open` / `os.fdopen` / `io.open` / `contextlib.suppress` / `tempfile.NamedTemporaryFile` / `tempfile.TemporaryDirectory`。
+第 2 章的 `tests/test_liaison_effects.py::test_no_second_transaction_manager_in_source` 扫 `tools/liaison/**/*.py`（`tests` 目录除外），把 `with X:` 判为"隐式提交事务边界"违规。
+⚠️ **判据已被 TD-18 细化过（`8bae001`，2026-09-09），细化的只有 `ast.Call` 这一格**：被调用者命中 `open` / `os.fdopen` / `io.open` / `suppress` / `NamedTemporaryFile` / `TemporaryDirectory`（及 `contextlib.*` / `tempfile.*` 两个模块族）才放行；名字里带 `conn` / `connect` / `transaction` / `begin` 词根的**先**判违规；**其余陌生被调用者仍判违规**。`urllib.request.urlopen` 属"陌生被调用者"，⛔ 照旧会红。
 ⚠️ **本章 opener 里写的"先赋值再 with 变量"这条规避法是错的，⛔ 不要照做**——已核对扫描器源码（`test_liaison_effects.py:185-206`）：`ast.Name`（`with resp:`）与 `ast.Attribute`（`with self._x:`）同样在判违规之列，赋值一步躲不掉。
 本章因此**一律不写 `with`**：`urlopen` 的响应用 `resp = ...` + `try/finally: resp.close()`。测试代码里可以照常用 `with`（扫描器跳过 `tests` 目录）。
 ⛔ **不要为了写 `with` 去放宽扫描器或往白名单里加本章文件**——技术债泳道正在改那个文件（TD-18），而它守的是工程铁律 1 唯一的静态判据。
@@ -353,8 +354,8 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'tools.liaison.notif
 「这段文字对**这条**通道超限了吗」与「超限了该怎么办」。
 
 ⛔ 本目录（`tools/liaison/`，测试除外）禁止写 `with X:`：第 2 章的事务扫描器
-把任何 `with <名字|属性|调用>:` 判为隐式提交违规（正面白名单只放行 `open` 等
-六个被调用者）。本模块用不到 `with`，写在这里是给后来改动的人看的。
+把 `with <名字|属性>:` 无条件判为隐式提交违规，`with <调用>:` 只放行一份正面
+白名单。本模块用不到 `with`，写在这里是给后来改动的人看的。
 """
 
 from __future__ import annotations
@@ -1126,10 +1127,11 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'tools.liaison.notif
 ```python
 """HTTP 传输层——**本服务唯一真发网络的地方**。
 
-⛔ **本目录禁止写 `with X:`。** 第 2 章的事务扫描器把任何
-`with <名字|属性|调用>:` 判为隐式提交违规（正面白名单只放行 `open` / `os.fdopen`
-/ `io.open` / `contextlib.suppress` / `tempfile.NamedTemporaryFile` /
-`tempfile.TemporaryDirectory`）。`urlopen` 的响应因此用 `resp = ...` +
+⛔ **本目录禁止写 `with X:`。** 第 2 章的事务扫描器把 `with <名字|属性>:` 无条件
+判为隐式提交违规；`with <调用>:` 只对一份正面白名单（`open` / `os.fdopen` /
+`io.open` / `suppress` / `NamedTemporaryFile` / `TemporaryDirectory` 与
+`contextlib.*` / `tempfile.*` 两个模块族）放行，**陌生被调用者一律判违规**——
+`urllib.request.urlopen` 正是陌生的那种。响应因此用 `resp = ...` +
 `try/finally: resp.close()`，⛔ 不写 `with urllib.request.urlopen(...) as resp:`，
 也 ⛔ 不写"先赋值再 `with 变量`"——`ast.Name` 同样在判违规之列。
 
