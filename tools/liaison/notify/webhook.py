@@ -17,6 +17,7 @@ from tools.liaison.config import load_group_webhook
 from tools.liaison.notify.guard import (
     GROUP_WEBHOOK_CHANNEL,
     MODE_DEGRADED,
+    MODE_REJECT,
     NotifyPlan,
     compute_notify_plan,
 )
@@ -197,7 +198,20 @@ class DegradedDelivery:
 
 
 def make_group_webhook_delivery(sender: GroupWebhookSender, plan: NotifyPlan) -> Delivery:
-    """按 plan 的 mode 选投递形态。⛔ `MODE_REJECT` 到不了这里（store 提前短路）。"""
+    """按 plan 的 mode 选投递形态。⛔ `MODE_REJECT` 到不了这里（store 提前短路）。
+
+    🔴 真到了这里就 `raise`，⛔ **不静默降级成 `DirectDelivery`**（TD-27）：reject
+    模式下 `plan.body` 为空，静默降级的结果是往群里发一条空 markdown——那比拒发更糟，
+    因为它**看起来成功了**。「到不了这里」这个前提原先只由调用方保证；本函数是公开的，
+    第二个调用方一出现就没人替它守。现在改由结构自己守住。
+    ⛔ 不要为了"容错"把这里改回返回一个投递对象：拒发的正确处置是**根本不投递**，
+    由 `store.effect_send_group_notify` 提前短路成 `rejected` 并告警（那条正路不动）。
+    """
+    if plan.mode == MODE_REJECT:
+        raise ValueError(
+            "拒发模式不产生投递对象，调用方必须提前短路："
+            f"mode={plan.mode} digest={plan.digest} reject_reason={plan.reject_reason}"
+        )
     if plan.mode == MODE_DEGRADED:
         return DegradedDelivery(sender, plan)
     return DirectDelivery(sender, plan)

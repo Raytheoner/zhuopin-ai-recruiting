@@ -14,7 +14,7 @@ import sqlite3
 import pytest
 
 from tools.liaison import alerts
-from tools.liaison.notify import guard, store
+from tools.liaison.notify import guard, ratelimit, store
 from tools.liaison.storage import db as liaison_db
 
 
@@ -237,20 +237,98 @@ def test_rejected_notify_is_recorded_and_alerted_and_never_sent(conn):
     assert_group_notify_identity(conn)
 
 
+def _record(conn, text, state, *, errcode=None):
+    """落一行台账，返回 plan。errcode 只在 pending_resend 上有意义。"""
+    plan = make_plan(text)
+    store.effect_send_group_notify(
+        conn,
+        thread_id=store.GROUP_NOTIFY_THREAD_ID,
+        business_key=plan.digest,
+        plan=plan,
+        deliver=stub_deliver(state, errcode=errcode, error=None if errcode is None else "boom"),
+        alert_sink=RecordingSink(),
+    )
+    return plan
+
+
 def test_pending_resends_are_listable(conn):
     """给第 8 章的重发驱动器留的把手。本章 ⏸ 不实现驱动器本身。"""
-    for text, state in (("a", store.STATE_SENT), ("b", store.STATE_PENDING_RESEND)):
-        plan = make_plan(text)
-        store.effect_send_group_notify(
-            conn,
-            thread_id=store.GROUP_NOTIFY_THREAD_ID,
-            business_key=plan.digest,
-            plan=plan,
-            deliver=stub_deliver(state),
-            alert_sink=RecordingSink(),
-        )
+    _record(conn, "a", store.STATE_SENT)
+    _record(conn, "b", store.STATE_PENDING_RESEND, errcode=ratelimit.RATE_LIMIT_ERRCODE)
     rows = store.select_pending_resends(conn)
     assert [r["body"] for r in rows] == ["b"]
+
+
+# --------------------------------------------------------------------------
+# TD-25：`select_pending_resends` 按 errcode 收窄，被滤掉的行必须仍可被取到。
+# --------------------------------------------------------------------------
+
+
+def test_retryable_errcodes_contains_only_the_documented_rate_limit_code(conn):
+    """口径常量本身就是判据：⛔ 不许"看起来像瞬时"就往里加。"""
+    assert store.RETRYABLE_ERRCODES == frozenset({ratelimit.RATE_LIMIT_ERRCODE})
+    assert store.RETRYABLE_ERRCODES, "集合为空会把 IN () 拼成非法 SQL"
+
+
+def test_rate_limited_row_is_offered_for_automatic_resend(conn):
+    """`45009` = 限流，是唯一有明文依据的瞬时错误，可自动重发。"""
+    _record(conn, "limited", store.STATE_PENDING_RESEND, errcode=ratelimit.RATE_LIMIT_ERRCODE)
+    assert [r["body"] for r in store.select_pending_resends(conn)] == ["limited"]
+    assert store.select_manual_intervention_resends(conn) == []
+
+
+@pytest.mark.parametrize(
+    ("body", "errcode"),
+    [("bot-not-in-group", 93000), ("bad-credentials", 40001)],
+)
+def test_permanent_errcodes_are_never_offered_for_automatic_resend(conn, body, errcode):
+    """`93000`/`40001` 是配置/权限问题，重试多少次都是同一结果——TD-25 的死行。
+
+    🔴 它们 ⛔ 不许因此消失：人工介入口径必须原样取得它们。
+    """
+    _record(conn, body, store.STATE_PENDING_RESEND, errcode=errcode)
+    assert store.select_pending_resends(conn) == []
+    manual = store.select_manual_intervention_resends(conn)
+    assert [(r["body"], r["last_errcode"]) for r in manual] == [(body, errcode)]
+
+
+def test_missing_errcode_counts_as_manual_intervention(conn):
+    """传输层抛异常时没有业务码。⛔ 不猜它可重试——保守方向交人工。"""
+    _record(conn, "transport-blew-up", store.STATE_PENDING_RESEND, errcode=None)
+    assert store.select_pending_resends(conn) == []
+    manual = store.select_manual_intervention_resends(conn)
+    assert [r["body"] for r in manual] == ["transport-blew-up"]
+    assert manual[0]["last_errcode"] is None
+
+
+def test_the_two_pending_views_partition_every_pending_row(conn):
+    """并集恒等于全部 `pending_resend`，交集为空——"过滤"⛔ 不等于"丢弃"。"""
+    _record(conn, "sent-one", store.STATE_SENT)
+    _record(conn, "limited", store.STATE_PENDING_RESEND, errcode=ratelimit.RATE_LIMIT_ERRCODE)
+    _record(conn, "not-in-group", store.STATE_PENDING_RESEND, errcode=93000)
+    _record(conn, "no-code", store.STATE_PENDING_RESEND, errcode=None)
+
+    auto = {r["digest"] for r in store.select_pending_resends(conn)}
+    manual = {r["digest"] for r in store.select_manual_intervention_resends(conn)}
+    all_pending = {
+        row[0]
+        for row in conn.execute(
+            "SELECT digest FROM liaison_group_notify WHERE state = ?",
+            (store.STATE_PENDING_RESEND,),
+        )
+    }
+    assert auto | manual == all_pending
+    assert auto & manual == set()
+    assert len(all_pending) == 3
+
+
+def test_manual_intervention_query_does_not_touch_the_shared_row_factory(conn):
+    """与 `select_pending_resends` 同一条约束：⛔ 不污染共享连接的 row_factory。"""
+    before = conn.row_factory
+    _record(conn, "not-in-group", store.STATE_PENDING_RESEND, errcode=93000)
+    rows = store.select_manual_intervention_resends(conn)
+    assert rows[0]["body"] == "not-in-group"
+    assert conn.row_factory is before
 
 
 def test_alert_channel_failure_does_not_abort_the_record(conn, caplog):

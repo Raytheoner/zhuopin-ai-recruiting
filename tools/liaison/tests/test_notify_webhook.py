@@ -241,6 +241,52 @@ def test_every_attempt_takes_a_token_from_the_bucket(clock):
     assert taken["n"] == 3
 
 
+# ── 投递形态的选取（TD-27） ────────────────────────────────────────────
+
+
+def _reject_plan():
+    """无附件承载 + 超限 = `MODE_REJECT`，`body` 为空。"""
+    plan = guard.compute_notify_plan("中" * 2000, limit_bytes=4096, attachment_supported=False)
+    assert plan.mode == guard.MODE_REJECT
+    assert plan.body == "", "前置条件：reject 模式下没有可发的正文"
+    return plan
+
+
+def test_reject_mode_refuses_to_produce_a_delivery_object():
+    """TD-27：拒发 ⛔ 不许静默降级成 `DirectDelivery`——那会往群里发一条空 markdown。
+
+    「到不了这里」原先只由调用方保证。本函数是公开的，结构必须自己守住这个前提，
+    否则第二个调用方一出现，"拒发"就悄悄变成"发一条看起来成功的空消息"。
+    """
+    fake = FakeTransport([])
+    with pytest.raises(ValueError) as excinfo:
+        webhook.make_group_webhook_delivery(make_sender(fake, attachment=False), _reject_plan())
+    assert "调用方必须提前短路" in str(excinfo.value)
+    # 抛错发生在任何 HTTP 之前：一次都没发出去。
+    assert fake.json_calls == [] and fake.multipart_calls == []
+
+
+@pytest.mark.parametrize(
+    ("attachment_supported", "text", "expected"),
+    [
+        (True, "短通知", webhook.DirectDelivery),
+        (True, "中" * 2000, webhook.DegradedDelivery),
+    ],
+    ids=["direct", "degraded"],
+)
+def test_the_other_two_modes_still_pick_their_delivery_form(
+    attachment_supported, text, expected
+):
+    """TD-27 只收紧 reject 分支，⛔ 不动 direct / degraded 的正路。"""
+    plan = guard.compute_notify_plan(
+        text, limit_bytes=4096, attachment_supported=attachment_supported
+    )
+    delivery = webhook.make_group_webhook_delivery(
+        make_sender(FakeTransport([]), attachment=attachment_supported), plan
+    )
+    assert isinstance(delivery, expected)
+
+
 # ── 降级投递的断点续发（6.3 / 6.9） ─────────────────────────────────────
 
 
