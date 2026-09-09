@@ -72,3 +72,51 @@ def test_readme_states_the_three_boundaries():
     text = (REPO_ROOT / "tools" / "liaison" / "README.md").read_text(encoding="utf-8")
     for phrase in ("开发期值守工具", "永不部署", "不是产品功能"):
         assert phrase in text, f"README 缺边界表述: {phrase}"
+
+
+def test_launchd_template_carries_variable_names_but_no_credential_values():
+    """第四道门禁（tasks 8.5 补充）：launchd 模板 ⛔ 不得携带任何密钥取值。
+
+    plist 落在 `~/Library/LaunchAgents/`——一个不受 `.gitignore` 保护、会被
+    Time Machine 与各类同步工具原样带走的位置。凭据一旦从 `.env` 挪进
+    `EnvironmentVariables`，泄漏面就从"仓库根一个被忽略的文件"扩大到"整个用户目录
+    的备份链"，而且**不会有任何症状**：服务照跑，测试照绿。
+
+    因此约束是结构性的：模板里凭据名只准以文档（XML 注释）的形式出现，
+    ⛔ 不准出现在任何 plist 键值里。
+    """
+    template = (
+        REPO_ROOT / "tools" / "liaison" / "launchd" / "com.zhuopin.hr.liaison.plist.template"
+    )
+    assert template.is_file(), "缺 launchd plist 模板"
+    raw = template.read_text(encoding="utf-8")
+
+    # 逐字 <key>NAME</key> 形式即为"当成配置项写进去了"，无论后面跟什么值。
+    for name in ("HR_LIAISON_BOT_ID", "HR_LIAISON_BOT_SECRET"):
+        assert f"<key>{name}</key>" not in raw, f"凭据名被当成 plist 键写进模板: {name}"
+
+    # 解析后逐个 plist 值检查：既不得有 EnvironmentVariables 承载凭据，
+    # 也不得有任何看起来像取值的长 token 混在字符串里。
+    import plistlib
+
+    data = plistlib.loads(raw.encode("utf-8"))
+    env = data.get("EnvironmentVariables", {})
+    for name in ("HR_LIAISON_BOT_ID", "HR_LIAISON_BOT_SECRET"):
+        assert name not in env, f"EnvironmentVariables 里出现了凭据: {name}"
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield from _walk(key)
+                yield from _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from _walk(item)
+        elif isinstance(node, str):
+            yield node
+
+    for value in _walk(data):
+        assert "HR_LIAISON_BOT_SECRET" not in value, f"plist 值里带了凭据名: {value}"
+        # 占位符与路径以外的长 token 一律视为可疑取值。
+        for token in re.findall(r"[A-Za-z0-9_\-]{24,}", value):
+            assert token.startswith("{{") or "/" in value, f"模板里出现疑似密钥取值: {token}"

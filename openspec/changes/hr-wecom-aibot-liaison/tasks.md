@@ -1,4 +1,4 @@
-> **进度**：47/66（第 1-5 章与第 7 章已完成并合回 main。第 1/2/3 章 2026-09-08，第 4 章「消息归档」、第 5 章「值守任务队列」与第 7 章「连接生命周期与中断告警」2026-09-09。各 6/6、6/6、6/6、10/10、10/10、9/9）
+> **进度**：49/66（第 1-5 章与第 7 章已完成并合回 main，第 8 章 2/9。第 1/2/3 章 2026-09-08，第 4 章「消息归档」、第 5 章「值守任务队列」与第 7 章「连接生命周期与中断告警」2026-09-09。各 6/6、6/6、6/6、10/10、10/10、9/9。第 8 章已勾 8.3「launchd 守护配置与安装脚本」、8.5「结构性守护测试」2026-09-09——⚠️ 两条都只到「配置与测试就位」，launchd **尚未实际安装**，装与灰度在 8.6）
 >
 > **粒度约定**（CLAUDE.md「粒度映射」）：本文件的**一个 `##` 章节 = 一个 superpowers plan = 一条 worktree 分支 = 一个可独立测试并合并的交付单元**。章节的 checkbox 在该 plan 的 final review 通过后才勾。
 >
@@ -204,9 +204,9 @@
 
 - [ ] 8.1 实现留存期清理：`HR_LIAISON_RETENTION_DAYS` 默认 180，超期归档与消息台账清理；队列行不参与自动清理。⚠️ 幂等策略：按年龄判定，重复执行安全
 - [ ] 8.2 清理失败时告警，⛔ 不静默跳过；单测覆盖超期被清理一条、清理失败告警一条
-- [ ] 8.3 写 launchd plist（`KeepAlive` + `ThrottleInterval`）与安装说明；⛔ 不移植 Windows 侧的三级退避重启脚本（design.md D12）
+- [x] 8.3 写 launchd plist（`KeepAlive` + `ThrottleInterval`）与安装说明；⛔ 不移植 Windows 侧的三级退避重启脚本（design.md D12）。产出：`tools/liaison/launchd/com.zhuopin.hr.liaison.plist.template`（占位符渲染式，模板内 ⛔ 无任何凭据取值）＋ `tools/liaison/scripts/install_launchd.py`（幂等：渲染 → 写 `~/Library/LaunchAgents/` → bootout 忽略失败 → bootstrap → 打印 `launchctl print` 状态行；`--dry-run` 不写任何文件、不调 launchctl）＋ README「运行与守护」一节（装／停即 `bootout` 回滚／看日志）。⏸ **留步：本 session ⛔ 未执行安装**——起 LaunchAgent 属安全配置变更，由 Shao Peishen 在 Terminal 自己跑一次，时点＝灰度 8.6。⏸ **留步：`tools/liaison/.venv` 尚未创建**，安装脚本对此 fail-closed（解释器不存在即拒装并退非 0，理由＝`KeepAlive` 不区分退出码，装上会 30s 一轮无限重启一个必然失败的进程）。⛔ 本勾只表示配置与脚本已就位并被单测覆盖，**不得当作「守护已生效」的证据**
 - [ ] 8.4 日志接入：轮转 + 有界容量 + 个人信息脱敏（借用 `runtime-observability` 的做法，不受其 HTTP 请求链路要求约束）
-- [ ] 8.5 加结构性守护测试：`tools/` 不在 `sync-to-server.sh` 的 `SYNC_PATHS` 里、SDK 依赖不在根 `requirements.txt` 里（design.md D10 的两道门禁）
+- [x] 8.5 加结构性守护测试：`tools/` 不在 `sync-to-server.sh` 的 `SYNC_PATHS` 里、SDK 依赖不在根 `requirements.txt` 里（design.md D10 的两道门禁）。已由 `tools/liaison/tests/test_liaison_boundaries.py` 两条覆盖（第 1 章落地：`test_tools_is_not_in_sync_paths`、`test_root_requirements_has_no_liaison_dependency`）＋ 本条补 plist 守护（`test_launchd_template_carries_variable_names_but_no_credential_values`：凭据名 ⛔ 不得以 plist 键值形式进模板，只准以 XML 注释形式出现——`~/Library/LaunchAgents/` 不受 `.gitignore` 保护且会被备份链带走，凭据挪进 `EnvironmentVariables` 会静默扩大泄漏面）
 - [ ] 8.6 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式
 - [ ] 8.7 加入汤丽萍（配置加一行 + 重启），并告知她"照原样在群里发即可、不用改任何习惯"
 - [ ] 8.8 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
