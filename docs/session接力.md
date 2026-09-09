@@ -235,7 +235,7 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
 | **G-3** | 还 **TD-19**（`client.run()` 的 async→同步适配） | 代码＝已完成（`0909AC`）；**端到端跑通＝Shao Peishen 亲自**（8.6 不进泳道） | 🔴 **⛔ 先别跑——被 TD-38 阻断**（`0909AE` 已跑过第一次，44 秒即被企微 `45009` 限流；再跑只是再洪泛一次）。TD-38 还上后再跑 | TD-38 还上之后，在仓库根 Terminal 跑 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison`，看三件事：① 日志出现 `WebSocket connection established` 且无 `errcode=853000`；② 断网后开出中断窗口＋群里收到断线告警；③ 恢复后自动重连、窗口闭合＋恢复告警。⚠️ 先跑 `--self-check`（exit 0、⛔ 不建连）验凭据更省事 | 服务本身已能起来，但**真实建连从未验过**；G-4 仍锁在这一步之后 |
 | **G-4** | 在 Terminal 跑 `install_launchd.py`（不带 `--dry-run`） | **Shao Peishen**（脚本 docstring 明写「Claude ⛔ 不代跑」） | ⛔ **暂缓——等 G-3** | G-3 完成后再跑。`--dry-run` 已于 09-09 验过，渲染无误、四条路径正确、无凭据取值 | **现在跑就是造一台刷屏机**：plist 是 `RunAtLoad`+`KeepAlive`+`ThrottleInterval=30`，而进程 `exit 4` 立刻返回 ⇒ 每 30 秒重启一次、每次立刻失败、`launchd.err.log` 无限追加同一条报错 |
 | **G-5** | 还 **TD-36**（假凭据会真实建连） | — | ✅ **已完成**（`0909AC`，与 TD-19 同一 commit） | 两条用例改走 `--self-check`（跑完全部校验、建连前退出），另加 `tests/netguard/` 网络闸门：非回环连接一律 raise，进程内＋子进程两条都装。⚠️ 落地中实测到一次经本机 `127.0.0.1` 代理的真实外发，已修并落档 `docs/findings/2026-09-09-测试网络闸门被本机代理绕过.md` | — |
-| **G-7** | 还 **TD-40**（`.env` 的 `HR_LIAISON_*` 让 app 配置加载不了） | **Shao Peishen 拍改法**（三选一），落地可代 | 🔴 **他本机现在就是坏的** | `Settings()` 能正常实例化；有 `.env` 的仓库根 checkout 上根 venv 全量回到 0 failed（现为 23 failed） | Web 服务在他本机起不来；且每次报错都把 bot_secret 明文打进输出 |
+| **G-7** | 还 **TD-40**（`.env` 的 `HR_LIAISON_*` 让 app 配置加载不了） | — | ✅ **已完成**（`0909AC`，2026-09-09 他答 `1c` ＝ 改法 ③） | 凭据已迁到 `tools/liaison/.env`（0600）；`Settings()` 正常实例化；根 venv 全量 **2041 passed / 0 failed**（迁移前 23 failed）；两道回归岗在位 | — |
 | **G-6** | `0909P` 发版到 `.51` | **Shao Peishen** 拍（发版不可代） | ⏸ 等他一个「发」 | 建议一次带上 TD-33，「这次发什么」发车前现算 | — |
 
 **2026-09-09 结存（`0909AC` 后订正）：他手上多了一件 —— G-3 的端到端那一步。**
@@ -357,6 +357,36 @@ G-1/G-2/G-5 已闭合；**G-3 的代码已就位，只差他在 Terminal 跑一�
   `Raytheoner/zhuopin-ai-transformation`，**分支 master**，WebFetch 读
   `raw.githubusercontent.com/.../master/<路径>`（中文路径要 percent-encode）。
   没有本地副本 → **grep 不了，引用必须给文件级 URL**。
+
+### ⑲ 09-09 晚：8.6 首次真实建连已跑，卡在心跳单位（`[Mac]0909AE` 出）
+
+**已发生的事实**：`0909AE` 用真实凭据首次让值守服务连上企微——**连上了**（鉴权通过、
+`liveness.json` 写出 `connected`、`liaison.db` 建出五张表）⇒ **TD-19 已销账**。
+但只在线 **44 秒**：SDK 的 `heartbeat_interval` 单位是**毫秒**，`session_client.py:37` 传的是
+`DEFAULT_HEARTBEAT_SECONDS = 30`，被当成 **30 毫秒** ⇒ 心跳 ×1000（44 秒内 1399 次）⇒
+企微返 `45009 Too many requests` 判死连接。全文 `docs/findings/2026-09-09-首次真实建连实测.md`，
+commit `159305f`。新登记 **TD-38**（阻断 8.6）、**TD-39**（断线事件疑似未达状态机，⚠️ 待复核）。
+
+**Shao Peishen 2026-09-09 已答 `1a，2a，3a`**，三条待办如下（⛔ 串行，AG 依赖 AF 合入）：
+
+| # | 谁做 | 状态 | 判据：怎样算完 | 不做会怎样 |
+|---|---|---|---|---|
+| 1 | `[Mac]0909AF`（CC，worktree）| 🆕 待派 | `DEFAULT_HEARTBEAT_MS = 30_000` 合入 main；AST 钉子能挡住改回 30；`reconnect_interval` 注释口径改对；TD-38 销账 | 值守通道**无法保持在线**，且每次拉起都对企微洪泛 ≈32 次/秒，bot 凭据有被限流/封禁风险 |
+| 2 | `[Mac]0909AG`（CC，主工作区，**需他本人在场**手动断/复 Wi-Fi）| 🆕 待派，**前置＝AF 已合入** | 心跳实测为 `30000ms`；断网后 `liveness` 翻 `disconnected` ＋ `outage_window` 开窗；复网后自动重连并闭窗（六项全过）| "服务看起来在跑、其实早断了"这类**无症状**故障没人守；8.6 灰度建立在没验过的重连上 |
+| 3 | launchd 装机（`install_launchd.py`，他本人在 Terminal 跑）| ⏸ **已明确暂缓**（他答 `3a`）| TD-38 已还 **且** AG 六项全过后，由他重新拍板 | 现在装＝一台无人值守地反复重启、反复洪泛、反复吃 45009 的机器（`KeepAlive=true` + `ThrottleInterval=30` 会放大） |
+
+⚠️ **口径订正**：`0909AE` opener 结尾那句「⏸ 下一步：Shao Peishen 在 Terminal 跑
+`install_launchd.py` 装常驻」**已作废**——那句写在不知道 TD-38 存在时。以本节第 3 行为准。
+
+⚠️ **`0909AE` 的两处偏离**（已如实落档，非隐患）：① `git pull --rebase` 时
+`tools/liaison/__main__.py` 与 `0909AD` 的 `send-followup` 块冲突，两侧都是文件尾纯插入，
+按项目口径**合并双方**、正文一字节未改；② 观察窗提前 51 秒收停（判定是对企微洪泛后主动
+SIGINT），事后证明不是多虑——45009 在第 44 秒就到了。
+
+📌 **一条值得记住的教训**：这个 bug 之所以活到真实建连才暴露，是因为守它的断言是**同义反复**——
+`assert options.heartbeat_interval == session_client.DEFAULT_HEARTBEAT_SECONDS` 拿传进去的值
+跟它自己比，单位错成什么样都绿。⇒ **配置项断言必须写绝对值，⛔ 不许拿常量跟自己比。**
+`0909AF` 已把"先让新断言在旧代码下真的红"写成强制步骤。
 
 ---
 
