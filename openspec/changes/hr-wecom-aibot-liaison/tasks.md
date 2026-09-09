@@ -1,4 +1,4 @@
-> **进度**：60/66（第 1-7 章已完成并合回 main，第 8 章 3/9。第 1/2/3 章 2026-09-08，第 4 章「消息归档」、第 5 章「值守任务队列」、第 6 章「群通知外发」与第 7 章「连接生命周期与中断告警」2026-09-09。各 6/6、6/6、6/6、10/10、10/10、10/10、9/9。第 8 章已勾 8.3「launchd 守护配置与安装脚本」、8.4「日志接入：轮转+有界+脱敏」、8.5「结构性守护测试」2026-09-09——⚠️ 8.3/8.5 都只到「配置与测试就位」，launchd **尚未实际安装**，装与灰度在 8.6。⚠️ 8.4 只做了**容量上界**，「留存期有上限」的时间维度**未实现**（已登记 TD-30，由 8.1 用独立的 `HR_LIAISON_LOG_RETENTION_DAYS` 默认 30 收口，⛔ 不复用 180 那个变量）。⚠️ 第 6 章同样只到「给了 URL 就能发」：真实群 webhook 尚未写进 `.env`，**未做过任何一次真实投递**，灰度真发同在 8.6 由 Shao Peishen 本人操作）
+> **进度**：62/66（第 1-7 章已完成并合回 main，第 8 章 5/9。第 1/2/3 章 2026-09-08，第 4 章「消息归档」、第 5 章「值守任务队列」、第 6 章「群通知外发」与第 7 章「连接生命周期与中断告警」2026-09-09。各 6/6、6/6、6/6、10/10、10/10、10/10、9/9。第 8 章已勾 8.1「留存期清理」、8.2「清理失败告警」（2026-09-09 [Mac]0909K）、8.3「launchd 守护配置与安装脚本」、8.4「日志接入：轮转+有界+脱敏」、8.5「结构性守护测试」2026-09-09——⚠️ 8.3/8.5 都只到「配置与测试就位」，launchd **尚未实际安装**，装与灰度在 8.6。⚠️ 8.4 只做了**容量上界**，「留存期有上限」的时间维度**未实现**（已登记 TD-30，原计划由 8.1 用独立的 `HR_LIAISON_LOG_RETENTION_DAYS` 默认 30 收口，⛔ 不复用 180 那个变量——⚠️ **8.1 实际 ⛔ 未做这一条**，只做了归档与消息台账的 180 天，TD-30 仍未还，见第 8 章落地偏离登记 P3）。⚠️ 第 6 章同样只到「给了 URL 就能发」：真实群 webhook 尚未写进 `.env`，**未做过任何一次真实投递**，灰度真发同在 8.6 由 Shao Peishen 本人操作）
 >
 > **粒度约定**（CLAUDE.md「粒度映射」）：本文件的**一个 `##` 章节 = 一个 superpowers plan = 一条 worktree 分支 = 一个可独立测试并合并的交付单元**。章节的 checkbox 在该 plan 的 final review 通过后才勾。
 >
@@ -211,8 +211,16 @@
 
 对应能力：`liaison-message-archive`（留存期一条）+ 整体可运行性。
 
-- [ ] 8.1 实现留存期清理：`HR_LIAISON_RETENTION_DAYS` 默认 180，超期归档与消息台账清理；队列行不参与自动清理。⚠️ 幂等策略：按年龄判定，重复执行安全
-- [ ] 8.2 清理失败时告警，⛔ 不静默跳过；单测覆盖超期被清理一条、清理失败告警一条
+- [x] 8.1 实现留存期清理：`HR_LIAISON_RETENTION_DAYS` 默认 180，超期归档与消息台账清理；队列行不参与自动清理。⚠️ 幂等策略：按年龄判定，重复执行安全
+- [x] 8.2 清理失败时告警，⛔ 不静默跳过；单测覆盖超期被清理一条、清理失败告警一条
+
+> **第 8 章（8.1–8.2）落地偏离登记**（run-build 收口时记，2026-09-09 [Mac]0909K）：
+>
+> - **P1 · 队列行永不清理 ⇒ 名单内消息的归档实际上不会被 180 天清掉**（冲突 B）。`liaison_task.msgid` 是 `REFERENCES liaison_message(msgid)`、无 `ON DELETE`，且 `PRAGMA foreign_keys = ON`；而 opener 写死 ⛔ `liaison_task` 行任何情况不删。两条叠加的必然结论是：**只有"归档了但没入队"的消息（名单外发送人）会被清理**。本轮按保守方向执行——这批行进 `blocked_by_queue` 桶，⛔ 不删、⛔ 不静默，每轮进报告并在有失败时把**计数**带进告警。🔴 **「队列行永不清理」与「归档 180 天」在 FK 下不可兼得，这是一条要 Shao Peishen 拍的取舍，本 session ⛔ 未替他拍。**
+> - **P2 · 跳过项（`SkippedItem`）不改变退出码。** 终审发现两类"永远清不掉"会静默通过：`archived_at` 不可解析的台账行、路径形状不再匹配 `<thread>/<yyyymmdd>/<leaf>` 的归档树。本轮已改成**跳过项也触发告警**（只带计数，合规）；但 ⛔ **未新增退出码**——"跳过是否该让 launchd 看见非 0"属调度侧决定，留给 8.3/8.4 那条泳道。
+> - **P3 · TD-30 的「日志留存时间维度」本单元 ⛔ 未收口。** 进度行原写"由 8.1 用独立的 `HR_LIAISON_LOG_RETENTION_DAYS` 默认 30 收口"，但本单元的实现计划只覆盖**归档与消息台账**的 `HR_LIAISON_RETENTION_DAYS`（180），⛔ 未实现日志的 30 天。**TD-30 仍然未还**，⛔ 不因 8.1 已勾而视作关闭。
+> - **P4 · 三处 controller 覆盖计划原文**（计划自带的示例代码与它自己的约束矛盾，按约束改）：① 计划 154-160 行的测试体声称 monkeypatch 时钟却没有，改成真 patch；② 计划 Step 3 的 `compute_retention_alert_text` 漏了冲突 B 要求的 `blocked_by_queue` 计数，补上（只补计数）；③ 计划 Step 3 的 `dry_run` 分支重读未变动的台账表，导致"消息自带附件"这一最常见情形下预览少报 `deleted_files`，改成模拟删后集合，使 `--dry-run` 与真实运行一致；④ 计划 1641-1646 行的测试只 patch 了 `DEFAULT_DB_PATH`，补 `DEFAULT_ARCHIVE_ROOT`（实证：未 patch 时 `cleanup_main()` 会打开**真实** `data/liaison.db` 与 `data/liaison/archive` 跑完整一轮）。
+> - **P5 · TD-33 / TD-34 已登记**，见 `docs/tech-debt.md`。
 - [x] 8.3 写 launchd plist（`KeepAlive` + `ThrottleInterval`）与安装说明；⛔ 不移植 Windows 侧的三级退避重启脚本（design.md D12）。产出：`tools/liaison/launchd/com.zhuopin.hr.liaison.plist.template`（占位符渲染式，模板内 ⛔ 无任何凭据取值）＋ `tools/liaison/scripts/install_launchd.py`（幂等：渲染 → 写 `~/Library/LaunchAgents/` → bootout 忽略失败 → bootstrap → 打印 `launchctl print` 状态行；`--dry-run` 不写任何文件、不调 launchctl）＋ README「运行与守护」一节（装／停即 `bootout` 回滚／看日志）。⏸ **留步：本 session ⛔ 未执行安装**——起 LaunchAgent 属安全配置变更，由 Shao Peishen 在 Terminal 自己跑一次，时点＝灰度 8.6。⏸ **留步：`tools/liaison/.venv` 尚未创建**，安装脚本对此 fail-closed（解释器不存在即拒装并退非 0，理由＝`KeepAlive` 不区分退出码，装上会 30s 一轮无限重启一个必然失败的进程）。⛔ 本勾只表示配置与脚本已就位并被单测覆盖，**不得当作「守护已生效」的证据**
 - [x] 8.4 日志接入：轮转 + 有界容量 + 个人信息脱敏（借用 `runtime-observability` 的做法，不受其 HTTP 请求链路要求约束）
 - [x] 8.5 加结构性守护测试：`tools/` 不在 `sync-to-server.sh` 的 `SYNC_PATHS` 里、SDK 依赖不在根 `requirements.txt` 里（design.md D10 的两道门禁）。已由 `tools/liaison/tests/test_liaison_boundaries.py` 两条覆盖（第 1 章落地：`test_tools_is_not_in_sync_paths`、`test_root_requirements_has_no_liaison_dependency`）＋ 本条补 plist 守护（`test_launchd_template_carries_variable_names_but_no_credential_values`：凭据名 ⛔ 不得以 plist 键值形式进模板，只准以 XML 注释形式出现——`~/Library/LaunchAgents/` 不受 `.gitignore` 保护且会被备份链带走，凭据挪进 `EnvironmentVariables` 会静默扩大泄漏面）
