@@ -387,3 +387,126 @@ def test_the_subcommand_reads_the_webhook_out_of_dotenv(letters, tmp_path):
     assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
     assert "example.invalid" in result.stdout
     assert "fake-key-for-tests" not in result.stdout + result.stderr
+
+
+# ── 第六组：回填打在**哪个文件**上（0909AO 复核）────────────────────────
+#
+# 2026-09-09 晚的现场：`--send` 真把 `人事部#1` 发进了群，但**主工作区**台账没变。
+# 复核结论（见 `docs/findings/2026-09-09-send-followup回填未生效复核.md`）：回填逻辑
+# 本身是对的——真因是台账由 `--md` 的**所在目录**推导，而交付给他的那条命令用的是
+# **相对路径**，在哪个 checkout 里跑就改哪个 checkout 的副本，且**CLI 一个字都没说
+# 它写的是哪个文件**。所以本组测的不是"改得对不对"，是"看不看得见改的是谁"。
+
+#: 真实台账 `人事部#1` 那一行的**逐字**形态（取自 `bf63e7a`）。⛔ 不要"整理"它——
+#: 括注、全角冒号、`／`、列宽全是现场原样，逐字才验得出定位与改写是否真的命中。
+REAL_ROW_BEFORE = (
+    "| `人事部#1（待发，暂不占号）` | 2026-09-09 | 汤丽萍 | "
+    "AI 招聘值守机制启用与配合方式（欢迎信／机制版）：需求确认怎么配合、"
+    "系统灰度中暂不用改习惯、请定反馈形式与节奏 | 决策点 a 无硬截止，不催 | `🆕 待发` |"
+)
+#: 真台账的**危险形状**：正文散文里有 `人事部#1`、状态图例表里有 `✅ 已推送 <日期>`、
+#: 变更记录里也有 `人事部#1`。这三处任何一处被误当成"那一行"，后果都是改错文件内容。
+REAL_LEDGER = f"""# 人事部 · 跟进信清单（HR 业务线自管台账）
+
+> HR 的跟进信**自成一条编号线，从 `人事部#1` 起**。本文件即这条线的台账真身。
+
+## 发送状态（起草者唯一可写的值是 `⏳ 待你审`）
+
+| 状态 | 含义 | 怎么变过来 |
+|---|---|---|
+| `🆕 待发` | 已批准，等发送 | Shao Peishen 审完手工改写 |
+| `✅ 已推送 <日期>` | 已发出 | 发出后手工改写 |
+
+## 清单
+
+| 编号 | 日期 | 收信人 | 主要事项 | 交期要点 | 发送状态 |
+|---|---|---|---|---|---|
+{REAL_ROW_BEFORE}
+
+## 变更记录
+
+- 2026-09-09 Shao Peishen 审核通过 ⇒ `人事部#1` 由 `⏳ 待你审` 转 `🆕 待发`。
+"""
+
+
+@pytest.fixture
+def real_shaped(tmp_path):
+    """与线上台账**逐字同形**的一份：散文 + 图例表 + 清单表 + 变更记录，四段俱全。"""
+    folder = tmp_path / "跟进信-真形"
+    folder.mkdir()
+    md = folder / "人事部-汤丽萍-跟进-2026-09-09-值守机制.md"
+    md.write_text(LETTER, encoding="utf-8")
+    ledger = folder / followup.LEDGER_FILENAME
+    ledger.write_text(REAL_LEDGER, encoding="utf-8")
+    return {"md": md, "ledger": ledger}
+
+
+def test_send_backfills_the_real_shaped_ledger_verbatim(real_shaped):
+    """逐字同形的台账上，`--send` 后那一行必须**逐字**变成终态。
+
+    ⛔ 不用"包含 ✅ 就算过"：括注没去掉、或改到了图例表那一行，`in` 断言照样绿。
+    """
+    code = run(["--md", str(real_shaped["md"]), "--send"], fake=FakeTransport())
+    assert code == 0
+    lines = real_shaped["ledger"].read_text(encoding="utf-8").splitlines()
+
+    hit = [line for line in lines if line.startswith("| `人事部#1")]
+    assert len(hit) == 1, f"清单里应当只有一行被改写，实得 {hit}"
+    assert hit[0] == (
+        "| `人事部#1` | 2026-09-09 | 汤丽萍 | "
+        "AI 招聘值守机制启用与配合方式（欢迎信／机制版）：需求确认怎么配合、"
+        "系统灰度中暂不用改习惯、请定反馈形式与节奏 | 决策点 a 无硬截止，不催 | "
+        "`✅ 已推送 2026-09-09` |"
+    ), hit[0]
+
+    # 图例表与散文、变更记录一个字节都不许动。
+    assert "| `✅ 已推送 <日期>` | 已发出 | 发出后手工改写 |" in lines
+    assert "> HR 的跟进信**自成一条编号线，从 `人事部#1` 起**。本文件即这条线的台账真身。" in lines
+    assert "- 2026-09-09 Shao Peishen 审核通过 ⇒ `人事部#1` 由 `⏳ 待你审` 转 `🆕 待发`。" in lines
+
+
+def test_send_prints_the_absolute_ledger_path_it_backfills(real_shaped, capsys):
+    """🔴 防呆：CLI 必须自报它写的是**哪一个**台账，且是**绝对路径**。
+
+    这条是 0909AO 的直接产物。现场那次 `--send` 发成功了、群里也收到了，但没人能当场
+    说出它回填的是哪个 checkout 的副本——因为 CLI 什么都没打印，而 `--md` 是相对路径。
+    ⛔ 不接受相对路径：`docs/跟进信/README-跟进信清单.md` 在每个 worktree 里都存在，
+    打出来等于没打。
+    """
+    run(["--md", str(real_shaped["md"]), "--send"], fake=FakeTransport())
+    out = capsys.readouterr().out
+    expected = str(real_shaped["ledger"].resolve())
+    assert expected in out, f"没打出台账绝对路径。实得：\n{out}"
+
+
+def test_dry_run_also_prints_the_absolute_ledger_path(real_shaped, capsys):
+    """dry-run 同样要打——他就是靠 dry-run 在真发前看清"到底会动什么"。"""
+    run(["--md", str(real_shaped["md"]), "--dry-run"], fake=FakeTransport())
+    out = capsys.readouterr().out
+    assert str(real_shaped["ledger"].resolve()) in out, out
+
+
+def test_the_printed_path_follows_md_not_the_cwd(tmp_path, monkeypatch, capsys):
+    """真因的可执行刻画：台账跟着 `--md` 走，**不跟着 CWD 走**。
+
+    两个 checkout 各有一份同名台账（现场就是这样：`docs/跟进信/` 自 `bf63e7a` 起进了
+    版本库，于是**每个 worktree 里都有一份逐字相同的副本**）。用相对 `--md` 在 B 里跑，
+    改的就是 B 的那份，A 的纹丝不动——而这正是"发出去了、主工作区没回填"的全部成因。
+    """
+    checkout_a = tmp_path / "主工作区" / "docs" / "跟进信"
+    checkout_b = tmp_path / "worktree" / "docs" / "跟进信"
+    for folder in (checkout_a, checkout_b):
+        folder.mkdir(parents=True)
+        (folder / "信.md").write_text(LETTER, encoding="utf-8")
+        (folder / followup.LEDGER_FILENAME).write_text(REAL_LEDGER, encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path / "worktree")
+    run(["--md", "docs/跟进信/信.md", "--send"], fake=FakeTransport())
+
+    assert "✅ 已推送" in (checkout_b / followup.LEDGER_FILENAME).read_text(encoding="utf-8")
+    a_text = (checkout_a / followup.LEDGER_FILENAME).read_text(encoding="utf-8")
+    assert a_text == REAL_LEDGER, "另一个 checkout 的台账必须一个字节都没动"
+
+    # 而唯一能让他当场看出"改的是 B 不是 A"的，就是那行绝对路径。
+    out = capsys.readouterr().out
+    assert str((checkout_b / followup.LEDGER_FILENAME).resolve()) in out, out

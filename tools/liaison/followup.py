@@ -167,10 +167,20 @@ def send_followup_main(
         )
         return EXIT_BAD_ARGS
 
-    ledger_path = md_path.parent / LEDGER_FILENAME
+    # 🔴 `.resolve()` 不是好看，是**防呆**：台账跟着 `--md` 的所在目录走，⛔ 不跟着
+    # CWD 走。`docs/跟进信/` 自 `bf63e7a` 起进了版本库 ⇒ **每个 worktree 里都有一份
+    # 逐字相同的副本**，于是"用相对路径在哪个 checkout 里跑，就回填哪个副本"，而两份
+    # 长得一模一样、相对路径也一模一样，光看命令行分辨不出来。
+    # 实证：2026-09-09 晚那次 `--send` 消息真发进了群，主工作区台账却纹丝不动，
+    # 现场没有任何人能当场说出它写的是谁——因为这里从前一个字都不打印。
+    # 见 `docs/findings/2026-09-09-send-followup回填未生效复核.md`。
+    ledger_path = (md_path.parent / LEDGER_FILENAME).resolve()
     if not ledger_path.is_file():
         print(f"找不到台账 {ledger_path} ⇒ ⛔ 拒发", file=sys.stderr)
         return EXIT_BAD_ARGS
+    # ⚠️ 打在**所有**路径上（含 dry-run 与终态短路），⛔ 不要只在真发那一支打：
+    # dry-run 正是他在真发前唯一能看清"到底会动哪个文件"的窗口，那里不打等于白设。
+    print(f"台账     ：{ledger_path}")
     ledger_text = ledger_path.read_text(encoding="utf-8")
     try:
         backfilled, changed = compute_backfilled_ledger(
@@ -250,5 +260,8 @@ def send_followup_main(
     # 台账只在**真的发出去之后**才改：写着"已推送"而群里没有，比没发更糟——
     # 那会让串行闸放行下一封，而上一封根本没到收信人手里。
     ledger_path.write_text(backfilled, encoding="utf-8")
-    print(f"已发送并回填台账：{number} → {_ALREADY_SENT} {today.isoformat()}")
+    print(
+        f"已发送并回填台账：{number} → {_ALREADY_SENT} {today.isoformat()}"
+        f"｜{ledger_path}"
+    )
     return EXIT_OK
