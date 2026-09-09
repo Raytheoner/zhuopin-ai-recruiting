@@ -236,11 +236,20 @@ class RedactingFormatter(logging.Formatter):
     `raise ValueError("联系 someone@example.com")` 这种）。所以格式化之后再扫
     一遍最终文本，是 Filter 之外必须补的一刀。
 
-    ⚠️ `super().format(record)` 会把**未脱敏**的 traceback 文本缓存进
-    `record.exc_text`。本方法只对**返回值**做替换，⛔ 不回写那个缓存。今天这是
-    安全的：本模块给所有 handler 配的都是本 Formatter，没有第二个 formatter 会
-    读到它。⛔ 谁要给 `tools.liaison` 挂一个裸 `logging.Formatter`，先回来读这段。
+    ⚠️ `super().format(record)` 内部会调 `formatException()` 把 traceback 渲染
+    成文本并**缓存进 `record.exc_text`**，供同一条 record 之后被别的 handler /
+    formatter 复用（stdlib 的省算设计）。`propagate=True` 是 `setup_logging` 刻意
+    保留的（见其 docstring），意味着这条 record 之后会继续往 root 走——root 上
+    任何调用方或第三方库挂的裸 `logging.Formatter`（今天仓库里还没有，但
+    `logging.basicConfig()` 或任意一次调试用的 `StreamHandler` 都会造出一个）都
+    会读到这份缓存。⛔ 因此"没有第二个 formatter 会读到它"是假设、不是事实，
+    真正的安全靠的是**在源头脱敏这份缓存本身**：重写 `formatException()`，让
+    `record.exc_text` 从被写入的那一刻起就已经是脱敏文本，而不是指望没人会用
+    第二个 formatter 去读原始缓存。
     """
+
+    def formatException(self, ei) -> str:
+        return compute_redacted_text(super().formatException(ei))
 
     def format(self, record: logging.LogRecord) -> str:
         return compute_redacted_text(super().format(record))
@@ -289,6 +298,28 @@ def _env_int(name: str, default: int, *, minimum: int) -> int:
     return value if value >= minimum else default
 
 
+def _resolve_level(raw: str | None) -> str:
+    """把环境变量/参数里的日志级别取值规整成合法级别名。⛔ 不抛异常——本函数
+    的唯一调用点 `setup_logging` 自己的 docstring 承诺「不可写时 ⛔ 不崩溃、
+    ⛔ 不阻断业务功能」；一个带尾随空格的级别名（plist 的 `EnvironmentVariables`
+    里很容易手抖多打一个空格）或数字级别（`20` 是很常见的约定）没有理由把整个
+    进程在装配日志之前——`setup_logging()` 是 `main()` 的第一句，此时还没有任何
+    handler——就用一条未捕获异常打死。取不到、非法一律回落到 `DEFAULT_LEVEL`。
+    """
+    candidate = (raw or DEFAULT_LEVEL).strip().upper()
+    names = logging.getLevelNamesMapping()
+    if candidate in names:
+        return candidate
+    try:
+        numeric = int(candidate)
+    except ValueError:
+        return DEFAULT_LEVEL
+    for name, value in names.items():
+        if value == numeric:
+            return name
+    return DEFAULT_LEVEL
+
+
 def _resolve_log_dir(explicit: "str | os.PathLike[str] | None") -> pathlib.Path:
     if explicit is not None:
         return pathlib.Path(explicit).expanduser()
@@ -333,11 +364,19 @@ def teardown_logging() -> None:
 
     没有它，上一条用例挂的 file handler 会一直攥着一个已被删除的 tmp 目录，
     下一条用例的日志就写进了一个看不见的地方。
+
+    ⚠️ **level 必须复位回 `NOTSET`**：`setup_logging` 会 `logger.setLevel(...)`，
+    而 level 是挂在 logger 对象本身、不是挂在某个 handler 上的状态——只摘 handler
+    不摘 level，上一条用例设的级别会在进程里永久生效，把下一条用例的记录在
+    `Logger.isEnabledFor()` 这一步就悄悄过滤掉（比如 `caplog.at_level("WARNING")`
+    只抬高了 root 的级别，抬不动这个包级 logger）。`NOTSET` 让它退回"跟随
+    effective level"的默认状态，不是"跟随生产环境残留的上一次配置"。
     """
     global _status
     logger = logging.getLogger(PACKAGE_LOGGER_NAME)
     _detach_managed_handlers(logger)
     _detach_redaction_filters(logger)
+    logger.setLevel(logging.NOTSET)
     _status = LoggingStatus()
 
 
@@ -372,7 +411,7 @@ def setup_logging(
     global _status
 
     directory = _resolve_log_dir(log_dir)
-    resolved_level = (level or os.environ.get(LOG_LEVEL_ENV) or DEFAULT_LEVEL).upper()
+    resolved_level = _resolve_level(level or os.environ.get(LOG_LEVEL_ENV))
     resolved_max_bytes = (
         max_bytes
         if max_bytes is not None

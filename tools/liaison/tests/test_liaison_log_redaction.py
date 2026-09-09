@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 
 import pytest
@@ -201,8 +202,13 @@ def test_parent_thread_id_does_not_match_the_protected_thread_id_key():
 
 @pytest.fixture
 def wired_logger(tmp_path):
-    """把包级 logger 按生产方式装配好，返回日志文件路径。"""
-    logsetup.setup_logging(log_dir=tmp_path)
+    """把包级 logger 按生产方式装配好，返回日志文件路径。
+
+    ⚠️ 显式钉死 `level="DEBUG"`：不钉的话这几条用例的通过与否会跟着宿主环境的
+    `HR_LIAISON_LOG_LEVEL` 漂——比如本机 CI 若导出了 `HR_LIAISON_LOG_LEVEL=ERROR`，
+    这里用的 WARNING/INFO 记录会被过滤掉，测试红得毫无线索。
+    """
+    logsetup.setup_logging(log_dir=tmp_path, level="DEBUG")
     yield tmp_path / logsetup.LOG_FILENAME
     logsetup.teardown_logging()
 
@@ -252,3 +258,86 @@ def test_filter_neutralises_a_broken_format_string_instead_of_leaking_it(wired_l
     text = wired_logger.read_text(encoding="utf-8")
     assert "13812345678" not in text
     assert "[liaison-redaction] 日志格式化失败" in text
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1（review 三条 Important，均落在计划逐字转写的代码里，非实现者错误；
+# 裁决：CLAUDE.md 合规红线与函数自身承诺的契约优先于计划逐字文本，且只许往
+# 更安全的方向纠偏——降级不崩溃、脱敏更多不更少）。
+# ---------------------------------------------------------------------------
+
+
+def test_bad_log_level_falls_back_instead_of_crashing(tmp_path):
+    """Important 1：手抖/数字/非法级别一律不许在装配日志之前把进程打死。
+
+    `resolved_level` 曾经只 `.upper()` 不校验就直接扔给 `logger.setLevel()`——
+    跟 `_env_int`「取不到、非数字、越界一律回落默认值，⛔ 不抛异常」的承诺不对称。
+    `setup_logging()` 是 `main()` 的第一句，此时还没有任何 handler，一条未捕获
+    异常就是 launchd 崩溃循环，连 stderr 都没有落地机会——直接违反本函数自己的
+    docstring 契约（不可写时 ⛔ 不崩溃、⛔ 不阻断业务功能）。
+    """
+    logger = logging.getLogger(logsetup.PACKAGE_LOGGER_NAME)
+    default_value = logging.getLevelNamesMapping()[logsetup.DEFAULT_LEVEL]
+    try:
+        for raw in ("INFO ", "INF0", "verbose"):
+            status = logsetup.setup_logging(log_dir=tmp_path, level=raw)
+            assert status.configured is True
+            assert (
+                logger.level == default_value
+            ), f"level={raw!r} 未回落到 DEFAULT_LEVEL：实际 {logger.level}"
+
+        # `'20'` 与数字级别的其它合法取值：能落到一个真实存在的级别就该被接受，
+        # ⛔ 不是见到数字就一律回落默认值（DEFAULT_LEVEL 恰好也是 INFO=20，
+        # 用 ERROR=40 才能真的证明是"数字被解析"而不是"数字被拒绝后走了默认值"）。
+        status = logsetup.setup_logging(log_dir=tmp_path, level="20")
+        assert logger.level == logging.INFO
+        status = logsetup.setup_logging(log_dir=tmp_path, level="40")
+        assert logger.level == logging.ERROR
+    finally:
+        logsetup.teardown_logging()
+
+
+def test_teardown_resets_the_logger_level_to_notset(tmp_path):
+    """Important 2：`teardown_logging` 不摘 `logger.level` 就是留了一个进程范围的
+    定时器——下一条用例的记录会在 `Logger.isEnabledFor()` 这一步被静默过滤掉。
+    `caplog.at_level(...)` 只抬高 root 的级别，抬不动这个包级 logger 自己钉死的
+    级别（控制组见 `test_session_liveness.py::test_reading_a_corrupt_stamp_returns_none_and_logs`
+    在 `HR_LIAISON_LOG_LEVEL=ERROR` 环境下先跑一遍脱敏套件的失败）。
+    """
+    logger = logging.getLogger(logsetup.PACKAGE_LOGGER_NAME)
+    logsetup.setup_logging(log_dir=tmp_path, level="ERROR")
+    assert logger.level == logging.ERROR
+    logsetup.teardown_logging()
+    assert logger.level == logging.NOTSET
+
+
+def test_traceback_redacted_before_propagating_to_a_plain_root_formatter(wired_logger):
+    """Important 3：`RedactingFormatter` 原先只对 `format()` 的**返回值**做替换，
+    不回写 `record.exc_text` 缓存；`setup_logging` 的 `propagate=True` 是刻意保留
+    的（见其 docstring），意味着这条 record 还会继续往 root 走。root 上任何裸
+    `logging.Formatter`（今天仓库里没有，但 `logging.basicConfig()` 或一次调试
+    用的 `StreamHandler` 都会造出一个）读到的是**未脱敏**的原始缓存——这正是
+    "结构上不可能明文外泄"这条合规红线的失效点。修复后 `formatException()` 在
+    源头就把缓存写成脱敏文本，root 收到的也是安全的。
+    """
+    root = logging.getLogger()
+    leak_stream = io.StringIO()
+    leak_handler = logging.StreamHandler(leak_stream)
+    leak_handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(leak_handler)
+    try:
+        logger = logging.getLogger("tools.liaison.archive")
+        try:
+            raise ValueError("联系 zhang.san@example.com 手机 13812345678")
+        except ValueError:
+            logger.error("归档失败", exc_info=True)
+    finally:
+        root.removeHandler(leak_handler)
+
+    leaked = leak_stream.getvalue()
+    assert "zhang.san@example.com" not in leaked, "邮箱明文泄露到了 root 的裸 formatter"
+    assert "13812345678" not in leaked, "手机号明文泄露到了 root 的裸 formatter"
+
+    own_text = wired_logger.read_text(encoding="utf-8")
+    assert "zhang.san@example.com" not in own_text
+    assert "13812345678" not in own_text
