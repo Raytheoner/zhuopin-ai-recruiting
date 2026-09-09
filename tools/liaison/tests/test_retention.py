@@ -446,3 +446,175 @@ def test_expiry_uses_end_of_day_not_midnight(tmp_path):
     )
     assert deletable == ()
     assert skipped == ()
+
+
+class RecordingSink:
+    """记下送出去的告警。⛔ 不做网络调用——真实群通知是第 6 章。"""
+
+    def __init__(self, explode=False):
+        self.texts = []
+        self.explode = explode
+
+    def send(self, text):
+        self.texts.append(text)
+        if self.explode:
+            raise RuntimeError("模拟：告警通道自己也挂了")
+
+
+def test_run_cleanup_deletes_ledger_row_then_file(conn, tmp_path):
+    """spec Scenario「超期数据被清理」端到端：台账行没了、文件也没了。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-old__a.xlsx")
+    _archive(
+        conn, "m-old", archived_at=OLD,
+        attachments_json='[{"filename": "a.xlsx", "relative_path": "u1/20260101/m-old__a.xlsx",'
+                         ' "byte_length": 1, "sha256": "x"}]',
+    )
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+    )
+    assert report.deleted_messages == ("m-old",)
+    assert report.deleted_files == ("u1/20260101/m-old__a.xlsx",)
+    assert report.failures == ()
+    assert sink.texts == []          # 没失败就 ⛔ 不发告警
+    assert not (root / "u1/20260101/m-old__a.xlsx").exists()
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 0
+
+
+def test_run_cleanup_keeps_files_of_surviving_rows(conn, tmp_path):
+    """未超期的消息，它的材料一个字节都不许动。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260901/m-new__a.xlsx")
+    _archive(
+        conn, "m-new", archived_at=NEW,
+        attachments_json='[{"filename": "a.xlsx", "relative_path": "u1/20260901/m-new__a.xlsx",'
+                         ' "byte_length": 1, "sha256": "x"}]',
+    )
+    retention.run_cleanup(conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink())
+    assert (root / "u1/20260901/m-new__a.xlsx").exists()
+
+
+def test_file_deletion_failure_raises_exactly_one_alert(conn, tmp_path, monkeypatch):
+    """8.2 逐字：「清理失败告警一条」+ spec Scenario「清理失败 → 发出告警、该失败被记录」。
+
+    两条一起断言：告警**恰好一条**（不是每个失败一条），且失败进了 report。
+    """
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/a__1.bin")
+    _touch(root, "u1/20260101/b__2.bin")
+    monkeypatch.setattr(
+        retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
+    )
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+    )
+    assert len(report.failures) == 2
+    assert len(sink.texts) == 1
+
+
+def test_alert_text_carries_no_personal_information(conn, tmp_path, monkeypatch):
+    """🔴 合规：告警将来会经第 6 章送进企微群。
+
+    ⛔ 文本里不许出现 msgid、发送人 userid、文件名、相对路径或消息正文——
+    否则等于把"谁发过什么材料"广播出去。只许带计数与阶段名。
+    """
+    root = tmp_path / "archive"
+    _touch(root, "tangliping/20260101/msg-9527__身份证扫描件.pdf")
+    monkeypatch.setattr(
+        retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
+    )
+    sink = RecordingSink()
+    retention.run_cleanup(conn, now=NOW, retention_days=180, archive_root=root, sink=sink)
+    text = sink.texts[0]
+    for forbidden in ("tangliping", "msg-9527", "身份证扫描件", ".pdf", "20260101"):
+        assert forbidden not in text, f"告警文本泄露了 {forbidden!r}：{text}"
+
+
+def test_alert_channel_failure_never_breaks_the_round(conn, tmp_path, monkeypatch):
+    """告警通道自己挂掉 ⇒ 记本地日志，⛔ 不抛给调用方（与第 7 章
+    `effect_emit_outage_alert` 同一条口径）。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/a__1.bin")
+    monkeypatch.setattr(
+        retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
+    )
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink(explode=True)
+    )
+    assert report.failures  # 轮次照常跑完并返回
+
+
+def test_blocked_and_skipped_items_are_reported_not_swallowed(conn, tmp_path):
+    """⛔ 不静默跳过：被队列行挡住的、以及形态不认识的，都必须出现在 report 里。"""
+    root = tmp_path / "archive"
+    _touch(root, "stray.txt")
+    _archive(conn, "m-queued", archived_at=OLD)
+    effect_enqueue_task(
+        conn, thread_id="u1", business_key="m-queued", sender_userid="u1",
+        received_at="2026-01-01T08:00:00+08:00", summary="s",
+    )
+    conn.commit()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink()
+    )
+    assert report.blocked_by_queue == ("m-queued",)
+    assert [item.subject for item in report.skipped] == ["stray.txt"]
+    assert "m-queued" in retention.render_report(report)
+
+
+def test_dry_run_changes_nothing(conn, tmp_path):
+    """`--dry-run` 只报不动：库里一行不少、盘上一个文件不少。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-old__a.xlsx")
+    _archive(conn, "m-old", archived_at=OLD)
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink(), dry_run=True
+    )
+    assert report.dry_run is True
+    assert report.deleted_messages == ("m-old",)          # 报"会删这些"
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
+    assert (root / "u1/20260101/m-old__a.xlsx").exists()
+    assert conn.execute("SELECT COUNT(*) FROM effect_log WHERE node_name = ?",
+                        (retention.RETENTION_DELETE_NODE,)).fetchone()[0] == 0
+
+
+def test_unparseable_ledger_row_stops_the_file_pass(conn, tmp_path):
+    """台账里有一行 `attachments_json` 读不出来 ⇒ 我们不知道哪些文件仍被引用
+    ⇒ ⛔ 整个文件那一遍不许跑。宁可这一轮不清文件，也不能误删一份还被
+    指着的材料。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/old__a.bin")
+    _archive(conn, "m-broken", archived_at=NEW, attachments_json="{")
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink()
+    )
+    assert report.deleted_files == ()
+    assert any(f.stage == "scan" for f in report.failures)
+    assert (root / "u1/20260101/old__a.bin").exists()
+
+
+def test_alert_text_includes_blocked_by_queue_count_when_round_has_failures(conn, tmp_path, monkeypatch):
+    """plan「冲突 B」逐字：blocked_by_queue 的计数在本轮有失败时也必须进告警文本
+    （⛔ 只带计数，不带其中的 msgid——那些明细留给 `render_report`）。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/a__1.bin")
+    _archive(conn, "m-queued", archived_at=OLD)
+    effect_enqueue_task(
+        conn, thread_id="u1", business_key="m-queued", sender_userid="u1",
+        received_at="2026-01-01T08:00:00+08:00", summary="s",
+    )
+    conn.commit()
+    monkeypatch.setattr(
+        retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
+    )
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+    )
+    assert report.blocked_by_queue == ("m-queued",)
+    assert len(sink.texts) == 1
+    text = sink.texts[0]
+    assert f"保留 {len(report.blocked_by_queue)} 条" in text
+    assert "m-queued" not in text

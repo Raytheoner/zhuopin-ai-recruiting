@@ -469,3 +469,164 @@ def prune_empty_dirs(archive_root: pathlib.Path) -> tuple[str, ...]:
             path.rmdir()
             pruned.append(path.relative_to(archive_root).as_posix())
     return tuple(pruned)
+
+
+@dataclass(frozen=True)
+class CleanupReport:
+    """一轮清理的完整结果。
+
+    ⚠️ `deleted_*` 在 `dry_run=True` 时表示"**本来会**删这些"，⛔ 不表示已删。
+    渲染与调用方都必须先看 `dry_run`。
+    """
+
+    retention_days: int
+    cutoff: str
+    dry_run: bool
+    deleted_messages: tuple[str, ...]
+    blocked_by_queue: tuple[str, ...]
+    deleted_files: tuple[str, ...]
+    pruned_dirs: tuple[str, ...]
+    skipped: tuple[SkippedItem, ...]
+    failures: tuple[CleanupFailure, ...]
+
+
+def compute_retention_alert_text(report: CleanupReport) -> str:
+    """拼一条清理失败告警。纯函数：不读库、不写日志、不发送（铁律 2）。
+
+    🔴 **只许带计数与阶段名。** ⛔ 不许带 msgid、发送人 userid、文件名、
+    相对路径或任何消息内容——这条告警将来会经第 6 章送进企微群，带上它们
+    等于把"谁发过什么材料"广播出去。明细只进本机运行日志。
+
+    ⚠️ 冲突 B（plan「前置状态与冲突处置」逐字）：`blocked_by_queue` 的计数
+    ——⛔ 只是计数，不带其中任何 msgid——必须在本轮有失败时也进这条告警，
+    否则"仍有队列条目而永久留存"这件事只能靠人去翻本机日志才发现。
+    """
+    stages = "、".join(sorted({failure.stage for failure in report.failures})) or "无"
+    return (
+        "【HR 值守通道·留存清理失败】"
+        f"留存期 {report.retention_days} 天；"
+        f"本轮清理台账 {len(report.deleted_messages)} 行、归档文件 {len(report.deleted_files)} 个；"
+        f"失败 {len(report.failures)} 项（阶段：{stages}）；"
+        f"因队列未清而保留 {len(report.blocked_by_queue)} 条。"
+        "明细见本机运行日志，⛔ 告警不带发送人、文件名与消息内容。"
+    )
+
+
+def emit_retention_alert(sink, text: str) -> bool:
+    """把告警送出去。**⛔ 永不抛异常**，返回是否送成功。
+
+    与第 7 章 `alerts.effect_emit_outage_alert` 同一条口径：告警通道失败只记
+    本地日志，⛔ 不许因此中止清理这一轮——两件事毫无关系。
+    ⛔ 捕获 `Exception` 而不是 `BaseException`：`KeyboardInterrupt` 必须能停下来。
+    """
+    try:
+        sink.send(text)
+    except Exception:
+        logger.error("留存清理告警发送失败，原文：%s", text, exc_info=True)
+        return False
+    return True
+
+
+def render_report(report: CleanupReport) -> str:
+    """给人看的一屏摘要（本机 stdout / 日志）。
+
+    ⚠️ 这一份**带明细**，因此 ⛔ 不许原样贴进企微群——对外的那一条是
+    `compute_retention_alert_text`。
+    """
+    lines = [
+        f"留存清理{'（DRY-RUN，未做任何修改）' if report.dry_run else ''}："
+        f"留存期 {report.retention_days} 天，cutoff={report.cutoff}",
+        f"  台账行 {'将删' if report.dry_run else '已删'} {len(report.deleted_messages)} 条："
+        f"{'、'.join(report.deleted_messages) or '无'}",
+        f"  归档文件 {'将删' if report.dry_run else '已删'} {len(report.deleted_files)} 个",
+        f"  空目录清理 {len(report.pruned_dirs)} 个",
+        f"  ⛔ 因仍有队列条目而保留（design D13：队列行不参与自动清理）"
+        f" {len(report.blocked_by_queue)} 条：{'、'.join(report.blocked_by_queue) or '无'}",
+    ]
+    for item in report.skipped:
+        lines.append(f"  跳过 {item.subject}：{item.reason}")
+    for failure in report.failures:
+        lines.append(f"  ❌ 失败[{failure.stage}] {failure.subject}：{failure.reason}")
+    return "\n".join(lines)
+
+
+def run_cleanup(
+    conn,
+    *,
+    now: datetime.datetime,
+    retention_days: int,
+    archive_root: pathlib.Path,
+    sink,
+    dry_run: bool = False,
+) -> CleanupReport:
+    """跑一轮留存期清理。
+
+    顺序（opener 约束 1 逐字）：**先删台账行、后删归档文件**。⛔ 不许调换。
+    反过来会在两步之间留下"台账指向不存在的文件"，那是 design D3 禁止的。
+
+    文件那一遍的"仍被引用"集合**必须在台账那一遍之后重新读一次**——
+    用清理前的台账去算，刚删掉的那些行还"引用"着它们的文件，那些文件就
+    永远删不掉了。
+
+    单条失败不中止整轮；全部跑完之后**汇总成一条**告警（⛔ 不是每个失败一条：
+    一次目录权限问题能刷出几百条告警，那等于没有告警）。
+    """
+    cutoff = compute_cutoff(now, retention_days)
+    rows = load_message_rows(conn)
+    split = compute_expired(now, retention_days, rows)
+
+    failures: list[CleanupFailure] = []
+    skipped: list[SkippedItem] = list(split.undecidable)
+
+    if dry_run:
+        deleted_messages = tuple(item.msgid for item in split.deletable)
+    else:
+        deleted_messages, ledger_failures = delete_expired_ledger_rows(conn, split.deletable)
+        failures.extend(ledger_failures)
+
+    # ⚠️ 重新读一次：这一遍要的是**清理之后**还活着的台账指向了哪些文件。
+    surviving = load_message_rows(conn)
+    referenced: set[str] = set()
+    scan_ok = True
+    for row in surviving:
+        try:
+            referenced.update(parse_relative_paths(row.attachments_json))
+        except ValueError as exc:
+            # 不知道哪些文件仍被引用 ⇒ ⛔ 整个文件那一遍不许跑。宁可这一轮
+            # 不清文件，也不能误删一份还被台账指着的材料（design D3）。
+            scan_ok = False
+            failures.append(CleanupFailure("scan", row.msgid, f"attachments_json 不可解析：{exc}"))
+
+    deleted_files: tuple[str, ...] = ()
+    pruned_dirs: tuple[str, ...] = ()
+    if scan_ok:
+        candidates, file_skipped = compute_deletable_files(
+            now, retention_days, iter_archive_files(archive_root), frozenset(referenced)
+        )
+        skipped.extend(file_skipped)
+        if dry_run:
+            deleted_files = candidates
+        else:
+            deleted_files, file_failures = delete_archive_files(archive_root, candidates)
+            failures.extend(file_failures)
+            pruned_dirs = prune_empty_dirs(archive_root)
+    else:
+        logger.error("留存清理：台账里有读不出来的 attachments_json，⛔ 本轮跳过全部文件清理")
+
+    report = CleanupReport(
+        retention_days=retention_days,
+        cutoff=cutoff.isoformat(),
+        dry_run=dry_run,
+        deleted_messages=tuple(deleted_messages),
+        blocked_by_queue=tuple(item.msgid for item in split.blocked_by_queue),
+        deleted_files=tuple(deleted_files),
+        pruned_dirs=tuple(pruned_dirs),
+        skipped=tuple(skipped),
+        failures=tuple(failures),
+    )
+
+    if report.failures:
+        # ⛔ 不静默跳过（8.2 逐字）。一轮一条，⛔ 不是每个失败一条。
+        emit_retention_alert(sink, compute_retention_alert_text(report))
+    logger.info("%s", render_report(report))
+    return report
