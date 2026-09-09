@@ -830,6 +830,12 @@ PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison
 ② 拔网线／断 Wi-Fi 后 `liaison_outage_window` 开出一条窗口、群里收到断线告警；
 ③ 网络恢复后自动重连、窗口闭合并发出恢复告警。三条都对 ⇒ 本条可销，G-4（launchd 装机）解锁。
 
+🔴 **2026-09-09 `[Mac]0909AG` 已跑完这三条，⛔ 不要重跑**：① ✅、② ✅（新开
+`disconnect_event` 窗口，翻转时延 55.75 秒）、③ ❌ **不过**——复网后 122 秒零动作，
+窗口永不闭合。定性见 **TD-39**（已从"待复核"升级为已确认缺陷）与
+`docs/findings/2026-09-09-断线重连实测.md`。**G-4（launchd 装机）继续锁着**，
+解锁条件改为「TD-39 还上并有自动化测试覆盖」。
+
 ⚠️ 先跑一次 `... -m tools.liaison --self-check` 更省事：它把凭据与 SDK 表面全校验一遍
 就退出（exit 0），⛔ 不建连——凭据打错时不必等到真连才发现。
 
@@ -1468,28 +1474,73 @@ SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释�
 **心跳是否真的变成 30 秒，需 `[Mac]0909AG` 真实建连确认**——在那之前，
 「⛔ TD-38 未还前不得装 launchd」这条闸门按 Shao Peishen 答 `3a` **继续有效**。
 
-## TD-39 · ⚠️ 待复核：SDK 判连接死亡后，断线事件疑似没到 `LiaisonSession`
+## TD-39 · 🔴 已确认缺陷：重连链被 `error` 事件抛出打断，连接断了就再也回不来（阻断 8.6）
 
-**疑点是什么**：`[Mac]0909AE` 实测中，SDK 在 21:26:33.988 打出
-`connection considered dead` 之后 **16 秒**，`data/liaison/liveness.json` 仍是
-`{"state": "connected", ...}`（`stamp_at` 21:26:49.898 说明值守线程还在正常盖戳），
-`liaison_outage_window` 表**一条记录都没有**，日志里也没有任何 `disconnected` /
-`reconnecting` 行。若属实，这正是 `make_sdk_connect` docstring 点名要消灭的静默故障：
-**中断窗口一条都不会有，"没有告警"被当成"一切正常"**。
+**已于 `[Mac]0909AG` 复核完毕，⛔ 不是虚惊，⛔ 不许销账。** 实测见
+`docs/findings/2026-09-09-断线重连实测.md`。
 
-🔴 **⛔ 本条尚未定性，不要当成已确认的缺陷**：观察窗只有 16 秒就被人工强杀了，SDK 的
-`_ws.close()` → 接收循环收尾 → `on_disconnected`（`client.py:70`）这条链可能仍在途中。
+**原疑点的措辞需要修正**：不是"断线事件没到 `LiaisonSession`"——它**到了**。
+`0909AE` 观察到的"16 秒仍是 `connected`"，只是因为判死时延本来就有 55.75 秒
+（心跳 30 秒 × 2 个未回 pong），观察窗被人工强杀时链路还在途中。
+**检测侧是好的，坏的是恢复侧。**
 
-**复核方法**（还 TD-38 之后再做，否则 44 秒就被限流、复现的是限流不是断线）：
-心跳改对、连接稳定之后，**拔网线／关 Wi-Fi** 制造真实断线，观察 ①`liveness.json` 是否
-在合理时延内翻成 `disconnected`；②`liaison_outage_window` 是否落一条窗口；
-③ 恢复网络后是否自动重连并闭合该窗口。三项全绿则本条销账为"虚惊"，任一不绿则升级为缺陷。
+**缺陷是什么**：连接断开后 SDK 只重连一次；那一次失败时抛出的异常，
+会把唯一还能触发重连的 task 杀死，于是**永不再试**。进程仍然活着、
+`liveness.json` 永远停在 `disconnected`（`stamp_at` 也不再刷新）、
+中断窗口永不闭合、恢复告警永不发出——**服务看起来在跑，其实早断了**。
 
-**触发条件**：TD-38 还上之后、8.6 灰度验收之前。⛔ 不许跳过——它守的正是
-"服务看起来在跑、其实早断了"这一类**无症状**故障。
+**根因链**（SDK `wecom_aibot_python_sdk 1.0.2`，行号为 venv 内实际行号）：
 
-**来源**：`[Mac]0909AE` 首次真实建连实测。相关：TD-38、
-`docs/findings/2026-09-09-首次真实建连实测.md`
+1. `aibot/ws.py:149-153` `connect()` 失败分支：`self.on_error(e)`（152 行）**在**
+   `await self._schedule_reconnect()`（153 行）**之前**；
+2. `aibot/client.py:76` 把 `on_error` 接成 `lambda error: self.emit("error", error)`；
+3. `pyee/base.py:178-184` `_emit_handle_potential_error`：`error` 事件**没有监听器时直接 `raise`**；
+4. `tools/liaison/session_client.py:214-215` 只接了 `EVENT_CONNECTED` / `EVENT_DISCONNECTED`，
+   **没有 `client.on("error", …)`** ⇒ 第 2 步必抛 ⇒ 第 152 行炸掉 ⇒ **第 153 行永远走不到**；
+5. 异常冒泡出 `_receive_loop()`（`ws.py:208`），该 task 死亡
+   （`Task exception was never retrieved`）。它是唯一还会调 `_schedule_reconnect` 的地方。
+
+**为什么现在才暴露**：TD-38 未修时连接活不过 44 秒就被限流踢断，每次都走启动路径重建，
+从没走到"运行中断线 → 重连失败"这条分支。**TD-38 修好是暴露本条的前提。**
+
+**实测数据**（2026-09-09，断网 91.77 秒 + 复网观察 122.28 秒）：
+
+| # | 判据 | 结论 |
+|---|---|---|
+| ① | 断线日志 | ✅ `connection closed` + `Reconnecting attempt 1` @ 22:03:24 |
+| ② | `liveness` 翻 `disconnected` | ✅ 时延 55.75 秒（心跳周期决定，非缺陷） |
+| ③ | 新开中断窗口 | ✅ 基线 1 → 2，`detected_by='disconnect_event'` |
+| ④ | 复网自动重连成功 | ❌ 复网后 122.28 秒**零日志**；`Authentication successful` 全程仅 1 次（启动那次） |
+| ⑤ | `liveness` 翻回 `connected` | ❌ 永远 `disconnected`，`stamp_at` 冻结 158 秒 |
+| ⑥ | 窗口闭合 | ❌ `recovered_at`/`closed_by`/`alerted_at` 三列全空 |
+
+**修法**（⛔ 本条只登记，`0909AG` 未改任何代码；修归另一条 opener）：
+
+1. 在 `_prepare_client` 里补 `error` 事件监听器（记日志即可），让 pyee 走
+   "有监听器 ⇒ 分发不抛"的分支，`ws.py:153` 的 `_schedule_reconnect()` 才能执行；
+2. 同时把 `max_reconnect_attempts` 改成 `-1`（无限重试）——见下方 N-1；
+3. 🔴 **两项都必须有断线重连的自动化测试覆盖**，⛔ 不许只靠手工复跑一遍就算还上。
+   本条守的正是无症状故障：没有测试钉住，它下次回归时同样不会有任何症状。
+
+**次生问题（同批修，⛔ 不要只修根因就销账）**：
+
+- **N-1 · 重试上限导致永久放弃**：`ws.py:68-69` `max_reconnect_attempts=10`、
+  退避 1s 起翻倍、上限 30s ⇒ 约 **181 秒**后打 `Max reconnect attempts reached, giving up`
+  并永久放弃。换网、路由器重启、机房割接都超过 3 分钟，同样静默死掉。改 `-1`。
+- **N-2 · 首跳撞在断网期**：attempt 1 固定 1 秒后重试，必然落在断网窗口内，白费一次机会。
+- **N-3 · `websockets` 次生崩栈**：`websockets/asyncio/client.py:741`
+  `if 200 <= response.status_code < 300:` 在 `response is None` 时抛 `AttributeError`。
+  第三方库缺陷，非主因，但污染日志。
+- **N-4 · 本机走 HTTP 代理**：`scutil --proxy` 显示 `HTTPEnable/HTTPSEnable = 1`，
+  断网时代理回 `HTTP 503`，异常类型是 `InvalidProxyStatus`。
+  ⚠️ **根因与异常类型无关**（任何重连异常都走同一条路）。但 **.51 现网若不走代理，
+  异常类型会不同**——复现时⛔ 不要按 `503` 去找。
+
+**触发条件**：🔴 **8.6 灰度验收前必须还上**。值守通道断了不会自愈、也不会告警，
+这正是 `make_sdk_connect` docstring 点名要消灭的那类故障。
+
+**来源**：`[Mac]0909AE` 起疑、`[Mac]0909AG` 定性。相关：TD-37、TD-38、
+`docs/findings/2026-09-09-断线重连实测.md`、`docs/findings/2026-09-09-首次真实建连实测.md`
 
 ## ~~TD-40~~ · `.env` 里的 `HR_LIAISON_*` 三个键让整个 app 的配置加载不了 ✅ 已还（`0909AC`，改法 ③）
 
