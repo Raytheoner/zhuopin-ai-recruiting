@@ -331,6 +331,23 @@ class LoopStopper:
         return True
 
 
+def _describe_error(error) -> str:
+    """把 `error` 渲染成一行可打印的文本。**⛔ 本函数永不抛异常。**
+
+    ⚠️ 载荷的 `__repr__` 自己抛异常时（第三方库里并不罕见——半初始化的对象、
+    `__repr__` 里再去读一个已关闭的 socket），`logger.warning(..., %r, error)`
+    会在格式化那一步炸。而从 `error` 监听器里逃出去的异常会被 pyee 再 emit 一次
+    `error`（`pyee/asyncio.py:78-81`）⇒ 无限递归。
+    """
+    try:
+        return repr(error)
+    except Exception:  # noqa: BLE001 —— 渲染失败 ⛔ 不许升级成故障
+        try:
+            return f"<{type(error).__name__} 的 repr() 自己抛了异常，无法呈现>"
+        except Exception:  # noqa: BLE001 —— 连 type().__name__ 都取不到就认了
+            return "<无法呈现的错误载荷>"
+
+
 def _handle_sdk_error(loop_stopper: "LoopStopper", error) -> None:
     """`error` 事件的监听器。**记日志，⛔ 不重新抛出。**
 
@@ -344,7 +361,17 @@ def _handle_sdk_error(loop_stopper: "LoopStopper", error) -> None:
     （异常文本里可能带 URL/凭据片段），⛔ 不许裸 `print`。
     """
     loop_stopper.capture()
-    logger.warning("值守通道连接报错，已交给 SDK 重连（⛔ 不回抛，回抛会打断重连链）：%r", error)
+    try:
+        logger.warning(
+            "值守通道连接报错，已交给 SDK 重连（⛔ 不回抛，回抛会打断重连链）：%s",
+            _describe_error(error),
+        )
+    except Exception:  # noqa: BLE001 —— 见下面这段注释，这不是"异常就 pass"
+        # ⛔ 最后一道闸：**任何**从本函数逃出去的异常都会被 pyee 拿去
+        # `self.emit("error", exc)`（`pyee/asyncio.py:78-81`）⇒ 又进本函数 ⇒
+        # **无限递归**。修好了 TD-39 却在这里挂死，比原来的 bug 更难查。
+        # 这一句刻意**不做任何插值**（不碰 error、不碰 %），所以它自己炸不了。
+        logger.warning("值守通道连接报错（错误详情无法呈现），已交给 SDK 重连")
 
 
 def _prepare_client(client_factory, on_connected, on_disconnected, loop_stopper):

@@ -375,3 +375,31 @@ def test_loop_stopper_forgets_the_previous_loop_on_a_new_attempt():
     stopper.forget()
     assert stopper.request_stop() is False
     assert old.calls == []
+
+
+class ExplodingRepr:
+    """`__repr__` 自己抛异常的载荷。⛔ 不是杜撰的刁难——见下面用例的 docstring。"""
+
+    def __repr__(self):
+        raise ValueError("repr 炸了")
+
+
+def test_error_listener_survives_a_payload_whose_repr_explodes():
+    """🔴 监听器必须是**全函数**：任何输入都不许让异常回到 SDK。
+
+    ⚠️ 这条守的是一个**死循环**，不只是一次崩溃。`pyee/asyncio.py:78-81`：
+
+        try:
+            coro = f(*args, **kwargs)
+        except Exception as exc:
+            self.emit("error", exc)     # ← 监听器抛了，pyee 再 emit 一次 error
+
+    监听器一旦抛异常，pyee 会拿这个异常**再触发一次 `error`**，于是又进同一个
+    监听器……无限递归。修好了 TD-39 却在这里挂死，比原来的 bug 更难查。
+    日志调用要格式化载荷（`%r`），载荷的 `__repr__` 抛异常就会走到这条路上。
+    """
+    client = PyeeLikeClient()
+    session_client.make_sdk_connect(
+        lambda: client, on_connected=lambda: None, on_disconnected=lambda: None
+    )
+    assert client.emit("error", ExplodingRepr()) is True
