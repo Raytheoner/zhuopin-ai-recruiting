@@ -1060,7 +1060,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 原样取得，⛔ 不变成沉默行。两个口径构成对 `pending_resend` 的一个划分，有测试守着。
 ⏸ 重发驱动器本身仍属第 8 章，本次 ⛔ 未接。
 
-## TD-26 令牌桶无进程级单例，且降级投递第一步 2 次 HTTP 只扣 1 个令牌
+## ~~TD-26~~ 令牌桶无进程级单例，且降级投递第一步 2 次 HTTP 只扣 1 个令牌 ✅ 已还（124f259）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **位置**：`tools/liaison/notify/webhook.py:286`（`bucket` 由调用方注入）、`webhook.py:184-196` + `:236`
@@ -1078,6 +1078,24 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 **还债动作**：① 第 8 章接线时用模块级单例并加断言；② 令 `send_next()` 自报本次要发几个
 请求，由 `effect_deliver_with_backoff` 按数取令牌。
 **触发条件**：第 8 章给群通知接上真实调用方之前。
+
+**已还**（2026-09-09，`124f259`，[Mac]0909AL）：触发条件已满足——`0909AD` 的 followup CLI
+就是第一个真实调用方。两条按还债动作逐字落地：
+① `ratelimit.get_group_webhook_bucket(*, monotonic, sleep)` 是**模块级单例**，
+   生产代码取桶的唯一入口。**断言**＝第二个调用方带着自己的时钟来一律 `RuntimeError`，
+   ⛔ 不静默返回既有单例：带自己的时钟＝它以为自己在造新桶，吞掉的话"有人绕过单例"
+   这件事就没有任何症状，而后果是 D9 的 20 条/分钟在服务端那头变成 40。
+   `reset_group_webhook_bucket()` ⛔ **只给测试用**（生产里重置＝手动给自己续一份配额）。
+   顺带新增只读 `TokenBucket.available_tokens`，让判据能钉在**桶的剩余量**上而不是
+   `acquire()` 的调用次数——后者是实现细节，前者才是这条债守的东西。
+② `Delivery.pending_requests` 由投递对象**自报**本步要发几次 HTTP，
+   `effect_deliver_with_backoff` 按数取令牌。⛔ **没有**写死"降级永远扣 2"：附件只上传
+   一次（断点在 `_media_id`），重试那一步只剩 `send_file`，仍按 1 扣——按 2 扣会白吃掉
+   一半配额，而症状是"发得比配置的还慢"，没有任何报错。
+三条单测：`test_two_callers_share_the_same_group_webhook_bucket`（判据是 `is` 同一性，
+⛔ 不放宽成"参数相同"）、`test_a_second_caller_bringing_its_own_clock_is_refused`、
+`test_degraded_first_step_takes_two_tokens_for_its_two_http_requests`，
+另有 direct 扣 1 与"上传过之后重试只扣 1"两条对照组。
 
 ## ~~TD-27~~ · `make_group_webhook_delivery` 对 `MODE_REJECT` 静默降级，会发出一条空 markdown ✅ 已还（26986e8）
 
@@ -1099,7 +1117,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 `test_notify_webhook.py::test_reject_mode_refuses_to_produce_a_delivery_object` 断言它真的抛
 且抛在任何 HTTP 之前。`store` 那条提前短路是正路，⛔ 未动。
 
-## TD-28 `liaison_group_notify` 的 CHECK 只守字段取值域，跨字段的荒唐组合能写进去
+## ~~TD-28~~ `liaison_group_notify` 的 CHECK 只守字段取值域，跨字段的荒唐组合能写进去 ✅ 已还（124f259）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **位置**：`tools/liaison/storage/schema.py` `GROUP_NOTIFY_SCHEMA`
@@ -1114,6 +1132,25 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 **还债动作**：补 `CHECK ((state='rejected') = (mode='reject'))` 与
 `CHECK (attempts >= 0 AND byte_length >= 0 AND limit_bytes > 0)`。
 
+**已还**（2026-09-09，`124f259`，[Mac]0909AL）：两条按原文逐字补进 `GROUP_NOTIFY_SCHEMA`。
+**只新增**——⛔ 未删任何既有列、⛔ 未改既有 CHECK（含 `(state='sent') = (sent_at IS NOT NULL)`）
+的语义。`limit_bytes > 0` 而不是 `>= 0`：阈值为 0 意味着任何正文都超限，那不是阈值是死锁；
+`byte_length = 0`（空正文）与 `attempts = 0`（还没发过）都是合法值，四条对照组用例
+（`test_legitimate_group_notify_rows_still_get_through`）钉住 ⛔ 不许误伤正路——收紧约束
+最常见的失败模式不是"没挡住"，是"顺手把合法的也挡了"，而那要到真发时才炸。
+七条否定用例（`test_absurd_group_notify_rows_are_refused_by_the_schema`）**直连 SQL 写入**，
+刻意绕开 `effect_send_group_notify`：本条要验的是「表结构自己守不守得住」，走代码路径
+等于用被测对象证明被测对象；登记时就是用直连 SQL 实证写入成功的，还债用同一把尺子量。
+
+**既有数据是否违反**：本机 `data/liaison.db` 的 `liaison_group_notify` **0 行**，
+违反新 CHECK 的行数 **0**。`.51` 现网 ⏸ **未查**（本泳道无服务器访问）。
+🔴 **仍欠一步（本条的残留）**：本仓库**没有任何迁移机制**（`storage/` 下无 migration /
+`ALTER TABLE` / `user_version`），DDL 全部走 `CREATE TABLE IF NOT EXISTS`——因此新 CHECK
+**只对新建的表生效**，已存在的库仍是旧结构。已实证：本机 `data/liaison.db` 里那张表的
+`sqlite_master.sql` 至今不含新 CHECK。当前 0 行所以无害，但 ⛔ 不得当作"现网也守住了"。
+**触发条件**：`.51` 上 `liaison_group_notify` 写入第一行真实数据之前，必须先决定
+"重建表还是加迁移"。⛔ 不在本泳道自行处置——`.51` 的任何结构变更属发版决定。
+
 **附带两条本章 blocking 修复引入的、已判可接受的后果**（⛔ 不是缺陷，登记备查）：
 ① 主键改成 `(thread_id, digest)` 后 `digest` 不再全局唯一也无单列索引——第 8 章若要
    "按 digest 单独查一条"会全表扫描。当前唯一取行路径 `select_pending_resends` 走
@@ -1121,7 +1158,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 ② `sent_at` 从微秒降到秒级（与 `created_at` 的 `datetime('now')` 对齐的必然结果），
    同一秒内多条通知在 `sent_at` 上不再可分辨，排序另有 `thread_id, digest` 兜底。
 
-## TD-29 第 6 章包边角：再导出面不对称、死代码、测试脚手架三处复制粘贴、异常文案错位
+## TD-29 第 6 章包边角：再导出面不对称、死代码、测试脚手架三处复制粘贴、异常文案错位 🟡 部分已还（124f259）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **级别**：不阻塞第 6 章，全部是可读性/可维护性
@@ -1141,6 +1178,36 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 4. **`tools/liaison/config.py:75` 复用 `MissingCredentialsError` 带来文案错位**：该异常消息逐字是
    「HR 值守通道**拒绝启动**：…」，而 `load_group_webhook` 的 docstring 正好在论证它
    **不是**启动期检查。运维在服务正常运行、只是群通知发不出去时，会收到一句说服务拒绝启动的告警。
+
+**核实结论**（2026-09-09，[Mac]0909AL）：本条**此前未处置**。派发时以为它已在 `0909T` 处置，
+是**读串了行**——那句「2026-09-09 已处置（`0909T`）」属于下面的 TD-30（日志留存期），
+⛔ 不属于本条。四条逐条核过代码：`MODE_*`/transport 确实一个都没导出、`is_send` 确实还在且
+全仓零引用、两条漏调的 `assert_group_notify_identity` 确实还漏着、`config.py:75` 确实还在
+复用 `MissingCredentialsError`。
+
+**已还三条**（`124f259`）：
+1. ✅ `notify/__init__.py` 再导出面补齐并**对称**：补 `MODE_DIRECT/DEGRADED/REJECT`、
+   transport 的五个名字（`Transport` / `UrllibTransport` / `WebhookResponse` /
+   `WebhookTransportError` / `WEBHOOK_TIMEOUT_SECONDS`）、`NotifyRecord` /
+   `effect_send_group_notify` / `GROUP_NOTIFY_THREAD_ID`，另导出本轮新增的
+   `get_group_webhook_bucket` / `reset_group_webhook_bucket`。
+   ⚠️ `AIBOT_CHANNEL` **保留导出**（虽仍零消费者）：它与 `GROUP_WEBHOOK_CHANNEL` 是同一个
+   概念的两个成员，只导一个正是本条要消灭的那种不对称。口径已写进包 docstring：
+   一个概念的全部成员一起导出，⛔ 不许只导一半。
+2. ✅ `guard.py` 的 `NotifyPlan.is_send` 死代码已删（删前复查全仓零引用，含测试）。
+3. 🟡 **只还了一半**：`test_notify_store.py` 两条漏调的 `assert_group_notify_identity(conn)`
+   已补齐（`test_effect_key_is_thread_node_digest` / `test_pending_resends_are_listable`），
+   九条写库用例现在全数自带恒等判据。
+
+**仍欠两条**（⏸ 留步，均因触碰区不在本泳道 `0909AL` 手上，⛔ 不越界改别人正在动的文件）：
+- ⏸ **③ 的 conftest 收编**：`FakeClock` / `RecordingSink` / `FAKE_WEBHOOK` 三处复制粘贴仍在。
+  `tools/liaison/tests/conftest.py` 是**全 liaison 测试共享**的文件，同批还有别的泳道在改
+  同目录的测试；本泳道的守区只到 `test_notify_*.py`。**触发条件**：下一次由单一泳道独占
+  `tools/liaison/tests/` 时顺带做。
+- ⏸ **④ `config.py:75` 的异常文案错位**：`load_group_webhook` 仍复用 `MissingCredentialsError`，
+  运维在服务正常运行、只是群通知发不出去时，仍会收到一句说"HR 值守通道**拒绝启动**"的告警。
+  `tools/liaison/config.py` 不在本泳道守区。**触发条件**：8.6 灰度真发之前——那正是这句
+  错误文案最可能被念出来的时刻。
 
 ---
 
