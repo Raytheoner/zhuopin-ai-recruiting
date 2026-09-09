@@ -923,3 +923,97 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 
 **触发条件**：第 6 章要调用 `mark_task_pushed` 之前。
 **不还的后果**：推送时间戳被静默改写，审计上「第一次推送时刻」不再可信，且无告警。
+
+## TD-25 非限流错误也落 `pending_resend`，第 8 章重发驱动器会拿到永远重发不成的行
+
+**登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
+**位置**：`tools/liaison/notify/webhook.py:247` → `tools/liaison/notify/store.py:106`
+**级别**：不阻塞第 6 章（spec 只要求「被记录且不被当作成功」，当前实现不违规）
+
+**成因**：`effect_deliver_with_backoff` 对**任何**未送达的结局都返回 `delivered=False`，
+`store` 一律落成 `state='pending_resend'`。但 `93000`（机器人不在群）、`40001`（凭据失效）
+这类错误重试多少次都是同一结果，与 `45009` 限流有本质区别。
+
+**不还的后果**：`select_pending_resends` 是第 8 章重发驱动器的取数口径，这些行会被
+反复取出、反复失败，且每失败一次可能再告警一次——变成一条**永远刷屏的死行**。
+
+**还债动作**（二选一）：① 台账加一列区分「可自动重发 / 需人工介入」；
+② 在 `select_pending_resends` 上按 errcode 过滤，只返回 `45009` 一类可重试的。
+**触发条件**：第 8 章接重发驱动器之前。
+
+## TD-26 令牌桶无进程级单例，且降级投递第一步 2 次 HTTP 只扣 1 个令牌
+
+**登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
+**位置**：`tools/liaison/notify/webhook.py:286`（`bucket` 由调用方注入）、`webhook.py:184-196` + `:236`
+**级别**：不阻塞第 6 章（本章零接线代码，两条都要到第 8 章接线才可达）
+
+**成因**：两处独立缺口，后果相同——**实际发送速率能突破 D9 的 20 条/分钟**：
+① `bucket` 是 `send_group_notify` 的参数，没有进程级单例。两个调用方各造一个
+   `make_group_webhook_bucket()` 就是两份配额，速率直接翻倍。
+② `DegradedDelivery` 第一次 `send_next()` 发出**两次** HTTP（`post_multipart` 上传附件
+   + `post_json` 发文件消息），但外层只 `bucket.acquire()` 一次。降级通知在压力下
+   以约 1.5 倍配额打服务端。
+
+**不还的后果**：主动限流的全部意义就是「不靠被平台打回才知道」。突破配额后又回到
+被 `45009` 打回、走退避重试的老路，而这正是本章要消灭的状态。
+**还债动作**：① 第 8 章接线时用模块级单例并加断言；② 令 `send_next()` 自报本次要发几个
+请求，由 `effect_deliver_with_backoff` 按数取令牌。
+**触发条件**：第 8 章给群通知接上真实调用方之前。
+
+## TD-27 `make_group_webhook_delivery` 对 `MODE_REJECT` 静默降级，会发出一条空 markdown
+
+**登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
+**位置**：`tools/liaison/notify/webhook.py:199-203`
+**级别**：不阻塞第 6 章（`store` 提前短路，当前不可达）
+
+**成因**：docstring 写着「⛔ `MODE_REJECT` 到不了这里（store 提前短路）」，但真到了这里
+不是报错，而是**静默走 `DirectDelivery`**——`plan.body` 在 reject 模式下为空，结果是往群里
+发一条 `body=""` 的空 markdown。「到不了这里」这个前提由**调用方**保证，而不是由结构保证。
+
+**不还的后果**：将来有人从别处调 `make_group_webhook_delivery`（它是公开函数），
+「拒发」会静默变成「发一条空消息」——比拒发更糟，因为它看起来成功了。
+**还债动作**：`MODE_REJECT` 分支改成 `raise ValueError`，并补一条测试。
+**触发条件**：`make_group_webhook_delivery` 出现第二个调用方之前。
+
+## TD-28 `liaison_group_notify` 的 CHECK 只守字段取值域，跨字段的荒唐组合能写进去
+
+**登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
+**位置**：`tools/liaison/storage/schema.py` `GROUP_NOTIFY_SCHEMA`
+**级别**：不阻塞第 6 章（现有代码路径产不出这些行）
+
+**成因**：表注释宣称「结构（主键）与机制（idempotent_effect）两道防线守同一件事」，
+但 CHECK 实际只约束了各字段各自的取值域。review 期用直连 SQL 逐条**实证写入成功**：
+- `state='sent'` + `mode='reject'`（"被拒发的通知已送达"）
+- `state='rejected'` + `mode='direct'` + `attempts=99`
+- `byte_length=-5` / `limit_bytes=-1` / `attempts=-3`
+
+**还债动作**：补 `CHECK ((state='rejected') = (mode='reject'))` 与
+`CHECK (attempts >= 0 AND byte_length >= 0 AND limit_bytes > 0)`。
+
+**附带两条本章 blocking 修复引入的、已判可接受的后果**（⛔ 不是缺陷，登记备查）：
+① 主键改成 `(thread_id, digest)` 后 `digest` 不再全局唯一也无单列索引——第 8 章若要
+   "按 digest 单独查一条"会全表扫描。当前唯一取行路径 `select_pending_resends` 走
+   `idx_liaison_group_notify_state`，不受影响。
+② `sent_at` 从微秒降到秒级（与 `created_at` 的 `datetime('now')` 对齐的必然结果），
+   同一秒内多条通知在 `sent_at` 上不再可分辨，排序另有 `thread_id, digest` 兜底。
+
+## TD-29 第 6 章包边角：再导出面不对称、死代码、测试脚手架三处复制粘贴、异常文案错位
+
+**登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
+**级别**：不阻塞第 6 章，全部是可读性/可维护性
+
+四条一起登记（都很小，建议一次还完）：
+1. **`tools/liaison/notify/__init__.py` 再导出面不对称且不完整**：`STATE_*` 导出而 `MODE_*` 不导出；
+   `transport.py` 一个名字都没导出（调用方从包根拿不到 `WebhookTransportError`）；
+   `NotifyRecord` / `effect_send_group_notify` / `GROUP_NOTIFY_THREAD_ID` 缺席；
+   `AIBOT_CHANNEL` 导出但生产代码零消费者。
+2. **`tools/liaison/notify/guard.py` `NotifyPlan.is_send` 是死代码**（全仓零引用，含测试）。
+3. **6 个子代理各造一份测试脚手架**：`FakeClock`（`test_notify_ratelimit.py` / `test_notify_webhook.py`）、
+   `RecordingSink`（`test_notify_store.py` / `test_notify_webhook.py`）、`FAKE_WEBHOOK`
+   （`test_notify_transport.py` / `test_notify_webhook.py`）三处复制粘贴，建议收进 `tests/conftest.py`。
+   另 `test_notify_store.py` 有两条写库用例末尾漏调 `assert_group_notify_identity(conn)`
+   （`test_effect_key_is_thread_node_digest` / `test_pending_resends_are_listable`）——
+   其余七条都调了，覆盖不缺口，但本章自带判据是唯一防线，建议补齐。
+4. **`tools/liaison/config.py:75` 复用 `MissingCredentialsError` 带来文案错位**：该异常消息逐字是
+   「HR 值守通道**拒绝启动**：…」，而 `load_group_webhook` 的 docstring 正好在论证它
+   **不是**启动期检查。运维在服务正常运行、只是群通知发不出去时，会收到一句说服务拒绝启动的告警。
