@@ -341,3 +341,158 @@ def test_traceback_redacted_before_propagating_to_a_plain_root_formatter(wired_l
     own_text = wired_logger.read_text(encoding="utf-8")
     assert "zhang.san@example.com" not in own_text
     assert "13812345678" not in own_text
+
+
+# ---------------------------------------------------------------------------
+# TD-31 / TD-32 还债（[Mac]0909AM）。
+#
+# 🔴 这两条 TD 原文都逐字写了「**无症状**」：错了不报错，日志看上去一切正常——
+# 同一行里的邮箱照样打码（TD-31），或者「脱敏很尽职」（TD-32）。**唯一能咬住它们
+# 的就是下面这批对抗输入**，所以每一族都必须同时断言两个方向：
+#   · 该脱敏的被脱敏 —— 漏了就是明文落盘；
+#   · 不该动的没被动 —— 多打了就是日志与 `liaison_message` 对不上、排障链路断掉。
+# ⛔ 只补正则不补用例＝把同一个无症状缺陷原地复制一份。
+# ---------------------------------------------------------------------------
+
+
+#: TD-31 手机号渲染族。`leaky` 必须被打码；`safe` 是**同一族里差一点点**的形态
+#: （位数不对 / 分组不对 / 号段不对），必须原样保留——它是「不许放宽到会误伤正常
+#: 数字串」这条约束的机器判据。
+_PHONE_RENDERINGS = (
+    ("无分隔", "13812345678", "12345678901"),
+    ("连字符", "138-1234-5678", "138-1234-567"),
+    ("空格", "138 1234 5678", "138 1234 567"),
+    ("点分隔", "138.1234.5678", "1.38.1234.5678"),
+    ("括号区号", "(+86) 138 1234 5678", "(+86) 138 1234 567"),
+    ("括号区号连写", "(86)13812345678", "(86)138123456"),
+    ("加号区号连字符", "+86-138-1234-5678", "+86-138-1234-567"),
+    ("全角数字", "１３８１２３４５６７８", "１２３４５６７８９０１"),
+)
+
+
+@pytest.mark.parametrize(
+    "label, leaky",
+    [(label, leaky) for label, leaky, _safe in _PHONE_RENDERINGS],
+)
+def test_phone_rendering_is_masked(label, leaky):
+    """TD-31 方向一（该脱敏的被脱敏）：候选人手抖用了分隔符/全角/括号区号写法，
+    号码同样不许明文落盘。"""
+    text = f"候选人回电诉求：{leaky} 谢谢"
+    out = logsetup.compute_redacted_text(text)
+
+    assert logsetup.PHONE_MASK in out, f"{label} 渲染的手机号整条漏过了脱敏"
+    assert leaky not in out, f"{label} 渲染的手机号原文仍在输出里"
+    assert out.startswith("候选人回电诉求："), "只许替换号码本身，⛔ 不许吃掉上下文"
+    assert out.endswith(" 谢谢")
+
+
+@pytest.mark.parametrize(
+    "label, safe",
+    [(label, safe) for label, _leaky, safe in _PHONE_RENDERINGS],
+)
+def test_phone_lookalike_is_left_alone(label, safe):
+    """TD-31 方向二（不该动的没被动）：与手机号只差一位/差一个分组的数字串是
+    正常业务数字，打成 `<redacted:phone>` 会让日志读不懂。"""
+    text = f"计数 {safe} 结束"
+    out = logsetup.compute_redacted_text(text)
+
+    assert out == text, f"{label} 的近似串被误伤：{out!r}"
+
+
+def test_phone_separator_class_does_not_join_unrelated_fields():
+    """TD-31 护栏：逗号/分号/斜杠**不是**号码内部分隔符——它们在日志里分隔的是两个
+    不同字段。放进分隔符集合会把三段无关数字连成一个假手机号。"""
+    text = "counts=138,1234,5678 ratio=138/1234/5678"
+    assert logsetup.compute_redacted_text(text) == text
+
+
+def test_log_format_timestamp_is_not_mistaken_for_a_separated_phone():
+    """TD-31 护栏：`LOG_FORMAT` 自己渲染出来的时间戳含空格与连字符，⛔ 不许被
+    新的分隔符分支咬到——否则每一行日志的时间都会变成 `<redacted:phone>`。"""
+    text = "2026-09-09 13:45:01,123 INFO tools.liaison.inbound: 收到一条消息"
+    assert logsetup.compute_redacted_text(text) == text
+
+
+#: TD-32 `thread_id` / `msgid` 渲染族。每条都是「保护段原文」，会被塞进同一行、
+#: 后面跟一个**真该打码**的手机号，用来同时验两个方向。
+_PROTECTED_RENDERINGS = (
+    ("%r 引号取值", "thread_id='13812345678'"),
+    ("%r dict 单引号键", "{'thread_id': '13812345678'}"),
+    ("JSON 双引号", '{"thread_id": "13812345678"}'),
+    ("JSON 双引号数值取值", '{"thread_id": 13812345678}'),
+    ("全角冒号裸值", "thread_id：13812345678"),
+    ("全角冒号带引号键", "'thread_id'：'13812345678'"),
+    ("msgid %r dict", "{'msgid': '13900001111'}"),
+    ("msgid JSON", '{"msgid": "13900001111"}'),
+    ("msgid 全角冒号", "msgid：13900001111"),
+)
+
+#: 与保护段同行、必须照常打码的手机号。⛔ 刻意与上面任何一个取值都不相同，
+#: 否则「没被打码」和「被打码了但断言看的是另一处」会混在一起。
+_NEIGHBOUR_PHONE = "13700007777"
+
+
+@pytest.mark.parametrize(
+    "label, rendering",
+    _PROTECTED_RENDERINGS,
+)
+def test_protected_key_survives_every_rendering(label, rendering):
+    """TD-32 方向二（不该动的没被动）：`thread_id` / `msgid` 无论用哪种渲染写出来，
+    取值都必须留明文——被打码那条日志就再也和 `liaison_message.thread_id` 对不上。"""
+    text = f"已归档 {rendering} 联系方式 {_NEIGHBOUR_PHONE}"
+    out = logsetup.compute_redacted_text(text)
+
+    assert rendering in out, f"{label} 渲染下受保护键被反过来打码了：{out!r}"
+
+
+@pytest.mark.parametrize(
+    "label, rendering",
+    _PROTECTED_RENDERINGS,
+)
+def test_neighbouring_phone_still_masked_in_every_rendering(label, rendering):
+    """TD-32 方向一（该脱敏的被脱敏）：保护段⛔ 不许顺带把同一行后面的手机号一起
+    豁免掉——扩大保护段的修法最容易在这里出血。"""
+    text = f"已归档 {rendering} 联系方式 {_NEIGHBOUR_PHONE}"
+    out = logsetup.compute_redacted_text(text)
+
+    assert _NEIGHBOUR_PHONE not in out, f"{label} 渲染把同行手机号一起豁免了"
+    assert logsetup.PHONE_MASK in out
+
+
+@pytest.mark.parametrize(
+    "rendering",
+    (
+        "{'sender_userid': '13812345678'}",
+        '{"sender_userid": "13812345678"}',
+        "sender_userid：13812345678",
+    ),
+)
+def test_sender_userid_stays_masked_in_the_new_renderings(rendering):
+    """TD-32 逐字警告：⛔ 不要顺手把 `sender_userid` 一起纳入保护名单。带引号键名与
+    全角冒号这几条新增分支同样⛔ 不许把它豁免掉——那是真的扩大明文面。"""
+    out = logsetup.compute_redacted_text(rendering)
+
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out
+
+
+def test_quoted_key_branch_does_not_swallow_the_next_pair():
+    """TD-32 护栏：带引号键名分支只许多吃**一个空格**，取值仍在第一个结构分隔符处
+    截断——`{"thread_id": 138…, "mobile": "…"}` 里的 mobile 照样打码。"""
+    text = '{"thread_id": 13812345678, "mobile": "13900002222"}'
+    out = logsetup.compute_redacted_text(text)
+
+    assert '"thread_id": 13812345678' in out
+    assert "13900002222" not in out
+    assert logsetup.PHONE_MASK in out
+
+
+def test_bare_key_with_space_before_value_still_falls_back_to_empty_value():
+    """TD-32 回归：Round-1 定下的「裸键名 + 空白 + 下一个 token ⇒ 按空值处理」
+    ⛔ 不许被本次放宽掀翻。放宽只发生在**键名带引号**（JSON/dict）那一支。"""
+    text = "thread_id= 13812345678"
+    out = logsetup.compute_redacted_text(text)
+
+    assert "thread_id=" in out
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out
