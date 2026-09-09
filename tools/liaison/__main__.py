@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 from tools.liaison import alerts, session, session_client
+from tools.liaison import logsetup
 from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
 from tools.liaison.storage import db as liaison_db
@@ -145,6 +146,7 @@ def main(
 ) -> int:
     """⚠️ 三个关键字参数是**接线缝**，只给测试注入 fake 用，⛔ 不是配置项——
     ⛔ 不要给它们加环境变量开关。"""
+    logsetup.setup_logging()
     load_dotenv_into_environ(resolve_dotenv_path())
 
     try:

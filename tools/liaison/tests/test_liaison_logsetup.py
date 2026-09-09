@@ -15,8 +15,11 @@ import logging.handlers
 import pathlib
 
 from tools.liaison import logsetup
+from tools.liaison import __main__ as liaison_main
 
 LOGSETUP_SOURCE = pathlib.Path(logsetup.__file__)
+LIAISON_ROOT = pathlib.Path(logsetup.__file__).resolve().parent
+MAIN_SOURCE = pathlib.Path(liaison_main.__file__)
 
 
 # ---------------------------------------------------------------------------
@@ -233,3 +236,61 @@ def test_logsetup_module_never_uses_a_with_statement():
     """⛔ tools/liaison 非测试代码里不许出现 with（见模块 docstring 第 2 段）。"""
     tree = ast.parse(LOGSETUP_SOURCE.read_text(encoding="utf-8"), filename=str(LOGSETUP_SOURCE))
     assert not [n for n in ast.walk(tree) if isinstance(n, (ast.With, ast.AsyncWith))]
+
+
+# ---------------------------------------------------------------------------
+# 7. Task 4 结构守卫：main() 接线、setup_logging 唯一调用点、logsetup 不 import app.*。
+#
+# ⚠️ 「不许出现 with」的守卫已在第 6 节存在（Task 3 提前落地），本节不重复定义
+# 同名函数——Python 会静默用后一份覆盖前一份，两次断言内容完全相同，重复只
+# 会制造"看起来加了 4 个用例、实际只多 3 个"的计数误差，不产生任何额外的
+# 检验力。
+# ---------------------------------------------------------------------------
+
+
+def _parse(path: pathlib.Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def test_main_calls_setup_logging_as_its_first_statement():
+    """opener 约束 3 逐字：只在 main() 第一行加 setup_logging() 一处。
+
+    「第一行」是有意义的：`main()` 的凭据校验分支会 print 到 stderr 然后退出，
+    日志晚一步装配就意味着启动期最常见的那类失败完全没有落盘证据。
+    """
+    tree = _parse(MAIN_SOURCE)
+    main_fn = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    body = main_fn.body
+    first = body[0]
+    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+        first = body[1]  # 跳过 docstring
+    assert isinstance(first, ast.Expr) and isinstance(first.value, ast.Call)
+    assert ast.unparse(first.value.func) == "logsetup.setup_logging"
+
+
+def test_setup_logging_is_wired_exactly_once_in_the_package():
+    """⛔ 不许在别的模块里"顺手也调一次"——重复装配会摘掉正在用的 handler。"""
+    callers: list[str] = []
+    for path in sorted(LIAISON_ROOT.rglob("*.py")):
+        if "tests" in path.parts:
+            continue
+        for node in ast.walk(_parse(path)):
+            if isinstance(node, ast.Call) and ast.unparse(node.func).endswith(
+                "setup_logging"
+            ):
+                callers.append(path.name)
+    assert callers == ["__main__.py"], f"setup_logging 的调用点不止一处：{callers}"
+
+
+def test_logsetup_imports_no_app_module():
+    """design D10：⛔ tools/ 不 import app.*。做法照抄，代码自建。"""
+    for node in ast.walk(_parse(LOGSETUP_SOURCE)):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert not node.module.startswith("app"), f"⛔ 不许 import {node.module}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not alias.name.startswith("app"), f"⛔ 不许 import {alias.name}"
