@@ -1415,7 +1415,7 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 **来源**：`[Mac]0909AC` 写 TD-19 适配时读 SDK 源码发现（⛔ 不是推测，`client.py`
 第 344-360 行原文）。相关：TD-19、`docs/findings/2026-09-09-aibot-wsclient-表面实测.md`
 
-## TD-38 · `heartbeat_interval` 单位错配：传秒当毫秒，心跳频率 ×1000，44 秒即被企微限流 🔴 阻断 8.6
+## ~~TD-38~~ · `heartbeat_interval` 单位错配：传秒当毫秒，心跳频率 ×1000，44 秒即被企微限流 ✅ 已还（`840f5cf`，`0909AF`）
 
 **欠的是什么**：`tools/liaison/session_client.py:37` 的 `DEFAULT_HEARTBEAT_SECONDS = 30`
 被 `build_ws_options`（同文件 118–131 行）原样传给 SDK 的 `heartbeat_interval=`，而
@@ -1448,6 +1448,25 @@ SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释�
 
 **来源**：`[Mac]0909AE` 首次真实建连实测。相关：TD-19、TD-39、
 `docs/findings/2026-09-09-首次真实建连实测.md`
+
+**怎么还的**（`840f5cf`，`[Mac]0909AF`，Shao Peishen 2026-09-09 答 `1a` 授权）：
+- `DEFAULT_HEARTBEAT_SECONDS = 30` → `DEFAULT_HEARTBEAT_MS = 30_000`（`session_client.py`），
+  常量处写明单位与 SDK 契约出处；`build_ws_options` 的关键字默认值同步改名。
+- 原断言 `assert options.heartbeat_interval == session_client.DEFAULT_HEARTBEAT_SECONDS`
+  是**同义反复**——拿传进去的值跟它自己比，单位错成什么样都绿，**这正是本条活到真实建连
+  才暴露的原因**。改成绝对值 `== 30_000`，并**先确认它在修复前真的红**
+  （带真 SDK 的 `tools/liaison/.venv` 里报 `assert 30 == 30000`）再动实现。
+- 补 AST 级钉子 `test_ws_options_source_pins_the_heartbeat_interval_to_milliseconds`：
+  上面那条靠 `importorskip("aibot")`，根 venv 按 design D10 不装 SDK ⇒ 恒 skip、**挡不住回退**；
+  AST 钉子不依赖 SDK，钉死 `DEFAULT_HEARTBEAT_MS` 必须是字面量 `30_000` 且必须带 `_MS` 名，
+  断言消息里写明**为什么是 30000 而不是 30**（否则下一个人只会觉得这个数很怪，顺手"修"回 30）。
+- `reconnect_interval` 一并复核（同形状、未爆）：只更正 `session_client.py:22-25` 的注释——
+  SDK 的封顶是**毫秒**口径且本模块**根本没传**该参数，「两层取同一个数」的说法作废。
+  ⛔ **没有**顺手加传参（那会改变重连行为，超出本条范围）。
+
+⚠️ **销账 ≠ 已验证**：根 venv 跑不到真 SDK，本条能验的到此为止。
+**心跳是否真的变成 30 秒，需 `[Mac]0909AG` 真实建连确认**——在那之前，
+「⛔ TD-38 未还前不得装 launchd」这条闸门按 Shao Peishen 答 `3a` **继续有效**。
 
 ## TD-39 · ⚠️ 待复核：SDK 判连接死亡后，断线事件疑似没到 `LiaisonSession`
 
