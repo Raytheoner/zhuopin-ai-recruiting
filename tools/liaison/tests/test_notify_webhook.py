@@ -704,3 +704,65 @@ def test_6_10_missing_env_raises_and_names_the_variable_without_reporting_succes
         webhook.build_group_webhook_sender(
             env={"HR_LIAISON_GROUP_WEBHOOK": "   "}, transport=fake
         )
+
+
+# ── 8.7·二进制附件与 20MB 上限（docx 群发的前置） ────────────────────────
+
+
+def test_publish_attachment_passes_bytes_through_untouched():
+    """docx 的字节流一路不失真地到达 transport。
+
+    判据里那个 0x89 不是合法 UTF-8：实现里只要有一次 decode 往返，本条当场炸。
+    """
+    blob = b"PK\x03\x04\x89\xff\x00docx"
+    fake = FakeTransport()
+    media_id = make_sender(fake).publish_attachment(filename="附件.docx", content=blob)
+    assert media_id == "MEDIA-1"
+    assert fake.multipart_calls[0]["content"] == blob
+    assert fake.multipart_calls[0]["filename"] == "附件.docx"
+
+
+def test_oversized_attachment_is_refused_before_any_network_call():
+    """超过企微 20MB 上限 ⇒ **提前拒绝**，⛔ 不发出去再看错误码。
+
+    「发出去再看错误码」在这条通道上尤其糟：附件是降级投递的**第一步**，它失败
+    之后提要那条不会发，于是一次 20MB 的误传换来的是一整条通知彻底没发出去，
+    而现场只留下一个企微的数字错误码——没人能从那个码看出"文件太大"。
+    """
+    fake = FakeTransport()
+    with pytest.raises(transport.WebhookTransportError) as exc:
+        make_sender(fake).publish_attachment(
+            filename="巨大.docx", content=b"x" * (webhook.MAX_ATTACHMENT_BYTES + 1)
+        )
+    message = str(exc.value)
+    assert "20" in message and str(webhook.MAX_ATTACHMENT_BYTES + 1) in message, (
+        f"报错必须写明上限与实际大小，否则看的人不知道该砍到多少：{message}"
+    )
+    assert fake.multipart_calls == [], "超限 ⇒ ⛔ 一个字节都不许发出去"
+    assert fake.json_calls == []
+
+
+def test_attachment_exactly_at_the_limit_is_allowed():
+    """边界另一侧：正好等于上限**放行**。
+
+    ⛔ 不能写成 `>=`——那会把一个企微本来收得下的附件挡在门外，而症状是
+    "偶尔发不出去"，比超限本身更难查。
+    """
+    fake = FakeTransport()
+    media_id = make_sender(fake).publish_attachment(
+        filename="刚好.docx", content=b"x" * webhook.MAX_ATTACHMENT_BYTES
+    )
+    assert media_id == "MEDIA-1"
+
+
+def test_size_guard_measures_bytes_not_characters():
+    """`str` 正文按 **UTF-8 编码后的字节数**算，⛔ 不按字符数。
+
+    中文一个字 3 字节：按字符数算会让一份 60MB 的中文正文一路溜到企微那头。
+    """
+    fake = FakeTransport()
+    oversized = "中" * (webhook.MAX_ATTACHMENT_BYTES // 3 + 1)
+    assert len(oversized) < webhook.MAX_ATTACHMENT_BYTES, "本用例的前提：字符数没超"
+    with pytest.raises(transport.WebhookTransportError):
+        make_sender(fake).publish_attachment(filename="中文.md", content=oversized)
+    assert fake.multipart_calls == []

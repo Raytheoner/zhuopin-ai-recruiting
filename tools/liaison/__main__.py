@@ -212,5 +212,24 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "cleanup":
 
     raise SystemExit(cleanup_main(sys.argv[2:]))
 
+# ── 8.7·跟进信群发子命令 ──────────────────────────────────────────────────
+# ⛔ 又一段**纯插入**：上面的 cleanup 分支与下面的既有入口都一字节未动。
+#
+# 判据顺序与 cleanup 那段同理，第三条尤其要紧：**发跟进信不需要企微 SDK 凭据**
+# （它不建长连接，只往群 webhook 发一次 HTTP），所以这条分支必须短路在
+# `main()` 的 `load_credentials()` 之前——排到后面去，一台还没配 BOT_ID 的机器
+# 就永远发不了跟进信，而报错说的是"缺 BOT_ID"，与真实原因毫无关系。
+#
+# 🔴 默认 dry-run，真发要显式 `--send`——理由见 followup.py 的模块 docstring。
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "send-followup":
+    from tools.liaison.followup import send_followup_main
+
+    # ⚠️ 群 webhook 在仓库根的 `.env` 里（真实值只落 .env，⛔ 不入版本管理）。
+    # 守护进程那条路靠 `main()` 里的这一句读它；本分支短路在 `main()` 之前，
+    # 所以必须自己读一次——否则他在配置完全正确的机器上跑也会得到"缺凭据"，
+    # 而那个报错指向的原因是错的。
+    load_dotenv_into_environ(resolve_dotenv_path())
+    raise SystemExit(send_followup_main(sys.argv[2:]))
+
 if __name__ == "__main__":
     raise SystemExit(main())

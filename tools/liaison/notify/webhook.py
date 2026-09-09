@@ -45,6 +45,11 @@ from tools.liaison.notify.transport import (
 _SEND_PATH_SUFFIX = "/send"
 _UPLOAD_PATH_SUFFIX = "/upload_media"
 
+#: 企微群机器人的附件上限。**提前拒绝的判据**，⛔ 不是"发出去再看错误码"。
+#: 附件是降级投递的第一步，它失败之后提要那条根本不会发——所以一次超限换来的
+#: 是整条通知彻底没发出去，而现场只留下一个企微的数字错误码，看不出是"文件太大"。
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 
 def compute_upload_url(webhook_url: str) -> str:
     """把发送地址换成附件上传地址。**纯函数**。
@@ -111,14 +116,25 @@ class GroupWebhookSender:
             self._webhook_url, compute_file_payload(media_id), timeout=self._timeout
         )
 
-    def publish_attachment(self, *, filename: str, content: str) -> str:
-        """把完整正文上传成一份附件，返回 `media_id`。
+    def publish_attachment(self, *, filename: str, content: str | bytes) -> str:
+        """把一份附件上传上去，返回 `media_id`。`content` 收 `str` 与 `bytes` 两种。
 
         ⛔ 上传失败一律抛 `WebhookTransportError`：上传没成功却继续发提要，
         群里就会出现一条声称"完整正文见附件"却没有附件的通知——那是一句谎。
+
+        ⚠️ `bytes` 那条路上 ⛔ 不许有任何 decode/encode 往返：docx 是 zip，
+        往返一次就毁了，而毁掉的 zip 在企微那头只会得到一个语焉不详的错误码。
         """
         if self._upload_url is None:
             raise WebhookTransportError("本通道没有配置附件承载方式")
+        # 按**字节数**量，⛔ 不按 len(str)：中文一个字 3 字节，按字符数算会让一份
+        # 60MB 的中文正文一路溜到企微那头。
+        size = len(content.encode("utf-8") if isinstance(content, str) else content)
+        if size > MAX_ATTACHMENT_BYTES:
+            raise WebhookTransportError(
+                f"附件 {filename} 有 {size} 字节，超过企微上限 "
+                f"{MAX_ATTACHMENT_BYTES} 字节（20 MiB），⛔ 提前拒绝、不发出去再看错误码"
+            )
         response = self._transport.post_multipart(
             self._upload_url, filename=filename, content=content, timeout=self._timeout
         )

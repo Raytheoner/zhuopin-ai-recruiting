@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -63,7 +64,7 @@ class Transport(Protocol):
         url: str,
         *,
         filename: str,
-        content: str,
+        content: str | bytes,
         timeout: float = WEBHOOK_TIMEOUT_SECONDS,
     ) -> WebhookResponse: ...
 
@@ -97,20 +98,61 @@ def parse_webhook_response(raw: bytes, *, status: int) -> WebhookResponse:
     )
 
 
-def compute_multipart_body(*, boundary: str, filename: str, content: str) -> bytes:
+#: 文件名里一出现就无法安全表达的字符。multipart 的头部靠 CRLF 分段、靠引号界定
+#: 文件名，所以这三个字符能凭空插进一个新头部、甚至提前闭合 boundary。
+#: ⛔ 不做"清洗后照发"——被清洗过的文件名收信人拿到手是另一个名字，而那正是
+#: 攻击者想要的那个名字。没有正确解释的输入只能拒。
+_FILENAME_FORBIDDEN = ('"', "\r", "\n")
+
+
+def compute_content_disposition(filename: str) -> str:
+    """单个文件字段的 `Content-Disposition` 头。**纯函数**。
+
+    两种形态一起给，因为它们各有各的读者：
+    - `filename="…"` 里放**原始 UTF-8 字节**——浏览器与 curl 实际就这么发，企微
+      认的也是这个；
+    - `filename*=UTF-8\'\'<percent>` 是 RFC 2231/5987 的规范形态，纯 ASCII，
+      按规范解析的一方读它。
+
+    两者解码后是同一个名字，所以谁赢都一样安全。
+    ⛔ **绝不许 latin-1**：`"人事部.docx".encode("latin-1")` 直接
+    UnicodeEncodeError，而它会在**真发那一刻**才炸——那时正文已经发出去了，
+    群里留下一条"完整正文见附件"却没有附件的通知。本项目的跟进信文件名全是中文，
+    所以这不是边角情况，是**唯一**的情况。
+    """
+    for bad in _FILENAME_FORBIDDEN:
+        if bad in filename:
+            raise ValueError(
+                f"文件名里含有会破坏 multipart 头部的字符 {bad!r}，⛔ 不清洗、不猜、直接拒"
+            )
+    quoted = urllib.parse.quote(filename, safe="", encoding="utf-8")
+    return (
+        'form-data; name="media"; '
+        f'filename="{filename}"; '
+        f"filename*=UTF-8\'\'{quoted}"
+    )
+
+
+def compute_multipart_body(*, boundary: str, filename: str, content: str | bytes) -> bytes:
     """拼一个只含单个文件字段的 multipart/form-data body。**纯函数**。
+
+    `content` 收 `str` 与 `bytes` 两种：`str` 按 UTF-8 编码后**汇进同一条路**，
+    `bytes` 原样落进 body。
+    🔴 bytes 那条不许有任何 decode/encode 往返——docx 是 zip，往返一次就毁了，
+    而毁掉的 zip 在企微那头只会得到一个语焉不详的错误码。
 
     ⛔ 不引入 `requests` / `urllib3` 之类的第三方库：design D10 的依赖隔离要求
     `tools/liaison/` 的依赖清单自己承担约束，而这段拼装只有二十行。
     """
+    payload = content.encode("utf-8") if isinstance(content, str) else content
     lines = (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="media"; filename="{filename}"\r\n'
+        f"Content-Disposition: {compute_content_disposition(filename)}\r\n"
         "Content-Type: application/octet-stream\r\n"
         "\r\n"
     )
     tail = f"\r\n--{boundary}--\r\n"
-    return lines.encode("utf-8") + content.encode("utf-8") + tail.encode("utf-8")
+    return lines.encode("utf-8") + payload + tail.encode("utf-8")
 
 
 class UrllibTransport:
@@ -132,7 +174,7 @@ class UrllibTransport:
         url: str,
         *,
         filename: str,
-        content: str,
+        content: str | bytes,
         timeout: float = WEBHOOK_TIMEOUT_SECONDS,
     ) -> WebhookResponse:
         boundary = f"----liaison{uuid.uuid4().hex}"

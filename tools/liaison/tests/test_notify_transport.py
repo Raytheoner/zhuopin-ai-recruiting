@@ -382,3 +382,84 @@ def test_env_example_declares_only_the_variable_name():
     assert f"{config.GROUP_WEBHOOK_ENV}=\n" in text or text.rstrip().endswith(
         f"{config.GROUP_WEBHOOK_ENV}="
     )
+
+
+# ── 8.7·二进制附件与中文文件名（docx 群发的前置） ────────────────────────
+#
+# 缺口：`compute_multipart_body` 原先只收 `str`，`content.encode("utf-8")` 对
+# docx 的字节流无从下手。docx 是 zip，任何"先 decode 再 encode"的往返都会毁掉它。
+
+
+def test_multipart_body_accepts_bytes_content_verbatim():
+    """bytes 原样进 body：⛔ 不许被当成文本做任何编解码往返。
+
+    判据取 docx 的真实特征：PK 魔数 + 一个**不是合法 UTF-8** 的字节（0x89）。
+    若实现里出现 `content.decode(...)` 之类的往返，这条当场炸 UnicodeDecodeError。
+    """
+    blob = b"PK\x03\x04\x89\xff\x00binary"
+    body = transport.compute_multipart_body(
+        boundary="BOUND", filename="a.docx", content=blob
+    )
+    assert blob in body
+    head, _, tail = body.partition(blob)
+    assert head.endswith(b"\r\n\r\n")
+    assert tail == b"\r\n--BOUND--\r\n"
+
+
+def test_str_and_bytes_paths_produce_identical_bodies():
+    """`str` 只是"先 UTF-8 编码"的糖：两条路必须逐字节相同。
+
+    ⛔ 不许 str 走一条格式、bytes 走另一条——那样单测覆盖了一条路，真发走的是另一条。
+    """
+    from_str = transport.compute_multipart_body(
+        boundary="B", filename="同名.docx", content="完整正文"
+    )
+    from_bytes = transport.compute_multipart_body(
+        boundary="B", filename="同名.docx", content="完整正文".encode("utf-8")
+    )
+    assert from_str == from_bytes
+
+
+def test_chinese_filename_is_utf8_and_rfc2231_never_latin1():
+    """中文文件名的**逐字节**断言（本项目的跟进信文件名全是中文）。
+
+    两件事一起断言：
+    ① `filename="…"` 里是**原始 UTF-8 字节**（浏览器与 curl 的实际做法，企微认这个）；
+    ② 另有 RFC 2231/5987 的 `filename*=UTF-8''<percent>`（规范形态，ASCII-only）。
+    ⛔ 不许 latin-1：`"人事部.docx".encode("latin-1")` 直接 UnicodeEncodeError，
+    那会在**真发那一刻**才炸，而那时正文已经发出去了。
+    """
+    name = "人事部-跟进.docx"
+    body = transport.compute_multipart_body(boundary="B", filename=name, content=b"x")
+    assert f'filename="{name}"'.encode("utf-8") in body
+    assert b"filename*=UTF-8''%E4%BA%BA%E4%BA%8B%E9%83%A8-%E8%B7%9F%E8%BF%9B.docx" in body
+    # 头部除了那段原始 UTF-8 文件名之外不得夹带别的非 ASCII 编码形态
+    header = body.split(b"\r\n\r\n", 1)[0]
+    assert b"?" not in header, "文件名被转义成了 ? ⇒ 走了非 UTF-8 的编码路径"
+
+
+@pytest.mark.parametrize("evil", ['a"b.docx', "a\r\nContent-Type: evil\r\n.docx", "a\nb.docx"])
+def test_filename_with_header_breaking_characters_is_refused(evil):
+    """引号与 CR/LF 一律拒收，⛔ 不做"清洗后照发"。
+
+    multipart 的头部是靠 CRLF 分段的：一个带换行的文件名能凭空插进一个新头部，
+    甚至提前闭合 boundary。这类输入没有"大概想发什么"的正确解释，只能拒。
+    """
+    with pytest.raises(ValueError):
+        transport.compute_multipart_body(boundary="B", filename=evil, content=b"x")
+
+
+def test_post_multipart_carries_bytes_through_to_the_request(monkeypatch):
+    """端到端到 `Request.data`：bytes 一路不失真。"""
+    blob = b"PK\x03\x04\x89\xff"
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["data"] = request.data
+        return FakeResponse(b'{"errcode":0,"errmsg":"ok","media_id":"MID"}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport.UrllibTransport().post_multipart(
+        FAKE_WEBHOOK, filename="附件.docx", content=blob
+    )
+    assert blob in captured["data"]
