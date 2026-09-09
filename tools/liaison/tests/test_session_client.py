@@ -172,7 +172,11 @@ def test_ws_options_disable_the_reconnect_attempt_ceiling():
         LiaisonCredentials(bot_id="fake-bot", bot_secret="fake-secret")
     )
     assert options.max_reconnect_attempts == session_client.UNLIMITED_RECONNECT_ATTEMPTS
-    assert options.heartbeat_interval == session_client.DEFAULT_HEARTBEAT_SECONDS
+    # ⛔ 不许写成 `== session_client.DEFAULT_HEARTBEAT_MS`——那是拿传进去的值跟它自己比，
+    # 单位错成什么样都绿。TD-38 这个 bug 正是这样活到真实建连才暴露的（2026-09-09，
+    # 心跳 ×1000、44 秒被企微 45009 判死）。这里必须是**绝对值**：SDK 的
+    # `heartbeat_interval` 单位是毫秒（aibot/types.py:49），30 秒 = 30000。
+    assert options.heartbeat_interval == 30_000
     assert options.bot_id == "fake-bot"
 
 
@@ -214,6 +218,57 @@ def test_ws_options_source_pins_the_reconnect_ceiling_to_unlimited():
     assert isinstance(value_node, ast.Name) and value_node.id == "UNLIMITED_RECONNECT_ATTEMPTS", (
         "max_reconnect_attempts= 必须传本模块的 UNLIMITED_RECONNECT_ATTEMPTS 常量（值 -1），"
         "⛔ 不许改成别的字面量或换个名字的变量"
+    )
+
+
+def test_ws_options_source_pins_the_heartbeat_interval_to_milliseconds():
+    """AST 级别的钉子：把心跳常量钉在 **30000（毫秒）**，⛔ 挡住有人把它改回 30。
+
+    ⚠️ **为什么是 30000 而不是 30**：SDK 的 `heartbeat_interval` 单位是**毫秒**
+    （`aibot/types.py:49`：`heartbeat_interval: int = 30000`，docstring 明写「心跳间隔
+    （毫秒）」；`aibot/ws.py:299` 实际 `asyncio.sleep(interval / 1000)`）。这个数字
+    读起来像"30 秒"，所以每一个只扫一眼的人都会想把它"修"成 30——那正是 TD-38：
+    2026-09-09 首次真实建连时传进去的 30 被解读成 **30 毫秒**，心跳频率 ×1000
+    （44 秒内 1399 次），被企微以 45009 限流判死，服务保持不了在线。
+
+    上面那条值断言靠 `importorskip("aibot")`，根 venv 按 design D10 不装 SDK ⇒ 恒 skip，
+    全量 pytest 走的正是根 venv。所以那条**挡不住回退**，这条才挡得住——同
+    `test_ws_options_source_pins_the_reconnect_ceiling_to_unlimited` 的手法。
+    """
+    source_path = pathlib.Path(session_client.__file__)
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in ([node.target] if isinstance(node, ast.AnnAssign) else node.targets)
+        if isinstance(target, ast.Name) and target.id == "DEFAULT_HEARTBEAT_MS"
+    ]
+    assert len(assignments) == 1, (
+        f"期望恰好一处 DEFAULT_HEARTBEAT_MS = ... 赋值，实际找到 {len(assignments)} 处。"
+        "⛔ 常量名必须带 _MS：叫 _SECONDS 而存毫秒值正是 TD-38 的成因"
+    )
+    value_node = assignments[0].value
+    assert isinstance(value_node, ast.Constant) and value_node.value == 30_000, (
+        "DEFAULT_HEARTBEAT_MS 必须是字面量 30_000。SDK 的 heartbeat_interval 单位是毫秒，"
+        "写 30 会被解读成 30 毫秒 ⇒ 心跳 ×1000 ⇒ 企微 45009 限流、连接 44 秒即死（TD-38）"
+    )
+
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "WSClientOptions"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "aibot"
+    ]
+    assert len(calls) == 1
+    heartbeat_kwargs = [kw for kw in calls[0].keywords if kw.arg == "heartbeat_interval"]
+    assert len(heartbeat_kwargs) == 1, (
+        "aibot.WSClientOptions(...) 必须显式传 heartbeat_interval=——不传就是走 SDK 默认，"
+        "本模块对心跳口径的控制权就没了"
     )
 
 

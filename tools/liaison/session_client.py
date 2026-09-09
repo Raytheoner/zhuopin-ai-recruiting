@@ -19,8 +19,13 @@ from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
-#: 外层退避：1s 起、翻倍、封顶 30s。封顶值与 SDK 内置退避的封顶取同一个数，
-#: 让两层的节奏是一致的（design D8 记的 SDK 封顶就是 30s）。
+#: 外层退避：1s 起、翻倍、封顶 30s。**单位是秒**，这两个常量只喂给本模块自己的
+#: `sleep`，⛔ 不传给 SDK。
+#: ⚠️ 2026-09-09（TD-38）更正：原注释称"封顶值与 SDK 内置退避的封顶取同一个数、
+#: 两层节奏一致"——**那是在两种单位下比的，结论不成立、已作废**。SDK 的
+#: `reconnect_interval` 单位是毫秒（`aibot/types.py:43`，默认 1000 = 1 秒），
+#: 且本模块**根本没传**该参数，所以 SDK 那层走的是它自己的默认退避，与这里的
+#: 30.0 秒没有任何对应关系。⛔ 不要为了"让两层一致"顺手加传参——那会改变重连行为。
 BASE_BACKOFF_SECONDS = 1.0
 MAX_BACKOFF_SECONDS = 30.0
 
@@ -34,7 +39,14 @@ _SATURATION_ATTEMPT = 64
 #: findings 2026-09-08 实测：`max_reconnect_attempts` 默认 **10**，`-1` 才是无限。
 #: spec 要求"自动重试直至成功"，⛔ 不许用默认值。
 UNLIMITED_RECONNECT_ATTEMPTS = -1
-DEFAULT_HEARTBEAT_SECONDS = 30
+
+#: 心跳间隔，**单位是毫秒**——30_000 就是 30 秒。SDK 契约见 `aibot/types.py:49`
+#: （`heartbeat_interval: int = 30000`，docstring 明写「心跳间隔（毫秒）」；
+#: `aibot/ws.py:299` 实际 `asyncio.sleep(interval / 1000)`）。
+#: ⛔ **不许改成 30**：2026-09-09 首次真实建连（TD-38）传的就是 30，被解读成 30 毫秒 ⇒
+#: 心跳频率 ×1000（44 秒内 1399 次）⇒ 企微 45009 限流 ⇒ 连接 44 秒即死、服务保持不了在线。
+#: ⛔ 常量名必须带 `_MS`：旧名叫 `_SECONDS` 而值要按毫秒填，正是本条的成因。
+DEFAULT_HEARTBEAT_MS = 30_000
 
 #: ⚠️ 事件名与必需方法名以 Step 5 的探针实测为准（见 docs/findings/
 #: 2026-09-09-aibot-wsclient-表面实测.md）。探针没跑成时这里保持默认值，
@@ -115,8 +127,11 @@ def run_forever(
         sleep(delay)
 
 
-def build_ws_options(credentials, *, heartbeat_interval: int = DEFAULT_HEARTBEAT_SECONDS):
+def build_ws_options(credentials, *, heartbeat_interval: int = DEFAULT_HEARTBEAT_MS):
     """构造 SDK 的连接参数。
+
+    ⚠️ `heartbeat_interval` 的**单位是毫秒**（SDK 契约，见 `DEFAULT_HEARTBEAT_MS` 处的
+    说明）。显式传值时⛔ 不要传秒——传 30 会变成 30 毫秒（TD-38）。
 
     ⛔ `import aibot` 写在函数体里：根 venv 不装 SDK（design D10 的依赖隔离），
     模块层 import 会让全量 pytest 在 collect 阶段就整个红掉。
