@@ -251,6 +251,14 @@ def test_foreign_key_is_the_second_line_of_defence(conn):
     with pytest.raises(sqlite3.IntegrityError):
         retention.effect_delete_expired_message(conn, thread_id="u1", business_key="m-queued")
     assert conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 1
+    # 🔴 finding 6（终审）：铁律 1 的核心断言——业务写失败 ⇒ 幂等记录必须
+    # 不存在——此前只在别处静态成立，这里从没被断言到。装饰器会先
+    # rollback 再抛异常，因此这一行是本单元唯一 effect 的"业务写失败留下
+    # 幂等记录"这条永久丢失的反面场景的直接证据。
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name = ?",
+        (retention.RETENTION_DELETE_NODE,),
+    ).fetchone()[0] == 0
 
 
 def test_running_twice_is_a_no_op(conn):
@@ -404,11 +412,24 @@ def test_delete_failure_is_collected_and_does_not_stop_the_round(tmp_path, monke
 def test_prune_empty_dirs_removes_only_empty_ones_and_keeps_the_root(tmp_path):
     root = tmp_path / "archive"
     _touch(root, "u1/20260101/a__1.bin")
-    (root / "u2" / "20260101").mkdir(parents=True)
-    pruned = retention.prune_empty_dirs(root)
+    (root / "u2" / "20260101").mkdir(parents=True)  # 20260101 相对 NOW 早已过期
+    pruned = retention.prune_empty_dirs(root, NOW, 180)
     assert set(pruned) == {"u2/20260101", "u2"}
     assert root.is_dir()                       # ⛔ 归档根本身永不删
     assert (root / "u1" / "20260101").is_dir()  # 非空目录不动
+
+
+def test_prune_empty_dirs_never_touches_a_non_expired_day_directory(tmp_path):
+    """finding 5(b)（终审）：今天的 `<thread_id>/<yyyymmdd>` 目录哪怕暂时空着
+    也不许删——`store_attachment` 是先 `mkdir` 出这层目录、再 `mkstemp`
+    写文件，撞上这个窗口会让清理把正在写的材料的父目录端掉，随之而来的
+    `mkstemp` 会抛 `FileNotFoundError`。"""
+    root = tmp_path / "archive"
+    today_dir = root / "u1" / "20260909"  # 相对 NOW=2026-09-09 12:00 是"今天"
+    today_dir.mkdir(parents=True)
+    pruned = retention.prune_empty_dirs(root, NOW, 180)
+    assert pruned == ()
+    assert today_dir.is_dir()
 
 
 def test_expiry_is_computed_in_china_tz_not_utc(tmp_path):
@@ -497,6 +518,34 @@ def test_run_cleanup_keeps_files_of_surviving_rows(conn, tmp_path):
     assert (root / "u1/20260901/m-new__a.xlsx").exists()
 
 
+def test_file_appearing_after_the_scan_is_not_deleted(conn, tmp_path, monkeypatch):
+    """finding 5(a)（终审）：扫盘之后才落地的文件根本没进这一轮的候选快照，
+    因此天然不是候选——⛔ 不靠"它的年龄恰好没到"侥幸活下来。
+
+    `archive_message` 先写文件、后写台账行（design D3）。这里用
+    `iter_archive_files` 的替身模拟"扫描完成的那一刻之后，daemon 才把材料
+    落盘"（backlog 重放的真实形状）：如果文件那一遍先读台账建 `referenced`
+    再扫盘（修复前的顺序），这份文件会被扫描到、又因为它从未进过台账而被
+    判定"无人引用"，只剩年龄一条线保它——它的路径日期是 `OLD`，早已过期，
+    修复前的顺序会把它删掉。
+    """
+    root = tmp_path / "archive"
+    real_iter = retention.iter_archive_files
+
+    def fake_iter(archive_root):
+        listing = real_iter(archive_root)
+        # 模拟：扫描完成之后，daemon 才把这份材料写到盘上。
+        _touch(archive_root, "u1/20260101/late__c.bin")
+        return listing
+
+    monkeypatch.setattr(retention, "iter_archive_files", fake_iter)
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink()
+    )
+    assert "u1/20260101/late__c.bin" not in report.deleted_files
+    assert (root / "u1/20260101/late__c.bin").exists()
+
+
 def test_file_deletion_failure_raises_exactly_one_alert(conn, tmp_path, monkeypatch):
     """8.2 逐字：「清理失败告警一条」+ spec Scenario「清理失败 → 发出告警、该失败被记录」。
 
@@ -566,13 +615,55 @@ def test_blocked_and_skipped_items_are_reported_not_swallowed(conn, tmp_path):
     assert "m-queued" in retention.render_report(report)
 
 
+def test_skipped_ledger_row_triggers_exactly_one_alert_with_count_only(conn, tmp_path):
+    """finding 3（终审）：`archived_at` 解析不了的台账行只进 `SkippedItem`，
+    此前从不触发告警——8.3/8.4 会从 launchd 跑，没人看 stdout，告警是唯一
+    通道，`SkippedItem` docstring 的「⛔ 不静默跳过」此前只对日志成立。
+    """
+    root = tmp_path / "archive"
+    _archive(conn, "m-bad-time", archived_at="不是时间")
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+    )
+    assert report.failures == ()
+    assert [item.subject for item in report.skipped] == ["m-bad-time"]
+    assert len(sink.texts) == 1
+    text = sink.texts[0]
+    assert f"跳过 {len(report.skipped)} 项" in text
+    assert "m-bad-time" not in text          # 🔴 合规：告警只带计数，不带 msgid
+
+
+def test_skipped_archive_file_triggers_exactly_one_alert_with_count_only(conn, tmp_path):
+    """归档树形态不认识（层数不对，`<thread_id>/<yyyymmdd>/<叶子>` 不成立）
+    同样只进 `SkippedItem`，同样必须触发告警——否则退役后这棵树会悄悄
+    变成整片清不掉的死角，且没有任何信号能被看见。"""
+    root = tmp_path / "archive"
+    _touch(root, "stray.txt")
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=sink
+    )
+    assert report.failures == ()
+    assert [item.subject for item in report.skipped] == ["stray.txt"]
+    assert len(sink.texts) == 1
+    text = sink.texts[0]
+    assert f"跳过 {len(report.skipped)} 项" in text
+    assert "stray.txt" not in text           # 🔴 合规：告警只带计数，不带文件名
+
+
 def test_dry_run_changes_nothing(conn, tmp_path):
-    """`--dry-run` 只报不动：库里一行不少、盘上一个文件不少。"""
+    """`--dry-run` 只报不动：库里一行不少、盘上一个文件不少、⛔ 一条告警都不发。
+
+    finding 1（终审）：告警通道也是"动"的一种——预览阶段不许触发它，否则
+    第 6 章接上真实企微群通道之后，`--dry-run` 会真的向群里广播一条消息。
+    """
     root = tmp_path / "archive"
     _touch(root, "u1/20260101/m-old__a.xlsx")
     _archive(conn, "m-old", archived_at=OLD)
+    sink = RecordingSink()
     report = retention.run_cleanup(
-        conn, now=NOW, retention_days=180, archive_root=root, sink=RecordingSink(), dry_run=True
+        conn, now=NOW, retention_days=180, archive_root=root, sink=sink, dry_run=True
     )
     assert report.dry_run is True
     assert report.deleted_messages == ("m-old",)          # 报"会删这些"
@@ -580,6 +671,24 @@ def test_dry_run_changes_nothing(conn, tmp_path):
     assert (root / "u1/20260101/m-old__a.xlsx").exists()
     assert conn.execute("SELECT COUNT(*) FROM effect_log WHERE node_name = ?",
                         (retention.RETENTION_DELETE_NODE,)).fetchone()[0] == 0
+    assert sink.texts == []
+
+
+def test_dry_run_with_unparseable_attachments_json_sends_zero_alerts(conn, tmp_path):
+    """finding 1 的证伪：预览阶段命中 `scan` 阶段的失败（一条读不出来的
+    `attachments_json`）也**不许**发出告警——`--dry-run` 的契约是「只报不动」，
+    这条失败在生产真实运行时会告警，但预览时它只是"如果真跑会发现的问题"，
+    ⛔ 不该真的把它送进企微群。修复前：`emit_retention_alert` 挂在
+    `dry_run` 判断之外，这条用例会发出恰好一条告警；修复后必须是零条。
+    """
+    root = tmp_path / "archive"
+    _archive(conn, "m-broken", archived_at=NEW, attachments_json="{")
+    sink = RecordingSink()
+    report = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root, sink=sink, dry_run=True
+    )
+    assert any(f.stage == "scan" for f in report.failures)  # 预览确实撞上了这条失败
+    assert sink.texts == []                                 # 但 ⛔ 一条告警都不许发
 
 
 def test_dry_run_preview_agrees_with_real_run_for_self_owned_attachment(conn, tmp_path):
@@ -691,7 +800,19 @@ def test_cleanup_main_runs_without_any_credentials(tmp_path, monkeypatch, capsys
     assert "留存清理" in capsys.readouterr().out
 
 
-def test_cleanup_main_rejects_unknown_arguments(capsys):
+def test_cleanup_main_rejects_unknown_arguments(tmp_path, monkeypatch, capsys):
+    """🔴 finding 7（终审）：两个真实数据接缝必须一起 patch，即使今天这条用例
+    因为未知参数检查是 `cleanup_main` 的第一条语句而"安全"——那是语句顺序
+    的偶然，不是任何断言在守。Task 5 review 已经因为同一条理由拒绝过它的
+    姊妹用例（`test_cleanup_main_fails_closed_on_bad_config`），同一份文件
+    里不一致地适用同一条理由是更差的结果：日后谁把未知参数检查挪到
+    `load_retention_days()` 之后，这条测试会在毫无提示的情况下开始碰
+    真实 `data/`。
+    """
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    monkeypatch.setattr(
+        retention.archive, "DEFAULT_ARCHIVE_ROOT", tmp_path / "archive"
+    )
     assert retention.cleanup_main(["--force"]) == retention.EXIT_BAD_ARGS
     assert "未知参数" in capsys.readouterr().err
 

@@ -451,14 +451,26 @@ def delete_archive_files(
     return tuple(deleted), tuple(failures)
 
 
-def prune_empty_dirs(archive_root: pathlib.Path) -> tuple[str, ...]:
+def prune_empty_dirs(
+    archive_root: pathlib.Path, now: datetime.datetime, retention_days: int
+) -> tuple[str, ...]:
     """自底向上删掉空目录。**⛔ 归档根本身永不删。**
 
     ⛔ 只用 `rmdir`（目录非空时它自己会失败），⛔ 绝不许用 `shutil.rmtree`
     ——`rmtree` 会把一个"我以为是空的"目录连同里面的材料一起端掉。
+
+    🔴 finding 5(b)（终审）：`<thread_id>/<yyyymmdd>` 这一层目录，只有它自己
+    的日期段也过期了才允许被 `rmdir`——哪怕它此刻恰好是空的。原因是
+    `store_attachment` 的写入顺序是先 `mkdir` 出这层日期目录、再
+    `mkstemp` 写文件；如果这一遍恰好落在两者之间的窗口里，"今天"的目录
+    会被判定为空并端掉，随后 `mkstemp` 就会撞上 `FileNotFoundError`——
+    对一条正在处理的实时消息来说这是一次不该发生的归档失败。
+    ⛔ `now` 不许在本函数体内读真实时钟；由调用方注入（唯一允许调
+    `datetime.now()` 的地方是 `cleanup_main`）。
     """
     if not archive_root.is_dir():
         return ()
+    cutoff = compute_cutoff(now, retention_days)
     pruned: list[str] = []
     candidates = sorted(archive_root.rglob("*"), key=lambda p: len(p.parts), reverse=True)
     for path in candidates:
@@ -466,6 +478,18 @@ def prune_empty_dirs(archive_root: pathlib.Path) -> tuple[str, ...]:
             continue
         if any(path.iterdir()):
             continue
+        parts = path.relative_to(archive_root).parts
+        if len(parts) == _ARCHIVE_PATH_DEPTH - 1:
+            # `<thread_id>/<yyyymmdd>` 形态：只删过期的那些，未过期的哪怕
+            # 空着也不碰——日期段解析不出来（形态不认识）时不特殊保护，
+            # 按下面的通用空目录逻辑处理。
+            try:
+                expires_at = _day_expiry_instant(parts[1])
+            except ValueError:
+                pass
+            else:
+                if not expires_at < cutoff:
+                    continue
         # `contextlib.suppress` 在事务扫描器的正面白名单里（TD-18 的还债形态），
         # ⛔ 不要改成 `with path:` 之类的写法。
         with contextlib.suppress(OSError):
@@ -503,13 +527,26 @@ def compute_retention_alert_text(report: CleanupReport) -> str:
     ⚠️ 冲突 B（plan「前置状态与冲突处置」逐字）：`blocked_by_queue` 的计数
     ——⛔ 只是计数，不带其中任何 msgid——必须在本轮有失败时也进这条告警，
     否则"仍有队列条目而永久留存"这件事只能靠人去翻本机日志才发现。
+
+    🔴 finding 3（终审）：`report.skipped`（`SkippedItem`，例如 `archived_at`
+    解析不了、或归档路径形态不认识）此前从不进这条文本——8.3/8.4 会在
+    launchd 下跑，没人看 stdout，告警是唯一通道，说不出口就等于永久失联。
+    这里只加计数，⛔ 不带 `subject`（那就是文件名/msgid，仍受合规红线管）。
+    标题按"有没有失败"二选一，让"清理失败"这个措辞对"只有跳过、没有失败"
+    的那一轮仍然准确。
     """
     stages = "、".join(sorted({failure.stage for failure in report.failures})) or "无"
-    return (
+    header = (
         "【HR 值守通道·留存清理失败】"
-        f"留存期 {report.retention_days} 天；"
+        if report.failures
+        else "【HR 值守通道·留存清理有跳过项】"
+    )
+    return (
+        header
+        + f"留存期 {report.retention_days} 天；"
         f"本轮清理台账 {len(report.deleted_messages)} 行、归档文件 {len(report.deleted_files)} 个；"
         f"失败 {len(report.failures)} 项（阶段：{stages}）；"
+        f"跳过 {len(report.skipped)} 项；"
         f"因队列未清而保留 {len(report.blocked_by_queue)} 条。"
         "明细见本机运行日志，⛔ 告警不带发送人、文件名与消息内容。"
     )
@@ -583,6 +620,27 @@ def run_cleanup(
 
     if dry_run:
         deleted_messages = tuple(item.msgid for item in split.deletable)
+        deleted_msgids = set(deleted_messages)
+    else:
+        deleted_messages, ledger_failures = delete_expired_ledger_rows(conn, split.deletable)
+        failures.extend(ledger_failures)
+
+    # 🔴 finding 5(a)（终审）：文件那一遍内部的两次读，顺序钉死为
+    # **先扫盘、后读"仍被引用"的台账**。⛔ 这不是把台账那一遍与文件那一遍
+    # 调换（那条仍然是先删台账行、后删文件，design D3）——这里只是文件
+    # 那一遍内部两个只读动作的先后。
+    #
+    # 原因：`archive_message` 先写文件、后写台账行（design D3 允许的中间态
+    # 是"材料已在、台账未记"）。若先读台账建 `referenced`、再去扫盘，一条
+    # 在两次读之间才落盘的新文件会被扫描到、却因为读 `referenced` 时它的
+    # 台账行还没提交而被判定"无人引用"，只剩年龄一条线保它——backlog 重放
+    # 或调小 `HR_LIAISON_RETENTION_DAYS` 时这条线可能不够，会把它删掉，
+    # 制造出 D3 明令禁止的「台账已记、材料缺失」。先扫盘、后读台账则让
+    # 扫描之后才出现的文件天然不是本轮候选（不在快照里），把窗口留给
+    # 扫描之前已存在、随后被"重新读台账"看见的那部分。
+    archive_files = iter_archive_files(archive_root)
+
+    if dry_run:
         # 🔴 controller 裁决（覆盖 brief 原实现，landing deviation，见 fix 报告）：
         # dry_run 不许碰库，因此不能靠"重新读库"拿"清理之后"的台账——那样读
         # 到的还是没删掉的行，会把它自己的附件误判成"仍被引用"，导致预览
@@ -590,11 +648,8 @@ def run_cleanup(
         # 文件，与真实运行的结果不一致（plan line 1809：dry_run 是上线前
         # 检查的唯一依据，预览必须可信）。改为**模拟**：假设本轮会全部成功，
         # 直接从这一轮读到的 `rows` 里剔除 `split.deletable` 的 msgid 集合。
-        deleted_msgids = set(deleted_messages)
         surviving = tuple(row for row in rows if row.msgid not in deleted_msgids)
     else:
-        deleted_messages, ledger_failures = delete_expired_ledger_rows(conn, split.deletable)
-        failures.extend(ledger_failures)
         # ⚠️ 重新读一次：这一遍要的是**清理之后**还活着的台账指向了哪些文件。
         # ⛔ 不与上面的 dry_run 分支合并复用：这里的正确性来自"真的重新读
         # 库"——某条删除若失败，它仍会出现在重新读出来的结果里，从而继续
@@ -616,7 +671,7 @@ def run_cleanup(
     pruned_dirs: tuple[str, ...] = ()
     if scan_ok:
         candidates, file_skipped = compute_deletable_files(
-            now, retention_days, iter_archive_files(archive_root), frozenset(referenced)
+            now, retention_days, archive_files, frozenset(referenced)
         )
         skipped.extend(file_skipped)
         if dry_run:
@@ -624,7 +679,7 @@ def run_cleanup(
         else:
             deleted_files, file_failures = delete_archive_files(archive_root, candidates)
             failures.extend(file_failures)
-            pruned_dirs = prune_empty_dirs(archive_root)
+            pruned_dirs = prune_empty_dirs(archive_root, now, retention_days)
     else:
         logger.error("留存清理：台账里有读不出来的 attachments_json，⛔ 本轮跳过全部文件清理")
 
@@ -640,7 +695,15 @@ def run_cleanup(
         failures=tuple(failures),
     )
 
-    if report.failures:
+    # 🔴 finding 1（终审）：`--dry-run` 的契约是「只报不动」，告警通道不是
+    # "动"的对象也不该被它触发——`scan` 阶段的失败（例如一条读不出来的
+    # `attachments_json`）在预览时也会真实产生，若不按 `dry_run` gate 住，
+    # 6 章接上真实企微群通道之后，一次纯预览会向群里广播一条内容和真实
+    # 失败一模一样、却没有任何标记区分预览与生产的"清理失败"消息。
+    # 🔴 finding 3（终审）：`report.skipped` 同样必须触发告警——它此前从不
+    # 进 `compute_retention_alert_text`，而 8.3/8.4 在 launchd 下跑，没人
+    # 看 stdout，告警是唯一通道；"⛔ 不静默跳过"的承诺此前只对着日志成立。
+    if not dry_run and (report.failures or report.skipped):
         # ⛔ 不静默跳过（8.2 逐字）。一轮一条，⛔ 不是每个失败一条。
         emit_retention_alert(sink, compute_retention_alert_text(report))
     logger.info("%s", render_report(report))
@@ -658,15 +721,25 @@ _DRY_RUN_FLAG: Final[str] = "--dry-run"
 _USAGE: Final[str] = "用法：python -m tools.liaison cleanup [--dry-run]"
 
 
-def cleanup_main(argv: Sequence[str] | None = None) -> int:
+def cleanup_main(argv: Sequence[str]) -> int:
     """`python -m tools.liaison cleanup` 的实现。
 
     ⚠️ **这是本模块唯一允许读真实时钟与真实环境变量的地方**，其余全部靠注入。
     ⚠️ 路径取的是 `liaison_db.DEFAULT_DB_PATH` 与 `archive.DEFAULT_ARCHIVE_ROOT`
     的**属性访问**（不是 `from ... import` 的绑定），这样单测能 monkeypatch 到
     临时目录上——opener 约束 3：⛔ 单测不许碰真实 `data/`。
+
+    🔴 finding 4（终审）：`argv` **没有默认值**，调用方必须显式传。此前的默认
+    `sys.argv[1:] if argv is None else argv` 在两个方向上都是错的——
+    `__main__.py` 的真实接线传的是 `sys.argv[2:]`（`cleanup` 之后的那一段），
+    唯一会触发默认分支的调用方式是"某处漏传 `argv`"，那时它读的是
+    `sys.argv[1:]`（多带了字面量 `"cleanup"`，会被当成未知参数拒绝）或者
+    是完全不相关的调用者自己的命令行，两种情况都不是"安全的兜底"，而是
+    "悄悄跑错的 data/"——已经实测会真的打开生产的 `data/liaison.db` 与
+    `data/liaison/archive` 跑一整轮。删掉默认值，让这类调用在写下来的那一刻
+    就因为缺参数报错，而不是在生产机器上删数据的那一刻才被发现。
     """
-    args = list(sys.argv[1:] if argv is None else argv)
+    args = list(argv)
     dry_run = _DRY_RUN_FLAG in args
     unknown = [item for item in args if item != _DRY_RUN_FLAG]
     if unknown:
