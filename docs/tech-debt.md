@@ -767,7 +767,32 @@ findings 与 controller ruling）。真正的风险只在于：如果将来有�
 `run_forever`，就会退回"服务起得来、日志正常、但从不真正建连"的静默故障——⛔ 不许
 削弱或绕过这道检查来"让它先跑起来"。
 
-## TD-20 · `start()` 的启动补记用"本次启动时间"当恢复时间，会低报"重启时网络仍未恢复"的中断时长
+## ~~TD-20~~ · `start()` 的启动补记用"本次启动时间"当恢复时间，会低报"重启时网络仍未恢复"的中断时长 ✅ 已还（`08d8784`）
+
+**2026-09-09 已处置（`0909U`）**：裁决＝**改法 ①**（2026-09-09 Shao Peishen，见
+`docs/findings/2026-09-09-Shao-Peishen-裁决-留存冲突B与TD20改法.md` 裁决二），已落地。
+`LiaisonSession.start()` ⛔ 不再调 `_backfill_open_windows(now)`——启动时**不闭合**任何
+未闭合窗口；闭合统一交给 `on_connected` 的 `CLOSED_BY_RECONNECT` 路径（"启动后首次连上"
+走的是同一条），恢复时间因此自然是**真正连上的时间**。`start()` 其余步骤与顺序不变：
+读存活戳 → 必要时开 `startup_gap` 窗口 → 补发"已闭合未告警"的旧窗口 → 最后写存活戳。
+
+`CLOSED_BY_STARTUP_BACKFILL` 与 `_backfill_open_windows` 失去调用方后**保留**，
+docstring 已注明按本裁决停用——`effect_log` 与 `liaison_outage_window` 里存着用它闭合的
+历史行，schema 的 `CHECK` 仍允许该取值，删掉它们那些历史行就失去解释。
+
+回归用例咬住 reviewer 的原始复现时间线（`test_starting_while_still_offline_does_not_
+underreport_the_outage`，`tools/liaison/tests/test_session_state_machine.py`）：
+`connected@10:10` → `10:40` 网络未恢复时重启 → `12:00` 首次 `on_connected`。
+修复前告警「10:10 至 10:40（持续 30 分 0 秒）」，修复后「10:10 至 12:00（持续 1 小时
+50 分 0 秒）」＝ 110 分钟。`specs/liaison-channel-session/spec.md` 第 46／56 两处口径同步。
+
+⛔ **本次未做、也不算欠**：改法 ③（接 `run_forever` 的 `on_attempt_failed`）由裁决明确
+排除——它是 ① 之上的加强，要做须另立一条，⛔ 不许当成 TD-20 的遗留。
+
+---
+
+<details>
+<summary>原始登记（保留备查）</summary>
 
 **欠的是什么**：`LiaisonSession.start()`（`tools/liaison/session.py` ~271-304、~362-370）
 在**尚未连上**的时刻就把每一个未闭合窗口（含刚补开的 `startup_gap` 窗口）的
@@ -794,9 +819,11 @@ SDK 事件到达时触发，而"启动后从未连上过"这种情形永远等�
 （该发的那条告警仍会发出、仍写"请重发"），但收信人会按错误的、偏短的时段去补发，
 落在低报区间之外的消息因此永远补不回来。
 
-**⚠️ 标注**：本条行为是计划既定行为，逐字对应 Architecture `start()` step 2，
-不是本次实现的疏漏。改状态机语义是设计决策，需 Shao Peishen 拍板改法，
-⛔ 执行方不得自行改动 `session.py` 的状态机行为。
+**⚠️ 标注**：裁决＝**改法 ①**（2026-09-09 Shao Peishen），已落地。原标注「需
+Shao Peishen 拍板改法、⛔ 执行方不得自行改动 `session.py` 的状态机行为」已经兑现——
+拍板已完成，改动依裁决执行，⛔ 不再是待拍事项。
+
+</details>
 
 ## TD-21 · 值守服务的礼貌回复是 at-most-once，崩溃即丢
 
