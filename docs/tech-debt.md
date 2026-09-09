@@ -1276,7 +1276,7 @@ fail-closed），`run_cleanup` 里按 **mtime** 清 `data/liaison/logs/*.log.*`�
 
 ---
 
-## TD-31 带分隔符渲染的手机号不脱敏
+## ~~TD-31~~ 带分隔符渲染的手机号不脱敏 ✅ 已还（`255fd36`）
 
 **登记时间**：2026-09-09（第 8 章 8.4 final review，[Mac]0909M）
 **位置**：`tools/liaison/logsetup.py` `_VALUE_PATTERNS` 的手机号正则
@@ -1303,9 +1303,28 @@ fail-closed），`run_cleanup` 里按 **mtime** 清 `data/liaison/logs/*.log.*`�
 **不还的后果**：候选人手抖用了分隔符格式的手机号即明文落盘，且**无症状**——
 脱敏看起来在工作（同一行里的邮箱照样打码），只有这一种渲染漏。
 
+**已还**（2026-09-09 `[Mac]0909AM`，轻量通道 TDD，`255fd36`）：`_VALUE_PATTERNS` 的手机号
+分支改成「头三位 `1[3-9]\d` 连写 + 可选 3-4-4 分组」，并把数字类扩到全角。
+逐条对应 TD 正文列的五种漏法：`138-1234-5678` / `138 1234 5678` / `138.1234.5678` /
+`+86-138-1234-5678` / `１３８１２３４５６７８`，另补 `(+86) 138 1234 5678`、`(86)13812345678`
+两种括号区号渲染。
+
+⚠️ **放宽的边界是刻意画死的**（opener：⛔ 不许放宽到会误伤正常数字串）：
+① 号段头三位必须连写，⛔ 分隔符不进这三位——这是挡住「一串被空格隔开的无关数字」的主护栏；
+② 分隔后只认 **3-4-4** 一种分组；
+③ 分隔符只收连字符/点/空格（含全角），⛔ **不收 `,` `;` `/`**——那些在日志里分隔的是两个
+不同字段，收进来会把三段无关数字连成一个假手机号。
+
+**咬住它的用例**（`tools/liaison/tests/test_liaison_log_redaction.py`）：`_PHONE_RENDERINGS`
+八族 × 两个方向——`test_phone_rendering_is_masked`（该脱敏的被脱敏）与
+`test_phone_lookalike_is_left_alone`（同族里差一位/差一个分组的近似串必须原样保留）；
+外加 `test_phone_separator_class_does_not_join_unrelated_fields` 与
+`test_log_format_timestamp_is_not_mistaken_for_a_separated_phone` 两条护栏。
+⚠️ 本条**无症状**，⛔ 后人改这条正则时不许删这批用例——删了缺陷会静默复发。
+
 ---
 
-## TD-32 JSON/全角冒号渲染下 `thread_id` 反被打码，归档链路可能对不上
+## ~~TD-32~~ JSON/全角冒号渲染下 `thread_id` 反被打码，归档链路可能对不上 ✅ 已还（`255fd36`）
 
 **登记时间**：2026-09-09（第 8 章 8.4 Task 1 review 裁决，[Mac]0909M）
 **位置**：`tools/liaison/logsetup.py` `_PROTECTED_SPAN_RE`
@@ -1331,6 +1350,30 @@ fail-closed），`run_cleanup` 里按 **mtime** 清 `data/liaison/logs/*.log.*`�
 **不还的后果**：排障时日志里的 `thread_id` 与库里对不上，且**无症状**——
 看起来只是"脱敏很尽职"。
 ⚠️ 还债时 ⛔ 不要顺手把 `sender_userid` 一起纳入保护名单，那是真的扩大明文面。
+
+**已还**（2026-09-09 `[Mac]0909AM`，轻量通道 TDD，`255fd36`）：`_PROTECTED_SPAN_RE` 拆成两支，
+⛔ **不是把原来那支放松**——
+· 分支 1（键名被**成对引号**包住，即 JSON / dict / `%r` 渲染）：键名后允许闭合引号、分隔符
+  补上全角 `：` `＝`，取值前额外允许**一个半角空格**（`json.dumps` 的默认分隔符就是 `": "`，
+  数值型取值 `{"thread_id": 13812345678}` 不带引号，不放这一个空格照样落进脱敏区）。
+  ⛔ 只放一个空格、⛔ 不用 `\s*`——`\s` 含 `\n`，那正是 Round-1 修掉的出血。
+· 分支 2（裸键名）：**逐字保持 Round-1 语义**，`thread_id= <下一个 token>` 仍按空值处理。
+  裸键名没有「这是结构化渲染」的证据，宁可多打码。
+裸值终止符另补两种引号与全角逗号/分号/冒号/等号/右括号，否则
+`thread_id：wm001，mobile：138…` 会把后一对键值一起吞进保护段，反过来**扩大**明文面。
+
+**逐字遵守了本条的警告**：`sender_userid` ⛔ 未加入 `PROTECTED_KEYS`，且
+`test_sender_userid_stays_masked_in_the_new_renderings` 在三种新增渲染下钉死它仍被打码。
+
+**咬住它的用例**：`_PROTECTED_RENDERINGS` 九种渲染 × 两个方向——
+`test_protected_key_survives_every_rendering`（受保护键不许被反向打码）与
+`test_neighbouring_phone_still_masked_in_every_rendering`（⛔ 不许顺带豁免同行的手机号）；
+外加 `test_quoted_key_branch_does_not_swallow_the_next_pair` 与
+`test_bare_key_with_space_before_value_still_falls_back_to_empty_value` 两条护栏。
+
+⏸ **留步（本次刻意不做，非漏做）**：裸键名 + 空白 + 裸值（`thread_id= 138…`）仍按空值处理，
+该取值会被打码。修它＝在**没有结构化证据**的渲染上扩大明文豁免面，方向与合规红线相反，
+按 CLAUDE.md 的「保守方向」不做。触发条件＝真出现这种调用点渲染时再议。
 
 ---
 
