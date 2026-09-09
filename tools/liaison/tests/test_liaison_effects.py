@@ -13,6 +13,7 @@ import sqlite3
 
 import pytest
 
+from tools.liaison.tests._source_scan import is_vendored
 from tools.liaison.storage import db as liaison_db
 from tools.liaison.storage.effects import (
     EFFECT_NODE_TO_TABLE,
@@ -97,7 +98,7 @@ def test_liaison_does_not_import_product_db_layer():
     判违规——`app.storage.db` 与 `app.graph.*` 自然都在其中，不需要再单独枚举。
     """
     for path in LIAISON_ROOT.rglob("*.py"):
-        if "tests" in path.parts:
+        if "tests" in path.parts or is_vendored(path):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -297,7 +298,7 @@ def test_no_second_transaction_manager_in_source():
     """
     offenders = []
     for path in sorted(LIAISON_ROOT.rglob("*.py")):
-        if "tests" in path.parts:
+        if "tests" in path.parts or is_vendored(path):
             continue
         rel = path.relative_to(LIAISON_ROOT).as_posix()
         source = path.read_text(encoding="utf-8")
@@ -462,7 +463,7 @@ def test_no_checkpointer_or_langgraph_in_liaison():
     这条断言让"我们没引入"从一句话变成一个会红的测试。
     """
     for path in LIAISON_ROOT.rglob("*.py"):
-        if "tests" in path.parts:
+        if "tests" in path.parts or is_vendored(path):
             continue
         text = path.read_text(encoding="utf-8")
         assert "langgraph" not in text.lower(), f"{path} 提到了 langgraph"
@@ -653,7 +654,7 @@ def test_effect_node_to_table_matches_the_insert_target_repo_wide():
     """
     effects_by_node: dict = {}
     for path in sorted(LIAISON_ROOT.rglob("*.py")):
-        if "tests" in path.parts:
+        if "tests" in path.parts or is_vendored(path):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         effects_by_node.update(_find_idempotent_effects_in_tree(tree))

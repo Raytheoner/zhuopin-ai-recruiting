@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tools.liaison.tests._source_scan import is_vendored
 from tools.liaison import whitelist as whitelist_module
 from tools.liaison.whitelist import admit, compute_admission, load_whitelist
 
@@ -104,7 +105,7 @@ def source_fingerprint() -> str:
     """tools/liaison 下全部 .py 的内容指纹，用于证明"名单变更没改代码"。"""
     digest = hashlib.sha256()
     for py in sorted(PACKAGE_ROOT.rglob("*.py")):
-        if "__pycache__" in py.parts:
+        if "__pycache__" in py.parts or is_vendored(py):
             continue
         digest.update(py.relative_to(PACKAGE_ROOT).as_posix().encode("utf-8"))
         digest.update(py.read_bytes())

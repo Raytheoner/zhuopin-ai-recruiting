@@ -1,8 +1,10 @@
 # `tools/liaison/.venv` 建立后四条测试转红——实测记录与待裁决
 
 **产出 session**：`[Mac]0909AA`（凭据验证与 liaison-venv）
-**状态**：🔴 **未修复，待 Shao Peishen 裁决**。本 session 按 opener 明令「⛔ 不改测试去迁就实现、
-⛔ 不改 `session_client.py` 的常量来让它过」，只做取证，未改动任何测试或实现代码。
+**状态**：✅ **已裁决、已修复**（Shao Peishen 2026-09-09 批「1/2 按建议，3 提上日程」）。
+首轮取证时按 opener 明令「⛔ 不改测试去迁就实现」只做记录不动代码；裁决后于同一 session
+落地，套件 **741 passed / 0 failed**。⛔ 未改动任何实现代码，`session_client.py` 的
+`REQUIRED_CLIENT_ATTRS` / `EVENT_*` 常量一个字未动。
 
 ## 现象
 
@@ -93,3 +95,61 @@ PYTHONPATH=. tools/liaison/.venv/bin/python -m pytest -q tools/liaison/tests
 ```
 
 对照：此前该套件在**未装 SDK 的解释器**下全绿，且 `test_liaison_sdk_smoke.py` 一直处于 skip。
+
+
+---
+
+# 裁决与落地（2026-09-09）
+
+## 更正：乙类不是两处，是**六处**
+
+首轮报告低估了范围。以 `tools/liaison` 为扫描根的 `rglob("*.py")` 共 **6 处**，
+排除条件全都只有 `tests`，**没有 `.venv`**：
+
+| 文件 | 行 | 当时状态 |
+|---|---|---|
+| `test_liaison_effects.py` | 99 / 464 / 655 | 😶 哑火——判据碰巧没被现有依赖命中 |
+| `test_liaison_effects.py` | 299 | 🔴 显形 |
+| `test_liaison_logsetup.py` | 305 | 🔴 显形 |
+| `test_whitelist.py` | 106（`source_fingerprint`） | 😶 哑火 |
+
+那四处哑火的是**已埋好、等下一个依赖踩响的地雷**。`source_fingerprint` 尤其：它算的是
+"tools/liaison 下全部 .py 的内容指纹，用于证明名单变更没改代码"——扫描根含 venv 后，
+该指纹的语义从"代码没变"悄悄变成了"代码没变**且没装过任何包**"。
+
+## 乙类落地：单一真源 `tools/liaison/tests/_source_scan.py`
+
+新增 `is_vendored(path)`，六处各加一句引用。⛔ 只改"要扫哪些文件"（扫描根定义），
+**不碰任何一处判据**（"扫出来算不算违规"）——六处的严格度一个字没放宽。
+
+判定按路径**分段**（`part in {".venv", "venv", "site-packages"}`），⛔ 不用
+`str(path).find(".venv")` 子串匹配——那会误杀 `tools/liaison/.venv_notes/foo.py` 这类正常文件。
+
+附带收益：套件耗时 **6.85s → 2.42s**（指纹不再 sha256 整个 site-packages）。
+
+## 甲类落地：判据回到用例名字说的那件事
+
+两条用例的第二句断言 `returncode == EXIT_SDK_UNAVAILABLE` 把**跑测试的解释器装没装
+aibot**这个环境事实写成了契约。删去该句，只保留 `!= EXIT_MISSING_CREDENTIALS`。
+
+裁决的决定性理由不是"现在红了"，而是**它保证了每修一层就得改一次测试**：TD-19 落地后
+进程会再往前走一关，那句断言会第三次失效，且那时的失败会晚得多、脏得多。
+
+**没有开口子**（双向覆盖完整）：
+- 缺凭据方向 → `test_entrypoint_exits_nonzero_and_names_missing_items` 仍硬断言 `== 2`
+- 齐备被误判方向 → 保留的 `!= EXIT_MISSING_CREDENTIALS` 守着
+
+**顺带加强**：`test_entrypoint_reads_dotenv_when_process_env_is_absent` 原先**缺**凭据泄漏
+断言（上一条有、它没有），本次补齐 `assert "sec-from-file" not in ...`。
+
+## 新登记 TD-36
+
+甲类两条用例喂的是假凭据，今天安全**纯属运气**（`SdkSurfaceUnverifiedError` 在任何网络
+动作前拦住）。TD-19 还上后这道拦阻消失，它们会带着假凭据真的去连企微。详见 TD-36。
+
+## 裁决 3：launchd 装机排在 TD-19 之后
+
+服务进程当前 `exit 4` 且立刻返回，而 plist 是 `RunAtLoad` + `KeepAlive` +
+`ThrottleInterval=30`——现在装 job 等于造一台每 30 秒失败一次的日志刷屏机。
+TD-19 条目已加「⏫ 2026-09-09 状态更新」段：其原阻塞理由（凭据未取得）已消失，
+本条转为**已提上日程**。

@@ -15,6 +15,7 @@ import logging
 import logging.handlers
 import pathlib
 
+from tools.liaison.tests._source_scan import is_vendored
 from tools.liaison import logsetup
 from tools.liaison import __main__ as liaison_main
 
@@ -303,7 +304,7 @@ def test_setup_logging_is_wired_exactly_once_in_the_package():
     """⛔ 不许在别的模块里"顺手也调一次"——重复装配会摘掉正在用的 handler。"""
     callers: list[str] = []
     for path in sorted(LIAISON_ROOT.rglob("*.py")):
-        if "tests" in path.parts:
+        if "tests" in path.parts or is_vendored(path):
             continue
         for node in ast.walk(_parse(path)):
             if isinstance(node, ast.Call) and ast.unparse(node.func).endswith(
