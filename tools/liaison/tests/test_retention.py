@@ -305,3 +305,105 @@ def test_identity_still_holds_after_cleanup(conn):
     )
     assert_effect_log_identity(conn)     # u2 未被清理，仍严格恒等
     assert_retention_accounting(conn)    # u1 被清理过，走记账等式
+
+
+def _touch(root, relative_path, payload=b"x"):
+    target = root / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    return target
+
+
+def test_expired_unreferenced_file_is_deleted(tmp_path):
+    """spec Scenario「超期数据被清理」在文件那一层的形态。"""
+    root = tmp_path / "archive"
+    old = _touch(root, "u1/20260101/m-old__a.xlsx")
+    fresh = _touch(root, "u1/20260901/m-new__b.xlsx")
+    files = retention.iter_archive_files(root)
+    deletable, skipped = retention.compute_deletable_files(NOW, 180, files, frozenset())
+    assert deletable == ("u1/20260101/m-old__a.xlsx",)
+    assert skipped == ()
+    deleted, failures = retention.delete_archive_files(root, deletable)
+    assert deleted == ("u1/20260101/m-old__a.xlsx",)
+    assert failures == ()
+    assert not old.exists()
+    assert fresh.exists()
+
+
+def test_referenced_file_is_never_deleted_even_if_expired(tmp_path):
+    """🔴 台账还指着的文件一律不删——删了就是 design D3 禁止的
+    「台账已记、材料缺失」。这是文件那一遍唯一的结构性保险。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-old__a.xlsx")
+    referenced = frozenset({"u1/20260101/m-old__a.xlsx"})
+    deletable, skipped = retention.compute_deletable_files(
+        NOW, 180, retention.iter_archive_files(root), referenced
+    )
+    assert deletable == ()
+
+
+def test_orphan_temp_file_is_swept(tmp_path):
+    """`attachments.py` 崩溃时留下的 `.tmp-*.part` 从不进台账 ⇒ 永远"未被引用"
+    ⇒ 超期后被这一遍顺带扫掉。attachments.py 的注释把这件事指给了第 8 章。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/.tmp-abc.part")
+    deletable, _ = retention.compute_deletable_files(
+        NOW, 180, retention.iter_archive_files(root), frozenset()
+    )
+    assert deletable == ("u1/20260101/.tmp-abc.part",)
+
+
+def test_unexpected_path_shape_is_reported_not_deleted(tmp_path):
+    """⛔ 形态不认识的路径一律不删——不认识就说明我们的假设错了，
+    这时候正确的动作是把它报出来，不是把它删掉。"""
+    root = tmp_path / "archive"
+    _touch(root, "stray.txt")
+    _touch(root, "u1/notadate/x.bin")
+    deletable, skipped = retention.compute_deletable_files(
+        NOW, 180, retention.iter_archive_files(root), frozenset()
+    )
+    assert deletable == ()
+    assert {item.subject for item in skipped} == {"stray.txt", "u1/notadate/x.bin"}
+
+
+def test_file_pass_is_idempotent(tmp_path):
+    """「重复执行安全」：第二遍什么也扫不到，且不报失败。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-old__a.xlsx")
+    first = retention.compute_deletable_files(
+        NOW, 180, retention.iter_archive_files(root), frozenset()
+    )[0]
+    retention.delete_archive_files(root, first)
+    second = retention.compute_deletable_files(
+        NOW, 180, retention.iter_archive_files(root), frozenset()
+    )[0]
+    assert first and second == ()
+
+
+def test_delete_failure_is_collected_and_does_not_stop_the_round(tmp_path, monkeypatch):
+    """单条失败不中止整轮（opener 约束 1 逐字）。"""
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/a__1.bin")
+    _touch(root, "u1/20260101/b__2.bin")
+    targets = ("u1/20260101/a__1.bin", "u1/20260101/b__2.bin")
+
+    def boom(path):
+        if path.name.startswith("a__"):
+            raise PermissionError("模拟：没有删除权限")
+        path.unlink()
+
+    monkeypatch.setattr(retention, "_unlink", boom)
+    deleted, failures = retention.delete_archive_files(root, targets)
+    assert deleted == ("u1/20260101/b__2.bin",)
+    assert [f.stage for f in failures] == ["file"]
+    assert failures[0].subject == "u1/20260101/a__1.bin"
+
+
+def test_prune_empty_dirs_removes_only_empty_ones_and_keeps_the_root(tmp_path):
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/a__1.bin")
+    (root / "u2" / "20260101").mkdir(parents=True)
+    pruned = retention.prune_empty_dirs(root)
+    assert set(pruned) == {"u2/20260101", "u2"}
+    assert root.is_dir()                       # ⛔ 归档根本身永不删
+    assert (root / "u1" / "20260101").is_dir()  # 非空目录不动

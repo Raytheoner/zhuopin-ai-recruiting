@@ -31,15 +31,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import logging
 import os
+import pathlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
 from app.storage.idempotency import idempotent_effect
+from tools.liaison.session import CHINA_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -328,3 +331,141 @@ def delete_expired_ledger_rows(
             continue
         deleted.append(item.msgid)
     return tuple(deleted), tuple(failures)
+
+
+#: 归档路径的层数：`<thread_id>/<yyyymmdd>/<叶子>`（design D4）。
+#: ⛔ 层数不对的路径一律不删——不认识的形态说明假设错了，那时候要报不要删。
+_ARCHIVE_PATH_DEPTH: Final[int] = 3
+
+
+@dataclass(frozen=True)
+class ArchiveFile:
+    """归档目录下的一个文件。`day` 是路径里的 `<yyyymmdd>` 段，形态不对时为空串。"""
+
+    relative_path: str
+    day: str
+
+
+def iter_archive_files(archive_root: pathlib.Path) -> tuple[ArchiveFile, ...]:
+    """列出归档根下的全部普通文件。归档根不存在 ⇒ 空元组（首次运行的正常情况）。
+
+    ⛔ **跳过符号链接**：跟着符号链接删会把归档根之外的东西删掉。
+    """
+    if not archive_root.is_dir():
+        return ()
+    found: list[ArchiveFile] = []
+    for path in sorted(archive_root.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        parts = path.relative_to(archive_root).parts
+        day = parts[1] if len(parts) == _ARCHIVE_PATH_DEPTH else ""
+        found.append(ArchiveFile(path.relative_to(archive_root).as_posix(), day))
+    return tuple(found)
+
+
+def _day_expiry_instant(day: str) -> datetime.datetime:
+    """把 `<yyyymmdd>` 段折成"那一天最晚的一刻（+08:00）"。
+
+    取当天 23:59:59.999999 而不是 00:00:00 是刻意的**保守方向**：晚一点过期
+    意味着边界上多留、不会早删。日期来自 `received_at`，那是发送人看到的
+    那个时刻，所以时区取 `+08:00`（design D4：⛔ 不做时区换算）。
+    """
+    if len(day) != 8 or not day.isdigit():
+        raise ValueError(f"不是 yyyymmdd 形态：{day!r}")
+    moment = datetime.datetime.strptime(day, "%Y%m%d")
+    return moment.replace(
+        hour=23, minute=59, second=59, microsecond=999999, tzinfo=CHINA_TZ
+    )
+
+
+def compute_deletable_files(
+    now: datetime.datetime,
+    retention_days: int,
+    files: Sequence[ArchiveFile],
+    referenced: frozenset[str],
+) -> tuple[tuple[str, ...], tuple[SkippedItem, ...]]:
+    """决定"删哪些文件"。纯函数：不碰文件系统、不读时钟。
+
+    两道判据，缺一不可：
+    1. **仍被台账引用的一律不删**——删了就是 design D3 禁止的
+       「台账已记、材料缺失」。这一条让这一遍与台账那一遍的顺序无关，
+       也让它对台账那一遍的失败自愈；
+    2. 路径里的 `<yyyymmdd>` 早于 cutoff。
+
+    形态不认识的路径（层数不对、日期段不是 8 位数字）进 `SkippedItem`，
+    ⛔ 不删——不认识就说明我们的假设错了，那时候要报不要删。
+    """
+    cutoff = compute_cutoff(now, retention_days)
+    deletable: list[str] = []
+    skipped: list[SkippedItem] = []
+    for item in files:
+        if item.relative_path in referenced:
+            continue
+        try:
+            expires_at = _day_expiry_instant(item.day)
+        except ValueError as exc:
+            skipped.append(
+                SkippedItem(
+                    item.relative_path,
+                    f"路径不是 <thread_id>/<yyyymmdd>/<文件> 形态，⛔ 不删：{exc}",
+                )
+            )
+            continue
+        if expires_at < cutoff:
+            deletable.append(item.relative_path)
+    return tuple(deletable), tuple(skipped)
+
+
+def _unlink(path: pathlib.Path) -> None:
+    """删一个文件。**单独抽出来是为了让测试能注入一次确定性的失败**——
+    ⛔ 这不是配置项，⛔ 不许给它加环境变量开关，⛔ 生产代码不许再包一层。"""
+    path.unlink()
+
+
+def delete_archive_files(
+    archive_root: pathlib.Path, relative_paths: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[CleanupFailure, ...]]:
+    """删文件。单条失败不中止整轮。
+
+    删之前再确认一次目标落在归档根**之内**：路径是自己扫出来的，这道检查
+    在正常路径上永远为真——它挡的是将来某次改动让路径来源变成"台账里的
+    字符串"的那一天，那时候一个 `../../` 就能删到仓库外面去。
+    """
+    root = archive_root.resolve()
+    deleted: list[str] = []
+    failures: list[CleanupFailure] = []
+    for relative_path in relative_paths:
+        target = archive_root / relative_path
+        try:
+            if root not in target.resolve().parents:
+                raise ValueError(f"目标不在归档根之内：{target}")
+            _unlink(target)
+        except Exception as exc:  # noqa: BLE001 —— 单条失败不中止整轮
+            logger.error("留存清理：删归档文件失败 %s：%s", relative_path, exc, exc_info=True)
+            failures.append(CleanupFailure("file", relative_path, str(exc)))
+            continue
+        deleted.append(relative_path)
+    return tuple(deleted), tuple(failures)
+
+
+def prune_empty_dirs(archive_root: pathlib.Path) -> tuple[str, ...]:
+    """自底向上删掉空目录。**⛔ 归档根本身永不删。**
+
+    ⛔ 只用 `rmdir`（目录非空时它自己会失败），⛔ 绝不许用 `shutil.rmtree`
+    ——`rmtree` 会把一个"我以为是空的"目录连同里面的材料一起端掉。
+    """
+    if not archive_root.is_dir():
+        return ()
+    pruned: list[str] = []
+    candidates = sorted(archive_root.rglob("*"), key=lambda p: len(p.parts), reverse=True)
+    for path in candidates:
+        if path.is_symlink() or not path.is_dir():
+            continue
+        if any(path.iterdir()):
+            continue
+        # `contextlib.suppress` 在事务扫描器的正面白名单里（TD-18 的还债形态），
+        # ⛔ 不要改成 `with path:` 之类的写法。
+        with contextlib.suppress(OSError):
+            path.rmdir()
+            pruned.append(path.relative_to(archive_root).as_posix())
+    return tuple(pruned)
