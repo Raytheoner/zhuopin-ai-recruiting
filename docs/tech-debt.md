@@ -808,7 +808,17 @@ findings 与 controller ruling）。真正的风险只在于：如果将来有�
 **⏳ 仍欠的、也是本条不销的唯一理由**：**8.6 用真实凭据端到端跑通**。判据来自
 `docs/session接力.md` ⑮「⛔ 不进泳道：8.6–8.9（他亲自）」。
 
-**Shao Peishen 要跑的就一条命令**（在仓库根、Terminal 里，⛔ 不经 pytest）：
+🔴 **2026-09-09 稍晚订正——⛔ 先别跑真实建连**：`[Mac]0909AE` 已经替本条跑了第一次
+（见 `docs/findings/2026-09-09-首次真实建连实测.md`），结果撞上 **TD-38**（`heartbeat_interval`
+传秒当毫秒，心跳 ×1000，44 秒即被企微 `45009 Too many requests` 限流）。**TD-38 未还之前
+再跑一次只是再洪泛一次**，⛔ 不要重复。下面这条命令保留给 TD-38 还上之后。
+
+⚠️ TD-38 的成因就在本条改的那个文件里（`session_client.py:37`），但它是**单位错配**——
+类型相同（int）、只有单位不同，按设计就在 `verify_client_surface` 那道护栏的盲区里，
+且**无任何本地症状**，只有真连上企微才暴露。⛔ 不要因此去加"校验单位"的启发式，
+真正的判据是 TD-39 那三项端到端观察。
+
+**TD-38 还上之后，Shao Peishen 要跑的就一条命令**（在仓库根、Terminal 里，⛔ 不经 pytest）：
 
 ```bash
 PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison
@@ -1459,3 +1469,40 @@ SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释�
 
 **来源**：`[Mac]0909AE` 首次真实建连实测。相关：TD-38、
 `docs/findings/2026-09-09-首次真实建连实测.md`
+
+## TD-40 · 🔴 `.env` 里的 `HR_LIAISON_*` 三个键让**整个 app 的配置加载不了**（他本机现状）
+
+**欠的是什么**：`app/config.py:13` 是
+`SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")`——pydantic-settings v2 的
+`BaseSettings` **默认 `extra="forbid"`**。`0909AA`（2026-09-09）把
+`HR_LIAISON_BOT_ID` / `HR_LIAISON_BOT_SECRET` / `HR_LIAISON_GROUP_WEBHOOK` 三个键写进仓库根
+`.env` 之后，`Settings()` 每次实例化都抛
+`ValidationError: Extra inputs are not permitted`，一次报三条。
+
+**这不是"测试环境的小毛病"**：`Settings` 是 app 的配置入口 ⇒ **Web 服务在他本机起不来**。
+`0909AC` 实测：有 `.env` 的仓库根 checkout 上根 venv 全量 **23 failed**
+（`test_config.py` 5、`test_config_fallback.py` 6、`test_config_audit_and_outbound.py` 10、
+`test_outbound_gate.py` 1、`tests/test_main_wiring.py` 1）；同一份代码在**没有 `.env`** 的
+worktree 里 **0 failed**。
+
+⚠️ **失败信息会把 bot_secret 明文打进 pytest 输出**（`input_value='...'`）——终端回滚、
+CI 日志、粘给别人看的报错里都带着它。这条本身就构成一个泄漏面。
+
+**为什么一直没被发现**：`.51` 上没有这三个键（`tools/` 不同步过去），CI 也不带 `.env`。
+它**只在他这台机器上**发生，而那正是唯一会跑 Web 服务的机器。
+
+**触发条件**：⚠️ **立刻**——他下一次起 Web 服务或跑全量 pytest 就会撞上，现在已经在撞了。
+
+**三个改法（未裁决，Shao Peishen 拍）**：
+① `app/config.py` 加 `extra="ignore"`——一行，但**放弃了「`.env` 里写错别字当场报错」这道岗**；
+② 给 `Settings` 补三个 `hr_liaison_*` 字段——app 并不用它们，纯为让校验过关，语义上是脏的；
+③ 把值守通道的凭据从根 `.env` 挪到 `tools/liaison/.env`（配合
+`__main__.resolve_dotenv_path()` 改默认路径）——**与 design D10 的依赖隔离同构**，
+两套配置各归各位，代价是他要挪一次文件。
+
+**不还的后果**：Web 服务起不来，且报错指向的是 `.env` 里那三个**本来就该在那儿**的键，
+很容易被读成"配置写错了"而去删凭据——删完值守通道又起不来。两边互相打架，
+且**每次报错都回显一次 bot_secret**。
+
+**来源**：`[Mac]0909AC` 收工前在仓库根 checkout 跑全量时实测（⛔ 不是推测，见上方失败计数）。
+相关：TD-19、design D10

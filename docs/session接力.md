@@ -232,9 +232,10 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
 |---|---|---|---|---|---|
 | **G-1** | 两人企微 `userid` 填进 `whitelist.yaml` | Shao Peishen 提供 → 已代填 | ✅ **已完成**（`e969f1b`） | `load_whitelist(SHIPPED_CONFIG) == {"TangLiPing", "ShaoPeiShen"}`，已成断言 | — |
 | **G-2** | 核对 `ShaoPeiShen` 的大小写 | Shao Peishen | ✅ **已确认**（2026-09-09 本人回「ShaoPeiShen 正确」） | 已比对企微通讯录「账号」列，与 `whitelist.yaml:22` 逐字符一致 | — |
-| **G-3** | 还 **TD-19**（`client.run()` 的 async→同步适配） | 代码＝已完成（`0909AC`）；**端到端跑通＝Shao Peishen 亲自**（8.6 不进泳道） | 🟡 **代码已就位，等他跑一次** | 在仓库根 Terminal 跑 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison`，看三件事：① 日志出现 `WebSocket connection established` 且无 `errcode=853000`；② 断网后开出中断窗口＋群里收到断线告警；③ 恢复后自动重连、窗口闭合＋恢复告警。⚠️ 先跑 `--self-check`（exit 0、⛔ 不建连）验凭据更省事 | 服务本身已能起来，但**真实建连从未验过**；G-4 仍锁在这一步之后 |
+| **G-3** | 还 **TD-19**（`client.run()` 的 async→同步适配） | 代码＝已完成（`0909AC`）；**端到端跑通＝Shao Peishen 亲自**（8.6 不进泳道） | 🔴 **⛔ 先别跑——被 TD-38 阻断**（`0909AE` 已跑过第一次，44 秒即被企微 `45009` 限流；再跑只是再洪泛一次）。TD-38 还上后再跑 | TD-38 还上之后，在仓库根 Terminal 跑 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison`，看三件事：① 日志出现 `WebSocket connection established` 且无 `errcode=853000`；② 断网后开出中断窗口＋群里收到断线告警；③ 恢复后自动重连、窗口闭合＋恢复告警。⚠️ 先跑 `--self-check`（exit 0、⛔ 不建连）验凭据更省事 | 服务本身已能起来，但**真实建连从未验过**；G-4 仍锁在这一步之后 |
 | **G-4** | 在 Terminal 跑 `install_launchd.py`（不带 `--dry-run`） | **Shao Peishen**（脚本 docstring 明写「Claude ⛔ 不代跑」） | ⛔ **暂缓——等 G-3** | G-3 完成后再跑。`--dry-run` 已于 09-09 验过，渲染无误、四条路径正确、无凭据取值 | **现在跑就是造一台刷屏机**：plist 是 `RunAtLoad`+`KeepAlive`+`ThrottleInterval=30`，而进程 `exit 4` 立刻返回 ⇒ 每 30 秒重启一次、每次立刻失败、`launchd.err.log` 无限追加同一条报错 |
 | **G-5** | 还 **TD-36**（假凭据会真实建连） | — | ✅ **已完成**（`0909AC`，与 TD-19 同一 commit） | 两条用例改走 `--self-check`（跑完全部校验、建连前退出），另加 `tests/netguard/` 网络闸门：非回环连接一律 raise，进程内＋子进程两条都装。⚠️ 落地中实测到一次经本机 `127.0.0.1` 代理的真实外发，已修并落档 `docs/findings/2026-09-09-测试网络闸门被本机代理绕过.md` | — |
+| **G-7** | 还 **TD-40**（`.env` 的 `HR_LIAISON_*` 让 app 配置加载不了） | **Shao Peishen 拍改法**（三选一），落地可代 | 🔴 **他本机现在就是坏的** | `Settings()` 能正常实例化；有 `.env` 的仓库根 checkout 上根 venv 全量回到 0 failed（现为 23 failed） | Web 服务在他本机起不来；且每次报错都把 bot_secret 明文打进输出 |
 | **G-6** | `0909P` 发版到 `.51` | **Shao Peishen** 拍（发版不可代） | ⏸ 等他一个「发」 | 建议一次带上 TD-33，「这次发什么」发车前现算 | — |
 
 **2026-09-09 结存（`0909AC` 后订正）：他手上多了一件 —— G-3 的端到端那一步。**
