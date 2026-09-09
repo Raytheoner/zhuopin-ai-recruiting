@@ -1106,7 +1106,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 
 ---
 
-## TD-33 · `idempotent_effect` 的 `effect_log` INSERT 只兜 `IntegrityError`，其余异常不回滚
+## ~~TD-33~~ ✅ 已还（25d8715） · `idempotent_effect` 的 `effect_log` INSERT 只兜 `IntegrityError`，其余异常不回滚
 
 **登记**：2026-09-09 [Mac]0909K（8.1–8.2 留存清理 run-build，Task 2 实现者发现、终审复核确认）
 **位置**：`app/storage/idempotency.py`（第二个 `try` 块）
