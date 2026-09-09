@@ -768,6 +768,11 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
    冒烟 ①–⑤ **全部达标**，未触发回滚。`.51` 现网自此为 `0aa1af4` 一线代码。
 
+   ℹ️ **并发事实（已核，不影响口径）**：sync 执行的 23:42–23:43 之间，第十六批编排
+   session 合入了 `5efb0e2`（纯 docs：第十六批编排 ＋ `0909AP` 撞号改判 `AQ`）。
+   `git diff 0aa1af4 5efb0e2 -- app/ scripts/ requirements.txt pyproject.toml .env.example deploy-server.ps1`
+   **为空** ⇒ 该 commit 未碰任何同步白名单路径，现网代码口径记 `0aa1af4` 准确。
+
    ✅ **「重复 `confirm` ⇒ 500」缺陷标已修上线**——`0908K` 记录里那条「⛔ 尚未发版到 `.51`」
    自本次起作废。09-08 13:18 现网实发的那次 500，其修复（`8ea7bd2`＋`2853116`）与 TD-33
    的加固（`25d8715`）已同批在现网生效。
