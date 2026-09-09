@@ -41,6 +41,9 @@ CONNECTION_THREAD_ID = "__liaison_connection__"
 DETECTED_BY_DISCONNECT = "disconnect_event"
 DETECTED_BY_STARTUP_GAP = "startup_gap"
 CLOSED_BY_RECONNECT = "reconnect"
+#: ⚠️ **已按 2026-09-09 Shao Peishen 裁决二（TD-20·改法 ①）停用**，今天不再有任何
+#: 新窗口以它闭合。⛔ 不许删：库里存着历史上这样闭合的行，schema 的 CHECK 也仍然
+#: 允许该取值——它留在这里是那些历史行的解释。详见 `_backfill_open_windows`。
 CLOSED_BY_STARTUP_BACKFILL = "startup_backfill"
 
 
@@ -272,10 +275,19 @@ class LiaisonSession:
 
         1. 读上一次的存活戳；若上次死在**连接健康**的状态，用最后一次盖戳的时间
            开一个 `startup_gap` 窗口——那段停机时间同样收不到消息；
-        2. 把**所有**未闭合窗口（含上一步刚开的那个）按"恢复时间 = 本次启动时间"
-           闭合。一条闭合路径管两种成因，⛔ 不要为 gap 单独写一条；
-        3. 补发所有"已闭合但还没告警"的窗口；
-        4. 最后才写本次启动的存活戳——写早了，第 1 步就读不到上一次的了。
+        2. 补发所有"已闭合但还没告警"的窗口；
+        3. 最后才写本次启动的存活戳——写早了，第 1 步就读不到上一次的了。
+
+        ⛔ **启动时不闭合任何未闭合窗口**（TD-20，2026-09-09 Shao Peishen 裁决二·
+        改法 ①）。闭合一律交给 `on_connected` 的 `CLOSED_BY_RECONNECT` 路径，
+        「启动后首次连上」走的也是同一条。
+
+        *为什么*：`start()` 跑在**还没连上**的时刻，那一刻根本不知道恢复时间。
+        旧实现拿"本次启动时间"当恢复时间，于是"重启时网络仍未恢复"这一场景
+        （launchd `AtStartup` 早于 Wi-Fi 关联完成，是最常发生的时刻）会**低报**
+        中断时长：reviewer 实测 `connected@10:10` → `10:40` 重启 → `12:00` 才真正
+        连上，只发出一条「10:10–10:40（30 分）请重发」，实际丢失 110 分钟。
+        告警是"响亮但不完整"的——收信人按偏短的区间补发，区间外的消息永远补不回来。
         """
         previous = read_liveness_stamp(self.liveness_path)
         if previous is not None and previous["state"] == STATE_CONNECTED:
@@ -295,7 +307,8 @@ class LiaisonSession:
                     gap_started_at,
                     format_instant(now),
                 )
-        self._backfill_open_windows(now)
+        # ⛔ 这里曾经是 `self._backfill_open_windows(now)`。见本方法 docstring：
+        # 启动时闭合 = 用启动时间冒充恢复时间 = 低报中断时长（TD-20）。
         self._flush_pending_alerts(now)
         self._state = STATE_STARTING
         self._since = now
@@ -305,7 +318,12 @@ class LiaisonSession:
 
     # ── 连接事件 ──────────────────────────────────────────────────────
     def on_connected(self, now: datetime) -> None:
-        """连上了（首次或重连）。把还开着的窗口闭合并告警。"""
+        """连上了（首次或重连）。把还开着的窗口闭合并告警。
+
+        **这是窗口闭合的唯一路径**（TD-20 裁决二·改法 ①）。⛔ 不许为"启动后首次
+        连上"加任何早退或分支：`starting → connected` 与 `disconnected → connected`
+        走的必须是同一条，否则启动时留着的那个窗口永远等不到闭合。
+        """
         for started_at in select_open_windows(self.conn):
             effect_close_outage_window(
                 self.conn,
@@ -360,6 +378,16 @@ class LiaisonSession:
 
     # ── 内部 ──────────────────────────────────────────────────────────
     def _backfill_open_windows(self, now: datetime) -> None:
+        """⚠️ **已按 2026-09-09 Shao Peishen 裁决二（TD-20·改法 ①）停用，无调用方。**
+
+        ⛔ 不许删。`effect_log` 与 `liaison_outage_window` 里存着历史上用这条路径
+        闭合的行（`closed_by='startup_backfill'`，schema 的 CHECK 仍然允许该取值）——
+        删掉这个函数与 `CLOSED_BY_STARTUP_BACKFILL` 常量，那些历史行就失去了解释，
+        读库的人只能看到一个没有出处的字符串。留在这里就是那份解释。
+
+        ⛔ 也不许重新接回 `start()`：它在"还没连上"的时刻用启动时间当恢复时间，
+        正是 TD-20 低报中断时长的成因。
+        """
         for started_at in select_open_windows(self.conn):
             effect_close_outage_window(
                 self.conn,

@@ -147,8 +147,10 @@ def test_reconnect_closes_the_window_and_alerts_once(db_path, liveness_path):
     assert payload["stamp_at"] == session.format_instant(up_at + timedelta(minutes=1))
 
 
-def test_restart_after_a_kill_during_an_outage_backfills_the_window(db_path, liveness_path):
-    """spec Scenario「进程被杀后重启」：上一次未闭合的窗口被补记，恢复时间 = 本次启动时间。"""
+def test_restart_after_a_kill_during_an_outage_keeps_the_window_open(db_path, liveness_path):
+    """spec Scenario「进程被杀后重启」：上一次未闭合的窗口 MUST NOT 丢弃，但 ⛔ 也不在
+    启动时闭合——它保持开启，等下一次真正连上（2026-09-09 裁决二·改法 ①，TD-20）。
+    """
     first = make_session(db_path, liveness_path, RecordingSink())
     first.start(T0)
     first.on_connected(T0)
@@ -162,16 +164,28 @@ def test_restart_after_a_kill_during_an_outage_backfills_the_window(db_path, liv
     second.start(restart_at)
 
     rows = windows(second.conn)
-    assert len(rows) == 1
+    assert len(rows) == 1, "上一次未闭合的窗口 MUST NOT 丢弃"
     assert rows[0][0] == session.format_instant(down_at)
-    assert rows[0][2] == session.format_instant(restart_at)
-    assert rows[0][3] == session.CLOSED_BY_STARTUP_BACKFILL
+    assert rows[0][2] is None, "⛔ 不许在启动时闭合——那一刻还不知道恢复时间"
+    assert rows[0][3] is None
+    assert sink.texts == [], "窗口没闭合就 ⛔ 不许告警"
+
+    up_at = T0 + timedelta(hours=3)
+    second.on_connected(up_at)
+    rows = windows(second.conn)
+    assert rows[0][2] == session.format_instant(up_at)
+    assert rows[0][3] == session.CLOSED_BY_RECONNECT
     assert len(sink.texts) == 1
-    assert "2026-09-09 10:05:00" in sink.texts[0] and "2026-09-09 11:00:00" in sink.texts[0]
+    assert "2026-09-09 10:05:00" in sink.texts[0] and "2026-09-09 13:00:00" in sink.texts[0]
 
 
-def test_restarting_again_does_not_backfill_or_alert_twice(db_path, liveness_path):
-    """7.3 幂等：按窗口起始时间去重，重复启动不重复补记，也不重复告警。"""
+def test_restarting_again_does_not_open_a_second_window_or_alert_twice(db_path, liveness_path):
+    """7.3 幂等：按窗口起始时间去重，重复启动不重复开窗，也不重复告警。
+
+    改法 ① 之后这条更强了：连着重启多次，那一个窗口从头到尾**只有一个**、
+    始终开着，且直到真正连上才发出**唯一**一条覆盖全程的告警——⛔ 不会像旧实现
+    那样被第一次重启切成一段短的、后面几段无人记录。
+    """
     first = make_session(db_path, liveness_path, RecordingSink())
     first.start(T0)
     first.on_connected(T0)
@@ -187,11 +201,18 @@ def test_restarting_again_does_not_backfill_or_alert_twice(db_path, liveness_pat
     third.start(T0 + timedelta(hours=2))
 
     rows = windows(third.conn)
-    assert len(rows) == 1, "⛔ 不许补记出第二条窗口"
-    assert rows[0][2] == session.format_instant(T0 + timedelta(hours=1)), (
-        "第二次启动补记的恢复时间 ⛔ 不许被第三次启动覆盖"
-    )
-    assert third_sink.texts == [], "已经告警过的窗口 ⛔ 不许再告警一次"
+    assert len(rows) == 1, "⛔ 不许补出第二条窗口"
+    assert rows[0][0] == session.format_instant(T0 + timedelta(minutes=5))
+    assert rows[0][2] is None, "重启多少次都 ⛔ 不许闭合"
+    assert third_sink.texts == []
+
+    third.on_connected(T0 + timedelta(hours=4))
+    rows = windows(third.conn)
+    assert len(rows) == 1
+    assert rows[0][2] == session.format_instant(T0 + timedelta(hours=4))
+    assert len(third_sink.texts) == 1, "全程只发一条，覆盖 10:05–14:00 整段"
+    assert "2026-09-09 10:05:00" in third_sink.texts[0]
+    assert "2026-09-09 14:00:00" in third_sink.texts[0]
 
 
 def test_restart_after_a_kill_while_connected_records_the_gap_from_the_last_stamp(
@@ -202,6 +223,10 @@ def test_restart_after_a_kill_while_connected_records_the_gap_from_the_last_stam
     spec Requirement 正文是「为**每一次连接中断**记录一个中断窗口」——进程不在了
     也是一种中断，只是两条 Scenario 没有单独举它。存活戳的最后一次盖戳时间正是
     这个窗口的起点，⛔ 不许因为"Scenario 没写"就让这段停机静默地过去。
+
+    ⚠️ 本用例只管**起点**（`startup_gap` 开窗这一件事）。窗口怎么闭、告警文案是
+    什么，由 test_starting_while_still_offline_does_not_underreport_the_outage
+    单独覆盖——改法 ① 之后启动时 ⛔ 不再闭合（TD-20）。
     """
     first = make_session(db_path, liveness_path, RecordingSink())
     first.start(T0)
@@ -219,9 +244,8 @@ def test_restart_after_a_kill_while_connected_records_the_gap_from_the_last_stam
     assert len(rows) == 1
     assert rows[0][0] == session.format_instant(last_stamp_at)
     assert rows[0][1] == session.DETECTED_BY_STARTUP_GAP
-    assert rows[0][2] == session.format_instant(restart_at)
-    assert rows[0][3] == session.CLOSED_BY_STARTUP_BACKFILL
-    assert len(sink.texts) == 1
+    assert rows[0][2] is None, "开了窗就够了，闭合归 on_connected 管（TD-20）"
+    assert sink.texts == []
 
 
 def test_clean_restart_after_a_disconnected_stamp_records_no_gap(db_path, liveness_path):
@@ -312,3 +336,88 @@ def test_a_failed_alert_is_retried_on_the_next_start(db_path, liveness_path):
         )
     ], "⛔ 不许因为本用例的重启时刻而多开一个 startup_gap 窗口"
     assert windows(second.conn)[0][4] is not None
+
+
+# ── TD-20 回归：启动时不闭合旧窗口（2026-09-09 Shao Peishen 裁决二·改法 ①）────
+
+
+def test_starting_while_still_offline_does_not_underreport_the_outage(db_path, liveness_path):
+    """TD-20 复现场景：重启时网络**仍未恢复**，⛔ 不许把恢复时间记成启动时间。
+
+    reviewer 实测的原始时间线，逐字照搬：末次存活戳 `connected@10:10` → 进程被杀
+    → `10:40` 网络仍未恢复时重启 → `12:00` 才第一次真正连上。
+
+    改动前：`start()` 在 10:40 就把窗口按"恢复时间 = 本次启动时间"闭合并告警，
+    收信人只被告知补发 10:10–10:40 的 30 分钟，而实际收不到消息的是 110 分钟——
+    低报 80 分钟，落在低报区间外的消息永远补不回来。
+
+    改动后：10:40 的启动**只开窗、不闭合、不告警**；闭合交给 `on_connected`，
+    于是告警自然带上 12:00 这个**真实**恢复时间。
+    """
+    first = make_session(db_path, liveness_path, RecordingSink())
+    first.start(T0)
+    first.on_connected(T0)
+    last_stamp_at = T0 + timedelta(minutes=10)  # 10:10 最后一次盖戳
+    first.tick(last_stamp_at)
+    first.conn.close()  # kill -9：连接健康时被杀
+
+    sink = RecordingSink()
+    restart_at = T0 + timedelta(minutes=40)  # 10:40 网络仍未恢复
+    second = make_session(db_path, liveness_path, sink)
+    second.start(restart_at)
+
+    rows = windows(second.conn)
+    assert len(rows) == 1
+    assert rows[0][0] == session.format_instant(last_stamp_at)
+    assert rows[0][1] == session.DETECTED_BY_STARTUP_GAP
+    assert rows[0][2] is None, "还没连上就 ⛔ 不许闭合窗口（TD-20）"
+    assert rows[0][3] is None
+    assert sink.texts == [], "启动时一条告警都 ⛔ 不许发——恢复时间还不知道（TD-20）"
+    assert second.state == session.STATE_STARTING
+
+    up_at = T0 + timedelta(hours=2)  # 12:00 第一次真正连上
+    second.on_connected(up_at)
+
+    rows = windows(second.conn)
+    assert len(rows) == 1, "⛔ 不许多开一个窗口"
+    assert rows[0][2] == session.format_instant(up_at), "恢复时间 = 真正连上的时间"
+    assert rows[0][3] == session.CLOSED_BY_RECONNECT
+    assert rows[0][4] is not None
+
+    assert len(sink.texts) == 1
+    assert "2026-09-09 10:10:00" in sink.texts[0]
+    assert "2026-09-09 12:00:00" in sink.texts[0]
+    assert "持续 1 小时 50 分 0 秒" in sink.texts[0], "110 分钟，⛔ 不是 30 分钟"
+    assert "2026-09-09 10:40:00" not in sink.texts[0], "启动时间 ⛔ 不许出现在告警里"
+    assert alerts.ALERT_RESEND_SENTENCE in sink.texts[0]
+
+
+def test_starting_with_no_open_window_behaves_exactly_as_before(db_path, liveness_path):
+    """裁决二的另一半：启动时本来就没有未闭合窗口 ⇒ 行为与改动前**完全一致**。
+
+    改法 ① 只拿掉"启动时闭合"这一步，⛔ 不许顺带改变别的启动语义：已闭合已告警的
+    窗口不许被重开、不许被重复告警，随后的首次 `on_connected` 也不许去动它。
+    ⚠️ 重启时刻与上一次盖戳时刻取同一瞬间，避免撞上 7.7 的 `startup_gap` 规则
+    （那条规则由 test_starting_while_still_offline… 单独覆盖）。
+    """
+    first = make_session(db_path, liveness_path, RecordingSink())
+    first.start(T0)
+    first.on_connected(T0)
+    first.on_disconnected(T0 + timedelta(minutes=5))
+    reconnected_at = T0 + timedelta(minutes=8)
+    first.on_connected(reconnected_at)  # 窗口已闭合、已告警
+    first.conn.close()
+
+    sink = RecordingSink()
+    second = make_session(db_path, liveness_path, sink)
+    second.start(reconnected_at)
+
+    before = windows(second.conn)
+    assert len(before) == 1
+    assert before[0][2] == session.format_instant(reconnected_at)
+    assert before[0][3] == session.CLOSED_BY_RECONNECT
+    assert sink.texts == [], "已告警过的窗口 ⛔ 不许再告警一次"
+
+    second.on_connected(T0 + timedelta(minutes=20))
+    assert windows(second.conn) == before, "首次连上 ⛔ 不许改动一个已闭合的窗口"
+    assert sink.texts == []

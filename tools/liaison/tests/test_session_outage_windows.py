@@ -141,7 +141,13 @@ def test_closing_a_window_sets_both_recovered_and_closed_by(conn):
 
 
 def test_closing_the_same_window_twice_keeps_the_first_close(conn):
-    """先被正常重连闭合过的窗口，下一次启动的补记 ⛔ 不许覆盖它。"""
+    """先被正常重连闭合过的窗口，第二次闭合 ⛔ 不许覆盖它——第一次闭合即真相。
+
+    ⚠️ `CLOSED_BY_STARTUP_BACKFILL` 这条路径已按 2026-09-09 裁决二（TD-20·改法 ①）
+    停用，`session.py` 里不再有调用方。本用例仍用它当第二个 `closed_by` 取值，
+    因为要验的是 `effect_close_outage_window` 这一层的幂等语义本身：
+    **无论谁、以什么成因来第二次闭合，都不许改写已落定的恢复时间。**
+    """
     started = _open(conn, T0)
     first = session.format_instant(T0 + timedelta(minutes=3))
     session.effect_close_outage_window(
