@@ -580,12 +580,24 @@ def run_cleanup(
 
     if dry_run:
         deleted_messages = tuple(item.msgid for item in split.deletable)
+        # 🔴 controller 裁决（覆盖 brief 原实现，landing deviation，见 fix 报告）：
+        # dry_run 不许碰库，因此不能靠"重新读库"拿"清理之后"的台账——那样读
+        # 到的还是没删掉的行，会把它自己的附件误判成"仍被引用"，导致预览
+        # 报告 `deleted_messages` 里有它、`deleted_files` 里却没有它引用的
+        # 文件，与真实运行的结果不一致（plan line 1809：dry_run 是上线前
+        # 检查的唯一依据，预览必须可信）。改为**模拟**：假设本轮会全部成功，
+        # 直接从这一轮读到的 `rows` 里剔除 `split.deletable` 的 msgid 集合。
+        deleted_msgids = set(deleted_messages)
+        surviving = tuple(row for row in rows if row.msgid not in deleted_msgids)
     else:
         deleted_messages, ledger_failures = delete_expired_ledger_rows(conn, split.deletable)
         failures.extend(ledger_failures)
-
-    # ⚠️ 重新读一次：这一遍要的是**清理之后**还活着的台账指向了哪些文件。
-    surviving = load_message_rows(conn)
+        # ⚠️ 重新读一次：这一遍要的是**清理之后**还活着的台账指向了哪些文件。
+        # ⛔ 不与上面的 dry_run 分支合并复用：这里的正确性来自"真的重新读
+        # 库"——某条删除若失败，它仍会出现在重新读出来的结果里，从而继续
+        # 保护它的文件不被误删（design D3 的"禁止台账已记、材料缺失"由此
+        # 成立）。改成共享逻辑会削弱这条保证，⛔ 不许为了省一点重复而合并。
+        surviving = load_message_rows(conn)
     referenced: set[str] = set()
     scan_ok = True
     for row in surviving:

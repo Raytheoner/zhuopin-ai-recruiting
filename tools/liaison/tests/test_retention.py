@@ -580,6 +580,59 @@ def test_dry_run_changes_nothing(conn, tmp_path):
                         (retention.RETENTION_DELETE_NODE,)).fetchone()[0] == 0
 
 
+def test_dry_run_preview_agrees_with_real_run_for_self_owned_attachment(conn, tmp_path):
+    """review round 1 · Important 修复的回归覆盖。
+
+    一条消息自己拥有自己的附件、且已超期 180+ 天——这是最常见的真实场景。
+    dry_run 不许因为"没真的删台账行，重新读库时那一行还在"就把它自己的
+    附件误判成"仍被引用"从而漏报——那样预览和真实运行的 `deleted_files`
+    就对不上，而 plan line 1809 的运维安全步骤（先 `--dry-run` 看一遍再跑
+    真的）正是靠这份预览可信才成立。
+
+    两轮各建一套独立的 conn/root（真实运行会删东西，不能共用），断言两边
+    `deleted_files` 逐字相同；再单独确认 dry_run 那一边库和盘一个字节没动。
+    """
+    attachments_json = (
+        '[{"filename": "a.xlsx", "relative_path": "u1/20260101/m-old__a.xlsx",'
+        ' "byte_length": 1, "sha256": "x"}]'
+    )
+
+    root_preview = tmp_path / "preview"
+    _touch(root_preview, "u1/20260101/m-old__a.xlsx")
+    _archive(conn, "m-old", archived_at=OLD, attachments_json=attachments_json)
+    preview = retention.run_cleanup(
+        conn, now=NOW, retention_days=180, archive_root=root_preview,
+        sink=RecordingSink(), dry_run=True,
+    )
+
+    # dry_run 只报不动：库里的行、盘上的文件都必须原封不动。
+    assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
+    assert (root_preview / "u1/20260101/m-old__a.xlsx").exists()
+
+    real_conn = liaison_db.get_connection(tmp_path / "real.db")
+    liaison_db.init_schema(real_conn)
+    root_real = tmp_path / "real"
+    _touch(root_real, "u1/20260101/m-old__a.xlsx")
+    _archive(real_conn, "m-old", archived_at=OLD, attachments_json=attachments_json)
+    real = retention.run_cleanup(
+        real_conn, now=NOW, retention_days=180, archive_root=root_real, sink=RecordingSink(),
+    )
+    real_conn.close()
+
+    assert preview.deleted_messages == real.deleted_messages == ("m-old",)
+    assert preview.deleted_files == real.deleted_files == ("u1/20260101/m-old__a.xlsx",)
+
+
+def test_emit_retention_alert_reports_success_and_failure_directly():
+    """`emit_retention_alert` 自身的返回值要被直接断言到——不能只靠间接场景。"""
+    ok_sink = RecordingSink()
+    assert retention.emit_retention_alert(ok_sink, "text") is True
+    assert ok_sink.texts == ["text"]
+
+    broken_sink = RecordingSink(explode=True)
+    assert retention.emit_retention_alert(broken_sink, "text") is False
+
+
 def test_unparseable_ledger_row_stops_the_file_pass(conn, tmp_path):
     """台账里有一行 `attachments_json` 读不出来 ⇒ 我们不知道哪些文件仍被引用
     ⇒ ⛔ 整个文件那一遍不许跑。宁可这一轮不清文件，也不能误删一份还被
