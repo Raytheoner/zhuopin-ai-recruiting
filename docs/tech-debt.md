@@ -951,7 +951,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 **触发条件**：第 6 章要调用 `mark_task_pushed` 之前。
 **不还的后果**：推送时间戳被静默改写，审计上「第一次推送时刻」不再可信，且无告警。
 
-## TD-25 非限流错误也落 `pending_resend`，第 8 章重发驱动器会拿到永远重发不成的行
+## ~~TD-25~~ · 非限流错误也落 `pending_resend`，第 8 章重发驱动器会拿到永远重发不成的行 ✅ 已还（26986e8）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **位置**：`tools/liaison/notify/webhook.py:247` → `tools/liaison/notify/store.py:106`
@@ -967,6 +967,14 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 **还债动作**（二选一）：① 台账加一列区分「可自动重发 / 需人工介入」；
 ② 在 `select_pending_resends` 上按 errcode 过滤，只返回 `45009` 一类可重试的。
 **触发条件**：第 8 章接重发驱动器之前。
+
+**已还**（2026-09-09，`26986e8`，[Mac]0909V）：采用方案 ②（errcode 过滤），**未加列**，
+理由见 `tools/liaison/notify/store.py::RETRYABLE_ERRCODES` 的代码注释——「能不能自动重发」
+由 `last_errcode` 派生得出，而它已经在表里，加列就是把同一事实存两遍且不一致时无症状。
+`RETRYABLE_ERRCODES = {45009}`（唯一有明文依据的瞬时错误）；`93000` / `40001` /
+`last_errcode IS NULL` 归「需人工介入」，由新增的只读 `select_manual_intervention_resends`
+原样取得，⛔ 不变成沉默行。两个口径构成对 `pending_resend` 的一个划分，有测试守着。
+⏸ 重发驱动器本身仍属第 8 章，本次 ⛔ 未接。
 
 ## TD-26 令牌桶无进程级单例，且降级投递第一步 2 次 HTTP 只扣 1 个令牌
 
@@ -987,7 +995,7 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 请求，由 `effect_deliver_with_backoff` 按数取令牌。
 **触发条件**：第 8 章给群通知接上真实调用方之前。
 
-## TD-27 `make_group_webhook_delivery` 对 `MODE_REJECT` 静默降级，会发出一条空 markdown
+## ~~TD-27~~ · `make_group_webhook_delivery` 对 `MODE_REJECT` 静默降级，会发出一条空 markdown ✅ 已还（26986e8）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **位置**：`tools/liaison/notify/webhook.py:199-203`
@@ -1001,6 +1009,11 @@ docstring「第一次推送的那个时刻才是事实」当场变假，且**没
 「拒发」会静默变成「发一条空消息」——比拒发更糟，因为它看起来成功了。
 **还债动作**：`MODE_REJECT` 分支改成 `raise ValueError`，并补一条测试。
 **触发条件**：`make_group_webhook_delivery` 出现第二个调用方之前。
+
+**已还**（2026-09-09，`26986e8`，[Mac]0909V）：`MODE_REJECT` 分支改为 `raise ValueError`
+（文案点名"拒发模式不产生投递对象，调用方必须提前短路"），
+`test_notify_webhook.py::test_reject_mode_refuses_to_produce_a_delivery_object` 断言它真的抛
+且抛在任何 HTTP 之前。`store` 那条提前短路是正路，⛔ 未动。
 
 ## TD-28 `liaison_group_notify` 的 CHECK 只守字段取值域，跨字段的荒唐组合能写进去
 
