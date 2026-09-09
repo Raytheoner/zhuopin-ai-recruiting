@@ -94,6 +94,15 @@
 
 **验收**：`liaison-inbound-whitelist` 除「名单内／名单外消息的归档与入队行为」两条（依赖第 4／5 章）外全部场景通过。
 
+> **第 3 章还债后补登记**（2026-09-09 `[Mac]0909O`，轻量通道还 TD-15／TD-16，⛔ 未改任何验收判据）：
+>
+> - **D1（TD-15 去重）**：3.4「任何失败结果都记 ERROR」的实现改为按**名单文件内容 SHA-256** 去重——同一份内容连续失败只记一组，内容一变重新记一组。⛔ **未降级**（仍是 ERROR），⛔ **未缓存名单**（全局只存一个 64 字符指纹串，3.3 的「⛔ 不沿用任何此前加载过的名单」原样成立且有双守测试）。契约仍成立：每个**不同的**失败态都被 ERROR 记录过。裁决＝去重不降级，Shao Peishen 第十四批认可。
+> - **D2（TD-16 ①）**：YAML 重复键从 PyYAML 原生的静默 last-wins 改为 **fail-closed + ERROR 点名键名**。这是一处**行为收紧**：此前"再追加一段 `members:`"会静默替换整份名单，现在整份拒绝。⛔ 只记键名不记值。
+> - **D3（TD-16 ②③）**：`UnicodeDecodeError` 单列成「配置文件非 UTF-8」分类；`_read_roster` 顶部 `path = Path(path)`，调用方传 `str` 不再落「未预期异常」。⚠️ 第 4 章 `inbound.py:102` 的 `admit(sender_userid, whitelist_path)` 是这条的直接受益方。
+> - **D4（TD-16 ④）**：`tools/liaison/config/README.md` 补「⚠️ 失败面」段。
+> - **D5（TD-14）**：`proposal.md` 的「Impact · 不触碰」把 `pyproject.toml` 那一行订正为「⛔ 不往 `pyproject.toml` 添加任何依赖；`testpaths` 因 `tools/liaison/tests` 接入而新增一条」。⛔ 只改了那一行。
+> - **D6（TD-18 第二轮）**：`test_liaison_effects.py` 的 `_scan_transaction_violations` 对 `with <Call>:` 细化判据（名字词根 + 已知连接符号判违规、`contextlib.*`／`tempfile.*` 模块族放行、**陌生被调用者仍判违规**）。🔴 `ast.Name`／`ast.Attribute` 两格未动，`with self._conn:` 仍无条件必红。⚠️ 「陌生被调用者仍判违规」是相对 opener 字面要求的**收紧偏离**，理由与证伪实测见 `docs/tech-debt.md` TD-18。
+
 ## 4. 消息归档
 
 对应能力：`liaison-message-archive`。

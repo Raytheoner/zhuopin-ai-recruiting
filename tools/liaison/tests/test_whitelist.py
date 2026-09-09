@@ -167,6 +167,18 @@ def error_records(caplog) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.levelno >= logging.ERROR and "whitelist" in r.name]
 
 
+@pytest.fixture(autouse=True)
+def _reset_failure_dedup():
+    """每条用例前后都清空 TD-15 的去重槽。
+
+    ⛔ 不要删这个 fixture：去重槽是模块级全局，两条用例若恰好写出同一份坏内容，
+    后跑的那条会被前一条的指纹吞掉 ERROR 而**静默变绿/变红**——那种失败极难归因。
+    """
+    whitelist_module._reset_failure_dedup()
+    yield
+    whitelist_module._reset_failure_dedup()
+
+
 def test_missing_file_yields_empty_whitelist(tmp_path, caplog):
     with caplog.at_level(logging.ERROR):
         assert load_whitelist(tmp_path / "absent.yaml") == frozenset()
@@ -227,10 +239,14 @@ def test_unexpected_exception_is_swallowed_into_empty_whitelist(tmp_path, monkey
         [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}],
     )
 
-    def explode(_raw):
+    def explode(_raw, *args, **kwargs):
         raise RecursionError("PyYAML 在畸形输入上可能抛出非 YAMLError")
 
-    monkeypatch.setattr(whitelist_module.yaml, "safe_load", explode)
+    # TD-16 ① 之后加载器换成 `yaml.load(..., Loader=_NoDuplicateKeySafeLoader)`
+    # （SafeLoader 的子类，安全性不变，见 test_yaml_python_tags_are_not_constructed），
+    # 所以这里改打 `yaml.load`。本测试要证的仍是同一件事：YAML 层抛出的
+    # **非 YAMLError** 异常不许逃到调用方。
+    monkeypatch.setattr(whitelist_module.yaml, "load", explode)
     with caplog.at_level(logging.ERROR):
         assert load_whitelist(path) == frozenset()
     assert error_records(caplog)
@@ -500,3 +516,265 @@ def test_rebinding_default_whitelist_path_takes_effect_through_admit(tmp_path, m
     )
     monkeypatch.setattr(whitelist_module, "DEFAULT_WHITELIST_PATH", override_path)
     assert admit("TestOnlyOverrideMember") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-15：失败 ERROR 按名单文件内容去重（⛔ 不降级、⛔ 不缓存名单本身）
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_same_broken_file_logs_only_one_error_group_across_three_admits(tmp_path, caplog):
+    """出厂态本尊：同一份坏名单连调三次 `admit()`，只出**一组** ERROR。
+
+    这是 TD-15 的正题。第 4／5 章每条入站消息调一次 `admit()`，出厂态
+    （两条 `userid` 留空）每次必产 3 条 ERROR——不去重就是每条消息刷 3 条，
+    运维会学会忽略这个 logger，而模块里真正的合规漏洞恰恰只靠它暴露。
+    """
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {"userid": "", "name": "汤丽萍", "role": "HR AI 专员"},
+            {"userid": "", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+
+    with caplog.at_level(logging.ERROR):
+        assert admit("TangLiPing", path) is False
+        first = len(error_records(caplog))
+        assert first, "第一次必须照记 ERROR——去重的是重复副本，不是失败本身"
+
+        assert admit("TangLiPing", path) is False
+        assert admit("TangLiPing", path) is False
+
+    assert len(error_records(caplog)) == first, (
+        "同一份内容的第 2／3 次失败不应再记 ERROR：" + caplog.text
+    )
+
+
+def test_error_group_covers_every_distinct_failure_before_dedup_kicks_in(tmp_path, caplog):
+    """契约「任何失败都记 ERROR」仍成立：**每一个不同的失败态**都被记过。
+
+    出厂态那一组里三条失败（两条 userid 为空 + 一条零条有效条目）
+    必须都在第一组里出现过——⛔ 去重不许把同一轮里的兄弟 ERROR 也吞掉。
+    """
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {"userid": "", "name": "汤丽萍", "role": "HR AI 专员"},
+            {"userid": "", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    messages = [r.getMessage() for r in error_records(caplog)]
+    assert sum("userid 为空或非字符串" in m for m in messages) == 2, messages
+    assert sum("零条有效条目" in m for m in messages) == 1, messages
+
+
+def test_changed_content_logs_a_second_error_group(tmp_path, caplog):
+    """内容一变就重新记一组——去重的键是内容，不是"这个文件报过了"。"""
+    path = tmp_path / "whitelist.yaml"
+    path.write_text("members:\n  - userid: ''\n    name: 汤丽萍\n    role: HR\n", encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+        first = len(error_records(caplog))
+        assert load_whitelist(path) == frozenset()
+        assert len(error_records(caplog)) == first, "同内容不该重复记"
+
+        # 依然是坏的，但内容变了（多了一条同样空 userid 的成员）
+        path.write_text(
+            "members:\n  - userid: ''\n    name: 汤丽萍\n    role: HR\n"
+            "  - userid: ''\n    name: 邵培申\n    role: 工具主人\n",
+            encoding="utf-8",
+        )
+        assert load_whitelist(path) == frozenset()
+        second = len(error_records(caplog))
+
+    assert second > first, "内容变了必须重新记一组 ERROR：" + caplog.text
+
+
+def test_dedup_does_not_downgrade_the_level(tmp_path, caplog):
+    """⛔ 裁决是"去重不降级"：记出来的仍然是 ERROR，不是 WARNING。"""
+    path = write_roster(tmp_path / "whitelist.yaml", [{"userid": "", "name": "汤", "role": "HR"}])
+    with caplog.at_level(logging.DEBUG):
+        assert load_whitelist(path) == frozenset()
+    levels = {r.levelno for r in caplog.records if "whitelist" in r.name}
+    assert levels == {logging.ERROR}, levels
+
+
+def test_dedup_caches_only_a_fingerprint_never_the_roster(tmp_path):
+    """⛔ 缓存的只能是指纹字符串。名单本身**绝不**缓存（spec 硬要求）。
+
+    两条判据：① 模块级去重状态是 `str | None`，不是集合/名单；
+    ② 无缓存不变式仍然成立——先成功加载一次让某人命中，删掉文件后立刻不命中。
+    """
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}],
+    )
+    assert admit("TangLiPing", path) is True
+    assert whitelist_module._LAST_LOGGED_FAILURE_FINGERPRINT is None
+
+    path.unlink()
+    assert admit("TangLiPing", path) is False
+    slot = whitelist_module._LAST_LOGGED_FAILURE_FINGERPRINT
+    assert isinstance(slot, str) and len(slot) == 64, slot
+    assert "TangLiPing" not in slot
+
+
+def test_a_clean_load_clears_the_dedup_slot(tmp_path, caplog):
+    """修好之后又改坏回同一份内容，必须重新报——否则真故障会被上一轮的指纹吞掉。"""
+    path = tmp_path / "whitelist.yaml"
+    broken = "members:\n  - userid: ''\n    name: 汤丽萍\n    role: HR\n"
+    good = "members:\n  - userid: TangLiPing\n    name: 汤丽萍\n    role: HR\n"
+
+    with caplog.at_level(logging.ERROR):
+        path.write_text(broken, encoding="utf-8")
+        assert load_whitelist(path) == frozenset()
+        first = len(error_records(caplog))
+        assert first
+
+        path.write_text(good, encoding="utf-8")
+        assert load_whitelist(path) == frozenset({"TangLiPing"})
+        assert whitelist_module._LAST_LOGGED_FAILURE_FINGERPRINT is None
+
+        path.write_text(broken, encoding="utf-8")
+        assert load_whitelist(path) == frozenset()
+
+    assert len(error_records(caplog)) > first, caplog.text
+
+
+def test_two_different_files_with_identical_bad_content_both_report(tmp_path, caplog):
+    """两个文件恰好写坏成同一份内容，是两个独立现场，⛔ 不许互相吞 ERROR。"""
+    content = "members:\n  - userid: ''\n    name: 汤丽萍\n    role: HR\n"
+    a, b = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    a.write_text(content, encoding="utf-8")
+    b.write_text(content, encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(a) == frozenset()
+        first = len(error_records(caplog))
+        assert load_whitelist(b) == frozenset()
+
+    assert len(error_records(caplog)) > first, caplog.text
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-16 ①：YAML 重复键 fail-closed 且点名键名
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_duplicate_top_level_members_key_is_rejected_not_last_wins(tmp_path, caplog):
+    """运维"再追加一段 `members:`"的现场：PyYAML 原生静默取后者，名单被整份替换。
+
+    ⛔ 不许 last-wins——那个失败**没有症状**（闸门看起来健康，人却换了一批）。
+    """
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        "members:\n  - userid: TangLiPing\n    name: 汤丽萍\n    role: HR AI 专员\n"
+        "members:\n  - userid: ShaoPeishen\n    name: 邵培申\n    role: 工具主人\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+
+    messages = [r.getMessage() for r in error_records(caplog)]
+    assert any("重复键" in m and "members" in m for m in messages), messages
+
+
+def test_duplicate_userid_key_inside_an_entry_is_rejected(tmp_path, caplog):
+    """条目内两个 `userid`：同样 fail-closed，并点名是哪个键。"""
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        "members:\n  - userid: TangLiPing\n    userid: ShaoPeishen\n"
+        "    name: 汤丽萍\n    role: HR AI 专员\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+
+    messages = [r.getMessage() for r in error_records(caplog)]
+    assert any("重复键" in m and "userid" in m for m in messages), messages
+
+
+def test_duplicate_key_error_does_not_leak_field_values(tmp_path, caplog):
+    """点名的是**键名**，⛔ 不是键值——与 `extra` / `top_level_extra` 两处同口径。"""
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        "members:\n  - userid: '13800138000'\n    userid: 'tangliping@zhuopin.com'\n"
+        "    name: 汤丽萍\n    role: HR AI 专员\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert "13800138000" not in caplog.text
+    assert "tangliping@zhuopin.com" not in caplog.text
+
+
+def test_a_roster_without_duplicate_keys_still_loads(tmp_path, caplog):
+    """重复键守卫不许误伤正常名单（两条成员各有自己的 `userid` 不是重复键）。"""
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [
+            {"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"},
+            {"userid": "ShaoPeishen", "name": "邵培申", "role": "工具主人"},
+        ],
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset({"TangLiPing", "ShaoPeishen"})
+    assert error_records(caplog) == []
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-16 ②：非 UTF-8 单列成一类，不再落"未预期异常"
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_non_utf8_file_is_reported_as_an_encoding_problem(tmp_path, caplog):
+    """GBK 存盘是运维在 Windows 上最容易犯的错，不该被报成内部异常。"""
+    path = tmp_path / "whitelist.yaml"
+    path.write_bytes(
+        "members:\n  - userid: TangLiPing\n    name: 汤丽萍\n    role: HR AI 专员\n".encode("gbk")
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+
+    messages = [r.getMessage() for r in error_records(caplog)]
+    assert any("不是 UTF-8 编码" in m for m in messages), messages
+    assert not any("未预期异常" in m for m in messages), messages
+
+
+def test_non_utf8_error_does_not_leak_file_content(tmp_path, caplog):
+    """⛔ 只记 encoding／偏移量／reason，不记 `str(exc)`，更不记 `exc.object`。"""
+    path = tmp_path / "whitelist.yaml"
+    path.write_bytes(
+        "members:\n  - userid: '13800138000'\n    name: 汤丽萍\n    role: HR\n".encode("gbk")
+    )
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(path) == frozenset()
+    assert "13800138000" not in caplog.text
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-16 ③：`path` 传 str 也要走正常分支，不落"未预期异常"
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_str_path_loads_like_a_path_object(tmp_path):
+    """第 4／5 章调用方传字符串是完全可能的——不该因此永久拒绝所有人。"""
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [{"userid": "TangLiPing", "name": "汤丽萍", "role": "HR AI 专员"}],
+    )
+    assert load_whitelist(str(path)) == frozenset({"TangLiPing"})
+    assert admit("TangLiPing", str(path)) is True
+
+
+def test_str_path_that_is_missing_reports_unreadable_not_unexpected(tmp_path, caplog):
+    """诊断必须落到"文件不可读"这一类，⛔ 不是"未预期异常"。"""
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist(str(tmp_path / "absent.yaml")) == frozenset()
+    messages = [r.getMessage() for r in error_records(caplog)]
+    assert any("不可读" in m for m in messages), messages
+    assert not any("未预期异常" in m for m in messages), messages

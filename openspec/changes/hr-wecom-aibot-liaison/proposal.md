@@ -34,7 +34,7 @@ HumanResource 是"企业AI转型"项目的部门模块之一。采购/财务/质
 - **新增目录**：`tools/liaison/`（服务代码、独立 `requirements.txt`、白名单配置）。
 - **新增运行时数据**：`data/liaison.db`（独立库，不与 `data/demo.db` 混用，理由见 design.md D5）、归档目录。`data/` 已在 `sync-to-server.sh:58` 的 `EXCLUDE_NAMES` 里，不会被同步。
 - **`.env` / `.env.example`**：新增 `HR_LIAISON_*` 配置项占位（占位符只写变量名，**不写任何真实凭据**）。
-- **不触碰**：`app/` 下任何模块（只被单向 import）、根 `requirements.txt`、`pyproject.toml`、`sync-to-server.sh`、`deploy-server.ps1`、`.51` 服务器上的任何东西。
+- **不触碰**：`app/` 下任何模块（只被单向 import）、根 `requirements.txt`、`sync-to-server.sh`、`deploy-server.ps1`、`.51` 服务器上的任何东西。`pyproject.toml`：⛔ 不往 `pyproject.toml` 添加任何依赖；`testpaths` 因 `tools/liaison/tests` 接入而新增一条。
 - **外部依赖**：`wecom-aibot-python-sdk`。⚠️ 已知风险：Windows 侧在用 v1.0.2，其文档未明确 Python 版本，按依赖链推断 3.8+；本项目 `requires-python = ">=3.14,<3.15"`。**SDK 在 Python 3.14 上的可安装性与可运行性必须在写业务代码之前先实测**，不兼容时的退路（按官方 WS 协议自建最小客户端）见 design.md D8。
 - **人**：Shao Peishen 需在企业微信管理后台注册新 aibot 并取得 BotID/Secret（账号级操作，无法代劳）；汤丽萍侧无需任何操作变更（继续在原群发消息即可）。
 

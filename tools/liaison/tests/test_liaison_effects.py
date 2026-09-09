@@ -123,31 +123,104 @@ def test_liaison_does_not_import_product_db_layer():
 _TRANSACTION_BOUNDARY_ATTRS = ("commit", "rollback", "executescript")
 
 
-#: 已知与数据库无关的上下文管理器（TD-18 的还债形态）。
-#: ⚠️ 这是一份**正面白名单**：只放行这里逐条列出的被调用者，其余 `with <Call>:`
-#: 一律照旧判违规。⛔ 绝不许退化成"只对名字里含 conn 的表达式判违规"——
-#: 那会重新打开 `with self._conn:` 的口子，而那个口子**没有症状**。
+# ─────────────────────────────────────────────────────────────────────────
+# TD-18：`with <Call>:` 的判据细化
+#
+# 🔴 细化的**只有 `ast.Call` 这一格**。`ast.Name`（`with conn:`）与
+# `ast.Attribute`（`with self._conn:`）**仍然无条件判违规**——⛔ 绝不许退回
+# "只认裸局部名"，`with self._conn:` 的口子**没有症状**（effect_log 与业务表
+# 静默劈叉，正是 .51 2026-08-10／08-12 丢 outbox 的失败模式）。
+# `test_scanner_catches_with_self_conn_attribute` 是这条的证伪测试，必须常绿。
+#
+# 判定顺序（先命中先定）：
+#   1. 名字命中 _CONNECTIONISH_TOKENS 或 _KNOWN_CONNECTION_CALLEES → 违规
+#   2. 命中非 DB 白名单（逐条全名 or 模块族）→ 放行
+#   3. 其余（名字判不出来的陌生被调用者）→ **仍判违规**
+# 第 1 步排在第 2 步前面是刻意的：`contextlib.closing(conn)` 属于
+# `contextlib.*` 却货真价实地管着一个连接，⛔ 不许被模块族白名单捞走。
+#
+# ⚠️ 第 3 步是相对 TD-18 opener 字面要求（"只在名字含 conn/... 时判违规"）
+# 的一处**收紧偏离**，刻意为之：那样写会让 `with pool.acquire():`
+# 这类名字里没有词根的陌生连接**静默通过**，而 tech-debt TD-18 原文
+# 的落款是"宁可留误报，⛔ 不许退回窄化"。这里两头都要：
+# opener 逐条点名的 open / contextlib.* / tempfile.* / suppress /
+# TemporaryDirectory 全部放行（TD-18 的真实痛点已消），陌生被调用者仍然会红
+# ——而那个失败是**响亮的**（一条可见的测试失败 + 一行白名单即可解决），
+# 反过来漏判则**没有症状**。
+# ─────────────────────────────────────────────────────────────────────────
+
+#: 被调用者名字里出现这些词根（不分大小写）即判违规：`get_connection()`、
+#: `engine.begin()`、`new_transaction()`、`db.connect()` 都会被抓。
+_CONNECTIONISH_TOKENS = ("conn", "connect", "transaction", "begin")
+
+#: 已知的连接／事务符号：名字里没有上面那些词根，但确实管着一个连接或事务。
+#: ⛔ 只增不删——删一条就是打开一个无症状的口子。
+_KNOWN_CONNECTION_CALLEES = frozenset(
+    {
+        "closing",
+        "contextlib.closing",
+        "atomic",
+        "savepoint",
+        "cursor",
+        "sqlite3.Connection",
+        "session",
+        "Session",
+    }
+)
+
+#: 已知与数据库无关的上下文管理器：逐条全名。
 #: ⛔ 往这份名单里加东西之前先确认：它绝不可能是一个 sqlite3 连接。
 _NON_DB_CONTEXT_CALLEES = frozenset(
     {
         "open",
         "os.fdopen",
         "io.open",
+        "suppress",
         "contextlib.suppress",
+        "NamedTemporaryFile",
+        "TemporaryDirectory",
         "tempfile.NamedTemporaryFile",
         "tempfile.TemporaryDirectory",
     }
 )
 
+#: 整个模块族都与数据库无关，`<module>.<任何东西>(...)` 一律放行。
+#: 例外由上面第 1 步兜住（`contextlib.closing` 先被判违规，走不到这里）。
+_NON_DB_CONTEXT_MODULES = ("contextlib.", "tempfile.")
+
+
+def _callee_name(func: ast.AST) -> str | None:
+    # 取点号全名（`os.fdopen` 而不是只看 `fdopen`），拿不到就返回 None
+    # ——⛔ None 一律按"抓"处理，不确定的时候宁可误报。
+    try:
+        return ast.unparse(func)
+    except Exception:
+        return None
+
+
+def _is_connection_like_call(func: ast.AST) -> bool:
+    name = _callee_name(func)
+    if name is None:
+        return True  # 判不出来就当成连接：宁可误报，不许静默放行
+    if name in _KNOWN_CONNECTION_CALLEES:
+        return True
+    return any(token in name.lower() for token in _CONNECTIONISH_TOKENS)
+
 
 def _is_known_non_db_context(func: ast.AST) -> bool:
-    # `with <callee>(...)` 的 callee 是否在正面白名单里。
-    # 用 `ast.unparse` 取点号全名（`os.fdopen` 而不是只看 `fdopen`），
-    # 这样 `with fdopen(...)`（来路不明的裸名）不会被误放行。
-    try:
-        return ast.unparse(func) in _NON_DB_CONTEXT_CALLEES
-    except Exception:
+    name = _callee_name(func)
+    if name is None:
         return False
+    if name in _NON_DB_CONTEXT_CALLEES:
+        return True
+    return name.startswith(_NON_DB_CONTEXT_MODULES)
+
+
+def _with_call_is_a_violation(func: ast.AST) -> bool:
+    """`with <callee>(...)` 是否算"第二个事务管理者"。见上方判定顺序。"""
+    if _is_connection_like_call(func):
+        return True
+    return not _is_known_non_db_context(func)
 
 
 def _scan_transaction_violations(
@@ -191,7 +264,7 @@ def _scan_transaction_violations(
                 # 第 3–5 章的服务对象几乎必然把连接挂成属性，只认 `ast.Name`
                 # 在那里是瞎的）、以及 `ast.Call`（如 `with get_connection() as c:`，
                 # Important 1 原文允许不处理，但覆盖成本低就顺手覆盖了）都要抓。
-                if isinstance(expr, ast.Call) and _is_known_non_db_context(expr.func):
+                if isinstance(expr, ast.Call) and not _with_call_is_a_violation(expr.func):
                     continue
                 if isinstance(expr, (ast.Name, ast.Attribute, ast.Call)):
                     scope = scope_name(func_stack)
@@ -1002,3 +1075,85 @@ def test_constraint_violation_in_archive_write_leaves_no_trace(conn):
     assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 1
     assert_effect_log_identity(conn)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-18：`with <Call>:` 判据细化后的两侧证据
+#   放行侧——与数据库无关的上下文管理器不再误报
+#   证伪侧——`with self._conn:` 与连接样调用必须仍然红
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        'with open("x.txt", encoding="utf-8") as f:',
+        'with io.open("x.txt") as f:',
+        "with os.fdopen(fd) as f:",
+        "with contextlib.suppress(OSError):",
+        "with suppress(OSError):",
+        "with tempfile.TemporaryDirectory() as d:",
+        "with TemporaryDirectory() as d:",
+        "with tempfile.NamedTemporaryFile() as f:",
+        "with NamedTemporaryFile() as f:",
+        "with contextlib.ExitStack() as stack:",
+    ],
+)
+def test_scanner_allows_non_db_context_managers(stmt):
+    """TD-18 的还债正题：第 3–5 章写这些与数据库无关的 `with` 不该变红。"""
+    source = f"""
+def handle(payload):
+    {stmt}
+        pass
+"""
+    offenders = _scan_transaction_violations(source, "fake_non_db.py", allowlist=set())
+    assert offenders == [], offenders
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        "with self._conn:",
+        "with self.conn:",
+        "with conn:",
+        "async with conn:",
+        "with get_connection() as c:",
+        "with db.connect() as c:",
+        "with engine.begin() as c:",
+        "with new_transaction() as t:",
+        "with GetConnection() as c:",
+        "with contextlib.closing(conn) as c:",
+        "with closing(conn) as c:",
+    ],
+)
+def test_scanner_still_catches_connection_shaped_context_managers(stmt):
+    """🔴 证伪：细化判据之后，连接／事务形态**一条都不许漏**。
+
+    ⛔ 这条参数表只增不删。`with self._conn:` 那一格尤其不许动——它是 TD-18
+    原文点名"⛔ 不许退回窄化"要守的那个口子，漏了它**没有任何症状**
+    （effect_log 与业务表静默劈叉，正是 .51 2026-08-10／08-12 丢 outbox 的形态）。
+    `contextlib.closing(conn)` 一格证明"连接样"判据压在模块族白名单**之前**。
+    """
+    prefix = "async def" if stmt.startswith("async with") else "def"
+    source = f"""
+{prefix} handle(conn, payload):
+    {stmt}
+        pass
+"""
+    offenders = _scan_transaction_violations(source, "fake_conn.py", allowlist=set())
+    assert offenders, f"扫描器必须仍然抓到 `{stmt}`"
+
+
+def test_scanner_still_catches_unknown_callees_by_default():
+    """陌生被调用者仍然判违规——⛔ 不许"名字里没有 conn 就放行"。
+
+    `with pool.acquire():` 名字里一个词根都没有，却完全可能是一个连接。
+    漏判没有症状；误判是一条响亮的测试失败，加一行白名单即可。
+    """
+    source = """
+def handle(pool):
+    with pool.acquire() as c:
+        c.execute("insert into liaison_task values (1)")
+"""
+    offenders = _scan_transaction_violations(source, "fake_unknown.py", allowlist=set())
+    assert offenders, "陌生被调用者应当保持默认判违规"

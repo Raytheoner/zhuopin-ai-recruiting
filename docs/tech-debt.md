@@ -540,7 +540,7 @@ discard_thread_checkpoints(graph.checkpointer, job_id)   # 删 checkpoints / wri
 而不是那句"没听懂是不是用人需求，可以试试…"，而**日志里不会有任何东西说明
 引导语其实已经生成过、只是连同 outbox 行一起被删了**。
 
-## TD-14 · `hr-wecom-aibot-liaison` 的 proposal「不触碰 pyproject.toml」与实现已不符
+## ~~TD-14~~ · `hr-wecom-aibot-liaison` 的 proposal「不触碰 pyproject.toml」与实现已不符 ✅ 已还
 
 **欠的是什么**：`openspec/changes/hr-wecom-aibot-liaison/proposal.md:37` 的「Impact ·
 不触碰」把 `pyproject.toml` 整份列为不触碰。但第 1 章（2026-09-08 落地）**改了它的
@@ -560,9 +560,15 @@ discard_thread_checkpoints(graph.checkpointer, job_id)   # 删 checkpoints / wri
 要么白白花一轮去"修"它，要么把 `tools/liaison/tests` 从 `testpaths` 摘掉——而摘掉的后果
 是静默的：不报错、不失败，只是本服务的 28 条测试从此没人跑。
 
+**已还**（2026-09-09 `[Mac]0909O`，轻量通道）：`proposal.md:37` 那一行把 `pyproject.toml`
+从「不触碰」清单里摘出来单列，订正为「⛔ 不往 `pyproject.toml` 添加任何依赖；`testpaths`
+因 `tools/liaison/tests` 接入而新增一条」。**只改了这一行**，`git diff` 为 1 insertion /
+1 deletion。挡依赖的判据没有放松：`test_no_liaison_dependency_leaked_into_pyproject`
+原样守着 `[project].dependencies`。
+
 ---
 
-## TD-15 · 准入名单出厂态下每条消息刷 3 条 ERROR 日志
+## ~~TD-15~~ · 准入名单出厂态下每条消息刷 3 条 ERROR 日志 ✅ 已还
 
 **欠的是什么**：`tools/liaison/whitelist.py` 的出厂态（`config/whitelist.yaml` 两条 `userid`
 留空，真实企微 userid 尚未取得）下，每次 `load_whitelist()` **必然**产生 3 条 ERROR
@@ -581,7 +587,28 @@ userid 填入使出厂态消失时复核一次）。
 而 `whitelist.py` 里真正的合规漏洞（如已修的 C1 值泄漏、I2 顶层字段静默忽略）
 恰恰也是靠 ERROR 日志暴露的。**噪声把唯一的告警通道淹掉**，真故障将无人察觉。
 
-## TD-16 · 终审延后的四条 Minor（准入名单）
+**已还**（2026-09-09 `[Mac]0909O`，轻量通道。裁决＝**去重不降级**，Shao Peishen 第十四批认可）：
+`whitelist.py` 新增 `_FailureLog`，把全部 `logger.error` 收口成 `failures.error`，按
+**名单文件内容的 SHA-256**（前面拼路径，见下）去重——同一份内容连续失败只记**一组**，
+内容一变重新记一组。⛔ 未降级：记出来的仍是 `ERROR`（`test_dedup_does_not_downgrade_the_level`）。
+⛔ 未缓存名单：全局状态只有 `_LAST_LOGGED_FAILURE_FINGERPRINT` 这**一个 64 字符十六进制串**，
+判定路径每次仍完整重读重解析（`test_dedup_caches_only_a_fingerprint_never_the_roster`
+＋原有的 `test_admit_rereads_the_file_on_every_call` 双守）。
+契约「任何失败都记 ERROR」原样成立：同一轮里的兄弟 ERROR ⛔ 不许互相吞——去重判据在
+`_FailureLog` **构造时**快照上一轮指纹，全局只在 `finish()` 更新一次
+（`test_error_group_covers_every_distinct_failure_before_dedup_kicks_in` 断言出厂态那组
+仍是 2 条「userid 为空」+ 1 条「零条有效条目」）。成功加载会清空指纹槽，
+所以「修好→又改坏回同一份内容」会重新报。
+
+**两处刻意的收紧**（都比 opener 字面要求更严，登记备查）：
+1. 指纹 = `sha256(repr(path) + 文件内容)` 而不是只含内容。两个不同文件恰好写坏成同一份内容
+   是两个独立现场，⛔ 不该互相吞 ERROR（`test_two_different_files_with_identical_bad_content_both_report`）。
+   生产上只有一份 `DEFAULT_WHITELIST_PATH`，对去重效果零差别。
+2. 每输出一组 ERROR，组尾补一行「以上准入名单失败按文件内容去重…」。
+   ⚠️ 否则运维看见 3 条 ERROR 之后突然安静，会误以为问题自己好了——
+   **日志安静不等于修好了**，这一行是唯一的提示。`config/README.md` 同步写进了失败面表。
+
+## ~~TD-16~~ · 终审延后的四条 Minor（准入名单）✅ 已还
 
 2026-09-08 交付单元 3 终审记录、当次未改：
 
@@ -597,6 +624,27 @@ userid 填入使出厂态消失时复核一次）。
 
 **触发条件**：第 4／5 章接线时一并处理（第 3 条尤其影响调用方）；第 4 条可随时补。
 **不还的后果**：1 与 4 都是**静默**失败——名单被改小或全员被拒，而闸门看起来健康。
+
+**已还**（2026-09-09 `[Mac]0909O`，轻量通道，四条一并）：
+
+1. **YAML 重复键 fail-closed**：新增 `_NoDuplicateKeySafeLoader`（`yaml.SafeLoader` 子类，
+   安全性不变——`test_yaml_python_tags_are_not_constructed` 常绿），构造映射前先自己扫一遍
+   键，撞重复即抛 `_DuplicateKeyError`；`_read_roster` 单开一条分支记 ERROR 并**点名键名 +
+   行列号**。⛔ 只记键名不记值，与 `extra` / `top_level_extra` 两处同口径
+   （`test_duplicate_key_error_does_not_leak_field_values`）。
+2. **非 UTF-8 单列一类**：`read_text` 换成 `read_bytes` + 显式 `decode("utf-8")`，
+   `UnicodeDecodeError` 单开分支，日志说「不是 UTF-8 编码（另存为 UTF-8 无 BOM 即可）」
+   并只带 `encoding` / 字节偏移量 / `reason` 三个定长元信息——⛔ 不记 `str(exc)`、
+   更不记 `exc.object`（那是文件内容）。不再落「未预期异常」。
+3. **`_read_roster` 顶部 `path = Path(path)`**：调用方传 `str` 现在走正常分支，
+   诊断落到「文件不可读」而不是「未预期异常」（`test_str_path_*` 两条）。
+4. **`config/README.md` 补「⚠️ 失败面」段**：六类失败 × 典型现场 × 日志里会说什么的表，
+   点明「改坏了也是立刻生效」「唯一提示是 ERROR 日志」「⛔ 不要以为没报错就是好了」，
+   并单独警告重复键的静默 last-wins 与 TD-15 的去重语义。
+
+**验证**：`tools/liaison/tests/test_whitelist.py` 新增 15 条（TD-15 七条 + TD-16 八条），
+全文件 61 passed。逐条证伪过：把 `whitelist.py` 换回改前版本再跑，这 15 条里有 9 条变红
+（三条 TD-16 判据 + TD-15 去重），其余 6 条是防回归的常绿守卫。
 ## ~~TD-17~~ · `app/outbound/delivery.py:12` 的非法转义序列 SyntaxWarning ✅ 已还
 
 **2026-09-08 已处置（`0908U`，轻量通道）**：按下方登记的第一种改法，把该模块的
@@ -658,6 +706,38 @@ userid 填入使出厂态消失时复核一次）。
 正面白名单，放行 `open` / `os.fdopen` / `io.open` / `contextlib.suppress` /
 `tempfile.NamedTemporaryFile` / `tempfile.TemporaryDirectory`。⛔ 未窄化判据——
 `with self._conn:` 与 `with get_connection():` 仍被抓，9 条 `test_scanner_*` 全绿。
+
+**已还（第二轮细化，2026-09-09 `[Mac]0909O` 轻量通道）**：第一轮的正面白名单只放行 6 个
+**逐条全名**，`with suppress(...)`（裸名导入）、`with TemporaryDirectory():`、
+`with contextlib.ExitStack():` 这些照样误报（实测：还原成第一轮实现后，新增的
+`test_scanner_allows_non_db_context_managers` 10 格里有 4 格红）。本轮把 `ast.Call`
+这一格拆成三步判据：
+
+1. 名字含 `conn` / `connect` / `transaction` / `begin`（**不分大小写**），或命中
+   `_KNOWN_CONNECTION_CALLEES`（`closing` / `atomic` / `savepoint` / `cursor` /
+   `Session` …）→ **违规**；
+2. 命中非 DB 白名单——逐条全名，**或模块族** `contextlib.*` / `tempfile.*` → 放行；
+3. 其余陌生被调用者 → **仍判违规**。
+
+第 1 步压在第 2 步**前面**是刻意的：`contextlib.closing(conn)` 属于 `contextlib.*`
+却货真价实管着一个连接，⛔ 不许被模块族白名单捞走。
+
+🔴 **`ast.Name` / `ast.Attribute` 两格一个字没动，仍然无条件判违规**——本条原文
+⛔ 的那种"退回只认裸局部名"没有发生。实测证伪：把 `isinstance(expr, (Name, Attribute, Call))`
+改回 `isinstance(expr, ast.Name)`，**12 条测试当场变红**（含
+`test_scanner_catches_with_self_conn_attribute` 与新增参数表里的 `with self._conn:`）。
+
+⚠️ **第 3 步是相对本轮 opener 字面要求的一处收紧偏离**，刻意为之并登记：opener 写的是
+"只在名字含 conn/… 时判违规"，照字面写会让 `with pool.acquire():` 这类名字里一个词根都
+没有的陌生连接**静默通过**——而本条原文的落款正是"宁可留误报，⛔ 不许退回窄化"。
+实测证伪：把第 3 步改成放行，`test_scanner_still_catches_unknown_callees_by_default` 变红。
+opener 逐条点名要放行的 `open` / `contextlib.*` / `tempfile.*` / `suppress` /
+`TemporaryDirectory` 全部已放行，**TD-18 的真实痛点已消**；留下的误报面是响亮的
+（一条可见的测试失败 + 往白名单加一行即解），漏判则**没有症状**。
+
+新增 `test_scanner_allows_non_db_context_managers`（10 格）、
+`test_scanner_still_catches_connection_shaped_context_managers`（11 格证伪）、
+`test_scanner_still_catches_unknown_callees_by_default`。`test_liaison_effects.py` 55 passed。
 
 ## TD-19 · 真实建连尚未适配——`make_sdk_connect` 对协程 `connect` 表面按"未验即拒绝启动"处理
 
