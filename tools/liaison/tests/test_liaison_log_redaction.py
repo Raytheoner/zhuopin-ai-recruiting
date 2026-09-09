@@ -51,10 +51,16 @@ def test_protects_the_keys_but_still_redacts_the_rest_of_the_same_line():
 
 
 def test_protects_quoted_and_empty_key_values():
-    """`msgid='...'` 与 `thread_id=`（空值）两种渲染形态都要认。"""
-    text = "msgid='13800001111' thread_id= 邮件 a.b@example.com"
+    """`msgid='...'` 与 `thread_id=`（空值）两种渲染形态都要认；空值情形只能保护到
+    分隔符为止，⛔ 不能连着空白之后的下一个 token 一起吃掉——否则那个 token 若
+    恰好是手机号/邮箱，就会连同保护段一起明文漏出（round-1 fix-round 修的洞）。
+    """
+    text = "msgid='13800001111' thread_id= 13900002222 邮件 a.b@example.com"
     out = logsetup.compute_redacted_text(text)
     assert "msgid='13800001111'" in out
+    assert "thread_id=" in out
+    assert "13900002222" not in out
+    assert logsetup.PHONE_MASK in out
     assert "a.b@example.com" not in out
 
 
@@ -67,3 +73,123 @@ def test_redaction_is_idempotent():
 
 def test_empty_text_is_returned_unchanged():
     assert logsetup.compute_redacted_text("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Round-1 fix-round：reviewer 用真实调用点渲染形态证伪了三处明文漏出，规则见
+# `docs/findings/`（协调者裁决：CLAUDE.md 合规红线优先于 brief 逐字正则，且只许
+# 往"更多脱敏"方向纠偏）。以下用例逐条对应裁决消息里的回归输入。
+# ---------------------------------------------------------------------------
+
+
+def test_empty_valued_key_does_not_swallow_the_next_token_across_a_space():
+    """Important 1 例 1：`thread_id= ` 后隔一个空格的手机号不许被当成取值吞掉。"""
+    text = "thread_id= 13812345678"
+    out = logsetup.compute_redacted_text(text)
+    assert "thread_id=" in out
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out
+
+
+def test_empty_valued_msgid_does_not_swallow_a_following_email():
+    """Important 1 例 2：`msgid= ` 后隔一个空格的邮箱同理。"""
+    text = "msgid= zhang.san@example.com"
+    out = logsetup.compute_redacted_text(text)
+    assert "msgid=" in out
+    assert "zhang.san@example.com" not in out
+    assert logsetup.EMAIL_MASK in out
+
+
+def test_empty_valued_msgid_with_colon_does_not_swallow_a_credential():
+    """Important 1 例 3：`msgid: ` 后隔一个空格的凭据同理，且凭据本身要按凭据规则打码。"""
+    text = "msgid: HR_LIAISON_BOT_SECRET=sekrit"
+    out = logsetup.compute_redacted_text(text)
+    assert "msgid:" in out
+    assert "sekrit" not in out
+    assert logsetup.SECRET_MASK in out
+    assert "HR_LIAISON_BOT_SECRET" in out
+
+
+def test_protected_bare_value_stops_at_ampersand_not_swallowing_next_pair():
+    """Important 1 例 4：`thread_id=wm001&mobile=...` 里 `&` 之后是另一个键值对，
+    ⛔ 不许被当成 thread_id 取值的一部分一起保护起来。"""
+    text = "thread_id=wm001&mobile=13812345678"
+    out = logsetup.compute_redacted_text(text)
+    assert "thread_id=wm001" in out
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out
+
+
+def test_empty_valued_key_followed_by_newline_does_not_protect_next_line():
+    """Important 1 附加例：`\\s` 含 `\\n`，`thread_id=` 后换行的下一行同样不许被吞。"""
+    text = "thread_id=\n13812345678"
+    out = logsetup.compute_redacted_text(text)
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out
+
+
+def test_credential_value_redacted_when_key_is_double_quoted_json_style():
+    """Important 2 例 1：`logger.debug("config=%r", cfg)` 打印出来的 JSON 渲染。"""
+    text = '{"LLM_API_KEY": "sk-abc123"}'
+    out = logsetup.compute_redacted_text(text)
+    assert "sk-abc123" not in out
+    assert logsetup.SECRET_MASK in out
+    assert "LLM_API_KEY" in out
+
+
+def test_credential_value_redacted_when_key_is_single_quoted_dict_repr():
+    """Important 2 例 2：Python dict repr 渲染，键值都带单引号。"""
+    text = "config={'HR_LIAISON_BOT_SECRET': 'super-sekrit'}"
+    out = logsetup.compute_redacted_text(text)
+    assert "super-sekrit" not in out
+    assert logsetup.SECRET_MASK in out
+    assert "HR_LIAISON_BOT_SECRET" in out
+
+
+def test_credential_value_redacted_with_arrow_rendering():
+    """Important 2 例 3：人工排障口语化的 `->` 渲染，不是 `=`/`:`。"""
+    text = "os.environ HR_LIAISON_BOT_SECRET -> super-sekrit"
+    out = logsetup.compute_redacted_text(text)
+    assert "super-sekrit" not in out
+    assert logsetup.SECRET_MASK in out
+    assert "HR_LIAISON_BOT_SECRET" in out
+
+
+def test_mobile_with_plus86_prefix_is_masked_with_and_without_separator():
+    """Important 4 例 1：`+86 ` 带空格与 `+86` 无分隔符连写两种渲染都要打码。"""
+    text = "请联系 +86 13812345678 或 +8613812345678"
+    out = logsetup.compute_redacted_text(text)
+    assert "13812345678" not in out
+    assert out.count(logsetup.PHONE_MASK) == 2
+
+
+def test_mobile_with_0086_prefix_is_masked():
+    """Important 4 例 2：`0086` 前缀连写（`tel:008613812345678`）。"""
+    text = "tel:008613812345678"
+    out = logsetup.compute_redacted_text(text)
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out
+
+
+def test_epoch_millis_and_long_digit_runs_still_not_masked():
+    """Important 4 护栏回归：修 +86 前缀不能连带误伤时间戳/字节数——13 位毫秒级
+    时间戳与 15 位连续数字串，两者都不含手机号/身份证形态，必须原样保留。"""
+    text = "ts=1694209999123 size=123456789012345 bytes"
+    assert logsetup.compute_redacted_text(text) == text
+
+
+def test_sender_userid_is_not_a_protected_key_and_still_gets_masked():
+    """`sender_userid` 明确不在 `PROTECTED_KEYS` 里，取值该打码照样打码。"""
+    text = "sender_userid=13812345678"
+    out = logsetup.compute_redacted_text(text)
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out
+
+
+def test_parent_thread_id_does_not_match_the_protected_thread_id_key():
+    """`parent_thread_id` 里的 `thread_id` 前面紧贴着 `_`（词字符），`\\b` 不成立，
+    不会被误当成受保护的 `thread_id` 键，取值该打码照样打码。"""
+    text = "parent_thread_id=13812345678"
+    out = logsetup.compute_redacted_text(text)
+    assert "13812345678" not in out
+    assert logsetup.PHONE_MASK in out

@@ -77,20 +77,41 @@ IDCARD_MASK = "<redacted:idcard>"
 PROTECTED_KEYS: tuple[str, ...] = ("msgid", "thread_id")
 
 #: 保护段：`msgid=…` / `thread_id=…`（也认 `: `）整段原样保留。
-#: 值的四种形态按顺序尝试：单引号串、双引号串、裸值（吃到下一个空白/逗号/分号/
-#: 右括号为止）、空值（`thread_id=` 后面什么都没有）。⛔ 不处理嵌套结构——日志里
-#: 这两个键从来都是标量。
+#: 值的三种形态按顺序尝试：单引号串、双引号串（引号本身就是无歧义的取值边界，
+#: 前面允许空白）、裸值（**必须紧贴分隔符**，中间不许有空白）；都不中就落到空值
+#: 分支，只保护到分隔符为止。⛔ 不处理嵌套结构——日志里这两个键从来都是标量。
+#:
+#: Round-1 fix-round 修订（reviewer 抓出的两处出血，均只在"更多脱敏"方向纠偏，
+#: 不扩大 `PROTECTED_KEYS` 的豁免面）：
+#: 1) 旧版在分隔符与裸值之间也放了 `\s*`，导致 `thread_id= ` 后面隔一个空白的
+#:    下一个 token（哪怕是手机号/邮箱/凭据）被当成"取值"一起原样保留、明文漏出；
+#:    `\s` 含 `\n`，连换行后的下一行都会被吃进去。现在裸值分支不允许前导空白，
+#:    宁可落到空值分支，也不猜一个不存在的取值。
+#: 2) 旧版裸值的终止符集合 `[\s,;)\]}]` 漏了 `&`、`/`、`:`、`=`，导致
+#:    `thread_id=wm001&mobile=13812345678` 这类"取值后面紧跟下一个键值对"的渲染，
+#:    会把 `&mobile=13812345678` 也一起吞进保护段。现在补齐这四个终止符。
 _PROTECTED_SPAN_RE = re.compile(
-    r"\b(?:" + "|".join(PROTECTED_KEYS) + r")\b\s*[=:]\s*"
-    r"(?:'[^']*'|\"[^\"]*\"|[^\s,;)\]}]*)"
+    r"\b(?:" + "|".join(PROTECTED_KEYS) + r")\b\s*[=:]"
+    r"(?:\s*'[^']*'"
+    r"|\s*\"[^\"]*\""
+    r"|[^\s,;)\]}&/:=]+"
+    r"|)"
 )
 
 #: 凭据取值：键名保留（排障要知道是哪一项没配好），取值一律打码。
 #: 覆盖 `HR_LIAISON_*` 与 `LLM_*` 两族（opener 约束 2 逐字）。
 #: ⚠️ 这会连 `HR_LIAISON_LOG_DIR=/x/y` 的路径也一起打掉——刻意如此：按前缀一刀切
 #: 才不需要维护一份「哪些 HR_LIAISON_* 是秘密」的名单，而那种名单必然漏。
+#:
+#: Round-1 fix-round 修订：键名两侧允许一个可选、且必须成对匹配的引号
+#: （`(?P<q>['"]?)…(?P=q)`）——`logger.debug("config=%r", cfg)` 这类调用点会把
+#: dict/JSON 原样打印出来，键名天然带引号（`"LLM_API_KEY": …`、
+#: `'HR_LIAISON_BOT_SECRET': …`），旧版要求分隔符紧跟裸键名，遇到引号整条失配、
+#: 取值明文漏出。分隔符另外接受 `->`（`os.environ HR_LIAISON_BOT_SECRET -> value`
+#: 这类人工排障时的口语化渲染）。
 _CREDENTIAL_RE = re.compile(
-    r"\b((?:HR_LIAISON|LLM)_[A-Z0-9_]+)(\s*[=:]\s*)"
+    r"(?P<q>['\"]?)\b(?P<key>(?:HR_LIAISON|LLM)_[A-Z0-9_]+)\b(?P=q)"
+    r"(?P<sep>\s*(?:->|[=:])\s*)"
     r"(?:'[^']*'|\"[^\"]*\"|[^\s,;)\]}]+)"
 )
 
@@ -105,6 +126,13 @@ _CREDENTIAL_RE = re.compile(
 #: ⛔ **刻意不做 15 位旧版身份证**：15 位纯数字与时间戳、SDK 序号、字节数撞得太厉害，
 #: 加进来会把大量无害数字打成 `<redacted:idcard>`，让日志读不懂。旧版身份证在本服务
 #: 的场景（在职员工与候选人）里已基本绝迹。⛔ 不要"顺手补上"。
+#:
+#: Round-1 fix-round 修订：手机号规则补上可选的国际区号前缀
+#: `(?:\+?0?0?86[- ]?)?`，覆盖 `+8613812345678`（区号与号码无分隔符连写）与
+#: `008613812345678`。旧版 `(?<!\d)` 护栏挂在 11 位号码本身前面，遇到区号紧贴
+#: （紧邻字符是数字 `6`）就直接失配；现在护栏挪到区号前面，区号作为匹配的一部分
+#: 一并打码。时间戳/字节数的护栏效果不变——纯数字串里 `(?<!\d)` 只在串首成立，
+#: 区号候选组不匹配时退化为空，不改变这一点。
 _VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), EMAIL_MASK),
     (
@@ -114,7 +142,10 @@ _VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         IDCARD_MASK,
     ),
-    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), PHONE_MASK),
+    (
+        re.compile(r"(?<!\d)(?:\+?0?0?86[- ]?)?1[3-9]\d{9}(?!\d)"),
+        PHONE_MASK,
+    ),
 )
 
 
@@ -123,7 +154,7 @@ def _redact_free_span(span: str) -> str:
     `compute_redacted_text` 里，绕过那一步就会把 `thread_id` 一起打码。"""
     if not span:
         return span
-    span = _CREDENTIAL_RE.sub(r"\1\2" + SECRET_MASK, span)
+    span = _CREDENTIAL_RE.sub(r"\g<q>\g<key>\g<q>\g<sep>" + SECRET_MASK, span)
     for pattern, mask in _VALUE_PATTERNS:
         span = pattern.sub(mask, span)
     return span
