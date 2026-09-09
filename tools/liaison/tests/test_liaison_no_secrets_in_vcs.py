@@ -20,9 +20,13 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 CREDENTIAL_ENV_NAMES = (
     "HR_LIAISON_BOT_ID",
     "HR_LIAISON_BOT_SECRET",
-    # 第 6 章（群通知外发）会用到，提前纳入扫描面：等到那一章再加，
-    # 中间这段时间里它是没人守的。
+    # 第 6 章（群通知外发）真正落地时定的变量名是 HR_LIAISON_GROUP_WEBHOOK。
+    # ⚠️ 带 _URL 后缀的旧名同时留在扫描面里，⛔ 不要"顺手清掉"——第 2 章预留时
+    # 用的是它，草稿与历史文档里可能已经写下过那个名字，删掉等于把那些行放生。
+    # ⚠️ 顺序有讲究：长名在前。正则是最左匹配，短名在前时
+    # 那个带 _URL 后缀的赋值要靠回溯才匹得上——匹得上，但读起来像 bug。
     "HR_LIAISON_GROUP_WEBHOOK_URL",
+    "HR_LIAISON_GROUP_WEBHOOK",
 )
 
 _ASSIGNMENT = re.compile(
@@ -115,7 +119,10 @@ def test_no_tracked_file_contains_a_wecom_webhook_url():
     assert not offenders, f"受版本管理的文件里出现了企微 webhook 完整地址: {offenders}"
 
 
-@pytest.mark.parametrize("name", ("HR_LIAISON_BOT_ID", "HR_LIAISON_BOT_SECRET"))
+@pytest.mark.parametrize(
+    "name",
+    ("HR_LIAISON_BOT_ID", "HR_LIAISON_BOT_SECRET", "HR_LIAISON_GROUP_WEBHOOK"),
+)
 def test_env_example_declares_the_placeholder_with_empty_value(name):
     """占位必须在 .env.example 里就位，且取值为空。
 

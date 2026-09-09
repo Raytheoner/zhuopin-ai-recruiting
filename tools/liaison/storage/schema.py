@@ -122,5 +122,56 @@ CREATE INDEX IF NOT EXISTS idx_liaison_outage_open
     ON liaison_outage_window (recovered_at, started_at);
 """
 
+#: 第 6 章·群通知台账。**一次通知恰好一行**，三种终局共用同一张表。
+#:
+#: ⛔ 不要拆成"成功表 + 待重发表"：拆开之后铁律 1 的恒等式
+#: 「`effect_log` 条数 == 业务表行数」就跨了两张表，需要求和才成立；等式一旦需要
+#: 求和，下一次有人加第四种终局时它会因为一个完全正当的理由变红，而那时最顺手的
+#: "修法"就是削弱等式本身。
+#:
+#: 主键是 **(thread_id, 内容摘要)** 复合键——与幂等键
+#: `{thread_id}:effect_send_group_notify:{digest}` **同域**。
+#:
+#: ⛔ 不要退回成 `digest TEXT PRIMARY KEY`：那样结构防线是全表唯一、机制防线按
+#: thread 分域，两道防线口径不一致。后果不是"多挡一次"而是真丢账：同内容换一个
+#: thread_id 再来时，幂等预检不命中 ⇒ `deliver()` **真的把消息发进群** ⇒ INSERT
+#: 撞主键 ⇒ 整个事务回滚 ⇒ 群里多一条通知，而台账与 effect_log 各 0 行。恒等式
+#: 因为 `0 == 0` 仍然是绿的，机器判据抓不到——正是本章要消灭的那类谎。
+#: tests/test_notify_store.py::test_same_content_on_two_threads_each_writes_its_own_row
+#: 守着这条。
+GROUP_NOTIFY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS liaison_group_notify (
+    digest TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    -- 通道名。两条通道阈值独立（D9），台账里也要能分得出这行是哪条通道发的。
+    channel TEXT NOT NULL,
+    state TEXT NOT NULL
+        CHECK (state IN ('sent', 'pending_resend', 'rejected')),
+    mode TEXT NOT NULL
+        CHECK (mode IN ('direct', 'degraded', 'reject')),
+    byte_length INTEGER NOT NULL,
+    limit_bytes INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_errcode INTEGER,
+    last_error TEXT,
+    -- **完整原文**。⛔ 存的绝不是提要——待重发靠这一列重发，存提要等于把
+    -- "降级"变成"丢内容"，而那正是本章要消灭的东西。
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    sent_at TEXT,
+    -- 「已送达必带时间戳」与「未送达必不带时间戳」一条等式同时钉住。
+    -- 写成等式而不是两条 CHECK：两个方向必须同时成立，拆开写容易只加一半。
+    CHECK ((state = 'sent') = (sent_at IS NOT NULL)),
+    -- 与幂等键 {thread_id}:effect_send_group_notify:{digest} 同域（见上）。
+    PRIMARY KEY (thread_id, digest)
+);
+
+-- 第 8 章的重发驱动器要找 state='pending_resend' 的行。
+CREATE INDEX IF NOT EXISTS idx_liaison_group_notify_state
+    ON liaison_group_notify (state, created_at);
+"""
+
 #: 本服务的全量 DDL。
-SCHEMA = EFFECT_LOG_SCHEMA + MESSAGE_AND_TASK_SCHEMA + OUTAGE_WINDOW_SCHEMA
+SCHEMA = (
+    EFFECT_LOG_SCHEMA + MESSAGE_AND_TASK_SCHEMA + OUTAGE_WINDOW_SCHEMA + GROUP_NOTIFY_SCHEMA
+)

@@ -97,25 +97,38 @@ def compute_outage_alert_text(started_at: str, recovered_at: str) -> str:
     )
 
 
-def effect_emit_outage_alert(sink: AlertSink, text: str) -> bool:
-    """把告警送出去。**⛔ 永不抛异常**，返回是否送成功。
+def effect_emit_alert(sink: AlertSink, text: str) -> bool:
+    """把一条告警送出去。**⛔ 永不抛异常**，返回是否送成功。
 
-    7.5 逐字：告警通道失败只记本地日志、⛔ 不中止接收。"不中止"在这一层的
-    可执行形式就是这个 try/except——把异常抛给接收循环，一次告警失败就能打断
-    消息接收，而这两件事毫无关系。
+    第 6 章的群通知复用同一个出口（opener 约束 6：告警走第 7 章的 alerts*；
+    alerts 通道自身失败只记日志、不中止）。
 
-    返回 False ⇒ 调用方 ⛔ 不许标记 `alerted_at` ⇒ 下次启动会重新扫到并补发。
-    ⛔ 捕获的是 `Exception` 而不是 `BaseException`：`KeyboardInterrupt` 与
-    `SystemExit` 必须能停下服务。
+    ⛔ 捕获 `Exception` 而不是 `BaseException`：`KeyboardInterrupt` 与 `SystemExit`
+    必须能停下服务。
+    返回 False ⇒ 调用方 ⛔ 不许把这条告警标记成"已告警"。
     """
     try:
         sink.send(text)
     except Exception:
         logger.error(
-            "中断告警发送失败，本次 ⛔ 不标记已告警，下次启动会重发；"
-            "⛔ 不因此中止消息接收。原文：%s",
+            "告警发送失败，本次 ⛔ 不标记已告警；⛔ 不因此中止调用方的流程。原文：%s",
             text,
             exc_info=True,
         )
         return False
     return True
+
+
+def effect_emit_outage_alert(sink: AlertSink, text: str) -> bool:
+    """中断告警的出口。语义与 `effect_emit_alert` 逐字相同，⛔ 永不抛异常。
+
+    7.5 逐字：告警通道失败只记本地日志、⛔ 不中止接收。"不中止"在这一层的
+    可执行形式就是"本函数不把异常抛出去"——把异常抛给接收循环，一次告警失败
+    就能打断消息接收，而这两件事毫无关系。
+
+    返回 False ⇒ 调用方 ⛔ 不许标记 `alerted_at` ⇒ 下次启动会重新扫到并补发。
+
+    保留这个名字是刻意的：第 7 章的调用点与测试都指着它，改名的收益是零、
+    风险是把一章已经验收过的行为一起动了。
+    """
+    return effect_emit_alert(sink, text)

@@ -61,3 +61,24 @@ def load_credentials(env: Mapping[str, str] | None = None) -> LiaisonCredentials
         bot_id=source[BOT_ID_ENV].strip(),
         bot_secret=source[BOT_SECRET_ENV].strip(),
     )
+
+
+#: 群通知的发送地址（第 6 章）。**URL 本身就是凭据**——`?key=` 那一段即身份。
+GROUP_WEBHOOK_ENV = "HR_LIAISON_GROUP_WEBHOOK"
+
+
+def load_group_webhook(env: Mapping[str, str] | None = None) -> str:
+    """读并校验群通知的发送地址。缺失／空串／纯空白一律 raise。
+
+    ⛔ **刻意不加进 `REQUIRED_CREDENTIAL_ENV_NAMES`。** 那个元组是**启动期**
+    fail-closed 的清单；收消息与发群通知是两件独立的事，把它加进去等于
+    "没配群通知就整个值守通道起不来"——那不是 fail-closed，那是连坐。
+    本函数在**发送时**校验：6.10 逐字要求"未配置 → 拒发并报告缺失的变量名，
+    ⛔ 不静默跳过后报成功"，拒发的前提是先真的走到发送这一步。
+
+    复用 `MissingCredentialsError`：它的消息里 ⛔ 只出现变量名、不出现取值。
+    """
+    source: Mapping[str, str] = os.environ if env is None else env
+    if _is_blank(source, GROUP_WEBHOOK_ENV):
+        raise MissingCredentialsError([GROUP_WEBHOOK_ENV])
+    return source[GROUP_WEBHOOK_ENV].strip()
