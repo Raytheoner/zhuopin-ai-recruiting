@@ -11,6 +11,8 @@ description: 把 OpenSpec 的 spec 转成 Superpowers 实现计划，是本项�
 
 确认当前会话能调用 `superpowers:writing-plans`。**不能调用就停下来**，告诉用户换到能调用它的界面（通常是 Desktop 的 Code tab 或 Claude Code 终端），不要自己手写一份计划冒充——手写的产物不带 `### Task N:` 结构，后面 `scripts/task-brief` 会解析失败。
 
+🔴 **自 `0909AB`（2026-09-09）起，在无头 session 与 worktree 里同样应可达**（插件已改 user 作用域，`cd 仓库根` 与 `cd /private/tmp` 两条探针实测 `LOADED`）。⇒ 现在再报 `Unknown skill` ＝**环境故障**，按 `docs/openers/0909AB-superpowers无头可达.md`【一】复现后修，⛔ 不绕、⛔ 不按磁盘 `SKILL.md` 手工走（旧预案已作废）。
+
 ## ⛔ 不需要 git worktree
 
 本技能只产出一份 markdown 计划文件（`docs/superpowers/plans/`），**不写任何代码、不建分支**。直接在主检出里跑。

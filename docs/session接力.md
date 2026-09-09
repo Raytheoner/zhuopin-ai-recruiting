@@ -210,6 +210,10 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
   - **沿用**（其他部门跑了两个月已验证）：§4 三要素信骨架、`决策点:` 字段必写、起草期代词自检、docx 必发、发送状态语义、串行原则。**替代**：取号与闸核看 `docs/跟进信/README-跟进信清单.md`；docx 在 Cowork 里跑 `md-to-word`；🔴 **发送由 Shao Peishen 本人在企微完成，代理人永不代发**
   - **身份已定**：汤丽萍＝**人事部 AI 专员**，与其他专员同等对待（名录正本里她还挂在「其他」栏、未记部门 ⇒ 那边需补一行，但 HR 线不依赖它）
   - ✅ **留白已清（09-09 他让直接改，「手工介入容易出错」）**：开头「先肯定最近一次真实交付」那句**判定欢迎信不适用、整行删除**——⛔ 不编造交付。删后重出 docx 并写回，占位零残留、frontmatter 未渗漏、25 段。**md ＋ docx 双件均为定稿态，状态仍 `⏳ 待你审`，发送由他本人在企微完成**
+  - 🔴 **发送口径与实证（09-09 下午）**：他审核通过并授权先发群，台账已转 `🆕 待发`；**但 Cowork 实际发不出去**——`qyapi.weixin.qq.com` 在 Mac 侧 device shell 无 DNS、在云容器经代理 CONNECT 得 403（不在 egress 白名单）。⇒ 这封由他本人在企微发。要让 Cowork 能代发群，前提是把该域名加进本会话 egress 白名单
+  - ✅ **口径固化**：「人力AI保障组」＝**人事部门群**（项目叫法 vs 实际部门，同一个）；Mac 端只此一群、不向 Windows 端其他群发信。已写进 `docs/跟进信/README-跟进信清单.md` 抬头
+  - 🔴 **win 端收发实证（09-09 他口述 ＋ 本会话核 win 源码），三条改假设的事实**，全文 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`：① **aibot 能主动发**，单聊与群聊同一方法只差 chatid（`send_markdown(chatid,…)` / `send_file(chatid, media_id)`）——**前置是专员先私信一次机器人**，那个单聊 chatid 才存在；本文此前「aibot 不能主动私信」的说法**已作废**。② **群里只收文字平信，文档回灌只能私信** ⇒ 第 4 章附件归档链路在群消息上**永远验不到**，8.6 验收必须先加「专员私信一次机器人」这一步，TD-22（真实 msgid 字符集）也只能在带附件的私信上核。③ aibot 开机即在线＝长连接监听形态可行，缺的只是把 `client.run()` 接进 `run_forever`（TD-19）。④ 必须分清：**值守服务由 launchd 在 macOS 原生环境跑、用本机网络能连企微；Cowork 的 shell 在隔离 VM 里无出网** ⇒ 服务发消息不需要我有网
+  - ✅ **whitelist 已填**：汤丽萍（len=10）、邵培申（len=11）均非空，fail-closed 那道闸已过。⇒ 她的**回灌走群即可**（她在群里发、值守服务收），⛔ 不需要另建私信通道；真正的卡点只剩 **TD-19**（`make_sdk_connect` 探到 `connect` 是协程即拒启动，要把 `client.run()` 接进 `run_forever` 并用真实凭据端到端验证）＝ 8.6 灰度那件事
   - 🧹 仓库根的 `Claude outputs/`（桌面端自动存的旧版「人力资源部」信）已挪进 `_to_delete/Claude outputs-20260909-旧版人力资源部信/`——Cowork 删不了文件，只能挪；⚠️ `_to_delete/` 未进 `.gitignore`，提交时别把它 add 进去
   - 📎 截图实证（09-09 下午）：「人力AI保障组」7 人，**MAC机器人已在组内**（另一个 BOT 是陈承的机器人）；成员含邵培申（群主）、陈承、聂鑫、汤丽萍、王寒月
   - **远程（Mac／Cowork）能做**：读正本起草 md 正文、跑代词自检与决策点自检、出 `⏳ 待你审` 草稿
@@ -236,6 +240,15 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
 **2026-09-09 17:xx 结存：他手上零待办。** G-1/G-2 已闭合；G-4/G-6 是他做但**现在还不该做**
 （G-4 等 G-3，G-6 等发车范围算清）；G-3/G-5 要排泳道，是我这边的事。
 ⇒ **下一步的球在我这边：把 TD-19 + TD-36 排成一条泳道。**
+
+### ⑲ 第十六批发车前置：`0909AB` superpowers 可达（2026-09-09 由 `0903B` 会话派，⛔ 不进泳道）
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| **P-1** | `0909AB`：插件（superpowers 及其它 scope=project 且 projectPath≠本仓库的）改装 **user 作用域**；无头 + worktree 两条探针复验；仍不通才给 run-lanes.sh 加 `--plugin-dir` | Shao Peishen 贴 CC opener（`docs/openers/0909AB-superpowers无头可达.md`，引用式） | ✅ **09-09 已跑完**：`--scope user` 装上（6.3.0），两条无头探针修后均 `LOADED`（修前均 `Unknown skill`），`subagent-driven-development` 另验 `SDD-LOADED`；**未走 `--plugin-dir` 退路，`run-lanes.sh` 一行未改** | 无头探针 `cd 仓库根` 与 `cd /private/tmp` 两次都回 `LOADED`；skill 模板里「取不到→手工走」已删、看护者预案改红灯；commit 已推 | 第十六批起每条泳道仍 `Unknown skill`，继续靠执行者手工走协议（08-27 起已六批），机器保证为零 |
+| **P-2** | 第十六批发车 | Cowork 编排 → 看护者 | ✅ **P-1 已跑完，前置解除**，可编（编号改用 `0910`）。新口径：泳道 opener 里⛔ 不再写「取不到→手工走」，一律写「回 `Unknown skill` ⇒ 登记『⏸ 留步：superpowers 不可达』并停」 | 看护报告「是否真调到」栏全 ✅ | 发早了＝再跑一批"靠运气" |
+
+⚠️ Shao Peishen 09-09 口径：**修好以后一律走规范流程**——`Skill(superpowers:…)` 不可达即环境故障、泳道停，⛔ 不再允许"按磁盘 SKILL.md 手工走"。过往六批的交付**不回炉**（看护报告逐条核过：两阶段 review、fix loop、终审都手工走了，丢的是机器保证不是步骤）。
 
 
 全是**技术债与机制债**，五条泳道零重叠、全走轻量通道（不走 spec-to-plan / run-build）：
@@ -292,10 +305,23 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
 - 🔴 **`set_session_title` 在远程编排器派发的 session 里不可用**（08-30 实测，报
   `unavailable in sessions dispatched by a remote orchestrator`）。这类 session 侧边栏会丢编号，
   **不是故障、也不是漏调**，如实登记即可。
-- **无头 session 取不到 `superpowers:*`**：插件装在 `projectPath: /Users/paulshao/Projects`
+- **无头 session 取不到 `superpowers:*`** —— ✅ **2026-09-09 `0909AB` 已修复**；以下旧结论保留为成因记录：
+  插件装在 `projectPath: /Users/paulshao/Projects`
   项目作用域，`.claude/settings.json` 里 `enabledPlugins` 开着也解析不到。
   ⇒ `run-build` 的前置检查 1「调不到就停」在无头下**恒定失效**。
   08-27 与 08-30 两次都是执行者照磁盘上的 `SKILL.md` 手工走完协议的——**那是运气，不是机制**。
+  - **修法＝改 user 作用域**：`claude plugin install superpowers@claude-plugins-official --scope user`
+    （user 作用域对任何 cwd 生效，含 `/private/tmp/wt-*` worktree）。实测：修前 `cd 仓库根` 与 `cd /private/tmp`
+    两条无头探针都回 `Unknown skill: superpowers:writing-plans`，修后都回 `LOADED`；
+    `subagent-driven-development` 在 `/private/tmp` 另验一次 `SDD-LOADED`。
+    **`run-lanes.sh` 的 `--plugin-dir` 退路没用上，脚本一行未改。**
+  - ⚠️ **user 作用域装到的是 6.3.0**，不再是六批手工走时读的 6.2.0（两版 `skills/` 目录同为 14 个、名字逐一相同）。
+    引用磁盘 SKILL.md 的历史路径写死 `6.2.0` 的地方，读到的已不是现在生效的那份。
+  - ⛔ **`claude plugin disable <id> --scope project` 是按插件 id 全局生效的**：09-09 实测它把 user 作用域那份
+    一起置成 `enabled: false`（三条记录全灭），已从备份回滚并复验 `LOADED`。要清 `/Users/paulshao/Projects`
+    那份旧 project 记录，只能直接编辑那个 `settings.json`，⛔ 不要用 `plugin disable`。
+  - 🔴 口径（Shao Peishen 09-09 定）：**修好以后一律走规范流程**——`Skill(superpowers:…)` 回 `Unknown skill`
+    ＝环境故障，泳道登记「⏸ 留步：superpowers 不可达」并停，⛔ 不再手工走、⛔ 执行者不自己装插件。
 - **`--max-budget-usd` 在 Max 订阅下不是钱闸**，是"跑飞保险丝"。真正的天花板是 5 小时滚动 +
   每周用量窗口。并行两条 run-build 用量翻倍，开跑前看 `/usage` 比看美元数有意义。默认已提到 25。
 - **GitHub Actions**：private 仓库 Free 计划 2000 分钟/月，**Windows runner 按 2x 扣**，撞过一次额度。

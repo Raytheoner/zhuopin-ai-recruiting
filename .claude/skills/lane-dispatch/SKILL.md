@@ -73,6 +73,13 @@ ls -t docs/superpowers/plans/*.md | head -6   # 哪些单元的 plan 已就绪
 4. **取数／回放类任务的产物去向**（Shao Peishen 2026-09-03 定）—— 凡会往 `data/` 下拉 `.51` 快照或落临时库的条目，
    opener 里必须写死「收口前把 `data/` 产物 `cp` 到主工作区同名路径」。worktree 随 finishing 删除时
    git-ignored 的文件一起没（实证 `0903H`），不写这条就等于默认丢
+5. 🔴 **`superpowers` 不可达的处置**（Shao Peishen 2026-09-09 定，`0909AB` 修完后生效）—— 每条走
+   `spec-to-plan` / `run-build` 的 opener 里逐字写死：
+   「`Skill(superpowers:…)` 回 `Unknown skill` ⇒ 登记『⏸ 留步：superpowers 不可达』并停」。
+   ⛔ **不写「按磁盘 SKILL.md 手工走」**（08-27 → 09-09 六批用过的旧预案，已作废）、⛔ 不让执行者自己装插件。
+   *为什么*：手工走丢的是机器保证（上下文隔离、两阶段 review gate、进度台账），而它**不会报错**——
+   六批 20+ 条全部"跑成了"，机器保证却是零。插件已在 `0909AB` 改成 user 作用域、无头与 worktree 两处实测
+   `LOADED`，⇒ 再出现 `Unknown skill` 就是**新的环境故障**，必须停下来让人看，不能再被预案吸收掉。
 
 ### ④ 核对并发车
 
@@ -167,6 +174,9 @@ python3 /Users/paulshao/Projects/HumanResource/scripts/install_lane_launcher.py
 | 【五】的 checkbox 核验 | 本批各变更包的**章节号与项数** |
 | 编号 `MMDDZ` | 当日日期，`TZ=Asia/Shanghai date +%m%d` 实跑取 |
 
+🔴 **看护者块里的「调不到 superpowers」预案一律写成红灯**（2026-09-09 起）：该条按 **FAIL** 处置、进红灯清单、
+报告里单列。⛔ 不再写「已知问题，不是新故障」「按预案手工走」——`0909AB` 修好后它就是新故障。
+
 ⚠️ **首次跑某个新类型的任务时，看护者块里的启动命令先不加 `--chain`**（如第一批
 run-build），拿到耗时与用量样本再开链式。链式用 `exec` 重启自身，中途 `Ctrl-C`
 只杀当前轮，已起的子 session 要用 `claude agents` / `claude stop` 收。
@@ -184,6 +194,7 @@ run-build），拿到耗时与用量样本再开链式。链式用 `exec` 重启
 - ⛔ **不要把不可代项排进泳道**（见 ①.3）。
 - ⛔ **不要给他裸 bash 命令**（见 ④）。他在 Desktop 用 CC，不开终端。
   本 skill 的产出只有一样：**整块贴出的看护者 opener**。
+- ⛔ **不要在 opener 里写「superpowers 取不到 → 按磁盘 SKILL.md 手工走」**（见 ③.5）。已作废，改写成"登记留步并停"。
 - ⛔ **不要在 opener 里写提问句**。它们在无人值守下跑，没人能回答，写了即空转且不报错。
   一律改成预案覆盖，口径同 `CLAUDE.md`「无人值守 prompt 禁止提问」。
 

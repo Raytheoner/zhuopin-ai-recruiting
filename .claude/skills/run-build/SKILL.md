@@ -12,6 +12,9 @@ description: 用 Superpowers 子代理驱动开发执行实现计划，完成后
 1. **能否调用 `superpowers:subagent-driven-development`？**
    不能就停。告诉用户换到能调用它的界面（Desktop 的 Code tab 或 Claude Code 终端）。
    **不要退化成自己逐个任务写代码**——那就丢掉了上下文隔离、两阶段 review、进度台账，也就丢掉了用这套工具的全部理由。
+   🔴 **自 `0909AB`（2026-09-09）起，在无头 session 与 worktree 里同样应可达**（插件已改 user 作用域，两处实测 `LOADED`）。
+   ⇒ 现在再报 `Unknown skill` ＝**环境故障**，按 `docs/openers/0909AB-superpowers无头可达.md`【一】复现后修，
+   ⛔ 不绕、⛔ 不按磁盘 `SKILL.md` 手工走（那是 08-27 → 09-09 六批的旧预案，已作废）。
 
 2. **bash 是否跑在用户本机？**
    Cowork 的 bash 在隔离 VM 里，git worktree 与提交行为不可靠。实现阶段应在 Claude Code 里做。
