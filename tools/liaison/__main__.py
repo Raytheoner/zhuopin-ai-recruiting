@@ -57,7 +57,21 @@ EXIT_SDK_SURFACE_UNVERIFIED = 4
 SELF_CHECK_ARG = "--self-check"
 
 #: tools/liaison/__main__.py → parents[0]=liaison, [1]=tools, [2]=仓库根
+LIAISON_DIR = Path(__file__).resolve().parents[0]
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: 🔴 值守通道的 .env 在 **tools/liaison/**，⛔ 不是仓库根（2026-09-09 迁，TD-40）。
+#:
+#: 迁的理由不是整洁：`app/config.py` 的 `Settings` 是 pydantic-settings 的
+#: `BaseSettings`，默认 `extra="forbid"`。三个 `HR_LIAISON_*` 键放在**根** `.env` 里，
+#: `Settings()` 每次实例化都抛 `ValidationError: Extra inputs are not permitted`
+#: ⇒ **整个 Web 服务起不来**，而且报错会把 `bot_secret` 明文打进输出。
+#: 实测：带根 `.env` 的 checkout 上根 venv 全量 23 failed，没有 `.env` 的 worktree 0 failed。
+#:
+#: ⚠️ 与 design D10 同构：依赖在 `tools/liaison/requirements.txt`，配置就在
+#: `tools/liaison/.env`，两套各归各位。⛔ **不做"根 .env 兜底"**——兜底会让
+#: "键还留在根 .env 里"这个坏状态继续静默存在，而它正是本条要消灭的东西。
+DEFAULT_DOTENV_PATH = LIAISON_DIR / ".env"
 
 #: 测试专用逃生口：让用例指一个不存在的 .env，免得开发机上真实的 .env 把
 #: "凭据缺失"这条用例喂绿。⛔ 不写进 .env.example——那会把它暗示成生产用法。
@@ -73,7 +87,7 @@ EVENT_DISCONNECTED = session_client.EVENT_DISCONNECTED
 
 def resolve_dotenv_path() -> Path:
     override = os.environ.get(DOTENV_PATH_ENV)
-    return Path(override) if override else REPO_ROOT / ".env"
+    return Path(override) if override else DEFAULT_DOTENV_PATH
 
 
 def load_dotenv_into_environ(path: Path) -> None:
@@ -174,6 +188,11 @@ def main(
     except MissingCredentialsError as exc:
         # 只打变量名，⛔ 不打取值。进程立刻退，⛔ 不进任何等待/重试循环。
         print(str(exc), file=sys.stderr)
+        # ⚠️ 把「刚才去哪儿找的」一并打出来：2026-09-09 把 .env 从仓库根迁到
+        # tools/liaison/（TD-40）之后，"我明明配了啊"最可能的原因就是文件还在旧位置。
+        # ⛔ 不打文件内容、不打取值，只打路径。
+        print(f"（已从 {resolve_dotenv_path()} 读取；⛔ 仓库根的 .env 不再被本服务读）",
+              file=sys.stderr)
         return EXIT_MISSING_CREDENTIALS
 
     events: queue.Queue = queue.Queue()
@@ -252,7 +271,7 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "cleanup":
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "send-followup":
     from tools.liaison.followup import send_followup_main
 
-    # ⚠️ 群 webhook 在仓库根的 `.env` 里（真实值只落 .env，⛔ 不入版本管理）。
+    # ⚠️ 群 webhook 在 `tools/liaison/.env` 里（真实值只落 .env，⛔ 不入版本管理）。
     # 守护进程那条路靠 `main()` 里的这一句读它；本分支短路在 `main()` 之前，
     # 所以必须自己读一次——否则他在配置完全正确的机器上跑也会得到"缺凭据"，
     # 而那个报错指向的原因是错的。

@@ -30,13 +30,28 @@ tools/liaison/.venv/bin/pip install -r tools/liaison/requirements.txt
 
 ## 凭据
 
-`HR_LIAISON_BOT_ID` 与 `HR_LIAISON_BOT_SECRET` **只从进程环境读**，真实值只落仓库根的
-`.env`（`.gitignore` 已排除）。两者缺失、为空串或只含空白字符时，服务**拒绝启动**并
-指明缺哪一项，⛔ 不以"启动了但收不到消息"的状态驻留。占位见根 `.env.example`。
+`HR_LIAISON_BOT_ID` 与 `HR_LIAISON_BOT_SECRET` **只从进程环境读**，真实值落
+**`tools/liaison/.env`**（`.gitignore:2` 的 `.env` 已挡住它）。两者缺失、为空串或只含
+空白字符时，服务**拒绝启动**并指明缺哪一项，⛔ 不以"启动了但收不到消息"的状态驻留。
+占位见同目录 `.env.example`：
 
-测试专用逃生口 `HR_LIAISON_DOTENV_PATH`：指定入口读哪个 `.env` 文件，缺省为仓库根的
-`.env`。⛔ 它只服务于测试隔离（避免开发机上真实的 `.env` 让"凭据缺失"用例变绿），
-⛔ 不要在生产用法里依赖它，因此它**不写进 `.env.example`**。
+```bash
+cp tools/liaison/.env.example tools/liaison/.env   # 然后填真实值
+```
+
+🔴 **⛔ 不要放进仓库根的 `.env`**（2026-09-09 迁出，TD-40）。`app/config.py` 的
+`Settings` 是 pydantic-settings 的 `BaseSettings`，默认 `extra="forbid"`——根 `.env` 里
+多一个它不认识的键，`Settings()` 就整个抛 `ValidationError` ⇒ **Web 服务起不来**，
+且报错把 `bot_secret` 明文打进输出。实测过一次：带这三个键时根 venv 全量 23 failed，
+迁出后 0 failed。⚠️ 连**空占位**都不行——`extra="forbid"` 判的是键在不在，不是值空不空。
+⛔ 也**没有**"根 `.env` 兜底"：兜底会让键留在根里这个坏状态继续静默存在。
+
+⚠️ 这与 design D10 同构：依赖在 `tools/liaison/requirements.txt`，配置在
+`tools/liaison/.env`，两套各归各位；`tools/` ⛔ 不进 `sync-to-server.sh`，都不会上 .51。
+
+测试专用逃生口 `HR_LIAISON_DOTENV_PATH`：指定入口读哪个 `.env` 文件，缺省为
+`tools/liaison/.env`。⛔ 它只服务于测试隔离（避免开发机上真实的 `.env` 让"凭据缺失"
+用例变绿），⛔ 不要在生产用法里依赖它，因此它**不写进 `.env.example`**。
 
 ## 运行与守护
 
@@ -80,7 +95,7 @@ launchctl print gui/$UID/com.zhuopin.hr.liaison | grep -E "state|last exit code"
 ⚠️ 日志目录不存在时 launchd **不建也不报错**，只是这条 job 起不来。安装脚本会先 `mkdir -p`。
 
 ⛔ plist 里不放任何凭据取值：`HR_LIAISON_BOT_ID` / `HR_LIAISON_BOT_SECRET` 由进程自己从
-仓库根 `.env` 读。`~/Library/LaunchAgents/` 不受 `.gitignore` 保护、会被备份链原样带走，
+`tools/liaison/.env` 读。`~/Library/LaunchAgents/` 不受 `.gitignore` 保护、会被备份链原样带走，
 凭据挪进 `EnvironmentVariables` 等于静默扩大泄漏面。守护断言见
 `tests/test_liaison_boundaries.py::test_launchd_template_carries_variable_names_but_no_credential_values`。
 

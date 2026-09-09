@@ -378,7 +378,7 @@ def test_group_webhook_is_not_part_of_startup_fail_closed():
 
 def test_env_example_declares_only_the_variable_name():
     """spec 场景「配置只记变量名」：受版本管理的配置里只有变量名，没有真实地址。"""
-    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "tools" / "liaison" / ".env.example").read_text(encoding="utf-8")
     assert f"{config.GROUP_WEBHOOK_ENV}=\n" in text or text.rstrip().endswith(
         f"{config.GROUP_WEBHOOK_ENV}="
     )

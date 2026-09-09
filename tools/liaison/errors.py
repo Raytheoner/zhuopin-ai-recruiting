@@ -17,5 +17,5 @@ class MissingCredentialsError(RuntimeError):
         joined = "、".join(self.missing_names)
         super().__init__(
             f"HR 值守通道拒绝启动：以下凭据缺失或只含空白字符 → {joined}。"
-            f"请在仓库根的 .env 里补齐（真实值只落 .env，⛔ 不入版本管理）。"
+            f"请在 tools/liaison/.env 里补齐（真实值只落 .env，⛔ 不入版本管理）。"
         )

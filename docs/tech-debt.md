@@ -805,8 +805,10 @@ findings 与 controller ruling）。真正的风险只在于：如果将来有�
 外层退避 1s → 2s → 4s，且每一轮 SDK 都重新打印 `Establishing WebSocket connection...`
 （复用旧对象时这里会变成 `Client already connected` 然后永久挂起——正是第 3 条防的形态）。
 
-**⏳ 仍欠的、也是本条不销的唯一理由**：**8.6 用真实凭据端到端跑通**。判据来自
-`docs/session接力.md` ⑮「⛔ 不进泳道：8.6–8.9（他亲自）」。
+**⏳ 曾经仍欠的那一步——已由 `[Mac]0909AE` 完成**：8.6 首次真实建连实测，连接**建立成功**
+（`WebSocket connection established` ＋ 认证通过），本适配就此验收销账。⚠️ 那次实测同时暴露了
+**另一个** bug（TD-38，`heartbeat_interval` 单位错配），⛔ 它不属于本条——本条守的是
+「`run_forever` 拿到的 callable 是否真的阻塞建连」，那一问的答案已经是肯定的。
 
 🔴 **2026-09-09 稍晚订正——⛔ 先别跑真实建连**：`[Mac]0909AE` 已经替本条跑了第一次
 （见 `docs/findings/2026-09-09-首次真实建连实测.md`），结果撞上 **TD-38**（`heartbeat_interval`
@@ -818,7 +820,7 @@ findings 与 controller ruling）。真正的风险只在于：如果将来有�
 且**无任何本地症状**，只有真连上企微才暴露。⛔ 不要因此去加"校验单位"的启发式，
 真正的判据是 TD-39 那三项端到端观察。
 
-**TD-38 还上之后，Shao Peishen 要跑的就一条命令**（在仓库根、Terminal 里，⛔ 不经 pytest）：
+**TD-38 还上之后复跑用的命令**（在仓库根、Terminal 里，⛔ 不经 pytest；本条已销，这条留给 TD-39 复核）：
 
 ```bash
 PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison
@@ -1470,7 +1472,7 @@ SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释�
 **来源**：`[Mac]0909AE` 首次真实建连实测。相关：TD-38、
 `docs/findings/2026-09-09-首次真实建连实测.md`
 
-## TD-40 · 🔴 `.env` 里的 `HR_LIAISON_*` 三个键让**整个 app 的配置加载不了**（他本机现状）
+## ~~TD-40~~ · `.env` 里的 `HR_LIAISON_*` 三个键让整个 app 的配置加载不了 ✅ 已还（`0909AC`，改法 ③）
 
 **欠的是什么**：`app/config.py:13` 是
 `SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")`——pydantic-settings v2 的
@@ -1506,3 +1508,32 @@ CI 日志、粘给别人看的报错里都带着它。这条本身就构成一�
 
 **来源**：`[Mac]0909AC` 收工前在仓库根 checkout 跑全量时实测（⛔ 不是推测，见上方失败计数）。
 相关：TD-19、design D10
+
+### ✅ 2026-09-09 已还——**裁决＝改法 ③**（Shao Peishen 当次答 `1c`）
+
+值守通道的配置迁到 `tools/liaison/.env`，与 design D10 的依赖隔离同构：依赖在
+`tools/liaison/requirements.txt`，配置在 `tools/liaison/.env`，两套各归各位，
+`tools/` ⛔ 不进 `sync-to-server.sh` 的 SYNC_PATHS，都不会上 .51。
+
+⛔ **没有选改法 ①（`extra="ignore"`）**：那会连带放弃「根 `.env` 里写错别字当场报错」
+这道岗——而那道岗挡的是"配置看起来配了、其实键名拼错了"这类**无症状**故障，
+比本条更难发现。
+
+落地清单：
+
+- `__main__.DEFAULT_DOTENV_PATH = LIAISON_DIR / ".env"`，`resolve_dotenv_path()` 据此取值。
+  ⛔ **刻意不做"根 `.env` 兜底"**——兜底会让"键还留在根 `.env` 里"这个坏状态继续静默存在。
+- 占位从根 `.env.example` **整段迁到** `tools/liaison/.env.example`。⚠️ 连**空占位**都迁走了：
+  `extra="forbid"` 判的是键**在不在**，不是值空不空，而 `cp .env.example .env` 是最常见的
+  触发路径。
+- 缺凭据时 stderr 多打一行「已从 <path> 读取」——迁移之后"我明明配了啊"最可能的原因
+  就是文件还在旧位置，⛔ 只打路径不打取值。
+- README、plist 模板注释、`errors.py` 的提示文案三处指向同步更新。
+
+两道回归岗：
+`test_default_dotenv_path_is_the_liaison_dir_not_the_repo_root`（默认路径被改回仓库根即红）、
+`test_root_env_example_does_not_carry_the_liaison_keys`（三个键回到根 `.env.example` 即红）。
+
+**验收实证**：迁移前根 venv 全量 **23 failed**；迁移后 **2041 passed / 5 skipped / 0 failed**，
+`Settings()` 正常实例化。liaison venv **786 passed / 0 failed**。
+凭据本身已从根 `.env` 移入 `tools/liaison/.env`（权限 0600），⛔ 未留备份副本。

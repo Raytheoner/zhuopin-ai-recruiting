@@ -301,6 +301,33 @@ def test_dotenv_strips_export_prefix(tmp_path):
         os.environ.update(env_backup)
 
 
+def test_default_dotenv_path_is_the_liaison_dir_not_the_repo_root():
+    """🔴 TD-40：值守通道的 `.env` 默认在 `tools/liaison/`，⛔ 不在仓库根。
+
+    ⛔ 这条 ⛔ 不是整洁癖。三个 `HR_LIAISON_*` 键放在根 `.env` 里会让
+    `app/config.py` 的 `Settings`（pydantic-settings，默认 `extra="forbid"`）
+    每次实例化都抛 `ValidationError` ⇒ **Web 服务起不来**，且报错把 `bot_secret`
+    明文打进输出。默认路径一旦被改回仓库根，那三个键就会被"合法地"请回去。
+
+    ⚠️ 同时钉死「⛔ 没有根 .env 兜底」：兜底会让"键还留在根 .env 里"这个坏状态
+    继续静默存在——而那正是本条要消灭的东西。
+    """
+    from tools.liaison import __main__ as liaison_main
+
+    assert liaison_main.DEFAULT_DOTENV_PATH == LIAISON_DIR / ".env"
+    assert liaison_main.DEFAULT_DOTENV_PATH.parent != REPO_ROOT, (
+        "默认 .env 又回到仓库根了——Settings 会因 extra='forbid' 整个炸掉"
+    )
+
+    env_backup = dict(os.environ)
+    try:
+        os.environ.pop("HR_LIAISON_DOTENV_PATH", None)
+        assert liaison_main.resolve_dotenv_path() == LIAISON_DIR / ".env"
+    finally:
+        os.environ.clear()
+        os.environ.update(env_backup)
+
+
 def test_process_env_wins_over_dotenv(tmp_path):
     """进程环境优先于 .env（与 pydantic-settings 在 app/config.py 里的口径一致）。"""
     dotenv = tmp_path / "loser.env"

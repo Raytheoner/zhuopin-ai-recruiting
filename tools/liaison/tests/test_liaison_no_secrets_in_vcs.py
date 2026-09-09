@@ -130,6 +130,30 @@ def test_env_example_declares_the_placeholder_with_empty_value(name):
     任何非空取值都可能被谁复制成 .env 用，而"看起来配好了、其实是假的"这种状态，
     正是 fail-closed 校验挡不住的那一种——它不缺失，它只是错的。
     """
-    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "tools" / "liaison" / ".env.example").read_text(encoding="utf-8")
     pattern = re.compile(rf"^{re.escape(name)}[ \t]*=[ \t]*$", re.MULTILINE)
-    assert pattern.search(text), f".env.example 里缺 {name} 的空值占位"
+    assert pattern.search(text), f"tools/liaison/.env.example 里缺 {name} 的空值占位"
+
+
+def test_root_env_example_does_not_carry_the_liaison_keys():
+    """🔴 TD-40 回归岗：`HR_LIAISON_*` ⛔ 不许出现在**根** `.env.example` 里。
+
+    `app/config.py` 的 `Settings` 是 pydantic-settings 的 `BaseSettings`，默认
+    `extra="forbid"`。根 `.env` 里多一个它不认识的键 ⇒ `Settings()` 抛
+    `ValidationError` ⇒ **Web 服务起不来**，且报错把 `bot_secret` 明文打进输出。
+
+    ⚠️ 这里连**空占位**也不许留：`cp .env.example .env` 是最常见的触发路径，
+    而 `extra="forbid"` 判的是键**在不在**，不是值空不空。空占位一样炸。
+
+    实证：2026-09-09 带这三个键的根 `.env` 让根 venv 全量 23 failed，
+    同一份代码在没有 `.env` 的 worktree 里 0 failed（TD-40，`0909AC`）。
+    """
+    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    offenders = [
+        line for line in text.splitlines()
+        if re.match(r"^[ \t]*(export[ \t]+)?HR_LIAISON_[A-Z_]+[ \t]*=", line)
+    ]
+    assert offenders == [], (
+        f"根 .env.example 又带上了值守通道的键：{offenders}。"
+        "占位应当只在 tools/liaison/.env.example 里"
+    )

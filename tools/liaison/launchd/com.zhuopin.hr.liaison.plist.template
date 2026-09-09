@@ -8,7 +8,7 @@
   `~/Library/LaunchAgents/`。手抄一份改改路径也能跑，但那份就脱离了守护测试的覆盖。
 
   ⛔ 本文件里不出现任何密钥取值。HR_LIAISON_BOT_ID / HR_LIAISON_BOT_SECRET 由进程
-  自己从仓库根 `.env` 读（tools/liaison/config.py::load_credentials），launchd 只负责
+  自己从 `tools/liaison/.env` 读（tools/liaison/config.py::load_credentials），launchd 只负责
   把进程拉起来。理由：plist 落在 ~/Library/LaunchAgents/，不受 .gitignore 保护、
   会被备份链原样带走；凭据挪进 EnvironmentVariables 会静默扩大泄漏面。
   守护断言见 tests/test_liaison_boundaries.py::
