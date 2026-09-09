@@ -149,7 +149,7 @@ def test_business_logging_still_works_while_degraded(tmp_path, capsys):
     blocker = tmp_path / "blocked"
     blocker.write_text("", encoding="utf-8")
     logsetup.setup_logging(log_dir=blocker)
-    logging.getLogger("tools.liaison.inbound").warning("手机 13812345678")
+    logging.getLogger("tools.liaison.degraded_probe").warning("手机 13812345678")
     err = capsys.readouterr().err
     assert "13812345678" not in err, "降级路径上脱敏 ⛔ 不许一起失效"
     assert logsetup.PHONE_MASK in err
@@ -183,19 +183,28 @@ def test_bad_env_values_fall_back_to_defaults_instead_of_crashing(tmp_path, monk
     assert handler.backupCount == logsetup.DEFAULT_BACKUP_COUNT
 
 
-def test_bad_log_level_falls_back_to_default_instead_of_crashing(tmp_path, monkeypatch):
-    """`_resolve_level` 的回归：Task 2 review 修的第一处缺陷。
+def test_good_env_values_are_actually_read_not_just_not_crashed_on(tmp_path, monkeypatch):
+    """fix round 1 · Important 1 的回归：只测非法取值回落默认值，测不出「环境变量
+    根本没被读」或「读到了但被曲解」——两者在那条测试下都表现为"用了默认值"或
+    "凑巧看起来正常"。这里显式设置合法取值，断言构造出来的
+    `RotatingFileHandler` 真的带着这两个值，而不是默认值或被曲解的值。
 
-    带尾随空格 / 数字字符串 / 拼错的级别名，任何一种都 ⛔ 不许在日志装配这个
-    进程第一动作上抛未捕获异常。"""
-    for bad_level in ("INFO ", "20", "INF0", "verbose"):
-        monkeypatch.setenv(logsetup.LOG_LEVEL_ENV, bad_level)
-        status = logsetup.setup_logging(log_dir=tmp_path)
-        assert status.degraded is False, f"level={bad_level!r} 不应触发降级"
-        logger = logging.getLogger(logsetup.PACKAGE_LOGGER_NAME)
-        assert logger.level == logging.getLevelName(logsetup.DEFAULT_LEVEL), (
-            f"level={bad_level!r} 应回落到 DEFAULT_LEVEL"
-        )
+    已用变异实验验证判定力（见 task-3-report.md 的 fix round 1 一节）：
+    `_env_int()` 提前返回 `default`（环境变量根本没读）、以及
+    `_env_int()` 把合法取值 ×10 曲解，这两种变异在本测试新增之前都能让
+    整个 497 条套件保持全绿；新增本测试后两者均转红。
+    """
+    monkeypatch.setenv(logsetup.LOG_MAX_BYTES_ENV, "2048")
+    monkeypatch.setenv(logsetup.LOG_BACKUP_COUNT_ENV, "3")
+    status = logsetup.setup_logging(log_dir=tmp_path)
+    assert status.degraded is False
+    handler = [
+        h
+        for h in logging.getLogger(logsetup.PACKAGE_LOGGER_NAME).handlers
+        if isinstance(h, logging.handlers.RotatingFileHandler)
+    ][0]
+    assert handler.maxBytes == 2048, f"实际 {handler.maxBytes}——环境变量没被真的读到"
+    assert handler.backupCount == 3, f"实际 {handler.backupCount}——环境变量没被真的读到"
 
 
 def test_teardown_only_removes_handlers_it_owns(tmp_path):
@@ -211,17 +220,9 @@ def test_teardown_only_removes_handlers_it_owns(tmp_path):
         logger.removeHandler(foreign)
 
 
-def test_teardown_resets_the_package_logger_level(tmp_path):
-    """Task 2 review 修的第二处缺陷的回归：level 挂在 logger 对象本身，不摘会
-    跨用例泄漏（比如把下一条用例的 caplog.at_level 悄悄顶掉）。"""
-    logsetup.setup_logging(log_dir=tmp_path, level="ERROR")
-    logger = logging.getLogger(logsetup.PACKAGE_LOGGER_NAME)
-    assert logger.level == logging.ERROR
-
-    logsetup.teardown_logging()
-
-    assert logger.level == logging.NOTSET
-
+# fix round 1 · Minor 3：`teardown_logging` 复位 level 的回归已存在于
+# test_liaison_log_redaction.py::test_teardown_resets_the_logger_level_to_notset
+# （同样的 level="ERROR" 设置、同样两条断言），本文件不再重复一份。
 
 # ---------------------------------------------------------------------------
 # 6. 结构守卫：logsetup.py 里不许出现 with（TD-18 的事务扫描器判据）。
