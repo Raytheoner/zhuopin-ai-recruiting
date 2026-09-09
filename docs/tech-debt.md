@@ -1474,10 +1474,50 @@ SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释�
 **心跳是否真的变成 30 秒，需 `[Mac]0909AG` 真实建连确认**——在那之前，
 「⛔ TD-38 未还前不得装 launchd」这条闸门按 Shao Peishen 答 `3a` **继续有效**。
 
-## TD-39 · 🔴 已确认缺陷：重连链被 `error` 事件抛出打断，连接断了就再也回不来（阻断 8.6）
+## TD-39 · 🔴 已确认缺陷：重连链被 `error` 事件抛出打断，连接断了就再也回不来（阻断 8.6）· 🛠 代码已改（`62d3594`），⏸ **等真实断网复验才销**
 
 **已于 `[Mac]0909AG` 复核完毕，⛔ 不是虚惊，⛔ 不许销账。** 实测见
 `docs/findings/2026-09-09-断线重连实测.md`。
+
+---
+
+### 🛠 2026-09-09 `[Mac]0909AH` 处置：代码已改（`62d3594`），⏸ **本条暂不销账**
+
+🔴 **⛔ 不许因为"代码改完了"就把本条划掉。** 销账 ≠ 已验证——`0909AF` 就是没区分
+这两件事，才要 `0909AG` 回头补验。本条**唯一**的销账条件是**真实断网复验通过**：
+真的拔网／关 Wi-Fi，看 ④⑤⑥ 三项从 ❌ 翻成 ✅。`0909AH` 在 worktree 里跑，
+**没有 `.env`、没有真实库，做不了真实建连**，因此它 ⛔ 未验证"真的能重连回来"。
+
+**改了什么**（两项都在 `tools/liaison/session_client.py`，接线在 `tools/liaison/__main__.py`）：
+
+| 项 | 改法 | 落点 |
+|---|---|---|
+| 根因（上表第 4 步） | `_prepare_client` 补 `error` 事件监听器：记 **WARNING**、⛔ 不回抛。pyee 于是走「有监听器 ⇒ 分发不抛」的分支，`ws.py:153` 的 `_schedule_reconnect()` 能执行 | `EVENT_ERROR` / `_handle_sdk_error` |
+| 同上·防复发 | 事件清单提成 `SUBSCRIBED_EVENTS`，接线**逐条走该清单**并纳入 `verify_client_surface` 校验——清单与接线曾是两处真源，那正是本条的缺口 | `SUBSCRIBED_EVENTS` |
+| N-0（兜底） | 补 `liveness.json` `stamp_at` 看门狗，跑在**第三条线程**上；停更超 `STALE_LIVENESS_SECONDS` 就用 `LoopStopper` 跨线程 `call_soon_threadsafe(loop.stop)` 停掉 SDK 的事件循环，`client.run()` 才返回、外层 `run_forever` 才接得上手 | `run_liveness_watchdog` / `LoopStopper` |
+
+**阈值取 180 秒**：实测判死时延 **55.75 秒**（心跳 30 秒 × 2 次未回 pong）的 3.2×。
+⛔ 不许拍脑袋改小——设得不够大会把**正常的判死过程本身**误判成假死，看门狗于是
+拆掉一条正在自愈的连接，"修复"反过来制造断线。
+
+**已知且刻意接受**：真实长断网期间存活戳同样冻结，看门狗因此每 ~180 秒重建一次
+连接（一小时约 17 次，远达不到企微限流量级）。⛔ 不要为它加"断网期间不看门"的
+例外——"真断网"与"假死"从进程外部看**完全一样**，分辨得了就不需要看门狗了。
+
+**测试覆盖**（对应本条修法第 3 点「必须有自动化测试覆盖」）：新增 23 条，
+`tools/liaison` 783 → **806**，全量 2042 → **2065**，全部**先红后绿**。
+主文件 `tools/liaison/tests/test_session_client_reconnect.py`（替身复刻 pyee 的
+`error` 语义与 `ws.py:149-153` 的失败分支，⛔ 不碰网络、⛔ 不 import aibot、
+⛔ 不用真实 sleep），接线断言在 `test_main_wiring.py`。
+**三条变异复核**证明断言有判据力：摘掉 `error` 订阅 → 18 红；拆掉看门狗线程 → 1 红；
+阈值改到 55.75 秒以下 → 1 红。
+
+**⏸ 下一步（⛔ 本条未做）**：真实断网复验——**在主工作区**（worktree ❌，那里没有
+`.env`）用真实凭据跑 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison`，
+断网 → 等 ≥180 秒 → 复网，看 ④ 自动重连、⑤ `liveness` 翻回 `connected`、
+⑥ 窗口闭合并发出恢复告警。三项都过 ⇒ 本条可销、G-4（launchd 装机）才谈解锁。
+
+---
 
 **原疑点的措辞需要修正**：不是"断线事件没到 `LiaisonSession`"——它**到了**。
 `0909AE` 观察到的"16 秒仍是 `connected`"，只是因为判死时延本来就有 55.75 秒
@@ -1545,6 +1585,10 @@ SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释�
 - **N-3 · `websockets` 次生崩栈**：`websockets/asyncio/client.py:741`
   `if 200 <= response.status_code < 300:` 在 `response is None` 时抛 `AttributeError`。
   第三方库缺陷，非主因，但污染日志。
+  🔴 **2026-09-09 `0909AH` 明确：本条不修，仅记录。** ⛔ 不许去改 `site-packages` 里的
+  `websockets`——那份改动不进版本管理、不会跟着任何一次部署走，下一次
+  `pip install` 就没了，而"我明明修过"会让后来的人按一个不存在的修复去推理。
+  要治只有两条路：升级 `websockets` 到修掉它的版本，或向上游提 issue。两条都另立一条。
 - **N-4 · 本机走 HTTP 代理**：`scutil --proxy` 显示 `HTTPEnable/HTTPSEnable = 1`，
   断网时代理回 `HTTP 503`，异常类型是 `InvalidProxyStatus`。
   ⚠️ **根因与异常类型无关**（任何重连异常都走同一条路）。但 **.51 现网若不走代理，
