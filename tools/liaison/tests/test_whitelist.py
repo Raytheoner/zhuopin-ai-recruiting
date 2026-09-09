@@ -317,13 +317,19 @@ def test_blank_userid_entry_is_dropped(tmp_path, caplog):
     assert error_records(caplog)
 
 
-def test_shipped_config_admits_nobody_until_userids_are_filled_in():
-    """⏸ 真实企微 userid 尚未取得，出厂态谁都不准入。
+def test_shipped_config_admits_exactly_the_two_approved_members():
+    """✅ 名单已生效：2026-09-09 Shao Peishen 提供真实企微 userid 并填入随包配置。
 
-    userid 填进去之后这条会失败——**这是正确的信号**，届时把它改成
-    断言两个 userid 均命中，那次改动本身就是"名单已生效"的证据。
+    本用例的前身是 `test_shipped_config_admits_nobody_until_userids_are_filled_in`
+    （出厂 fail-closed 态，断言空集合）。原 docstring 预留了改法——"userid 填进去之后
+    这条会失败，这是正确的信号，届时把它改成断言两个 userid 均命中，那次改动本身就是
+    '名单已生效'的证据"。本次改动即是那个证据，⛔ 不是为了让测试变绿而放宽断言。
+
+    ⚠️ `compute_admission` 严格区分大小写（`candidate in whitelist`，无 casefold）。
+    这两个字面量必须与企微通讯录「账号」逐字符一致，错一个字母 = 该人被静默拒绝
+    （fail-closed 方向，安全但通道不通）。
     """
-    assert load_whitelist(SHIPPED_CONFIG) == frozenset()
+    assert load_whitelist(SHIPPED_CONFIG) == frozenset({"TangLiPing", "ShaoPeiShen"})
 
 
 def test_entry_with_a_forbidden_field_is_dropped_entirely(tmp_path, caplog):

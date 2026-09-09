@@ -15,10 +15,10 @@
 members:
   # ⚠️ userid 留空 = 该条不生效（fail-closed）。真实企微 userid 尚未取得，
   #    取得后填在这里即可生效，⛔ 不要为了"先跑起来"填假值。
-  - userid: ""
+  - userid: "TangLiPing"
     name: 汤丽萍
     role: HR AI 专员，材料交换对手方
 
-  - userid: ""
+  - userid: "ShaoPeiShen"
     name: 邵培申
     role: 工具主人，自测与指令验证通道
