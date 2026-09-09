@@ -125,10 +125,28 @@ def test_compute_expired_extracts_relative_paths():
     assert split.deletable[0].relative_paths == ("u1/20260101/m-att__a.xlsx",)
 
 
+class _ClockReadForbidden(datetime.datetime):
+    """`datetime.datetime` 的替身：`now()` / `utcnow()` 一被调用就炸。
+
+    其余方法（`fromisoformat`、算术、比较……）原样继承自真实的
+    `datetime.datetime`，所以只要 `compute_expired` 没有偷偷读真实时钟，
+    它的行为应当与替换前完全一致。
+    """
+
+    @classmethod
+    def now(cls, tz=None):  # noqa: D102 - 见类 docstring
+        raise AssertionError("compute_expired 不许读真实时钟（now()）")
+
+    @classmethod
+    def utcnow(cls):  # noqa: D102 - 见类 docstring
+        raise AssertionError("compute_expired 不许读真实时钟（utcnow()）")
+
+
 def test_compute_expired_is_pure_and_takes_no_clock(monkeypatch):
     """时钟注入（opener 约束 3）：把 `datetime.datetime` 换成会炸的替身，
     纯函数仍必须能跑完——它一次都不许读真实时钟。"""
     row = _row("m-old", archived_at="2026-01-01 00:00:00")
+    monkeypatch.setattr(retention.datetime, "datetime", _ClockReadForbidden)
     split = retention.compute_expired(NOW, 180, [row])
     assert [item.msgid for item in split.deletable] == ["m-old"]
     assert retention.compute_expired(NOW, 180, [row]) == split  # 同输入同输出
