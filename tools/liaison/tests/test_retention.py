@@ -699,6 +699,15 @@ def test_cleanup_main_rejects_unknown_arguments(capsys):
 def test_cleanup_main_fails_closed_on_bad_config(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HR_LIAISON_RETENTION_DAYS", "0")
     monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    # 🔴 controller fix-round-1 override（覆盖 plan line 1641-1646 的原样例）：
+    # 两个真实数据接缝（DB 路径 + 归档根）在每条新测试里都必须一起 patch，
+    # 不能靠"这条路径在当前实现里读不到"这种依赖语句顺序的偶然安全——
+    # 今天 load_retention_days() 先炸、archive.DEFAULT_ARCHIVE_ROOT 根本没被读到，
+    # 但这只是巧合，不是任何断言在守；日后若把日志/建连接挪到配置校验之前，
+    # 这条测试会在毫无提示的情况下开始删真实 data/liaison/archive。
+    monkeypatch.setattr(
+        retention.archive, "DEFAULT_ARCHIVE_ROOT", tmp_path / "archive"
+    )
     assert retention.cleanup_main([]) == retention.EXIT_BAD_CONFIG
     assert "HR_LIAISON_RETENTION_DAYS" in capsys.readouterr().err
 
@@ -739,3 +748,28 @@ def test_importing_main_module_does_not_run_cleanup(monkeypatch):
     import tools.liaison.__main__ as liaison_main
 
     importlib.reload(liaison_main)  # 不抛 SystemExit 即为通过
+
+
+def test_exit_codes_are_disjoint_from_main_modules_exit_codes():
+    """Minor fix（controller fix-round-1）：退出码互不相撞没有任何断言守着。
+
+    `retention.EXIT_*` 从 5 开始是因为 2/3/4 被 `__main__.py` 的
+    `EXIT_MISSING_CREDENTIALS` / `EXIT_SDK_UNAVAILABLE` /
+    `EXIT_SDK_SURFACE_UNVERIFIED` 占用；这条守的是"以后改错了会立刻红"，
+    而不是重新硬编码一遍 2/3/4——那样两边改了同一个数字也测不出来。
+    ⚠️ 只 import 模块（不带 `cleanup` 参数运行 pytest 自身），
+    该模块顶层没有任何副作用，见 `test_importing_main_module_does_not_run_cleanup`。
+    """
+    import tools.liaison.__main__ as liaison_main
+
+    main_codes = {
+        liaison_main.EXIT_MISSING_CREDENTIALS,
+        liaison_main.EXIT_SDK_UNAVAILABLE,
+        liaison_main.EXIT_SDK_SURFACE_UNVERIFIED,
+    }
+    retention_codes = {
+        retention.EXIT_RETENTION_FAILED,
+        retention.EXIT_BAD_CONFIG,
+        retention.EXIT_BAD_ARGS,
+    }
+    assert main_codes.isdisjoint(retention_codes)
