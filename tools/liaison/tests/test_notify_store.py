@@ -183,6 +183,7 @@ def test_effect_key_is_thread_node_digest(conn):
     )
     key = conn.execute("SELECT effect_key FROM effect_log").fetchone()[0]
     assert key == f"{store.GROUP_NOTIFY_THREAD_ID}:effect_send_group_notify:{plan.digest}"
+    assert_group_notify_identity(conn)
 
 
 def test_exhausted_retries_persist_as_pending_resend_and_alert(conn):
@@ -257,6 +258,7 @@ def test_pending_resends_are_listable(conn):
     _record(conn, "b", store.STATE_PENDING_RESEND, errcode=ratelimit.RATE_LIMIT_ERRCODE)
     rows = store.select_pending_resends(conn)
     assert [r["body"] for r in rows] == ["b"]
+    assert_group_notify_identity(conn)
 
 
 # --------------------------------------------------------------------------
@@ -489,3 +491,100 @@ def test_generic_alert_emitter_never_raises():
     """`effect_emit_alert` ⛔ 永不抛异常，返回是否送成功。"""
     assert alerts.effect_emit_alert(RecordingSink(), "hello") is True
     assert alerts.effect_emit_alert(BoomSink(), "hello") is False
+
+
+# ---------------------------------------------------------------------------
+# TD-28：跨字段的荒唐组合必须被**表结构**挡住
+# ---------------------------------------------------------------------------
+
+
+def _insert_notify_row(conn: sqlite3.Connection, **overrides) -> None:
+    """绕开 `effect_send_group_notify` 直连 SQL 写一行。
+
+    ⚠️ **刻意绕过代码路径**：本组用例要验的是「表结构自己守不守得住」，不是
+    「现有代码路径产不产得出这些行」。走代码路径等于用被测对象证明被测对象——
+    TD-28 登记时就是用直连 SQL 逐条**实证写入成功**的，还债也必须用同一把尺子量。
+    """
+    row = {
+        "digest": "d-1",
+        "thread_id": "group-notify",
+        "channel": "group_webhook",
+        "state": "pending_resend",
+        "mode": "direct",
+        "byte_length": 10,
+        "limit_bytes": 4096,
+        "attempts": 1,
+        "last_errcode": None,
+        "last_error": None,
+        "body": "正文",
+        "sent_at": None,
+    }
+    row.update(overrides)
+    conn.execute(
+        "INSERT INTO liaison_group_notify"
+        " (digest, thread_id, channel, state, mode, byte_length, limit_bytes,"
+        "  attempts, last_errcode, last_error, body, sent_at)"
+        " VALUES (:digest, :thread_id, :channel, :state, :mode, :byte_length, :limit_bytes,"
+        "  :attempts, :last_errcode, :last_error, :body, :sent_at)",
+        row,
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides, why",
+    [
+        (
+            {"state": "sent", "mode": "reject", "sent_at": "2026-09-09 12:00:00"},
+            "被拒发的通知不可能已送达",
+        ),
+        (
+            {"state": "rejected", "mode": "direct", "attempts": 99},
+            "拒发的行不可能是 direct 模式，更不可能试了 99 次",
+        ),
+        (
+            {"state": "pending_resend", "mode": "reject"},
+            "reject 模式只能配 rejected 状态，⛔ 不许待重发",
+        ),
+        ({"byte_length": -5}, "正文长度不可能是负数"),
+        ({"limit_bytes": -1}, "阈值不可能是负数"),
+        ({"limit_bytes": 0}, "阈值为 0 意味着任何正文都超限，那不是阈值是死锁"),
+        ({"attempts": -3}, "尝试次数不可能是负数"),
+    ],
+    ids=[
+        "sent-but-rejected-mode",
+        "rejected-but-direct-mode",
+        "pending-but-reject-mode",
+        "negative-byte-length",
+        "negative-limit-bytes",
+        "zero-limit-bytes",
+        "negative-attempts",
+    ],
+)
+def test_absurd_group_notify_rows_are_refused_by_the_schema(conn, overrides, why):
+    """结构自己守住，⛔ 不指望"现有代码路径产不出这些行"。
+
+    "产不出"是**调用方**保证的，不是结构保证的——第二个调用方一出现就没人替它守，
+    而这张表是台账：一行"被拒发但已送达"的记录会让所有基于它的报表悄悄说谎。
+    """
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_notify_row(conn, **overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"state": "rejected", "mode": "reject", "attempts": 0},
+        {"state": "sent", "mode": "direct", "sent_at": "2026-09-09 12:00:00"},
+        {"state": "pending_resend", "mode": "degraded", "attempts": 5},
+        {"byte_length": 0},
+    ],
+    ids=["rejected-reject", "sent-direct", "pending-degraded", "empty-body-length"],
+)
+def test_legitimate_group_notify_rows_still_get_through(conn, overrides):
+    """对照组：新增的 CHECK ⛔ 不许误伤正路。
+
+    收紧约束最常见的失败模式不是"没挡住"，是"顺手把合法的也挡了"——而那会在
+    真发时才炸。`byte_length=0` 必须放行（空正文长度是 0，⛔ 不是非法值）。
+    """
+    _insert_notify_row(conn, **overrides)
+    assert conn.execute("SELECT COUNT(*) FROM liaison_group_notify").fetchone()[0] == 1

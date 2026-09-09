@@ -83,10 +83,6 @@ class NotifyPlan:
     byte_length: int
     limit_bytes: int
 
-    @property
-    def is_send(self) -> bool:
-        return self.mode in (MODE_DIRECT, MODE_DEGRADED)
-
 
 def compute_byte_length(text: str) -> int:
     """UTF-8 编码后的**字节数**。⛔ 不是 `len(text)`。"""

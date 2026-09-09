@@ -99,6 +99,18 @@ class TokenBucket:
         self._tokens = min(self._capacity, self._tokens + gained)
         self._updated_at = now
 
+    @property
+    def available_tokens(self) -> float:
+        """当前还剩多少令牌（先补一次再报）。**只读观测面**，⛔ 不许拿它做判断。
+
+        它的存在是为了让 TD-26 ② 的判据钉在"服务端那边被打了几下"上，而不是
+        `acquire()` 被调了几次——后者是实现细节，前者才是 D9 那条 20 条/分钟守的东西。
+        ⛔ 不要在生产代码里写 `if bucket.available_tokens >= n:` 之类的先看后取：
+        节流的语义是**阻塞取**，看一眼再自己决定发不发，等于把决定权交回给调用方。
+        """
+        self._refill()
+        return self._tokens
+
     def acquire(self) -> float:
         """取一个令牌，返回**实际等待的秒数**（不需要等就是 0.0）。"""
         self._refill()
@@ -127,3 +139,52 @@ def make_group_webhook_bucket(
         monotonic=monotonic,
         sleep=sleep,
     )
+
+
+# ---------------------------------------------------------------------------
+# 进程级单例（TD-26 ①）
+# ---------------------------------------------------------------------------
+
+#: 群 webhook 的**唯一**令牌桶。⛔ 不许在模块外直接读写它，走 `get_group_webhook_bucket`。
+_GROUP_WEBHOOK_BUCKET: TokenBucket | None = None
+_GROUP_WEBHOOK_CLOCK: tuple[Callable[[], float], Callable[[float], None]] | None = None
+
+
+def get_group_webhook_bucket(
+    *, monotonic: Callable[[], float], sleep: Callable[[float], None]
+) -> TokenBucket:
+    """取群 webhook 的**进程级单例**令牌桶。生产代码取桶只走这一条路。
+
+    🔴 **为什么必须是单例**：D9 的「20 条/分钟」是**服务端**的额度。两个调用方
+    各 `make_group_webhook_bucket()` 一次就是两份配额，进程内看着都没超，服务端
+    那头挨了 40 下——于是又被 `45009` 打回、退回"被平台拒了才知道"的老路，
+    而主动限流的全部意义就是不走那条路。
+
+    ⛔ **第二个调用方带着自己的时钟来一律 `raise`，不静默返回既有单例。**
+    带自己的时钟＝它以为自己在造一个新桶；静默返回会让它的注入悄悄失效
+    （测试里表现为假时钟推不动真桶，生产里表现为绕过单例这件事没人知道）。
+    报出来的代价是一次明确的失败，吞掉的代价是配额翻倍且无症状。
+    """
+    global _GROUP_WEBHOOK_BUCKET, _GROUP_WEBHOOK_CLOCK
+    if _GROUP_WEBHOOK_BUCKET is None:
+        _GROUP_WEBHOOK_BUCKET = make_group_webhook_bucket(monotonic=monotonic, sleep=sleep)
+        _GROUP_WEBHOOK_CLOCK = (monotonic, sleep)
+        return _GROUP_WEBHOOK_BUCKET
+    if _GROUP_WEBHOOK_CLOCK != (monotonic, sleep):
+        raise RuntimeError(
+            "群 webhook 令牌桶已经初始化过了，⛔ 不许用另一套时钟再取一次——"
+            "那意味着有第二个调用方在造自己的桶，配额会翻倍。"
+            "需要换时钟请先显式 reset_group_webhook_bucket()（仅限测试）。"
+        )
+    return _GROUP_WEBHOOK_BUCKET
+
+
+def reset_group_webhook_bucket() -> None:
+    """清掉单例。⛔ **只给测试用**，生产代码里出现即是缺陷。
+
+    单例一旦被重置，之前发出去的量就不再计入新桶——在生产里那就是"手动给自己
+    续了一份配额"。留这个口子是因为测试必须能换假时钟，⛔ 不是因为它有别的用途。
+    """
+    global _GROUP_WEBHOOK_BUCKET, _GROUP_WEBHOOK_CLOCK
+    _GROUP_WEBHOOK_BUCKET = None
+    _GROUP_WEBHOOK_CLOCK = None

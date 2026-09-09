@@ -162,6 +162,19 @@ CREATE TABLE IF NOT EXISTS liaison_group_notify (
     -- 「已送达必带时间戳」与「未送达必不带时间戳」一条等式同时钉住。
     -- 写成等式而不是两条 CHECK：两个方向必须同时成立，拆开写容易只加一半。
     CHECK ((state = 'sent') = (sent_at IS NOT NULL)),
+    -- TD-28：上面几条 CHECK 只守**各字段各自的取值域**，跨字段的荒唐组合照样写得进去
+    -- （登记时用直连 SQL 实证过：`state='sent'` + `mode='reject'`、
+    -- `state='rejected'` + `mode='direct'` + `attempts=99`、`byte_length=-5` 全部成功）。
+    -- 下面两条补的是跨字段与取值域的下界。
+    --
+    -- 「拒发」在状态与模式上是**同一件事的两个投影**，必须同真同假。同样写成等式而
+    -- 不是两条单向 CHECK：只加一半的话，"rejected 但 mode=direct" 这种行仍然进得来，
+    -- 而这张表是台账——一行"被拒发但已送达"会让所有基于它的报表悄悄说谎。
+    CHECK ((state = 'rejected') = (mode = 'reject')),
+    -- 长度与次数的下界。`limit_bytes` 是 **> 0** 而不是 >= 0：阈值为 0 意味着任何正文
+    -- 都超限，那不是阈值是死锁。`byte_length = 0`（空正文）与 `attempts = 0`
+    -- （还没发过）都是合法的，⛔ 不许顺手收成 > 0 误伤正路。
+    CHECK (attempts >= 0 AND byte_length >= 0 AND limit_bytes > 0),
     -- 与幂等键 {thread_id}:effect_send_group_notify:{digest} 同域（见上）。
     PRIMARY KEY (thread_id, digest)
 );

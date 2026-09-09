@@ -766,3 +766,57 @@ def test_size_guard_measures_bytes_not_characters():
     with pytest.raises(transport.WebhookTransportError):
         make_sender(fake).publish_attachment(filename="中文.md", content=oversized)
     assert fake.multipart_calls == []
+
+
+# ---------------------------------------------------------------------------
+# TD-26 ②：令牌数按**本步真正发出的 HTTP 请求数**扣
+# ---------------------------------------------------------------------------
+
+
+def test_degraded_first_step_takes_two_tokens_for_its_two_http_requests(bucket, clock):
+    """降级投递第一步发**两次** HTTP（上传附件 + 发文件消息），必须扣 **2** 个令牌。
+
+    只扣 1 个是原缺口：降级通知会以约 1.5 倍配额打服务端，于是又被 `45009` 打回、
+    退回"被平台拒了才知道"的老路——而主动限流的全部意义就是不走那条路。
+    判据钉在**桶的剩余量**上，⛔ 不是 acquire() 的调用次数：调用几次是实现细节，
+    "服务端那边被打了几下"才是这条债要守的东西。
+    """
+    fake = FakeTransport([0, 0])
+    plan = guard.compute_notify_plan("中" * 2000, limit_bytes=4096, attachment_supported=True)
+    before = bucket.available_tokens
+    outcome = webhook.effect_deliver_with_backoff(
+        webhook.DegradedDelivery(make_sender(fake), plan), bucket=bucket, sleep=clock.sleep
+    )
+    assert outcome.delivered is True
+    # 实际打出去 3 次 HTTP：upload_media + send(file) + send(markdown)
+    assert len(fake.multipart_calls) + len(fake.json_calls) == 3
+    assert bucket.available_tokens == pytest.approx(before - 3.0)
+
+
+def test_direct_delivery_takes_exactly_one_token(bucket, clock):
+    """对照组：不降级的一条 markdown 只发一次 HTTP，⛔ 不许因为本次修改多扣。"""
+    fake = FakeTransport([0])
+    plan = guard.compute_notify_plan("短", limit_bytes=4096, attachment_supported=True)
+    before = bucket.available_tokens
+    webhook.effect_deliver_with_backoff(
+        webhook.DirectDelivery(make_sender(fake), plan), bucket=bucket, sleep=clock.sleep
+    )
+    assert bucket.available_tokens == pytest.approx(before - 1.0)
+
+
+def test_degraded_retry_after_upload_succeeded_takes_only_one_token(bucket, clock):
+    """附件已上传过之后，重试那一步只剩 `send_file` 一次 HTTP → 只扣 **1** 个。
+
+    ⛔ 不许写死"降级永远扣 2"：附件只上传一次（断点在 `_media_id` 上），第二次
+    还按 2 扣会把配额白白吃掉一半，而症状是"发得比配置的还慢"——没人会去查。
+    """
+    fake = FakeTransport([0])
+    plan = guard.compute_notify_plan("中" * 2000, limit_bytes=4096, attachment_supported=True)
+    delivery = webhook.DegradedDelivery(make_sender(fake), plan)
+    assert delivery.pending_requests == 2
+    delivery.send_next()  # 上传 + 发文件消息；本步之后 _media_id 已就位
+    assert delivery.pending_requests == 1
+
+    before = bucket.available_tokens
+    webhook.effect_deliver_with_backoff(delivery, bucket=bucket, sleep=clock.sleep)
+    assert bucket.available_tokens == pytest.approx(before - 1.0)

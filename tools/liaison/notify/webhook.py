@@ -154,6 +154,16 @@ class Delivery(Protocol):
     @property
     def done(self) -> bool: ...
 
+    @property
+    def pending_requests(self) -> int:
+        """下一次 `send_next()` 会打出去**几次** HTTP 请求。
+
+        🔴 由投递对象**自报**，⛔ 不由 `effect_deliver_with_backoff` 去猜（TD-26 ②）。
+        外层猜的写法在降级投递上就错了：第一步实际发两次（上传附件 + 发文件消息），
+        外层只扣 1 个令牌，实际以约 1.5 倍配额打服务端。谁发的谁知道发了几次。
+        """
+        ...
+
     def send_next(self) -> WebhookResponse: ...
 
 
@@ -168,6 +178,11 @@ class DirectDelivery:
     @property
     def done(self) -> bool:
         return self._index >= 1
+
+    @property
+    def pending_requests(self) -> int:
+        """恒为 1：一条 markdown 就是一次 `post_json`。"""
+        return 1
 
     def send_next(self) -> WebhookResponse:
         response = self._sender.send_markdown(self._plan.body)
@@ -197,6 +212,18 @@ class DegradedDelivery:
     @property
     def done(self) -> bool:
         return self._index >= 2
+
+    @property
+    def pending_requests(self) -> int:
+        """第一步 2 次（`post_multipart` 上传 + `post_json` 发文件消息），其余 1 次。
+
+        ⛔ **不许写死"降级永远 2"**：附件只上传一次（断点在 `_media_id` 上），
+        重试时那一步只剩 `send_file`。还按 2 扣会白吃掉一半配额，症状是"发得比
+        配置的还慢"——没有任何报错，没人会去查。
+        """
+        if self._index == 0 and self._media_id is None:
+            return 2
+        return 1
 
     def send_next(self) -> WebhookResponse:
         if self._index == 0:
@@ -263,7 +290,10 @@ def effect_deliver_with_backoff(
     attempts = 0
     retries = 0
     while not delivery.done:
-        bucket.acquire()  # 节流在**发送前**生效（spec 逐字）
+        # 节流在**发送前**生效（spec 逐字），且**按本步真正要发的请求数**取令牌
+        # （TD-26 ②）：降级投递第一步发两次 HTTP，只扣 1 个就是在偷配额。
+        for _ in range(delivery.pending_requests):
+            bucket.acquire()
         attempts += 1
         try:
             response = delivery.send_next()

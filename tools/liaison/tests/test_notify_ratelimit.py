@@ -135,3 +135,49 @@ def test_ratelimit_module_does_not_import_time():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
     assert "time" not in imported, "⛔ ratelimit.py 不许 import time，时钟只能注入"
+
+
+# ---------------------------------------------------------------------------
+# TD-26 ①：令牌桶必须是**进程级单例**
+# ---------------------------------------------------------------------------
+
+
+def test_two_callers_share_the_same_group_webhook_bucket(clock):
+    """两个调用方拿到的必须是**同一个对象**，⛔ 不是两个等价的桶。
+
+    等价的两个桶＝两份 20 条/分钟的配额，实际发送速率直接翻倍——而 D9 的
+    「20 条/分钟」是**服务端**的额度，它不会因为进程内分了两个桶就变成 40。
+    判据写成 `is`（同一性），⛔ 不许放宽成"参数相同"：参数相同的两个桶各自
+    独立扣令牌，正是本条债要消灭的东西。
+    """
+    ratelimit.reset_group_webhook_bucket()
+    first = ratelimit.get_group_webhook_bucket(monotonic=clock.monotonic, sleep=clock.sleep)
+    second = ratelimit.get_group_webhook_bucket(monotonic=clock.monotonic, sleep=clock.sleep)
+    assert first is second
+
+    # 且配额是**共享**的：第一个调用方扣掉的，第二个调用方看得见。
+    before = second.available_tokens
+    first.acquire()
+    assert second.available_tokens == pytest.approx(before - 1.0)
+
+
+def test_a_second_caller_bringing_its_own_clock_is_refused(clock):
+    """断言（TD-26 还债动作逐字："用模块级单例并加断言"）。
+
+    第二个调用方带着**自己**的时钟来，说明它以为自己在造一个新桶。静默返回既有
+    单例会让它的假时钟对不上、且掩盖了"有人绕过单例"这件事；⛔ 不许静默，要报。
+    """
+    ratelimit.reset_group_webhook_bucket()
+    ratelimit.get_group_webhook_bucket(monotonic=clock.monotonic, sleep=clock.sleep)
+    other = FakeClock()
+    with pytest.raises(RuntimeError):
+        ratelimit.get_group_webhook_bucket(monotonic=other.monotonic, sleep=other.sleep)
+
+
+def test_available_tokens_starts_full_and_never_goes_negative(clock):
+    """`available_tokens` 是 TD-26 ② 的观测面，先把它自己钉住。"""
+    b = ratelimit.make_group_webhook_bucket(monotonic=clock.monotonic, sleep=clock.sleep)
+    assert b.available_tokens == pytest.approx(float(ratelimit.GROUP_WEBHOOK_BUCKET_CAPACITY))
+    for _ in range(ratelimit.GROUP_WEBHOOK_BUCKET_CAPACITY + 3):
+        b.acquire()
+    assert b.available_tokens >= 0.0
