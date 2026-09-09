@@ -122,6 +122,39 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
                     effect_key,
                 )
                 return None
+            except Exception:
+                # ⚠️ 语义边界，别把这一支和上面那支混为一谈：
+                # - IntegrityError = 撞唯一键 = 别人已经做完了 = 幂等命中 = **正常
+                #   路径** ⇒ 回滚 + 短路返回 None（上面那支）
+                # - 其它任何异常 = 这条 INSERT 是**真失败**（磁盘满的
+                #   OperationalError 是最现实的一种）⇒ 回滚 + **原样上抛**。
+                #   ⛔ 不得返回 None、⛔ 不得假装幂等成功：这件事一次都没被记进
+                #   effect_log，返回 None 等于告诉调用方"早做过了"，重放时它会
+                #   被跳过，业务写就此永久丢失。
+                #
+                # 回滚是必须的，理由与上面那支逐字同款：fn 刚写的业务行还在这个
+                # 未提交的事务里，而 conn 是全应用共享的单连接（见
+                # db.get_connection）。不回滚，这些行会被之后任何一次*不相关*的
+                # effect 的 conn.commit() 悄悄落盘 —— 业务表多一行、effect_log
+                # 一行也没有，工程铁律1 的恒等式当场破掉，且没有任何症状。
+                # ⛔ 同理不能改成 INSERT OR IGNORE 之后照常 commit。
+                #
+                # 回滚自己也可能失败。那个次生异常 ⛔ 绝不许替换掉原始异常
+                # （调用方要看的是"磁盘满"，不是"rollback 炸了"），但也不能静默：
+                # 回滚失败 ⇒ 那批业务写仍留在未提交事务里，随时会被下一次不相关
+                # 的 commit 带下去，记 ERROR 让这个失败模式留下痕迹。
+                try:
+                    conn.rollback()
+                except Exception as rollback_exc:
+                    logger.error(
+                        "rollback failed while cleaning up after effect_log insert "
+                        "for effect_key=%s failed; this call's business write was NOT "
+                        "undone and may be silently committed by a later, unrelated "
+                        "effect",
+                        effect_key,
+                        exc_info=rollback_exc,
+                    )
+                raise
 
             conn.commit()
             return result

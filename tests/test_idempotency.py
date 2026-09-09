@@ -313,3 +313,104 @@ def test_rollback_failure_during_short_circuit_does_not_fake_success(tmp_path, c
             send(conn, thread_id="job1", business_key="v1")
 
     assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
+def test_non_integrity_error_on_effect_log_insert_rolls_back_and_propagates(tmp_path):
+    """
+    TD-33。第二个 try（写 effect_log 的那条 INSERT）此前只兜 sqlite3.IntegrityError。
+    若这条 INSERT 抛的是**别的**异常——磁盘满的 OperationalError 是最现实的一种——
+    异常直接向上抛，中间**不做 conn.rollback()**：于是被装饰函数已经完成的业务写就
+    那样悬在这个连接尚未提交的事务里，直到某个不相干的后续 commit() 把它悄悄一并
+    落盘（conn 是全应用共享的单连接，见 app/storage/db.py 的 get_connection）。
+
+    这是工程铁律1 要防的那类事故的近亲：不是"业务写失败、幂等记录成功"，而是
+    "业务写成功、提交归属不明"——业务表多一行、effect_log 一行也没有，恒等式当场
+    破掉，且**完全没有症状**。
+
+    语义边界（写死在生产代码注释里）：
+    - IntegrityError = 撞唯一键 = 幂等命中 = 正常路径 ⇒ 回滚 + 短路返回 None
+    - 其它任何异常 = 真失败 ⇒ 回滚 + **原样上抛**。⛔ 不得返回 None、⛔ 不得假装
+      幂等成功——那会让调用方以为这件事已经做过了，而它其实一次都没被记下来。
+
+    断言 ⓐ 异常原样抛出（类型与消息都不被替换）ⓑ 业务写没有留在未提交事务里：
+    后续一次完全不相干的 conn.commit() 之后，**用另一个连接**去查那一行必须查不到
+    （用另一个连接才能区分"已回滚"和"还悬在本连接的未提交事务里"——同一连接看得见
+    自己未提交的写）。
+    """
+    db_path = str(tmp_path / "test.db")
+
+    class _EffectLogInsertFailingConnection(sqlite3.Connection):
+        """让写 effect_log 的那条 INSERT 抛 OperationalError（模拟磁盘满），
+        其余语句（含预检 SELECT、业务写、init_schema）一律照常。"""
+
+        def execute(self, sql, *args, **kwargs):
+            if sql.lstrip().upper().startswith("INSERT INTO EFFECT_LOG"):
+                raise sqlite3.OperationalError("database or disk is full (simulated)")
+            return super().execute(sql, *args, **kwargs)
+
+    conn = sqlite3.connect(
+        db_path, check_same_thread=False, factory=_EffectLogInsertFailingConnection
+    )
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)
+
+    @idempotent_effect("effect_disk_full")
+    def send(conn, thread_id, business_key):
+        conn.execute(
+            "INSERT INTO job (id, title) VALUES (?, ?)",
+            ("leaked-job", "不应该落盘的行"),
+        )
+        return "sent"
+
+    # ⓐ 原始异常原样抛出：既不被吞成 None，也不被回滚的次生异常替换
+    with pytest.raises(sqlite3.OperationalError, match="disk is full"):
+        send(conn, thread_id="job1", business_key="v1")
+
+    # 之后某个完全不相干的动作在同一个共享连接上 commit——这正是泄漏发生的时刻
+    conn.commit()
+
+    # ⓑ 换一个连接来看：那一行不能被这次不相干的 commit 带下去
+    reader = get_connection(db_path)
+    assert reader.execute("SELECT 1 FROM job WHERE id = ?", ("leaked-job",)).fetchone() is None
+    assert reader.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+
+
+def test_rollback_failure_on_non_integrity_error_keeps_original_exception(tmp_path, caplog):
+    """
+    TD-33 的最坏分支：effect_log 的 INSERT 抛了非 IntegrityError（真失败），兜底的
+    conn.rollback() 自己也失败。此时业务写没被撤掉、仍躺在未提交事务里等着被下一次
+    不相关的 commit 带走。
+
+    要求与第一个 try 块同款：回滚的次生异常 ⛔ 绝不许替换掉原始异常（调用方要看的是
+    "磁盘满"，不是"rollback 炸了"），但也不许静默——必须记一条带 effect_key 的 ERROR，
+    让这个失败模式在现网留下痕迹。
+    """
+    db_path = str(tmp_path / "test.db")
+
+    class _BothFailingConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if sql.lstrip().upper().startswith("INSERT INTO EFFECT_LOG"):
+                raise sqlite3.OperationalError("database or disk is full (simulated)")
+            return super().execute(sql, *args, **kwargs)
+
+        def rollback(self):
+            raise sqlite3.OperationalError("rollback exploded")
+
+    conn = sqlite3.connect(db_path, check_same_thread=False, factory=_BothFailingConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)  # init_schema 只用 commit()，不用 rollback()，对这个子类安全
+
+    @idempotent_effect("effect_disk_full_rb")
+    def send(conn, thread_id, business_key):
+        conn.execute("INSERT INTO job (id, title) VALUES (?, ?)", ("job-loser", "本次写的行"))
+        return "sent"
+
+    with caplog.at_level(logging.ERROR, logger="app.storage.idempotency"):
+        with pytest.raises(sqlite3.OperationalError, match="disk is full"):
+            send(conn, thread_id="job1", business_key="v1")
+
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records, "回滚失败必须记 ERROR，不能彻底静默"
+    assert any("job1:effect_disk_full_rb:v1" in r.getMessage() for r in error_records), (
+        "日志里应该包含 effect_key，方便定位是哪个 effect 的部分写入被泄漏"
+    )
