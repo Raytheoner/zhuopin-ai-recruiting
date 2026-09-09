@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import datetime
+import pathlib
+import sys
 
 import pytest
 
@@ -671,3 +673,69 @@ def test_alert_text_includes_blocked_by_queue_count_when_round_has_failures(conn
     text = sink.texts[0]
     assert f"保留 {len(report.blocked_by_queue)} 条" in text
     assert "m-queued" not in text
+
+
+def test_cleanup_main_runs_without_any_credentials(tmp_path, monkeypatch, capsys):
+    """🔴 清理 ⛔ 不需要企微凭据——它不建连接。
+
+    这条同时守住了 `__main__.py` 里那个分支的位置：它必须在 `load_credentials()`
+    之前短路，否则一台还没配 BOT_ID 的机器上永远清理不了。
+    """
+    monkeypatch.delenv("HR_LIAISON_BOT_ID", raising=False)
+    monkeypatch.delenv("HR_LIAISON_BOT_SECRET", raising=False)
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    monkeypatch.setattr(
+        retention.archive, "DEFAULT_ARCHIVE_ROOT", tmp_path / "archive"
+    )
+    assert retention.cleanup_main([]) == retention.EXIT_OK
+    assert "留存清理" in capsys.readouterr().out
+
+
+def test_cleanup_main_rejects_unknown_arguments(capsys):
+    assert retention.cleanup_main(["--force"]) == retention.EXIT_BAD_ARGS
+    assert "未知参数" in capsys.readouterr().err
+
+
+def test_cleanup_main_fails_closed_on_bad_config(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HR_LIAISON_RETENTION_DAYS", "0")
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    assert retention.cleanup_main([]) == retention.EXIT_BAD_CONFIG
+    assert "HR_LIAISON_RETENTION_DAYS" in capsys.readouterr().err
+
+
+def test_cleanup_main_returns_5_when_the_round_had_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/a__1.bin")
+    monkeypatch.setattr(retention.archive, "DEFAULT_ARCHIVE_ROOT", root)
+    monkeypatch.setattr(
+        retention, "_unlink", lambda path: (_ for _ in ()).throw(PermissionError("模拟"))
+    )
+    assert retention.cleanup_main([]) == retention.EXIT_RETENTION_FAILED
+
+
+def test_main_module_cleanup_branch_is_guarded_and_appended():
+    """守住 opener 约束 4 的两半：
+
+    ① 子命令分支挂在 `__name__ == "__main__"` 上 ⇒ 被 import 时完全惰性；
+    ② 文件最后两行（既有入口）**一字节未变**。
+    """
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "__main__.py"
+    ).read_text(encoding="utf-8")
+    assert 'if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "cleanup":' in source
+    assert source.rstrip().endswith(
+        'if __name__ == "__main__":\n    raise SystemExit(main())'
+    )
+    # 分支必须排在既有入口之前，否则 `raise SystemExit(main())` 会先跑掉。
+    assert source.index('sys.argv[1] == "cleanup"') < source.rindex('if __name__ == "__main__":')
+
+
+def test_importing_main_module_does_not_run_cleanup(monkeypatch):
+    """被 import（测试、工具）时那段必须一动不动。"""
+    monkeypatch.setattr(sys, "argv", ["pytest", "cleanup"])
+    import importlib
+
+    import tools.liaison.__main__ as liaison_main
+
+    importlib.reload(liaison_main)  # 不抛 SystemExit 即为通过

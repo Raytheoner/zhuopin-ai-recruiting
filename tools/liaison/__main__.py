@@ -196,5 +196,21 @@ def main(
     return 0
 
 
+# ── 第 8 章·留存期清理子命令（tasks 8.1–8.2）─────────────────────────────
+# ⛔ 本段是**纯插入**：下面那两行既有入口一字节未动（日志泳道同时在 main()
+# 函数体首行接线，两头各占一边，避免 merge 冲突）。
+#
+# 三个判据的顺序是刻意的：
+# ① `__name__ == "__main__"` 放最前 ⇒ 被 import 时（测试、工具）这段完全惰性，
+#    ⛔ 不许改成模块级裸判断；
+# ② 它排在既有入口之前 ⇒ `raise SystemExit(main())` 不会先跑掉；
+# ③ 清理**不需要企微凭据**（它不建连接），所以这条分支必须短路在
+#    `main()` 的 `load_credentials()` 之前——否则一台还没配 BOT_ID 的机器
+#    永远清理不了自己的过期数据。
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "cleanup":
+    from tools.liaison.retention import cleanup_main
+
+    raise SystemExit(cleanup_main(sys.argv[2:]))
+
 if __name__ == "__main__":
     raise SystemExit(main())

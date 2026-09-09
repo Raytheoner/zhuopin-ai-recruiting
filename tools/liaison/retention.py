@@ -37,12 +37,15 @@ import json
 import logging
 import os
 import pathlib
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
 from app.storage.idempotency import idempotent_effect
+from tools.liaison import alerts, archive
 from tools.liaison.session import CHINA_TZ
+from tools.liaison.storage import db as liaison_db
 
 logger = logging.getLogger(__name__)
 
@@ -642,3 +645,51 @@ def run_cleanup(
         emit_retention_alert(sink, compute_retention_alert_text(report))
     logger.info("%s", render_report(report))
     return report
+
+
+#: 退出码。⚠️ 2/3/4 已被 `__main__.py` 占用（缺凭据 / SDK 不可用 / SDK 表面未验），
+#: ⛔ 不许复用——排障的人靠退出码一眼分辨是哪一类问题。
+EXIT_OK: Final[int] = 0
+EXIT_RETENTION_FAILED: Final[int] = 5
+EXIT_BAD_CONFIG: Final[int] = 6
+EXIT_BAD_ARGS: Final[int] = 7
+
+_DRY_RUN_FLAG: Final[str] = "--dry-run"
+_USAGE: Final[str] = "用法：python -m tools.liaison cleanup [--dry-run]"
+
+
+def cleanup_main(argv: Sequence[str] | None = None) -> int:
+    """`python -m tools.liaison cleanup` 的实现。
+
+    ⚠️ **这是本模块唯一允许读真实时钟与真实环境变量的地方**，其余全部靠注入。
+    ⚠️ 路径取的是 `liaison_db.DEFAULT_DB_PATH` 与 `archive.DEFAULT_ARCHIVE_ROOT`
+    的**属性访问**（不是 `from ... import` 的绑定），这样单测能 monkeypatch 到
+    临时目录上——opener 约束 3：⛔ 单测不许碰真实 `data/`。
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    dry_run = _DRY_RUN_FLAG in args
+    unknown = [item for item in args if item != _DRY_RUN_FLAG]
+    if unknown:
+        print(f"未知参数：{' '.join(unknown)}。{_USAGE}", file=sys.stderr)
+        return EXIT_BAD_ARGS
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+    try:
+        retention_days = load_retention_days()
+    except RetentionConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_BAD_CONFIG
+
+    conn = liaison_db.get_connection()
+    liaison_db.init_schema(conn)
+    report = run_cleanup(
+        conn,
+        now=datetime.datetime.now(CHINA_TZ),
+        retention_days=retention_days,
+        archive_root=archive.DEFAULT_ARCHIVE_ROOT,
+        sink=alerts.LoggingAlertSink(),
+        dry_run=dry_run,
+    )
+    print(render_report(report))
+    return EXIT_RETENTION_FAILED if report.failures else EXIT_OK
