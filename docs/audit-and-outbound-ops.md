@@ -748,6 +748,40 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    （本轮 opener §二.3 按后者写，`Get-Content` 直接 `PathNotFound`）。全机只此一个 `*.log`。
 
 
+   **2026-09-09 六次发版记录（`[Mac]0909P`）——✅ 成功**
+
+   执行人：`[Mac]0909P` session ｜ 依据：Shao Peishen **2026-09-09 23:32 CST 回「发」**
+   （接力档 G-6，commit `0aa1af4` 留痕）。与上面五条**并列**，不覆盖。
+
+   | 项 | 值 |
+   |---|---|
+   | 发版 HEAD | `0aa1af4`（sync 执行时 `main` 与 `origin/main` 同步；工作区有第十六批泳道的 `docs/` 未提交改动，但 `docs/` 不在 `SYNC_PATHS` 白名单，到不了 `.51`） |
+   | 上线范围（**发车前现算**，非 opener 原文照抄） | `git diff --stat 95b298c..main -- app/ scripts/ requirements.txt pyproject.toml .env.example deploy-server.ps1` ＝ **5 文件 / +276 −7**：`.env.example` 9（只多 `LLM_FALLBACK_*` 四个变量名，无值）／`app/outbound/delivery.py` 2（TD-17 docstring 转义，行为零变化）／`app/storage/idempotency.py` **94**（`8ea7bd2`＋`2853116` 撞键短路 ＋ `25d8715` TD-33 非完整性异常也回滚）／`pyproject.toml` 12（`testpaths` 接入 `tools/liaison/tests`，无依赖变更）／`scripts/install_lane_launcher.py` 166（Mac launchd 安装脚本，在 Windows 上是惰性文件）。与 `0909AJ` 23:33 代跑的现算**逐项一致**，`app/` 无多出项 ⇒ 授权范围未被低估（`0908K` 教训的对策生效） |
+   | 快照目录 | `C:\apps\backups\20260909-2341`。只快照 `app\`（`data\` 因 `demo.db-shm` 被运行中服务占用，且回滚本就不用 `data\`） |
+   | 前置核对 5 项 | **全过**：`git status -sb` ＝ `## main...origin/main` 同步 ｜ `ssh zp51` 回 `ok` ｜ 现网基线 **200** ｜ `git diff --stat 95b298c..main -- requirements.txt` **为空** ⇒「纯 sync、⛔ 不装依赖、⛔ 不重跑 `deploy-server.ps1`」前提成立 ｜ 本机 `pytest tests/test_transaction_ownership.py tests/test_outbound_effects.py` **12 passed** |
+   | `sync-to-server.sh` 执行方式 | 同前五次，由 Shao Peishen 本人点 CC Desktop bash 块 Run（Auto Mode 分类器拦 AI 直调；人点这一下即发版授权留痕）。输出末尾 `HTTP 200` + 「发版完成」，远程重启计划任务输出为可读中文 |
+   | 冒烟 ①：首页 | `curl http://192.168.100.51:8095/hr/recruit-agent/` → **200** |
+   | 冒烟 ②：`GET /api/jobs` | **JSON 列表 + HTTP 200**（非 405），20 个岗位，含 `stage_label` / `created_at_label` 等字段 |
+   | 冒烟 ③：`logs\app.log` | ✅ **字面亦通过**。本次新进程 PID `1480`，`2026-09-09 23:42:43,209` `Application startup complete`；其后仅 4 行 uvicorn 启动 + 3 条 `200` 访问，**零 `Traceback` / `OperationalError`**。⇒ `0908K` 记的「尾 N 行必混历史错误」本次未复现（上一版进程的错误已滚出尾 60 行窗口） |
+   | 🔴 冒烟 ④（**本次目标验收**）：修复真的到了现网 | `Select-String app\storage\idempotency.py -Pattern 'short-circuiting duplicate effect_key'` → **`1`**（期望 ≥1）⇒ 撞键短路修复已在 `.51` 落地 |
+   | 冒烟 ⑤：巡检裸跑回归 | 不带 `PYTHONIOENCODING` 裸跑 `python -m app.audit.assertions` → **`EXIT=0`**，6 条断言全 `[OK]`（`19b8937` 的编码修复未被本次回归） |
+
+   冒烟 ①–⑤ **全部达标**，未触发回滚。`.51` 现网自此为 `0aa1af4` 一线代码。
+
+   ✅ **「重复 `confirm` ⇒ 500」缺陷标已修上线**——`0908K` 记录里那条「⛔ 尚未发版到 `.51`」
+   自本次起作废。09-08 13:18 现网实发的那次 500，其修复（`8ea7bd2`＋`2853116`）与 TD-33
+   的加固（`25d8715`）已同批在现网生效。
+
+   ⚠️ **⛔ 不要据此认为「重复 confirm」这一类事件已彻底闭合**——`0908K` 终审登记的三条
+   观察项**逐条仍然成立**，本次发版一条都没有关闭它们：
+   ① 单连接拓扑下连接级 `rollback` 不等于"只撤本次写"（根治需每请求一连接或 effect 串行化，
+   M2 迁 Postgres 时一并解决）；② `effect_confirm_profile` 内部 `human_review` 主键冲突走的是
+   **另一条**语义路径，仍是 500；③ 本修法只认 `sqlite3.IntegrityError`，迁 Postgres 时必须
+   同步换成 `psycopg.errors.UniqueViolation`，否则该 500 原样复活。
+
+   §五 第 1 项（`data\` 备份任务）状态不变，仍 ⏸。
+
+
 ---
 
 ## 关联
