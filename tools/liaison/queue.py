@@ -54,6 +54,17 @@ class TaskNotFound(LookupError):
     """
 
 
+class _TaskAlreadyPushed(Exception):
+    """内部信号：这条队列条目已经是「已推送」，本次 UPDATE 一行都没改。
+
+    ⛔ 不外泄给调用方——`mark_task_pushed` 把它翻成 `False`（幂等命中）。
+    做成异常而不是返回值，是因为它必须从 `@idempotent_effect` 的**函数体里**
+    抛出来才能触发装饰器的回滚：返回一个"什么都没做"的值，装饰器会照常
+    写下 `effect_log` 行并提交，`effect_mark_task_pushed` 就变成 2 行——
+    正是 TD-24 要堵的那个形状。
+    """
+
+
 class TaskTransitionRejected(ValueError):
     """存储层拒绝了这次状态取值或状态转移。
 
@@ -171,11 +182,58 @@ def _require_single_row(cursor, *, msgid: str, action: str) -> None:
         raise TaskNotFound(f"{action} 找不到队列条目：msgid={msgid!r}（命中 {cursor.rowcount} 行）")
 
 
+#: `effect_defer_task` 的幂等键里「代际号」与 `msgid` 的分隔符。
+#:
+#: 🔴 代际号在前、且是纯数字（不含本分隔符）⇒ 按**第一个** `#` 切分永远唯一，
+#: 所以 `{代际}#{msgid}` 这个组合**不可能**与另一个 (代际, msgid) 组合撞车，
+#: 无论真实 msgid 里含多少个 `#`。TD-22 那类「分隔符恰好出现在真实 msgid 里就
+#: 静默串味」的坑在这个方向上不成立——⛔ 不要把顺序调成 `{msgid}#{代际}`，
+#: 那个方向就撞得上（msgid `M#1` 与 msgid `M` 的第 1 代会得到同一把键）。
+DEFER_GENERATION_SEPARATOR = "#"
+
+
+def _defer_business_key(msgid: str, generation: int) -> str:
+    """第 `generation` 次暂缓这条 msgid 所用的 `business_key`。"""
+    return f"{generation}{DEFER_GENERATION_SEPARATOR}{msgid}"
+
+
+def _next_defer_generation(conn: sqlite3.Connection, *, msgid: str) -> int:
+    """这条 msgid **下一次**暂缓的代际号 ＝ 它此前成功暂缓过的次数。只读。
+
+    🔴 **为什么暂缓的幂等键必须带代际号**（TD-23）：`pending → deferred` 是一条
+    **可重复发生**的转移——第 6 章的「撤销暂缓」会把行改回 `pending`，之后再暂缓
+    是完全合法的。而「一个 msgid 一把幂等键」只能表达"这件事发生过至少一次"，
+    表达不了"这是第几次"。用它做键，第二次合法暂缓会被预检短路掉，
+    **该 msgid 的暂缓从此再也做不成**，且报错指向错误的原因。
+    代际号让每一次暂缓拿到自己的键：重放同一次暂缓仍然命中（键相同），
+    一次**新的**暂缓则拿到新键、照常走到存储层触发器。
+
+    ⚠️ 逐个代际**精确匹配**地探，⛔ 不用 `LIKE` / `GLOB` 前缀匹配：msgid 是外部
+    来的字符串，里面的 `_` `%` 会被当通配符——那正是 TD-22 记的那个坑。
+    循环次数 ＝ 这条 msgid 的暂缓次数，实际就是个位数。
+
+    ⚠️ 查 `business_key` 而**不查** `effect_key`，因此天然不看 `thread_id`：
+    「一条消息暂缓了几次」是 msgid 这个全局唯一业务身份的属性，不是某个会话的属性
+    （与 `enqueue_task` 里那段"判据不看 thread_id"同一条理由，也是 TD-24 的教训）。
+    """
+    generation = 0
+    while conn.execute(
+        "SELECT 1 FROM effect_log WHERE node_name = 'effect_defer_task' AND business_key = ?",
+        (_defer_business_key(msgid, generation),),
+    ).fetchone() is not None:
+        generation += 1
+    return generation
+
+
 @idempotent_effect("effect_defer_task")
 def effect_defer_task(
-    conn: sqlite3.Connection, *, thread_id: str, business_key: str
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, msgid: str
 ) -> str:
-    """把一条队列条目转入「暂缓」。`business_key` 即 `msgid`。
+    """把一条队列条目转入「暂缓」。
+
+    ⚠️ `business_key` 是 `{代际}#{msgid}`（见 `_next_defer_generation`），**不是**
+    裸 msgid，所以要改哪一行由单独传进来的 `msgid` 决定。⛔ 不要从 `business_key`
+    里反解 msgid——真实 msgid 可以含 `#`，反解在那一刻就开始静默改错行。
 
     ⛔ **本函数不判断旧状态。** 「暂缓只能来自待发」由
     `trg_liaison_task_defer_only_from_pending` 触发器拒绝——那是唯一真源。
@@ -185,9 +243,9 @@ def effect_defer_task(
     （见 `queue.py` 模块 docstring 与本计划判断 4）。
     """
     cursor = conn.execute(
-        "UPDATE liaison_task SET send_status = 'deferred' WHERE msgid = ?", (business_key,)
+        "UPDATE liaison_task SET send_status = 'deferred' WHERE msgid = ?", (msgid,)
     )
-    _require_single_row(cursor, msgid=business_key, action="暂缓")
+    _require_single_row(cursor, msgid=msgid, action="暂缓")
     return business_key
 
 
@@ -201,12 +259,31 @@ def effect_mark_task_pushed(
     "同一输入产生同一结果"不再成立，测试只能靠 monkeypatch 才写得动。
     「已推送必带时间戳」由表上的等式 CHECK 拒绝，⛔ 本函数不预判。
 
+    🔴 **`AND send_status <> 'pushed'` 是「第一次推送时刻」的第二道防线**（TD-24）。
+    表上的三态 CHECK 与等式 CHECK 都拦不住 `pushed → pushed`：那一步在表层完全合法，
+    只是把 `pushed_at` 换了个值。幂等键是第一道防线，但它带 `thread_id` 前缀，
+    而队列条目的业务身份是全局唯一的 `msgid`——调用方换一个 `thread_id`
+    （第 6 章按**推送目标群**取 thread_id 就会发生）幂等键就不命中了。
+    `mark_task_pushed` 已经把 thread_id 改成从行里读回来堵住那条缝，本条件是它的
+    兜底：即便哪天又有人从别的路径凑出一把新键，UPDATE 自己也一行都不会改。
+
     ⚠️ UPDATE 型 effect，⛔ 不登记进 `EFFECT_NODE_TO_TABLE`。
     """
     cursor = conn.execute(
-        "UPDATE liaison_task SET send_status = 'pushed', pushed_at = ? WHERE msgid = ?",
+        "UPDATE liaison_task SET send_status = 'pushed', pushed_at = ? "
+        "WHERE msgid = ? AND send_status <> 'pushed'",
         (pushed_at, business_key),
     )
+    if cursor.rowcount == 0:
+        # 0 行有两种完全不同的成因，⛔ 不许混为一谈：条目根本不存在（真错，
+        # `_require_single_row` 抛 `TaskNotFound`），还是它已经是「已推送」
+        # （幂等命中，翻成 `False`）。不分开，一次正常的重复推送会被报成
+        # "找不到队列条目"，排查会被带偏到完全错误的方向。
+        current = conn.execute(
+            "SELECT send_status FROM liaison_task WHERE msgid = ?", (business_key,)
+        ).fetchone()
+        if current is not None and current[0] == "pushed":
+            raise _TaskAlreadyPushed(business_key)
     _require_single_row(cursor, msgid=business_key, action="标记已推送")
     return business_key
 
@@ -225,28 +302,56 @@ def defer_task(conn: sqlite3.Connection, *, thread_id: str, msgid: str) -> None:
     （触发器的条件是 `OLD.send_status <> 'pending'`），⛔ 不许吞掉它——
     "暂缓只能来自待发"是 spec 的要求，不是可以体谅的边界情况。
 
-    🔴 **`effect_defer_task` 幂等命中（返回 `None`）时不能当无操作放过。**
-    `idempotent_effect` 的预检在 `effect_key` 命中时会在 fn 函数体跑之前就短路
-    返回——`effect_defer_task` 唯一会把这把 `{thread_id}:effect_defer_task:{msgid}`
-    写进 `effect_log` 的路径是**上一次成功的 pending→deferred 转移**（转移失败时
-    异常在 effect_log 写入之前就已回滚抛出，不会落这行）。换句话说，命中幂等键
-    本身就等价于"这条 msgid 已经离开过 pending 状态"——再调一次在语义上必然是
-    非法转移，不需要真的重放 UPDATE 让触发器确认一遍。
-    这与 `mark_task_pushed` 刻意不同：那边的重复推送是"同一件事所以别再做"，
-    这边的重复暂缓是"这个状态机形状本来就不允许重复进入"（同一份 `TaskTransitionRejected`
-    docstring 已经写明这个不对称）。⛔ 不要为了让两者看起来对称而把这支
-    `raise` 改成 `return False`。
+    🔴 **⛔ 不从「幂等键命中」推断状态**（TD-23 还债，2026-09-09）。
+    旧实现把命中幂等键当作"这条 msgid 已经离开过 pending"的证据直接拒绝。
+    但**「离开过 pending」不等于「现在不在 pending」**：`deferred → pending`
+    在 schema 上合法（触发器只在 `NEW.send_status='deferred'` 时触发），第 6 章的
+    「撤销暂缓」正走这条路。于是一条被撤销过暂缓、此刻确实在 `pending` 的条目，
+    再次暂缓**完全合法却被永久拒绝**，而且该 msgid 的暂缓从此再也做不成
+    （幂等键永远命中），报错还声称原因是"此前已转入过暂缓"，排查被带偏。
+
+    **两条还债动作里选了②「读状态」，⛔ 没选①「加 TRIGGER 禁止 deferred→pending」**，
+    两条理由：① 那条 TRIGGER 会让第 6 章的「撤销暂缓」在存储层永远不可能实现——
+    等于用删掉功能来消灭场景，而这个场景正是 TD-23 自己写明的触发场景；
+    ② 它落在 `storage/schema.py`，不在本次还债的触碰区内。
+
+    实现分两层，**判断状态的地方只有一处**：
+      1. 幂等键带**代际号**（`_next_defer_generation`）⇒ 一次新的暂缓拿到新键、
+         照常走到存储层触发器，由触发器裁定合法与否。**这一层不读状态。**
+      2. 键仍然命中（只可能是并发下两条路径撞同一代际）⇒ 才读一次真状态，
+         按真状态决定返回还是抛什么。这是"读状态"，⛔ 不是"从键反推状态"。
+
+    ⛔ **仍然从不返回 `False`。** 非法转移一律抛——"暂缓只能来自待发"是 spec 的要求，
+    不是可以体谅的边界情况。这与 `mark_task_pushed` 刻意不对称：那边的重复推送是
+    "同一件事所以别再做"，这边的重复暂缓是"这个状态机形状不允许重复进入"。
     """
+    business_key = _defer_business_key(msgid, _next_defer_generation(conn, msgid=msgid))
     try:
-        applied = effect_defer_task(conn, thread_id=thread_id, business_key=msgid)
+        applied = effect_defer_task(
+            conn, thread_id=thread_id, business_key=business_key, msgid=msgid
+        )
     except sqlite3.IntegrityError as exc:
         raise _translate_transition_error(exc, msgid=msgid, action="暂缓") from exc
     if applied is None:
+        # 走到这里说明代际键仍被抢先占用 —— 只可能是另一条路径在本次
+        # `_next_defer_generation` 与 effect 之间做完了同一代际的暂缓。
+        # 🔴 ⛔ 不许再据此推断状态（那正是 TD-23 的病灶），读一次真状态。
+        current = conn.execute(
+            "SELECT send_status FROM liaison_task WHERE msgid = ?", (msgid,)
+        ).fetchone()
+        if current is None:
+            raise TaskNotFound(f"暂缓 找不到队列条目：msgid={msgid!r}（命中 0 行）")
+        if current[0] == "deferred":
+            # 别人刚把它暂缓成功了，结果正是本次要的。⛔ 不抛：这次调用要达成的
+            # 状态已经达成，抛异常只会让调用方以为暂缓没做成而去做补偿。
+            return
+        # ⚠️ 文案只陈述**读到的真状态**，⛔ 不从"键命中"反推任何结论——旧实现
+        # 硬编码"此前已成功从待发转入过暂缓"，在 `pending→deferred→pushed→再 defer`
+        # 路径下就是假话，排查会被带偏（TD-23 的附带缺陷）。
         raise TaskTransitionRejected(
             f"存储层拒绝了这次状态变更：暂缓 msgid={msgid!r}。"
-            "幂等键命中——这条队列条目此前已经成功从「待发」转入过「暂缓」，"
-            "「暂缓只能来自待发」使得再次转入必然非法（未重放 UPDATE，"
-            "命中幂等键本身即可推出结论）。"
+            f"幂等键 {business_key!r} 已被占用（另一条路径抢先做完了同一代际的暂缓），"
+            f"而这条条目当前的真实状态是 {current[0]!r}——本次暂缓未执行。"
         )
 
 
@@ -256,11 +361,44 @@ def mark_task_pushed(
     """标记「已推送」。返回 `True` 表示这次真的改了状态，`False` 表示幂等命中。
 
     幂等命中时 ⛔ 不覆盖已有时间戳——第一次推送的那个时刻才是事实。
+
+    🔴 **`thread_id` 只是调用方的上下文，⛔ 不参与幂等键**（TD-24 还债，2026-09-09）。
+    队列条目的业务身份是**全局唯一**的 `msgid`（`liaison_task.msgid UNIQUE`），
+    而幂等键的形状是 `{thread_id}:{node}:{business_key}`。让调用方决定 thread_id，
+    就等于让调用方决定"这次算不算重复"：msgid `M` 归档时 thread_id 是私聊
+    (`u_tang`)、10:00 推送成功；第 6 章群通知重试时若按**推送目标群**取
+    thread_id (`chat_xxx`) 再调一次，键不命中、UPDATE 真的执行，
+    `pushed_at` 被静默改写成 11:30，`effect_log` 里多出一行。
+    `effect_mark_task_pushed` 是 UPDATE 型、不进 `EFFECT_NODE_TO_TABLE`，
+    铁律 1 的恒等断言抓不到它——**没有任何症状**。
+
+    **两条还债动作里选了②「从任务行读回 thread_id」，⛔ 没选①「加 TRIGGER」**：
+    ① 落在 `storage/schema.py`，不在本次还债的触碰区内；而且 ② 才是治本的那条——
+    它让幂等键回到 msgid 这个真正的业务身份上，任何调用方都再也凑不出第二把键，
+    ① 只是在凑出第二把键之后再拦一道。两者不互斥，① 的效果由
+    `effect_mark_task_pushed` 里的 `AND send_status <> 'pushed'` 在**同一层**补上，
+    合起来就是这条时间戳的两道防线。
+
+    ⚠️ 参数 `thread_id` 保留是为了调用点的可读性（说明这次推送是在哪个会话上下文里
+    发生的），⛔ 但它不再影响任何判定。删掉它会连累 `test_retention.py` 等调用点，
+    而那些文件不在本次触碰区。
     """
+    # 幂等键的 thread_id 从行里读回来，⛔ 不用入参。顺带把"条目不存在"提前到
+    # 进 effect 之前——与 `_require_single_row` 同一个 `TaskNotFound` 结论，
+    # 只是不必先让 UPDATE 空跑一趟。
+    owner = conn.execute(
+        "SELECT thread_id FROM liaison_task WHERE msgid = ?", (msgid,)
+    ).fetchone()
+    if owner is None:
+        raise TaskNotFound(f"标记已推送 找不到队列条目：msgid={msgid!r}（命中 0 行）")
     try:
         applied = effect_mark_task_pushed(
-            conn, thread_id=thread_id, business_key=msgid, pushed_at=pushed_at
+            conn, thread_id=owner[0], business_key=msgid, pushed_at=pushed_at
         )
+    except _TaskAlreadyPushed:
+        # 第二道防线命中：这条已经是「已推送」，UPDATE 一行都没改，
+        # `effect_log` 也没多出一行（装饰器已回滚）。这是**正常路径**。
+        return False
     except sqlite3.IntegrityError as exc:
         raise _translate_transition_error(exc, msgid=msgid, action="标记已推送") from exc
     return applied is not None

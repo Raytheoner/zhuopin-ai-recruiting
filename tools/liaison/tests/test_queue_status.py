@@ -217,3 +217,120 @@ def test_list_tasks_orders_by_received_at_then_id(conn):
             summary=msgid,
         )
     assert [row["msgid"] for row in list_tasks(conn)] == ["msg-b", "msg-a"]
+
+
+# ---------------------------------------------------------------------------
+# TD-23 / TD-24 还债（[Mac]0909AK）
+# ---------------------------------------------------------------------------
+
+
+def test_a_task_that_was_un_deferred_can_be_deferred_again(conn, task):
+    """🔴 TD-23 的触发场景：被撤销过暂缓的条目**必须**还能再次暂缓。
+
+    「撤销暂缓」（`deferred → pending`）在 schema 上是合法的——
+    `trg_liaison_task_defer_only_from_pending` 只在 `NEW.send_status='deferred'`
+    时触发，回到 `pending` 一路放行。第 6 章要加的「取消暂缓」正是这条路径。
+
+    旧实现把「幂等键命中」当作「这行离开过 pending」的证据直接抛
+    `TaskTransitionRejected`，于是这条**完全合法**的转移被永久拒绝，
+    且该 msgid 的暂缓从此再也做不成（幂等键永远命中）。
+    """
+    defer_task(conn, thread_id="u_zhang", msgid=task)
+    assert _status(conn, task) == ("deferred", None)
+
+    # 第 6 章「撤销暂缓」的存根：⛔ 不走业务层是刻意的——那个函数还不存在，
+    # 本用例钉的是 `defer_task` 面对「行确实回到了 pending」时的行为。
+    conn.execute("UPDATE liaison_task SET send_status = 'pending' WHERE msgid = ?", (task,))
+    conn.commit()
+    assert _status(conn, task) == ("pending", None)
+
+    defer_task(conn, thread_id="u_zhang", msgid=task)
+    assert _status(conn, task) == ("deferred", None)
+    assert_effect_log_identity(conn)
+
+
+def test_mark_pushed_from_another_thread_id_does_not_rewrite_the_timestamp(conn, task):
+    """🔴 TD-24：换一个 `thread_id` 再标记推送，⛔ 不许改写第一次推送的时刻。
+
+    队列条目的业务身份是全局唯一的 `msgid`，但幂等键带 `thread_id` 前缀。
+    归档时 `thread_id` 是私聊会话（`u_zhang`），第 6 章群通知重试时若按**推送目标群**
+    取 `thread_id`（`chat_xxx`），幂等键就不再命中，UPDATE 会真的执行——
+    `pushed_at` 被静默改写成第二次的时刻，且 `effect_log` 里多出一行。
+    docstring「第一次推送的那个时刻才是事实」当场变假，而**没有任何症状**。
+    """
+    assert mark_task_pushed(conn, thread_id="u_zhang", msgid=task, pushed_at=PUSHED_AT) is True
+
+    assert mark_task_pushed(
+        conn, thread_id="chat_xxx", msgid=task, pushed_at="2026-09-09T23:59:59+08:00"
+    ) is False
+
+    assert _status(conn, task) == ("pushed", PUSHED_AT), "第一次推送的时刻是事实，⛔ 不许被改写"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_mark_task_pushed'"
+    ).fetchone()[0] == 1, "同一条推送 ⛔ 不许在 effect_log 里留下第二行"
+
+
+def test_defer_reads_the_real_state_when_its_generation_key_was_taken(conn, task, monkeypatch):
+    """并发兜底分支：代际键仍被占用时，⛔ 不许再从"键命中"反推状态。
+
+    单连接下这条分支自然不可达（`_next_defer_generation` 会自己越过被占用的代际），
+    所以这里把它按死成"我们算出的代际号已经过期"——正是另一条路径在探测与装饰器
+    预检之间抢先做完同一代际时的样子。断言钉的是**报出来的是读到的真状态**，
+    而不是旧实现那句硬编码的"此前已成功从待发转入过暂缓"。
+    """
+    from tools.liaison import queue as queue_module
+
+    defer_task(conn, thread_id="u_zhang", msgid=task)
+    conn.execute("UPDATE liaison_task SET send_status = 'pending' WHERE msgid = ?", (task,))
+    conn.commit()
+
+    monkeypatch.setattr(queue_module, "_next_defer_generation", lambda conn, *, msgid: 0)
+
+    with pytest.raises(TaskTransitionRejected) as excinfo:
+        defer_task(conn, thread_id="u_zhang", msgid=task)
+
+    detail = str(excinfo.value)
+    assert "'pending'" in detail, detail
+    assert "此前已成功从「待发」转入过「暂缓」" not in detail, detail
+    assert _status(conn, task) == ("pending", None), "被拒的转移 ⛔ 不许留下任何痕迹"
+
+
+def test_defer_returns_quietly_when_a_peer_already_applied_the_same_deferral(
+    conn, task, monkeypatch
+):
+    """同一分支的另一半：真状态已经是「暂缓」⇒ 本次要达成的状态已达成，⛔ 不抛。
+
+    抛在这里会让调用方以为暂缓没做成而去做补偿动作，而库里其实已经是暂缓了。
+    """
+    from tools.liaison import queue as queue_module
+
+    defer_task(conn, thread_id="u_zhang", msgid=task)
+    monkeypatch.setattr(queue_module, "_next_defer_generation", lambda conn, *, msgid: 0)
+
+    assert defer_task(conn, thread_id="u_zhang", msgid=task) is None
+    assert _status(conn, task) == ("deferred", None)
+
+
+def test_pushed_at_survives_even_a_forged_idempotency_key(conn, task):
+    """TD-24 的第二道防线单独成立。
+
+    `mark_task_pushed` 已经把 thread_id 从行里读回来，调用方再也凑不出第二把键——
+    这条绕过它、直接拿一把伪造的 thread_id 去调 effect，证明**即便**哪天又有人
+    从别的路径凑出新键，`AND send_status <> 'pushed'` 也让 UPDATE 一行都不改。
+    """
+    from tools.liaison.queue import _TaskAlreadyPushed, effect_mark_task_pushed
+
+    mark_task_pushed(conn, thread_id="u_zhang", msgid=task, pushed_at=PUSHED_AT)
+
+    with pytest.raises(_TaskAlreadyPushed):
+        effect_mark_task_pushed(
+            conn,
+            thread_id="chat_forged",
+            business_key=task,
+            pushed_at="2026-09-09T23:59:59+08:00",
+        )
+
+    assert _status(conn, task) == ("pushed", PUSHED_AT)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_mark_task_pushed'"
+    ).fetchone()[0] == 1, "被防线拦下的调用 ⛔ 不许在 effect_log 里留下第二行"
