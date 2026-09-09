@@ -1,16 +1,19 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-09 11:5x（Cowork 业务线，`HR业务线-接力0903B` 转场 → `0909Q`）
+> 最后更新：2026-09-09 12:2x（Cowork `HR业务线-接力0909Q`，两条裁决已拍 + 第十五批编排完）
 
 ---
 
 ## 开场词（复制即用）
 
 ```
-HR业务线-接力0909Q
+[Mac]0909Q-HR业务线接力
+【设置】执行环境: Cowork ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（Cowork 无 worktree，只做文档、编排与派单）｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）｜ 派发: Cowork·HR业务线-接力0903B
 读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 恢复上下文，然后按【下一步】继续。
 ```
+
+> 🔴 **Cowork 接力开场词同样是 opener，头两行＝标题行 + 【设置】行**（CLAUDE.md「CC 与 Cowork 两端同等适用」；09-09 Shao Peishen 指出漏了一次）。本 session 派出去的 opener，`派发` 一律写 `Cowork·HR业务线-接力0909Q`。
 
 > 🔒 **首行只用于给读文档的人对编号，不指望侧边栏**。Cowork 侧的 session 名是摘要生成的，
 > 首行无效（08-27 实测：`HR业务线-接力0827B` → 侧边栏 `HR业务线接力`）。⛔ 不要再改首行格式硬试。
@@ -26,7 +29,7 @@ HR业务线-接力0909Q
 | 项 | 现状 |
 |---|---|
 | main | `5e2573f`，**与 origin 同步（ahead 0）**。第十三批（`0909A–F`）与第十四批（`0909H–O`）共 60+ commit 全合入 |
-| 工作区 | 未提交（Cowork 侧，09-09 11:5x）：本文、`OP-0820-全量编排.md`（第十四批自动摘标注 + 号池 Y/Z 结果行 + `0909Q`）、`CLAUDE.md` + `kickoff`/`lane-dispatch` 两个 skill（并行铁律加 `git stash` 禁令、退路命令无引号版、launchd 两缺陷落档）、`docs/findings/2026-09-09-Shao-Peishen-裁决-无备用LLM与aibot独立注册.md`（新）。**`0909R` 转场提交 opener 已派（09-09 11:5x）；若 git log 里没有它的 commit，先催这一条**。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
+| 工作区 | `0909R` 转场提交 ✅ `de4a32e`（含 CLAUDE.md `git stash` 禁令、两个 skill、09-09 裁决 findings）。之后 Cowork 侧又改了两处**未提交**：本文开场词补【设置】行、`.claude/skills/kickoff/SKILL.md` 加「Cowork 接力开场词模板」——**新 session 派出的第一条 CC opener 一并 add 提交**。➕ 09-09 12:2x 第十五批编排又落了三件未提交：`OP-0820-全量编排.md`（第十五批一节 + 号池 S–X 六行 + 看护者指针）、`docs/openers/0909X-泳道批次看护.md`（新）、`docs/findings/2026-09-09-Shao-Peishen-裁决-留存冲突B与TD20改法.md`（新）——`0909X` 的【二】已把五条路径写全（含 kickoff skill）。⚠️ `.claude/handoff/` 在 `.gitignore` 里，看护报告只在本机 |
 | `.51` 代码 | ✅ **已发版 `95b298c`**（`0908K` 2026-09-08 五次发版成功）。⚠️ **实际范围远大于该轮 opener 所述的「只发巡检 CLI 编码修复」**——`7a48a19..95b298c` 对 `app/ scripts/` ＝ 15 文件 / +905 −118，一并上线 **WBS 2.3 备用供应商切换**、**WBS 2.5 重试耗尽转人工**（两个新 `effect_*` 节点）、**tasks 5.3 离题轮不留岗位记录/丢弃**；⇒ 今后发版 opener 的「这次发什么」必须由 `git diff <现网 HEAD>..main` 现算。快照 `C:\apps\backups\20260908-1420`（`app\` 126 文件完整；`data\` 因 `demo.db-shm` 被占用中断，不影响回滚——回滚只用 `app\`）。纯 sync，⛔ 未装依赖、未重跑 `deploy-server.ps1`。冒烟 4 项：首页 200 ｜ `GET /api/jobs` JSON 列表 ｜ 新进程 PID 9600 于 `14:22:36` 启动、**其后零 Traceback**（尾 60 行里那段 `Traceback` 时间戳为 `13:18:32`，属上一版进程的历史错误，已取证非本次回归，未回滚）｜ 🔴 **不带 `PYTHONIOENCODING` 裸跑巡检 `EXIT=0`**、6 条断言全过、断言四豁免 7 条 ⇒ `19b8937` 修复现网生效。⇒ **`0908J` 那条「加 `PYTHONIOENCODING=utf-8` 才得真结果」已作废，⛔ 不要再加环境变量**。🔴 查实遗留缺陷（早于本次发版、未修）：重复 `confirm` 时 `idempotent_effect` 抛 `sqlite3.IntegrityError: UNIQUE constraint failed: effect_log.effect_key` 而非短路，用户可见 500（恒等式未破）→ ✅ 第十二批 `0908S/T` 已修合入（撞键即 rollback 业务写、按已执行返回），**尚未上 `.51`**。ℹ️ 口径订正：`.51` 应用日志真实路径是 `logs\app.log`，**不是** `data\logs\app.log`。详见 `docs/audit-and-outbound-ops.md` §五 ｜ `0908B` 失败回滚见 `docs/findings/2026-09-08-51四次发版回滚.md` |
 | pytest | main 侧 **1941 passed / 4 skipped / 0 failed**（09-09 10:2x `0909Y` 真身核验；4 条 skip 全是刻意离线/SDK 只装在 tools venv）。⛔ 别抄进 opener 当基线，见【四】 |
 | 生产 | `.51:8095`，`/hr/recruit-agent`，服务正常 |
@@ -156,7 +159,7 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
 
 ### ⑮ 09-09 起：等他三样东西，然后第十五批 ＋ 8.6 灰度
 
-**A. 要 Shao Peishen 拍的（不可代，两条都是真取舍）**
+**A. 要 Shao Peishen 拍的（不可代）** —— ✅ **两条 2026-09-09 中午已拍**，落档 `docs/findings/2026-09-09-Shao-Peishen-裁决-留存冲突B与TD20改法.md`：冲突 B 取方案 ②（终态队列行连归档一起清）；TD-20 取改法 ①（启动不闭旧窗，`on_connected` 才闭）。两条均已排进第十五批（`0909T` / `0909U`），下面原文留作判据记录。
 
 1. 🔴 **冲突 B：名单内消息的归档在 FK 下永远清不掉**（`0909K` 登记 P1，未替他拍）。`liaison_task.msgid → liaison_message(msgid)` 无 `ON DELETE`，opener 又写死队列行永不删 ⇒ 汤丽萍/邵培申的归档全进 `blocked_by_queue` 桶，只有名单外发送人的归档会被 180 天清理。属个人信息留存期问题。
    - ① 保持现状（名单内归档永久保留，只报计数）——**不推荐**，与 D13「180 天」和 proposal 合规说明相悖
@@ -164,13 +167,13 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
    - ③ 台账行删除前把 `liaison_task.msgid` 置空（去掉 FK 依赖）——队列行失去回指，5.5「回指来源消息」被打破，不推荐
 2. 🔴 **TD-20 三选一**（`0909F` 留步；8.6 前必须定）：① 启动时不闭旧窗口、等 `on_connected` 真连上再闭 ② 启动另开新窗专等 `on_connected` ③ 接 `run_forever` 的 `on_attempt_failed`。**推荐 ①**：改动最小、告警自然带真实恢复时间、不新增窗口类型；③ 可作为 ① 之上的加强，不单独选。
 
-**B. 他自己要做的三样（09-09 已说去做）**
+**B. 他自己要做的三样（09-09 已说去做）** —— ⏸ **09-09 12:1x 本机实测：三项都还没有**（`.env` 三个变量缺失或空；`whitelist.yaml` 两人 `userid` 仍为空串；`tools/liaison/.venv` 不存在）。⛔ 只判存在性，未读取任何取值。
 
 - 企微后台**新建** aibot（超管账号建；API 模式选长连接；加进「人力AI保障群」），BotID/Secret 与群 webhook 写进本机 `.env`（`HR_LIAISON_BOT_ID` / `HR_LIAISON_BOT_SECRET` / `HR_LIAISON_GROUP_WEBHOOK`）。⛔ 凭据不进聊天不进 git；Cowork 只出「验存在性 + 只读探针」opener
 - 通讯录里抄两人「账号」，填 `tools/liaison/config/whitelist.yaml` 的 `userid`（留空＝fail-closed）
 - 他回「写好了」后 → 出 opener：验三个变量非空（不回显）→ `tools/liaison/.venv` 建起来装 `requirements.txt` → 跑 `tools/liaison/scripts/probe_ws_surface.py`（TD-19 只读探针，真实建连一次，新机器人不影响 Windows）→ 跑通则改常量 + 落 findings，跑不通则留步（`SdkSurfaceUnverifiedError` 就是设计的拒启动）
 
-**C. 第十五批候选（零重叠，A 拍完即可编排；编号从 `0909S` 起，看护者 `0909X`；`0909R` 已用于转场提交）**
+**C. 第十五批候选** —— ✅ **已编排发车（见下面 ⑯）**。下表留作取舍记录：六条候选里五条进了本批；队列债（TD-23/24）因「零生产调用方、8.x 推送接线前还即可」推到第十六批。
 
 | 泳道 | 内容 | 触碰区 |
 |---|---|---|
@@ -183,6 +186,26 @@ SDK 结论：`wecom-aibot-python-sdk 1.0.2` 在 3.14 判据 A/B/C 全过，走�
 
 ⛔ 不进泳道：8.6–8.9（他亲自）；`0909P` 发版（等「发」；建议等幂等基座泳道合入后再发，一次带上 TD-33，「这次发什么」现算）；launchd 重装与 liaison launchd 安装（他 Terminal）。
 下一批看护者判据要收窄两处（`0909Y` 报告分歧①②）：`.env.example` 允许注释行、只禁取值；webhook grep 只认 `qyapi.weixin.qq.com` 真实域名。
+
+### ⑯ 第十五批（2026-09-09 中午编排，`0909S–W`，看护者 `0909X`）· 已交给他发车
+
+全是**技术债与机制债**，五条泳道零重叠、全走轻量通道（不走 spec-to-plan / run-build）：
+
+| 泳道 | 编号 | 做什么 | 触碰区 |
+|---|---|---|---|
+| 发车机制 | `0909S` | launchd plist 两缺陷（`AbandonProcessGroup` + `EnvironmentVariables.PATH`）＋单测；⛔ 不装 | `scripts/install_lane_launcher.py`、`tests/test_lane_launcher.py` |
+| 留存 | `0909T` | 冲突 B 裁决落地 ＋ TD-30（日志 30 天）＋ TD-34（咬不住的回归测试） | `retention.py`、`logsetup.py`、`liaison-message-archive/spec.md`、`design.md` §D13 |
+| 会话 | `0909U` | TD-20 裁决落地 ＋ spec 两处改口径 | `session.py`、`liaison-channel-session/spec.md` |
+| 群通知债 | `0909V` | TD-25（按 `last_errcode` 过滤，**不加列**）＋ TD-27（`MODE_REJECT` 改 raise） | `notify/webhook.py`、`notify/store.py` |
+| 幂等基座 | `0909W` | TD-33（`effect_log` INSERT 非 `IntegrityError` 也回滚）；随 `0909P` 上 `.51` | `app/storage/idempotency.py` |
+
+- dry-run 已在 Cowork 侧核过（用 `--plan` 指本机挂载路径，绕开脚本里的 `REPO` 绝对路径常量）：**5 泳道 5 条**，正文 18/22/19/19/19 行，`Σ=N=5`（`M=6`，多出的一处是第十三批 `0909B` 的残留标注，BUDGET-HIT 不自动摘、实为虚惊）
+- 发车参数：`--full-auto --yes --only 0909S,0909T,0909U,0909V,0909W --max-parallel 5`
+- 🔴 **本批唯一跨泳道共享文件 `docs/tech-debt.md`**（T/U/V/W 各销自己那几条，段间相隔 30 行以上）。真身核验判据：销账数比基线 **+6**（TD-20/25/27/30/33/34），且 TD-23/24/26 仍未销
+- 🔴 **本批五条泳道都不碰 `tasks.md`**——8.1–8.5 已勾、8.6–8.9 留他本人，本批没有要回勾的行；跑完 `grep -c '^- \[x\]'` 应一字不变
+- 🔴 `0909S` 修的正是 launchd 发车缺陷，**修完要他在 Terminal 重装一次才生效**，所以本批自己大概率仍走「点 Run」退路（`0909X` 的【四】【五】已写死判据与无引号退路命令）
+- 不进本批：8.6–8.9（他亲自）；`0909P` 发版（等「发」；建议等 `0909W` 合入后一次带上 TD-33，「这次发什么」由 `git diff <现网 HEAD>..main` 现算）；TD-23/24（第十六批）；TD-26（与 `0909V` 同文件，下一批单独还）；三件凭据的验证 opener（等他写进 `.env`）
+- 🔢 号池：`0909` 字母池 **S–X 已全部派出**，09-09 当日已无可用字母。第十六批若仍在 09-09 发车，必须改用 `0910` 并在号池台账另起一段
 
 **D. 顺手件**：清理 `/private/tmp/wt-0908M`、`wt-0909B`（真未合 0）；CLAUDE.md 252 行已超 250 红线 2 行，下次改它时拆一段出去。
 

@@ -103,6 +103,13 @@ opener 只出现在聊天记录里，从不落档** ⇒ 下一轮 grep 只看得
 
 ⚠️ **撞号会把 `set_session_title` 那条规则的价值清零**——侧边栏三条同名，照样分不清。
 ⚠️ **Cowork 接力号与 CC 共用同一号池**；`Z` 固定留给看护者，不派作他用。
+🔴 **Cowork 接力开场词也是 opener，头两行同样是标题行 + 【设置】行**（2026-09-09 Shao Peishen 指出漏了一次）。模板：
+```
+[Mac]MMDDX-HR业务线接力
+【设置】执行环境: Cowork ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（Cowork 无 worktree，只做文档、编排与派单）｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）｜ 派发: Cowork·HR业务线-接力<母号>
+读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 恢复上下文，然后按【下一步】继续。
+```
+标题行用 `[Mac]` 格式是为了过 `check-opener-header.py` 判据①（有【设置】行就必须有 `[Mac]MMDDX-` 标题）；Cowork 侧没有 `set_session_title`，第 3 行直接写任务。
 ⚠️ 台账只记已知的，**claude.ai 侧边栏才是真身**，拿不准就让 Shao Peishen 看一眼。
 
 ##### 🔴 "这不算 Opener" 是最常见的漏法（2026-08-26 实证）
