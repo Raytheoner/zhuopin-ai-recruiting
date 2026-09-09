@@ -39,6 +39,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
+from app.storage.idempotency import idempotent_effect
+
 logger = logging.getLogger(__name__)
 
 #: 留存期天数的环境变量（design D13 逐字）。
@@ -222,3 +224,107 @@ def compute_expired(
             deletable.append(item)
 
     return ExpirySplit(tuple(deletable), tuple(blocked), tuple(undecidable))
+
+
+#: 清理动作的 effect 节点名。**这个名字有两个用途**，改它会同时打断两处：
+#: ① 幂等键的中段；② `assert_effect_log_identity` 判断"哪些 thread 被清理过"
+#: 的依据（冲突 A 的方案 2）。
+RETENTION_DELETE_NODE: Final[str] = "effect_delete_expired_message"
+
+
+class RetentionLedgerError(RuntimeError):
+    """删台账行时行数对不上（既不是 1 也不是外键拒绝）。"""
+
+
+@dataclass(frozen=True)
+class CleanupFailure:
+    """一条清理失败。`stage` ∈ {"ledger", "file", "scan", "prune"}。
+
+    ⛔ 不要把它和 `SkippedItem` 合并：`SkippedItem` 是"按规矩不该处理"，
+    `CleanupFailure` 是"该处理却没处理成"。前者是正常路径，后者要告警。
+    """
+
+    stage: str
+    subject: str
+    reason: str
+
+
+@idempotent_effect(RETENTION_DELETE_NODE)
+def effect_delete_expired_message(
+    conn, *, thread_id: str, business_key: str
+) -> str:
+    """删掉一条超期的台账行。**本服务唯一的删库动作。**
+
+    幂等键 `{thread_id}:effect_delete_expired_message:{msgid}`，与业务删除
+    在同一个事务里提交（工程铁律 1）。留下的这行 `effect_log` 有两个作用：
+    ① 审计——"这条材料是什么时候按留存期清掉的"的唯一凭据；
+    ② 让 `assert_effect_log_identity` 知道哪些 thread 被清理过（冲突 A 方案 2）。
+
+    ⛔ 只删 `liaison_message` 一张表的一行。⛔ 不删 `liaison_task`
+    （opener 约束 2；外键也会拦住），⛔ 不删 `effect_log`。
+
+    ⛔ 不 `commit()` 也不 `rollback()`：提交由 `idempotent_effect` 独占。
+    """
+    cursor = conn.execute(
+        "DELETE FROM liaison_message WHERE msgid = ? AND thread_id = ?",
+        (business_key, thread_id),
+    )
+    if cursor.rowcount != 1:
+        # 装饰器会先 rollback 再把异常抛出去，所以这一行不会留下半截状态。
+        raise RetentionLedgerError(
+            f"删除 msgid={business_key} thread_id={thread_id} 影响了 {cursor.rowcount} 行"
+            f"（期望恰好 1 行）；⛔ 不继续删，先查清楚"
+        )
+    return business_key
+
+
+def load_message_rows(conn) -> tuple[MessageRow, ...]:
+    """读全量台账 + 每行"有没有队列行"。
+
+    `has_queue_row` 用一条 `EXISTS` 子查询一次算出来，⛔ 不要在 Python 里
+    逐行回查——那会让行数上去之后变成 N+1 次查询，也会让 `compute_expired`
+    有理由去碰连接。
+    """
+    return tuple(
+        MessageRow(
+            msgid=row[0],
+            thread_id=row[1],
+            archived_at=row[2],
+            attachments_json=row[3],
+            has_queue_row=bool(row[4]),
+        )
+        for row in conn.execute(
+            "SELECT m.msgid, m.thread_id, m.archived_at, m.attachments_json, "
+            "       EXISTS(SELECT 1 FROM liaison_task t WHERE t.msgid = m.msgid) "
+            "FROM liaison_message AS m ORDER BY m.msgid"
+        ).fetchall()
+    )
+
+
+def delete_expired_ledger_rows(
+    conn, expired: Sequence[ExpiredMessage]
+) -> tuple[tuple[str, ...], tuple[CleanupFailure, ...]]:
+    """逐条删台账行。**单条失败不中止整轮**（opener 约束 1 逐字）。
+
+    ⛔ 不许改成一条 `DELETE ... WHERE msgid IN (...)`：批量删会让一条外键
+    冲突把整批一起回滚掉，"单条失败不中止整轮"当场失效，而且失败时你
+    分不清是哪一条挡住的。
+    """
+    deleted: list[str] = []
+    failures: list[CleanupFailure] = []
+    for item in expired:
+        try:
+            applied = effect_delete_expired_message(
+                conn, thread_id=item.thread_id, business_key=item.msgid
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条失败不中止整轮
+            # ⛔ 捕获 Exception 而不是 BaseException：KeyboardInterrupt 必须能停下来。
+            logger.error("留存清理：删台账行失败 msgid=%s：%s", item.msgid, exc, exc_info=True)
+            failures.append(CleanupFailure("ledger", item.msgid, str(exc)))
+            continue
+        if applied is None:
+            # 幂等命中：这条之前就删过了。正常路径，⛔ 不算失败也不算本轮删除。
+            logger.info("留存清理：msgid=%s 之前已清理过，跳过", item.msgid)
+            continue
+        deleted.append(item.msgid)
+    return tuple(deleted), tuple(failures)

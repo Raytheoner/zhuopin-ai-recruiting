@@ -739,6 +739,22 @@ def assert_effect_log_identity(conn: sqlite3.Connection) -> None:
     ——它是铁律 1 唯一的机器守卫，削弱它等于把守卫拆了。**⛔ 明确写死：
     不许把它改成总数比较、不许削弱成"约等于"。**
     """
+    # 冲突 A / 方案 2（本函数 docstring 二选一的第 2 条）：留存期清理会让被清理过的
+    # thread 的业务表行数低于 effect_log 行数，那是一个**正当**的差额。
+    # 这里把它们排除出严格恒等的比对范围——它们由 test_retention.py 的
+    # `assert_retention_accounting` 用一条**更强**的记账等式单独盯住：
+    #     归档 effect 行数 == 台账行数 + 清理 effect 行数
+    # ⛔ 排除的依据必须是"留下过清理记录"这个事实，不是任何形式的白名单。
+    from tools.liaison.retention import RETENTION_DELETE_NODE
+
+    cleaned_threads = {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT thread_id FROM effect_log WHERE node_name = ?",
+            (RETENTION_DELETE_NODE,),
+        ).fetchall()
+    }
+
     for node_name, table in EFFECT_NODE_TO_TABLE.items():
         effect_counts = dict(
             conn.execute(
@@ -750,10 +766,52 @@ def assert_effect_log_identity(conn: sqlite3.Connection) -> None:
         business_counts = dict(
             conn.execute(f"SELECT thread_id, COUNT(*) FROM {table} GROUP BY thread_id").fetchall()
         )
+        for thread_id in cleaned_threads:
+            effect_counts.pop(thread_id, None)
+            business_counts.pop(thread_id, None)
         assert effect_counts == business_counts, (
             f"恒等不变式破裂：节点 {node_name} 的 effect_log 分组计数 {effect_counts} "
             f"≠ 业务表 {table} 的分组计数 {business_counts}"
         )
+
+
+def test_identity_assertion_still_catches_a_break_in_an_uncleaned_thread(conn):
+    """冲突 A 的证伪：收窄比对范围之后，**没被清理过**的 thread 仍必须被抓住。
+
+    ⛔ 不要删这条。方案 2 的风险正是"排除范围"悄悄扩大到把所有 thread 都排掉，
+    那时断言永远为真——比没有断言更糟。
+    """
+    _process(conn, thread_id="u1", msgid="m1")
+    conn.execute(
+        "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+        "VALUES ('sneaky', 'u1', 'u1', 't', 'text')"
+    )
+    conn.commit()
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)
+
+
+def test_identity_assertion_excludes_only_threads_that_were_actually_cleaned(conn):
+    """被排除的必须**恰好**是留下过清理记录的那些 thread，一个不多。"""
+    _process(conn, thread_id="u1", msgid="m1")
+    _process(conn, thread_id="u2", msgid="m2")
+    # u1 上伪造一条"清理过"的痕迹，并把它的台账行删掉——u1 应被排除。
+    conn.execute("DELETE FROM liaison_task WHERE thread_id = 'u1'")
+    conn.execute("DELETE FROM liaison_message WHERE thread_id = 'u1'")
+    conn.execute(
+        "INSERT INTO effect_log VALUES ('u1:effect_delete_expired_message:m1', 'u1', "
+        "'effect_delete_expired_message', 'm1', datetime('now'))"
+    )
+    conn.commit()
+    assert_effect_log_identity(conn)  # u1 被排除，u2 仍严格恒等 ⇒ 通过
+    # u2 上制造一处破裂，必须仍然被抓住
+    conn.execute(
+        "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+        "VALUES ('sneaky2', 'u2', 'u2', 't', 'text')"
+    )
+    conn.commit()
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)
 
 
 def _process(conn, *, thread_id, msgid, content="hello"):
