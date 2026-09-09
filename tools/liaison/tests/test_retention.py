@@ -407,3 +407,42 @@ def test_prune_empty_dirs_removes_only_empty_ones_and_keeps_the_root(tmp_path):
     assert set(pruned) == {"u2/20260101", "u2"}
     assert root.is_dir()                       # ⛔ 归档根本身永不删
     assert (root / "u1" / "20260101").is_dir()  # 非空目录不动
+
+
+def test_expiry_is_computed_in_china_tz_not_utc(tmp_path):
+    """🔴 冲突 C 的靶心之一：`_day_expiry_instant` 把 `tzinfo=CHINA_TZ` 换成
+    `tzinfo=datetime.timezone.utc` 必须让这条测试变红。两种解读相差 8 小时，
+    本机在 EDT，这类回退不报错、不崩溃，只是悄悄把过期时刻挪 8 小时——
+    cutoff 卡在两种解读中间（留 4 小时以上余量防抖动）：
+    CHINA_TZ 解读下 2026-01-01 23:59:59.999999+08:00 == 2026-01-01 15:59:59.999999Z，
+    早于 cutoff（2026-01-01 20:00:00Z）⇒ 超期；UTC 解读下同一时刻记成
+    2026-01-01 23:59:59.999999Z，晚于 cutoff ⇒ 未超期。两者结论相反。
+    """
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-x__a.bin")
+    now = datetime.datetime(2026, 1, 2, 20, 0, 0, tzinfo=datetime.timezone.utc)
+    deletable, skipped = retention.compute_deletable_files(
+        now, 1, retention.iter_archive_files(root), frozenset()
+    )
+    assert deletable == ("u1/20260101/m-x__a.bin",)
+    assert skipped == ()
+
+
+def test_expiry_uses_end_of_day_not_midnight(tmp_path):
+    """🔴 冲突 C 的靶头之二：`_day_expiry_instant` 把
+    `hour=23, minute=59, second=59, microsecond=999999` 换成
+    `hour=0, minute=0, second=0, microsecond=0` 必须让这条测试变红。
+    取当天最晚一刻是刻意的保守方向；取零点会让同一天的文件提前近 24 小时
+    过期。cutoff 卡在当天正午（留 12 小时余量防抖动）：
+    「最晚一刻」语义下 2026-01-01 23:59:59.999999+08:00 晚于 cutoff
+    （2026-01-01 12:00:00+08:00）⇒ 未超期；「零点」语义下同一天记成
+    2026-01-01 00:00:00+08:00，早于 cutoff ⇒ 超期。两者结论相反。
+    """
+    root = tmp_path / "archive"
+    _touch(root, "u1/20260101/m-y__b.bin")
+    now = datetime.datetime(2026, 1, 2, 12, 0, 0, tzinfo=CHINA_TZ)
+    deletable, skipped = retention.compute_deletable_files(
+        now, 1, retention.iter_archive_files(root), frozenset()
+    )
+    assert deletable == ()
+    assert skipped == ()
