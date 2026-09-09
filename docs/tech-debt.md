@@ -739,7 +739,7 @@ opener 逐条点名要放行的 `open` / `contextlib.*` / `tempfile.*` / `suppre
 `test_scanner_still_catches_connection_shaped_context_managers`（11 格证伪）、
 `test_scanner_still_catches_unknown_callees_by_default`。`test_liaison_effects.py` 55 passed。
 
-## TD-19 · 真实建连尚未适配——`make_sdk_connect` 对协程 `connect` 表面按"未验即拒绝启动"处理
+## TD-19 · 真实建连适配 ✅ 代码已就位（`0909AC`），⏳ 卡在 8.6 由 Shao Peishen 端到端跑通
 
 **欠的是什么**：Task 5 的探针实测（`docs/findings/2026-09-09-aibot-wsclient-表面实测.md`
 「遗留发现」）发现真实 SDK 的 `WSClient.connect` 是 `async def`——同步调用它只会返回一个
@@ -780,6 +780,46 @@ findings 与 controller ruling）。真正的风险只在于：如果将来有�
 把 `launchd.err.log` 无限追加同一条报错的机器**——plist 自己的注释预警过这个形状（原文针对
 退出码 2 的缺凭据场景，退出码 4 是同一形状）。⛔ 灰度前置清单里把 launchd 装机与 TD-19
 并列是错的，它排在 TD-19 之后。
+
+### ✅ 2026-09-09（`0909AC`）代码已就位——**本条仍不销**，剩最后一步归 Shao Peishen
+
+**已做完的**（`tools/liaison/session_client.py` / `__main__.py`）：
+
+1. `make_sdk_connect` 现在返回的阻塞调用真的调 **`client.run()`**（同步、跑到断线为止），
+   ⛔ 不再是那个协程 `connect`。`REQUIRED_CLIENT_ATTRS` 从 `("on", "connect")` 改成
+   `("on", "run")`——清单里只留**真正会被调用**的方法。
+2. **护栏没被删、没被降级，只是挪了位置**：`verify_client_surface()` 现在核四项——
+   方法齐全、`run` 可调用、`run` **不是**协程函数、`run` 能**零参数**调用。断言在岗：
+   `test_make_sdk_connect_refuses_a_coroutine_function_run`、
+   `test_make_sdk_connect_refuses_a_run_that_needs_arguments`、
+   `test_main_exits_when_the_sdk_run_is_a_coroutine_function`、
+   `test_make_sdk_connect_verifies_the_surface_before_run_forever_can_swallow_it`。
+   ⛔ 没有加任何"跳过校验"的开关或环境变量。
+3. 🔴 **每次建连尝试改用一个全新的连接对象**（`make_sdk_connect` 收的是**工厂**不是对象）。
+   实测 `aibot==1.0.2` `client.py::connect` 开头是 `if self._started: return self`，而
+   `_started` 只有 `disconnect()` 会清。同一个对象第二次 `run()` ⇒ connect 立刻返回 ⇒
+   `loop.run_forever()` 挂在空转的事件循环上 ⇒ **进程活着、日志正常、永远不再连上**，
+   ⛔ 没有任何症状。守护断言：`test_make_sdk_connect_builds_a_fresh_client_for_every_attempt`。
+
+**实证**（装了闸门、⛔ 未真连企微）：`python -m tools.liaison` 已能一路走到 `client.run()`，
+外层退避 1s → 2s → 4s，且每一轮 SDK 都重新打印 `Establishing WebSocket connection...`
+（复用旧对象时这里会变成 `Client already connected` 然后永久挂起——正是第 3 条防的形态）。
+
+**⏳ 仍欠的、也是本条不销的唯一理由**：**8.6 用真实凭据端到端跑通**。判据来自
+`docs/session接力.md` ⑮「⛔ 不进泳道：8.6–8.9（他亲自）」。
+
+**Shao Peishen 要跑的就一条命令**（在仓库根、Terminal 里，⛔ 不经 pytest）：
+
+```bash
+PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison
+```
+
+看三件事：① SDK 日志出现 `WebSocket connection established` 且**没有** `errcode=853000`；
+② 拔网线／断 Wi-Fi 后 `liaison_outage_window` 开出一条窗口、群里收到断线告警；
+③ 网络恢复后自动重连、窗口闭合并发出恢复告警。三条都对 ⇒ 本条可销，G-4（launchd 装机）解锁。
+
+⚠️ 先跑一次 `... -m tools.liaison --self-check` 更省事：它把凭据与 SDK 表面全校验一遍
+就退出（exit 0），⛔ 不建连——凭据打错时不必等到真连才发现。
 
 ## ~~TD-20~~ · `start()` 的启动补记用"本次启动时间"当恢复时间，会低报"重启时网络仍未恢复"的中断时长 ✅ 已还（`08d8784`）
 
@@ -1269,7 +1309,7 @@ checkout（`1f2d018`）跑，**通过**。
 **不还的后果**：`effect_enqueue_task` ↔ `liaison_task` 这一对在被清理过的 thread 上
 不再有任何断言检查——那正是铁律 1 的核心不变式，而缺口是静默的。
 
-## TD-36 · TD-19 一旦还上，两条凭据用例会带着假凭据向企微发起真实建连
+## ~~TD-36~~ · TD-19 一旦还上，两条凭据用例会带着假凭据向企微发起真实建连 ✅ 已还（`0909AC`，与 TD-19 同一 commit）
 
 **欠的是什么**：`test_liaison_credentials.py` 的
 `test_entrypoint_succeeds_when_credentials_present` 与
@@ -1292,3 +1332,61 @@ TD-19 还上之后这道拦阻消失，同样两条用例会让子进程带着�
 
 **来源**：`[Mac]0909AA` 在裁决甲类两条红时顺带识别（Shao Peishen 2026-09-09 批准登记）。
 相关：TD-19、`docs/findings/2026-09-09-tools-venv-建立后四条测试转红.md`
+
+### ✅ 2026-09-09 已还（`0909AC`），两层各管一半
+
+**① 被测路径改走启动期自检**：入口新增 `--self-check`（`__main__.SELF_CHECK_ARG`）——把
+「读 .env → 校验凭据 → 造连接对象 → 核 SDK 表面 → 接事件」整条路径**原样跑完**，在
+`run_forever` 之前返回 0。⛔ 它**不跳过任何一项校验**（守护断言
+`test_self_check_runs_the_whole_startup_path_then_stops_before_connecting`：表面对不上时它
+照样以 exit 4 拒绝）；它跳过的只是唯一会碰网络的那一步。
+⛔ **不许写进 launchd plist**（会让服务每次拉起就 exit 0、值守通道从此不存在且无症状），
+守护断言 `test_plist_never_runs_the_self_check_mode`。
+
+判据同时**变严**了：旧断言只说「不是 exit 2」，进程实际停在哪靠下游某一关碰巧拦住；
+新断言直接要求整条自检走通（装了 SDK ⇒ exit 0）。**期望值是测出来的、⛔ 不是写死的**
+（`_sdk_available_to_subprocess()`）——把"跑测试的解释器装没装 aibot"写进断言正是
+`docs/findings/2026-09-09-tools-venv-建立后四条测试转红.md` 记的那个坑。
+
+**② 加了一道机器判据**：`tools/liaison/tests/netguard/`——一个 `sitecustomize.py` 闸门，
+非回环的 `getaddrinfo` / `connect` / `connect_ex` 一律 raise。进程内由 conftest 的 autouse
+fixture 装上，子进程由 `netguard_support.subprocess_env()` 塞进 `PYTHONPATH`（`site` 在
+解释器启动时自动 import）——**两条缺一不可**，因为要防的那条路径跑在子进程里。
+于是「测试不触网」从"我看了一遍觉得没有"变成了一条会红的断言。
+
+⚠️ **落地过程中实测到一次真实外发，已单独落档**：闸门第一版按主机名放行回环，而本机
+`HTTPS_PROXY=http://127.0.0.1:<port>`——建连打到回环、被放行、由代理转发到企微，
+企微回了 `errcode=853000`。只清 `*_PROXY` 环境变量**不够**（`websockets` 走
+`urllib.request.getproxies()`，macOS 上还读系统代理设置）。现已连
+`getproxies`/`proxy_bypass` 一起摁掉，判据用例也加了 **websockets 栈**的第二个探针。
+详见 `docs/findings/2026-09-09-测试网络闸门被本机代理绕过.md`。
+
+**验收实证**：`tools/liaison/.venv` 里 **750 passed / 0 failed**（基线 741）；根 venv 全量
+**2005 passed / 5 skipped / 0 failed**。
+
+## TD-37 · `client.run()` 吞掉 KeyboardInterrupt，Ctrl-C 停不下值守服务（要按两次）
+
+**欠的是什么**：`aibot==1.0.2` 的 `WSClient.run()` 自己 `except KeyboardInterrupt:` →
+`self.disconnect()` → **正常返回**（`client.py:344-360`）。TD-19 把它接进
+`session_client.run_forever` 之后，Ctrl-C 的效果变成：`run()` 静默返回 → 外层当成
+"连上后又断了" → 退避 1 秒 → **拿一个全新对象重连**。服务不停。
+
+第二次 Ctrl-C 若落在那 1 秒的 `sleep()` 窗口里，`KeyboardInterrupt` 就能穿过
+`run_forever`（它只 catch `Exception`）到达 `main()` 的 `except KeyboardInterrupt`，
+线程正常收尾。所以现象是"**要按两次、且第二次得按在退避窗口里**"。
+
+**触发条件**：本条**不必单独排期**。⚠️ 但凡出现下面任一情形就要还：
+① 有人在 Terminal 手工跑值守服务并抱怨"Ctrl-C 停不掉"；② 要给服务加优雅停机
+（flush、闭合当前窗口再退）——那时"停机信号到不了 `main()`"会从麻烦升级成缺陷。
+
+**不还的后果**：**不静默、后果有限**。生产路径不受影响——launchd 用 SIGTERM，
+Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`。受影响的只有人工
+前台调试，且症状**当场可见**（按一次没停），⛔ 不是"看起来正常其实没工作"那一类。
+
+**已考虑但未做的改法**（留给还它的人，⛔ 不要当成结论）：在 `connect_once` 外面临时
+换 `signal.signal(SIGINT, ...)`、置一个标志位、`run()` 返回后补 `raise KeyboardInterrupt`。
+代价是在库函数里动进程级信号处理，且只在主线程成立。⛔ `0909AC` 判定它超出该泳道
+范围（opener「范围硬界定」），故只登记不动手。
+
+**来源**：`[Mac]0909AC` 写 TD-19 适配时读 SDK 源码发现（⛔ 不是推测，`client.py`
+第 344-360 行原文）。相关：TD-19、`docs/findings/2026-09-09-aibot-wsclient-表面实测.md`

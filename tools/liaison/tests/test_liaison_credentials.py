@@ -9,6 +9,7 @@
 """
 
 import ast
+import functools
 import os
 import pathlib
 import subprocess
@@ -17,7 +18,11 @@ import time
 
 import pytest
 
-from tools.liaison.__main__ import EXIT_MISSING_CREDENTIALS
+from tools.liaison.__main__ import (
+    EXIT_MISSING_CREDENTIALS,
+    EXIT_SDK_UNAVAILABLE,
+    SELF_CHECK_ARG,
+)
 from tools.liaison.config import (
     BOT_ID_ENV,
     BOT_SECRET_ENV,
@@ -25,6 +30,7 @@ from tools.liaison.config import (
     load_credentials,
 )
 from tools.liaison.errors import MissingCredentialsError
+from tools.liaison.tests import netguard_support
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 LIAISON_DIR = REPO_ROOT / "tools" / "liaison"
@@ -37,24 +43,58 @@ FORBIDDEN_MODULE_LEVEL_IMPORTS = ("aibot", "wecom_aibot_python_sdk", "websockets
 STARTUP_PATH_MODULES = ("errors.py", "config.py", "__main__.py")
 
 
-def _run_entrypoint(env_overrides: dict[str, str], tmp_path: pathlib.Path):
-    """在子进程里跑 `python -m tools.liaison`，返回 CompletedProcess 与耗时。
+@functools.cache
+def _sdk_available_to_subprocess() -> bool:
+    """跑测试的这个解释器装没装 aibot？
 
-    ⚠️ 必须指一个**不存在**的 .env：开发机上仓库根真有一个 .env，不隔离的话
-    "凭据缺失"这条用例会在他机器上变绿、在 CI 上变红。
+    ⚠️ 这是**环境事实，⛔ 不是契约**——design D10 决定了 SDK 只进
+    `tools/liaison/.venv`，全量 pytest 走的根 venv 里必然没有。前一版用例踩过的坑
+    正是把它写死进断言：`tools/liaison/.venv` 一建起来、pytest 从那里跑，同一句断言
+    就转红，而被测行为一个字都没变。
+
+    所以这里**测出来**再决定期望值，⛔ 不假设。判据本身（"启动期自检不会因为凭据
+    缺失退出、也不会因为 SDK 表面对不上退出"）在两个 venv 里是同一条。
+    """
+    probe = subprocess.run(
+        [sys.executable, "-c", "import aibot"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=30,
+    )
+    return probe.returncode == 0
+
+
+def _expected_self_check_code() -> int:
+    """自检该以哪个码结束：装了 SDK ⇒ 0（整条走通）；没装 ⇒ 3（缺依赖，与凭据无关）。"""
+    return 0 if _sdk_available_to_subprocess() else EXIT_SDK_UNAVAILABLE
+
+
+def _subprocess_env(tmp_path: pathlib.Path, env_overrides: dict[str, str]) -> dict[str, str]:
+    """子进程环境：清掉真实凭据、指一个受控的 .env、**装上网络闸门**。
+
+    ⚠️ 必须指一个**不存在**（或用例自己写的）.env：开发机上仓库根真有一个 .env，
+    不隔离的话"凭据缺失"这条用例会在他机器上变绿、在 CI 上变红。
+
+    ⚠️ `netguard_support.subprocess_env` ⛔ 不能省（TD-36）：进程内的闸门罩不到
+    子进程，而带着假凭据真的去连企微的正是这里起的子进程。
     """
     env = os.environ.copy()
     env.pop(BOT_ID_ENV, None)
     env.pop(BOT_SECRET_ENV, None)
     env["PYTHONPATH"] = str(REPO_ROOT)
+    netguard_support.subprocess_env(env)
     env["HR_LIAISON_DOTENV_PATH"] = str(tmp_path / "absent.env")
     env.update(env_overrides)
+    return env
 
+
+def _run_entrypoint(
+    env_overrides: dict[str, str], tmp_path: pathlib.Path, *, args: tuple[str, ...] = ()
+):
+    """在子进程里跑 `python -m tools.liaison`，返回 CompletedProcess 与耗时。"""
     started = time.monotonic()
     proc = subprocess.run(
-        [sys.executable, "-m", "tools.liaison"],
+        [sys.executable, "-m", "tools.liaison", *args],
         cwd=str(REPO_ROOT),
-        env=env,
+        env=_subprocess_env(tmp_path, env_overrides),
         capture_output=True,
         text=True,
         timeout=30,
@@ -121,26 +161,29 @@ def test_entrypoint_exits_nonzero_and_names_missing_items(tmp_path):
 def test_entrypoint_succeeds_when_credentials_present(tmp_path):
     """凭据校验通过后，入口不得再因为"凭据"这件事拒绝启动。
 
-    ⚠️ **2026-09-09 修订（Shao Peishen 裁决）**：本用例一度断言
-    `returncode == EXIT_SDK_UNAVAILABLE`，理由是"`sys.executable` 是根 venv，
-    design D10 决定了 aibot 只装在 `tools/liaison/.venv`，根 venv 里必然装不上"。
-    那句断言把**跑测试的解释器装没装 aibot**这个环境事实写成了契约，于是
-    `tools/liaison/.venv` 一建起来、pytest 从那里跑，`sys.executable` 就成了装有
-    aibot 的解释器，进程越过 SDK 这关、停在更后面，用例当场转红——而被测行为
-    一个字都没变。
+    ⚠️ **2026-09-09 二次修订（TD-36，与 TD-19 同一个 commit）**：本用例改跑
+    `--self-check`。⛔ 这不是"为了让测试好过"而放宽——恰恰相反，判据变**严**了：
 
-    更要紧的是它**保证了每修一层就得改一次测试**：TD-19（async connect 适配）
-    落地后，进程会再往前走一关，这句断言会第三次失效。
+    - 旧写法断言的是 `returncode != EXIT_MISSING_CREDENTIALS`，而进程实际停在哪
+      靠的是**下游某一关碰巧拦住了它**（装了 aibot 就停在表面校验 exit 4，没装就停在
+      exit 3）。TD-19 落地后那两道拦阻都没了，同样一条用例会带着假凭据 `bot-1`/`sec-1`
+      **真的去连企微 WebSocket**，而且 ⛔ 不会有任何报错告诉你。
+    - 新写法把整条启动路径（读 .env → 校验凭据 → 造连接对象 → 核 SDK 表面 → 接事件）
+      原样跑完，在建连前退出，因此可以直接断言 **exit 0**：⛔ 不再依赖"下游哪一关会红"
+      这个环境事实，也 ⛔ 不再需要网络。
 
-    因此判据回到用例名字说的那件事——**"没有因为凭据缺失退出"**，⛔ 不再锁死
-    停在哪一关。当前实际停在何处只是环境信息、不是契约：装了 aibot 时止步于
-    `SdkSurfaceUnverifiedError`(4)，没装时止步于 `EXIT_SDK_UNAVAILABLE`(3)。
+    `--self-check` ⛔ 不跳过任何一项校验（见 `__main__.SELF_CHECK_ARG` 的说明）；
+    真实建连是 8.6 由 Shao Peishen 亲自跑，⛔ 不在本套件里。
     """
     proc, _ = _run_entrypoint(
-        {BOT_ID_ENV: "bot-1", BOT_SECRET_ENV: "sec-1"}, tmp_path
+        {BOT_ID_ENV: "bot-1", BOT_SECRET_ENV: "sec-1"}, tmp_path, args=(SELF_CHECK_ARG,)
     )
     assert proc.returncode != EXIT_MISSING_CREDENTIALS, (
         f"凭据齐备时不该被判定为缺失：stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert proc.returncode == _expected_self_check_code(), (
+        "启动期自检应当整条走通（装了 SDK ⇒ 0；没装 ⇒ 3，与凭据无关）："
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     )
     assert "sec-1" not in proc.stdout + proc.stderr, "凭据取值不得出现在任何输出里"
 
@@ -148,27 +191,87 @@ def test_entrypoint_succeeds_when_credentials_present(tmp_path):
 def test_entrypoint_reads_dotenv_when_process_env_is_absent(tmp_path):
     """凭据"只从进程环境读"——.env 的作用是**填进**进程环境，不是第二个真源。
 
-    ⚠️ 同上一条（2026-09-09 修订）：⛔ 不断言停在哪一关，只断言"没有因为凭据缺失
-    退出"——这才是"从 .env 读到了凭据"这件事本身要验的东西。理由见上一条 docstring。
+    ⚠️ 同上一条（TD-36）：改跑 `--self-check`，判据收紧为 exit 0，且 ⛔ 不触网。
     """
     dotenv = tmp_path / "from-file.env"
     dotenv.write_text(
         f"# 注释行应被跳过\n{BOT_ID_ENV}=bot-from-file\n{BOT_SECRET_ENV}=sec-from-file\n",
         encoding="utf-8",
     )
-    env = os.environ.copy()
-    env.pop(BOT_ID_ENV, None)
-    env.pop(BOT_SECRET_ENV, None)
-    env["PYTHONPATH"] = str(REPO_ROOT)
-    env["HR_LIAISON_DOTENV_PATH"] = str(dotenv)
+    env = _subprocess_env(tmp_path, {"HR_LIAISON_DOTENV_PATH": str(dotenv)})
     proc = subprocess.run(
-        [sys.executable, "-m", "tools.liaison"],
+        [sys.executable, "-m", "tools.liaison", SELF_CHECK_ARG],
         cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=30,
     )
     assert proc.returncode != EXIT_MISSING_CREDENTIALS, f"stderr={proc.stderr!r}"
+    assert proc.returncode == _expected_self_check_code(), (
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
     # 上一条有泄漏断言而本条原先没有——补齐。凭据来自 .env 这条路径同样不得回显取值。
     assert "sec-from-file" not in proc.stdout + proc.stderr, (
         "凭据取值不得出现在任何输出里"
+    )
+
+
+def test_the_self_check_never_reaches_the_network(tmp_path):
+    """TD-36 的判据本身也要有岗：闸门装上了，且被测路径确实没撞上它。
+
+    三件事一起断言，⛔ 缺一条都不成立：
+    ① 子进程里闸门对**裸 socket** 生效；
+    ② 子进程里闸门对**真实建连栈**（`websockets`，SDK 用的就是它）也生效——
+       ⚠️ 这一条 ⛔ 不能省：2026-09-09 实测过一次真实的假绿灯——本机
+       `HTTPS_PROXY=http://127.0.0.1:<port>`，`websockets` 走
+       `urllib.request.getproxies()`（macOS 上连**系统代理设置**一起读，清环境变量
+       没用），建连打到回环、被闸门放行、再由代理转发出去。只验 ① 的话闸门会一直
+       报绿，而流量照常出去；
+    ③ 同样这个环境下跑 `--self-check`，退出码 0 且 stderr 里 ⛔ 没有闸门的报错名，
+       即被测路径**根本没走到建连**。
+
+    ⚠️ 探针打的是 `example.com` 而不是企微：闸门若哪天回归失效，这条用例会真的把
+    包发出去——那就让它发给一个无关的公共域名，⛔ 不要发给企微生产端点。
+
+    ⚠️ 根 venv 里 skip 是**预期行为**（design D10：SDK 与 `websockets` 只进
+    `tools/liaison/.venv`）——② 需要 `websockets` 才验得了。⛔ 不要为了让它在根 venv
+    也能跑而把 SDK 加进根 requirements.txt。
+    """
+    if not _sdk_available_to_subprocess():
+        pytest.skip("SDK/websockets 只装在 tools/liaison/.venv，根 venv skip 是预期（design D10）")
+    env = _subprocess_env(tmp_path, {BOT_ID_ENV: "bot-1", BOT_SECRET_ENV: "sec-1"})
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import socket; socket.getaddrinfo('example.com', 443)",
+        ],
+        cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert probe.returncode != 0, "闸门没生效——子进程居然解析出了外部域名"
+    assert "NetworkAccessInTestError" in probe.stderr, probe.stderr
+
+    ws_probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio, websockets\n"
+            "async def m():\n"
+            "    await websockets.connect('wss://example.com/ws')\n"
+            "asyncio.run(m())\n",
+        ],
+        cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert "NetworkAccessInTestError" in ws_probe.stderr, (
+        "闸门拦不住 websockets（SDK 真正用的那条路）——很可能又被代理绕过去了。"
+        f"stderr={ws_probe.stderr!r}"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "tools.liaison", SELF_CHECK_ARG],
+        cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "NetworkAccessInTestError" not in proc.stderr, (
+        "启动期自检撞上了网络闸门——它 ⛔ 不该走到建连那一步"
     )
 
 

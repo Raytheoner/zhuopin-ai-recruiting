@@ -41,7 +41,13 @@ DEFAULT_HEARTBEAT_SECONDS = 30
 #: `make_sdk_connect` 会在启动时**当场报错**，⛔ 不会静默错接线。
 EVENT_CONNECTED = "connected"
 EVENT_DISCONNECTED = "disconnected"
-REQUIRED_CLIENT_ATTRS = ("on", "connect")
+
+#: 本模块真正依赖的两个方法。⚠️ 2026-09-09（TD-19）把 `connect` 从这份清单里
+#: **移走、换成 `run`**：实测 `WSClient.connect` 是 `async def` 且建连后立即返回，
+#: 不满足 `run_forever`「阻塞到断开为止」的契约；本模块从此不再调用它。
+#: ⛔ 清单里只留**真正会被调用**的方法——要求一个用不到的方法，会让"表面校验"
+#: 与"真实依赖"错位：校验绿灯，而真正被调的那个方法从没被核过。
+REQUIRED_CLIENT_ATTRS = ("on", "run")
 
 
 class SdkSurfaceUnverifiedError(RuntimeError):
@@ -125,15 +131,23 @@ def build_ws_options(credentials, *, heartbeat_interval: int = DEFAULT_HEARTBEAT
     )
 
 
-def make_sdk_connect(
-    client,
-    *,
-    on_connected: Callable[[], None],
-    on_disconnected: Callable[[], None],
-) -> Callable[[], None]:
-    """把连接事件接到回调上，返回一个交给 `run_forever` 用的阻塞调用。
+def verify_client_surface(client) -> None:
+    """核对 SDK 连接对象的表面，对不上就 raise。⛔ 不许降级成 warning。
 
-    先核对表面再接线：对不上就 raise，⛔ 不许"能接的先接上、接不上的算了"。
+    🔴 **这是整条链上唯一的护栏，⛔ 不许删、不许加"跳过校验"的开关或环境变量。**
+    它防的正是「服务起得来、日志一片正常、但从来没真正建连／断线事件永远到不了
+    `LiaisonSession`」这一类**静默**故障——中断窗口一条都不会有，"没有告警"被当成
+    "一切正常"。
+
+    校验四项，每一项对应一种真实存在过的静默失败形态：
+
+    1. `REQUIRED_CLIENT_ATTRS` 都在——SDK 换版本改名时当场炸；
+    2. `run` 可调用；
+    3. `run` **不是**协程函数——协程 `run()` 同步调用只返回一个协程对象、不执行
+       任何网络动作，`run_forever` 会把它当成"连上后立刻断开"，从此满速退避重连；
+    4. `run` 能以**零参数**调用——将来若变成 `run(self, forever)`，`run()` 会抛
+       `TypeError`，而 `run_forever` 把任何 `Exception` 都当"这次没连上"吞掉重试：
+       一个永远不会自愈的接口变更会伪装成"网络一直不好"。
     """
     missing = [attr for attr in REQUIRED_CLIENT_ATTRS if not hasattr(client, attr)]
     if missing:
@@ -143,25 +157,97 @@ def make_sdk_connect(
             "REQUIRED_CLIENT_ATTRS / EVENT_CONNECTED / EVENT_DISCONNECTED，"
             "并把原始输出落进 docs/findings/。⛔ 不要绕过本检查。"
         )
-    connect = client.connect
-    if inspect.iscoroutinefunction(connect):
-        # 实测（docs/findings/2026-09-09-aibot-wsclient-表面实测.md「遗留发现」）：
-        # 真实 SDK 的 WSClient.connect 是 `async def`，同步调用只会拿到一个协程
-        # 对象、执行不了任何网络动作——`run_forever` 会把"刚连上"误判成"立刻又
-        # 断开了"，退避从 1s 起不停重连，永远连不上、⛔ 不报错、⛔ 没有任何症状。
-        # 真正满足 run_forever「阻塞到断开为止」这个契约的入口是 client.run()
-        # （同步、跑到断线为止）。本模块 ⛔ 不猜一个未经真实凭据验证的 async
-        # 适配方案——凭据未注册，猜错同样是静默故障，只是换了个位置。
+    if not callable(client.on):
         raise SdkSurfaceUnverifiedError(
-            "SDK 的 connect 是协程函数（async def），不满足 run_forever 期望的"
-            "「阻塞到断开为止」同步调用契约：同步调用它只会返回一个协程对象，"
-            "不执行任何网络操作。真正的阻塞入口是 client.run()。本模块拒绝把"
-            "未经验证的 async→同步适配硬接上去，详见 "
-            "docs/findings/2026-09-09-aibot-wsclient-表面实测.md「遗留发现」一节。"
+            "SDK 连接对象的 on 不可调用，订阅不了 "
+            f"{EVENT_CONNECTED!r}/{EVENT_DISCONNECTED!r} 两个连接事件。"
         )
+    run = client.run
+    if not callable(run):
+        raise SdkSurfaceUnverifiedError("SDK 连接对象的 run 不可调用，没有可阻塞的入口。")
+    if inspect.iscoroutinefunction(run):
+        raise SdkSurfaceUnverifiedError(
+            "SDK 的 run 是协程函数（async def），不满足 run_forever 期望的"
+            "「阻塞到断开为止」同步调用契约：同步调用它只会返回一个协程对象，"
+            "不执行任何网络操作，run_forever 会把它当成「连上后立刻断开」而满速退避重连。"
+            "请按 docs/findings/2026-09-09-aibot-wsclient-表面实测.md 重新核对表面，"
+            "⛔ 不要绕过本检查。"
+        )
+    try:
+        signature = inspect.signature(run)
+    except (TypeError, ValueError):
+        # 取不到签名（C 实现、奇异的可调用对象）⇒ 这一项无从判断，放行。
+        # ⛔ 不因"看不清"就拒绝启动：上面三项已经守住了主要失败形态。
+        return
+    try:
+        signature.bind()
+    except TypeError as exc:
+        raise SdkSurfaceUnverifiedError(
+            f"SDK 的 run 不能以零参数调用（签名 {signature}）。run_forever 只会调 run()，"
+            "参数对不上会抛 TypeError，而 run_forever 把任何 Exception 都当成「这次没连上」"
+            "吞掉重试——一个永不自愈的接口变更会伪装成「网络一直不好」。⛔ 不要绕过本检查。"
+        ) from exc
+
+
+def _prepare_client(client_factory, on_connected, on_disconnected):
+    """造一个连接对象、核表面、接事件。返回**尚未 run** 的那个对象。
+
+    先核表面再接线：对不上就 raise，⛔ 不许"能接的先接上、接不上的算了"。
+    """
+    client = client_factory()
+    verify_client_surface(client)
     client.on(EVENT_CONNECTED, lambda *args, **kwargs: on_connected())
     client.on(EVENT_DISCONNECTED, lambda *args, **kwargs: on_disconnected())
-    return connect
+    return client
+
+
+def make_sdk_connect(
+    client_factory: Callable[[], object],
+    *,
+    on_connected: Callable[[], None],
+    on_disconnected: Callable[[], None],
+) -> Callable[[], None]:
+    """返回一个交给 `run_forever` 用的、真正阻塞到断开为止的调用。
+
+    ⚠️ **参数是一个"每次造一个全新连接对象"的工厂，⛔ 不是一个连接对象**——
+    这不是风格选择，是 SDK 的一个闩锁逼出来的（实测 `aibot==1.0.2`
+    `client.py::connect`）：
+
+        async def connect(self):
+            if self._started:
+                self._logger.warn("Client already connected")
+                return self          # ⛔ 什么都不做就回来了
+            self._started = True
+            await self._ws_manager.connect()
+
+    `_started` 一旦置位就只有 `disconnect()` 会清掉它。于是**同一个对象第二次
+    `run()`** 会：connect 立刻返回 → `loop.run_forever()` 挂在一个空转的事件循环上
+    → 进程活着、日志正常、**永远不再连上**，⛔ 没有任何症状。这正是本模块存在的
+    理由要消灭的那一类故障，所以每一次建连尝试都必须拿一个全新的对象。
+
+    表面校验在**返回之前**就跑掉（拿第一个对象核），⛔ 不许挪进返回的闭包里：
+    `run_forever` 会把任何 `Exception`（`SdkSurfaceUnverifiedError` 是 `RuntimeError`）
+    当成"这次没连上"吞掉重试，护栏一旦挪进去就等于被拆掉。
+
+    ⚠️ **线程归属**：`client.run()` 自己 `new_event_loop()`。它必须跑在**主线程**
+    （第 7 章接线：值守线程独占库、主线程跑连接），⛔ 不许挪进子线程，也 ⛔ 不许
+    在一个已经有事件循环在跑的线程里调它。
+    """
+    prepared = _prepare_client(client_factory, on_connected, on_disconnected)
+
+    def connect_once() -> None:
+        nonlocal prepared
+        client = prepared
+        prepared = None
+        if client is None:
+            client = _prepare_client(client_factory, on_connected, on_disconnected)
+        # ⚠️ `client.run()` 在真实 SDK 上几乎不会返回：建连失败由 SDK 内部
+        # `_schedule_reconnect()` 接手（`max_reconnect_attempts=-1` ⇒ 无限重试），
+        # `loop.run_forever()` 就一直挂着。外层 `run_forever` 因此是**兜底**那一层，
+        # ⛔ 不是主重连路径——主重连是 SDK 的（design D8）。
+        client.run()
+
+    return connect_once
 
 
 def build_client(credentials):

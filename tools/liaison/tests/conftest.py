@@ -20,6 +20,7 @@ from __future__ import annotations
 import pytest
 
 from tools.liaison import logsetup
+from tools.liaison.tests import netguard_support
 
 
 @pytest.fixture(autouse=True)
@@ -42,3 +43,24 @@ def liaison_logs_to_tmp(tmp_path, monkeypatch):
     monkeypatch.delenv(logsetup.LOG_BACKUP_COUNT_ENV, raising=False)
     yield
     logsetup.teardown_logging()
+
+
+@pytest.fixture(autouse=True)
+def no_outbound_network():
+    """本目录的用例一律 ⛔ 不许连外部地址（TD-36）。
+
+    **为什么必须有这条**：`test_liaison_credentials.py` 的两条用例带着假凭据
+    （`bot-1`/`sec-1`）起真子进程跑 `python -m tools.liaison`。TD-19 之前它们停在
+    SDK 表面校验、在任何网络动作之前，**纯属运气**；TD-19 落地后那道拦阻就没了。
+    没有本闸门，"跑一次本地测试 = 对企微生产端点做几次失败认证"这件事
+    ⛔ **不会有任何报错告诉你**。
+
+    ⚠️ 本 fixture 只罩**进程内**。子进程另有一条：
+    `netguard_support.subprocess_env()` 把同一份闸门塞进子进程的 `PYTHONPATH`，
+    由 `site` 在解释器启动时自动装上。两条缺一不可。
+
+    ⚠️ 回环放行、⛔ 不按用例开口子——按用例开口子等于没有闸门。
+    """
+    netguard_support.install()
+    yield
+    netguard_support.uninstall()

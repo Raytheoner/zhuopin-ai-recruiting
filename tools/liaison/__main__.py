@@ -41,6 +41,21 @@ EXIT_SDK_UNAVAILABLE = 3
 #: SDK 的方法／事件表面与接线假设对不上（⛔ 不许硬着头皮跑）。
 EXIT_SDK_SURFACE_UNVERIFIED = 4
 
+#: 启动期自检子命令：把「读 .env → 校验凭据 → 造连接对象 → 核 SDK 表面 → 接事件」
+#: 整条启动路径**原样**跑一遍，然后在**建立任何网络连接之前**退出。
+#:
+#: 🔴 它 ⛔ **不是**"跳过校验的开关"——恰恰相反，它把校验跑完才退出；它跳过的是
+#: `run_forever(connect)`，也就是唯一会碰网络的那一步。加它的理由是 TD-36：
+#: `test_liaison_credentials.py` 的两条用例用 `sys.executable` 起真实子进程、喂
+#: 假凭据（`bot-1`/`sec-1`）。TD-19 之前它们停在 SDK 表面校验（exit 4）纯属运气；
+#: TD-19 落地后那道拦阻消失，同样两条用例会带着假凭据**真的去连企微**——而且
+#: ⛔ 没有任何报错会告诉你。
+#:
+#: ⛔ **不许写进 launchd plist 的 ProgramArguments**：那会让服务每次被拉起都
+#: 立刻 exit 0，launchd 认为"跑完了"，值守通道从此根本不存在，且 ⛔ 无任何症状。
+#: 守护断言：tests/test_launchd_plist.py::test_plist_never_runs_the_self_check_mode。
+SELF_CHECK_ARG = "--self-check"
+
 #: tools/liaison/__main__.py → parents[0]=liaison, [1]=tools, [2]=仓库根
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -143,9 +158,14 @@ def main(
     session_builder=build_session,
     client_builder=session_client.build_client,
     runner=session_client.run_forever,
+    self_check: bool = False,
 ) -> int:
-    """⚠️ 三个关键字参数是**接线缝**，只给测试注入 fake 用，⛔ 不是配置项——
-    ⛔ 不要给它们加环境变量开关。"""
+    """⚠️ 三个接线缝关键字参数只给测试注入 fake 用，⛔ 不是配置项——
+    ⛔ 不要给它们加环境变量开关。
+
+    `self_check=True` 见 `SELF_CHECK_ARG` 的说明：跑完整条启动路径（含 SDK 表面
+    校验），**在建立任何网络连接之前**返回 0。⛔ 它不跳过任何一项校验。
+    """
     logsetup.setup_logging()
     load_dotenv_into_environ(resolve_dotenv_path())
 
@@ -156,8 +176,16 @@ def main(
         print(str(exc), file=sys.stderr)
         return EXIT_MISSING_CREDENTIALS
 
+    events: queue.Queue = queue.Queue()
+
     try:
-        client = client_builder(credentials)
+        # ⚠️ 传的是**工厂**不是对象：SDK 的 `_started` 闩锁让同一个连接对象没法
+        # 重连第二次（详见 session_client.make_sdk_connect 的 docstring）。
+        connect = session_client.make_sdk_connect(
+            lambda: client_builder(credentials),
+            on_connected=lambda: events.put((EVENT_CONNECTED, now())),
+            on_disconnected=lambda: events.put((EVENT_DISCONNECTED, now())),
+        )
     except ImportError as exc:
         print(
             f"HR 值守通道拒绝启动：aibot SDK 不可用（{exc}）。"
@@ -166,18 +194,18 @@ def main(
             file=sys.stderr,
         )
         return EXIT_SDK_UNAVAILABLE
-
-    events: queue.Queue = queue.Queue()
-
-    try:
-        connect = session_client.make_sdk_connect(
-            client,
-            on_connected=lambda: events.put((EVENT_CONNECTED, now())),
-            on_disconnected=lambda: events.put((EVENT_DISCONNECTED, now())),
-        )
     except session_client.SdkSurfaceUnverifiedError as exc:
         print(f"HR 值守通道拒绝启动：{exc}", file=sys.stderr)
         return EXIT_SDK_SURFACE_UNVERIFIED
+
+    if self_check:
+        # ⛔ 到此为止：⛔ 不起值守线程、⛔ 不调 runner、⛔ 不碰网络。
+        print(
+            "HR 值守通道启动期自检通过：凭据齐备、SDK 表面符合契约、连接事件已接线。"
+            "⛔ 本次未建立任何连接（--self-check）。",
+            file=sys.stderr,
+        )
+        return 0
 
     stop_event = threading.Event()
     worker = threading.Thread(
@@ -230,6 +258,9 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "send-followu
     # 而那个报错指向的原因是错的。
     load_dotenv_into_environ(resolve_dotenv_path())
     raise SystemExit(send_followup_main(sys.argv[2:]))
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == SELF_CHECK_ARG:
+    raise SystemExit(main(self_check=True))
 
 if __name__ == "__main__":
     raise SystemExit(main())

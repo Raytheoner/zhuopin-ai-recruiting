@@ -65,6 +65,23 @@ def test_program_arguments_point_at_the_liaison_venv_python(tmp_path):
     assert args[1:] == ["-m", "tools.liaison"]
 
 
+def test_plist_never_runs_the_self_check_mode(tmp_path):
+    """🔴 `--self-check` ⛔ 不许出现在 launchd 拉起的命令行里（TD-36）。
+
+    自检模式跑完校验就 exit 0。写进 plist 的后果是：launchd 每次拉起服务，服务
+    立刻"正常结束"，`KeepAlive` 再拉、再结束——值守通道**从来没有真正存在过**，
+    而 ⛔ 没有任何症状：退出码 0、err 日志干净、进程列表里看不出异常。
+    """
+    from tools.liaison.__main__ import SELF_CHECK_ARG
+
+    rendered = install_launchd.render_plist(tmp_path)
+    data = plistlib.loads(rendered.encode("utf-8"))
+    assert SELF_CHECK_ARG not in data["ProgramArguments"], (
+        f"plist 里出现了 {SELF_CHECK_ARG}——服务会每次拉起就立刻 exit 0"
+    )
+    assert SELF_CHECK_ARG not in rendered, "模板全文里都 ⛔ 不该出现自检开关"
+
+
 def test_all_paths_in_the_rendered_plist_are_absolute(tmp_path):
     """launchd 的 cwd 是 `/`，相对路径不会报错，只会指到错的地方。"""
     data = plistlib.loads(install_launchd.render_plist(tmp_path).encode("utf-8"))

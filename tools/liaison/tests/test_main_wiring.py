@@ -154,35 +154,114 @@ def test_main_exits_when_the_sdk_surface_does_not_match(credentials_in_env, caps
     assert ran == [], "⛔ 表面对不上时不许硬着头皮跑起来"
 
 
-def test_main_exits_when_the_sdk_connect_is_a_coroutine_function(credentials_in_env, capsys):
-    """🔴 controller ruling：真实 SDK 的 `WSClient.connect` 是 `async def`。
+def test_main_exits_when_the_sdk_run_is_a_coroutine_function(credentials_in_env, capsys):
+    """🔴 **护栏仍在的进程侧证据**（TD-19 落地后的新形态）。
 
-    同步调用它只会拿到一个协程对象、什么网络动作都不执行——`run_forever` 会把
-    "刚连上"误判成"立刻又断开了"，然后永远退避重连、⛔ 不报错、⛔ 没有任何
-    症状（docs/findings/2026-09-09-aibot-wsclient-表面实测.md「遗留发现」）。
-    这条测试证明 `make_sdk_connect` 在 `main()` 里对这种表面**当场拒绝启动**，
-    ⛔ 不静默进入自旋重连。
+    适配写好之后本模块调的是 `client.run()`，护栏就跟着挪到 `run` 上——⛔ 没有被
+    删掉、没有被降级成警告。协程 `run()` 同步调用只返回一个协程对象、不执行任何
+    网络动作，`run_forever` 会把它当成"连上后立刻断开"而永远退避重连，⛔ 不报错、
+    ⛔ 没有任何症状。这条证明 `main()` 对这种表面**当场拒绝启动**。
     """
 
-    class AsyncConnectClient:
+    class AsyncRunClient:
         def on(self, event, handler):
             pass
 
-        async def connect(self):  # pragma: no cover - 不应被真的调用到
-            raise AssertionError("不应该走到这里——协程 connect 必须被提前拒绝")
+        async def run(self):  # pragma: no cover - 不应被真的调用到
+            raise AssertionError("不应该走到这里——协程 run 必须被提前拒绝")
 
     ran = []
     assert (
         liaison_main.main(
-            client_builder=lambda _c: AsyncConnectClient(),
+            client_builder=lambda _c: AsyncRunClient(),
             runner=lambda connect: ran.append(1),
         )
         == liaison_main.EXIT_SDK_SURFACE_UNVERIFIED
     )
-    assert ran == [], "⛔ 协程 connect 对不上契约时不许硬着头皮跑起来"
-    err = capsys.readouterr().err
-    assert "client.run()" in err
-    assert "2026-09-09-aibot-wsclient-表面实测.md" in err
+    assert ran == [], "⛔ 协程 run 对不上契约时不许硬着头皮跑起来"
+    assert "async def" in capsys.readouterr().err
+
+
+def test_main_accepts_the_real_sdk_shape_and_hands_run_to_the_runner(credentials_in_env, tmp_path):
+    """TD-19 的正面判据：真实 SDK 形状（`async def connect` + 同步 `run`）能起来，
+
+    且交给 `run_forever` 的那个 callable 调到的是 **`client.run()`**——
+    ⛔ 不是 `client.connect`（协程，同步调它什么都不会发生）。
+    """
+    ran = []
+
+    class RealShapeClient:
+        def on(self, event, handler):
+            pass
+
+        async def connect(self):  # pragma: no cover - ⛔ 不该被调
+            raise AssertionError("⛔ 不该调 connect——阻塞入口是 run()")
+
+        def run(self):
+            ran.append(1)
+            raise KeyboardInterrupt  # 停下 main()，⛔ 不真的驻留
+
+    def session_builder():
+        conn = liaison_db.get_connection(tmp_path / "liaison.db")
+        liaison_db.init_schema(conn)
+        return session.LiaisonSession(
+            conn, RecordingSink(), liveness_path=tmp_path / "liveness.json"
+        )
+
+    assert (
+        liaison_main.main(
+            session_builder=session_builder,
+            client_builder=lambda _c: RealShapeClient(),
+            runner=lambda connect: connect(),
+        )
+        == 0
+    )
+    assert ran == [1], "交给 runner 的 callable 必须真的调到 client.run()"
+
+
+def test_self_check_runs_the_whole_startup_path_then_stops_before_connecting(
+    credentials_in_env, capsys
+):
+    """TD-36：`--self-check` 把校验全跑完，⛔ 在建连前停下。
+
+    ⛔ 它不是"跳过校验的开关"——下面两条断言一起才成立：
+    ① 表面对不上时它**照样**以 `EXIT_SDK_SURFACE_UNVERIFIED` 拒绝（校验没被跳过）；
+    ② 表面对得上时它返回 0 且 `runner` / `client.run()` 一次都没被调（没碰网络）。
+    """
+
+    class BareClient:
+        pass
+
+    assert (
+        liaison_main.main(
+            client_builder=lambda _c: BareClient(),
+            runner=lambda connect: connect(),
+            self_check=True,
+        )
+        == liaison_main.EXIT_SDK_SURFACE_UNVERIFIED
+    ), "⛔ 自检模式不许跳过 SDK 表面校验"
+
+    ran = []
+    ran_runner = []
+
+    class RealShapeClient:
+        def on(self, event, handler):
+            pass
+
+        def run(self):
+            ran.append(1)
+
+    assert (
+        liaison_main.main(
+            client_builder=lambda _c: RealShapeClient(),
+            runner=lambda connect: ran_runner.append(1),
+            self_check=True,
+        )
+        == 0
+    )
+    assert ran == [], "⛔ 自检模式不许调 client.run()——那是唯一会碰网络的一步"
+    assert ran_runner == [], "⛔ 自检模式不许进 run_forever"
+    assert "--self-check" in capsys.readouterr().err
 
 
 def test_main_wires_both_callbacks_into_the_queue(credentials_in_env, tmp_path):
@@ -193,7 +272,7 @@ def test_main_wires_both_callbacks_into_the_queue(credentials_in_env, tmp_path):
         def on(self, event, handler):
             handlers[event] = handler
 
-        def connect(self):
+        def run(self):
             raise AssertionError("本用例不应真的建连")
 
     captured: dict = {}

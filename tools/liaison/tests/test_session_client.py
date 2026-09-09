@@ -230,55 +230,181 @@ def test_make_sdk_connect_refuses_a_client_missing_the_expected_surface():
 
     with pytest.raises(session_client.SdkSurfaceUnverifiedError) as excinfo:
         session_client.make_sdk_connect(
-            BareClient(), on_connected=lambda: None, on_disconnected=lambda: None
+            BareClient, on_connected=lambda: None, on_disconnected=lambda: None
         )
     for attr in session_client.REQUIRED_CLIENT_ATTRS:
         assert attr in str(excinfo.value)
 
 
-def test_make_sdk_connect_refuses_a_coroutine_function_connect():
-    """🔴 controller ruling（docs/findings/2026-09-09-aibot-wsclient-表面实测.md）：
+def test_make_sdk_connect_refuses_a_coroutine_function_run():
+    """🔴 **护栏仍在的证据**（TD-19 落地后的新形态）。
 
-    真实 SDK 的 `WSClient.connect` 是 `async def`。同步调用它只会返回一个协程
-    对象、不执行任何网络动作——`run_forever` 会把"刚连上"误判成"立刻又断开
-    了"，从此永远退避重连，⛔ 不报错、⛔ 没有任何症状。`make_sdk_connect` 必须
-    在接线阶段就当场拒绝这种表面，而不是把一个不满足"阻塞到断开为止"契约的
-    callable 交给 run_forever。
+    TD-19 之前守的是"`connect` 是协程 ⇒ 拒绝"；适配写好之后本模块调的是
+    `client.run()`，护栏就必须跟着挪到 `run` 上——⛔ 而不是被删掉或降级成警告。
+    协程 `run()` 同步调用只返回一个协程对象、不执行任何网络动作，`run_forever`
+    会把它当成"连上后立刻断开"，从此满速退避重连：⛔ 不报错、⛔ 没有任何症状。
+
+    ⚠️ 同时断言"表面拒绝之前一个事件都没订阅"：半接线比不接线更危险。
     """
     events = {}
 
-    class AsyncConnectClient:
+    class AsyncRunClient:
         def on(self, event, handler):
             events[event] = handler
 
-        async def connect(self):  # pragma: no cover - 不应被真的调用到
-            raise AssertionError("协程 connect 必须在接线阶段就被拒绝，不应被调用")
+        async def run(self):  # pragma: no cover - 不应被真的调用到
+            raise AssertionError("协程 run 必须在接线阶段就被拒绝，不应被调用")
 
     with pytest.raises(session_client.SdkSurfaceUnverifiedError) as excinfo:
         session_client.make_sdk_connect(
-            AsyncConnectClient(), on_connected=lambda: None, on_disconnected=lambda: None
+            AsyncRunClient, on_connected=lambda: None, on_disconnected=lambda: None
         )
-    assert "client.run()" in str(excinfo.value)
+    assert "async def" in str(excinfo.value)
     assert events == {}, "⛔ 表面拒绝之前不许先订阅事件——半接线比不接线更危险"
 
 
-def test_make_sdk_connect_subscribes_both_events_and_returns_a_blocking_callable():
-    """用 fake 连接对象验接线形状，⛔ 不联真企微。"""
+def test_make_sdk_connect_refuses_a_run_that_needs_arguments():
+    """`run` 将来若要参数，`run()` 会抛 TypeError——而 run_forever 会把它当"没连上"
+
+    吞掉重试。一个永不自愈的接口变更会伪装成"网络一直不好"，⛔ 必须当场拒绝启动。
+    """
+
+    class NeedsArgsClient:
+        def on(self, event, handler):
+            pass
+
+        def run(self, forever):  # pragma: no cover - 不应被真的调用到
+            raise AssertionError("不应被调用")
+
+    with pytest.raises(session_client.SdkSurfaceUnverifiedError) as excinfo:
+        session_client.make_sdk_connect(
+            NeedsArgsClient, on_connected=lambda: None, on_disconnected=lambda: None
+        )
+    assert "零参数" in str(excinfo.value)
+
+
+def test_make_sdk_connect_accepts_the_real_sdk_shape_async_connect_plus_sync_run():
+    """TD-19 的正面判据：真实 SDK 的形状（`async def connect` + 同步 `run`）必须被接受。
+
+    ⚠️ `connect` 是协程**不再**是拒绝理由——本模块从此不调它。⛔ 但这不等于放宽了
+    护栏：护栏挪到了真正被调用的 `run` 上（见上面两条）。
+    """
     events = {}
+    ran = []
+
+    class RealShapeClient:
+        def on(self, event, handler):
+            events[event] = handler
+
+        async def connect(self):  # pragma: no cover - 本模块 ⛔ 不调它
+            raise AssertionError("⛔ 不该调 connect——阻塞入口是 run()")
+
+        def run(self):
+            ran.append(1)
+
+    connect = session_client.make_sdk_connect(
+        RealShapeClient, on_connected=lambda: None, on_disconnected=lambda: None
+    )
+    assert set(events) == {session_client.EVENT_CONNECTED, session_client.EVENT_DISCONNECTED}
+    connect()
+    assert ran == [1], "交给 run_forever 的 callable 必须真的调到 client.run()"
+
+
+def test_make_sdk_connect_subscribes_both_events_and_returns_a_blocking_callable():
+    """用 fake 连接对象验接线形状，⛔ 不联真企微。
+
+    ⚠️ 事件订阅发生在 **make 的那一刻**、不是第一次 connect 的时候——接线出错要在
+    启动时就现形，⛔ 不许拖到第一次建连尝试（那时 run_forever 已经会吞异常了）。
+    """
+    events = {}
+    fired = []
     ran = []
 
     class FakeClient:
         def on(self, event, handler):
             events[event] = handler
 
-        def connect(self):
+        def run(self):
             ran.append(1)
 
     connect = session_client.make_sdk_connect(
-        FakeClient(),
-        on_connected=lambda: events.setdefault("_called_connected", True),
-        on_disconnected=lambda: events.setdefault("_called_disconnected", True),
+        FakeClient,
+        on_connected=lambda: fired.append("connected"),
+        on_disconnected=lambda: fired.append("disconnected"),
     )
     assert set(events) == {session_client.EVENT_CONNECTED, session_client.EVENT_DISCONNECTED}
+    events[session_client.EVENT_CONNECTED]()
+    events[session_client.EVENT_DISCONNECTED]("对端断开")  # SDK 会带 reason 参数
+    assert fired == ["connected", "disconnected"]
     connect()
     assert ran == [1]
+
+
+def test_make_sdk_connect_builds_a_fresh_client_for_every_attempt():
+    """🔴 每次建连尝试都必须拿一个**全新**的连接对象。
+
+    实测 `aibot==1.0.2`：`WSClient.connect` 开头是 `if self._started: return self`，
+    而 `_started` 只有 `disconnect()` 会清。同一个对象第二次 `run()` ⇒ connect 立刻
+    返回 ⇒ `loop.run_forever()` 挂在一个空转的事件循环上 ⇒ 进程活着、日志正常、
+    **永远不再连上**，⛔ 没有任何症状。这条断言就是防它。
+    """
+    built = []
+    wired = []
+
+    class OneShotClient:
+        def __init__(self) -> None:
+            self.runs = 0
+            built.append(self)
+
+        def on(self, event, handler):
+            wired.append((id(self), event))
+
+        def run(self):
+            self.runs += 1
+
+    connect = session_client.make_sdk_connect(
+        OneShotClient, on_connected=lambda: None, on_disconnected=lambda: None
+    )
+    connect()
+    connect()
+    connect()
+    assert len(built) == 3, f"三次尝试应当造出三个连接对象，实际 {len(built)}"
+    assert [c.runs for c in built] == [1, 1, 1], "⛔ 同一个对象不许被 run 两次"
+    assert len(wired) == 6, "每一个新对象都要重新订阅两个连接事件"
+    assert len({ident for ident, _ in wired}) == 3
+
+
+def test_make_sdk_connect_verifies_the_surface_before_run_forever_can_swallow_it():
+    """护栏必须在 `make` 时就响，⛔ 不许挪进返回的闭包。
+
+    `SdkSurfaceUnverifiedError` 是 `RuntimeError`，而 `run_forever` 把任何
+    `Exception` 都当成"这次没连上"吞掉重试。校验一旦挪进闭包，服务会安静地
+    每隔几秒重试一个**永远不会成功**的接线——护栏等于被拆掉。
+    """
+    calls = []
+
+    class BareClient:
+        pass
+
+    def factory():
+        calls.append(1)
+        return BareClient()
+
+    with pytest.raises(session_client.SdkSurfaceUnverifiedError):
+        session_client.make_sdk_connect(
+            factory, on_connected=lambda: None, on_disconnected=lambda: None
+        )
+    assert calls == [1], "校验应当在 make 时就跑掉，⛔ 不许等到第一次 connect"
+
+
+def test_verify_client_surface_passes_a_client_that_matches_the_contract():
+    """证伪的另一半：合契约的表面 ⛔ 不许被误杀（否则上面几条只是"永远拒绝"）。"""
+
+    class GoodClient:
+        def on(self, event, handler):
+            pass
+
+        def run(self):
+            pass
+
+    session_client.verify_client_surface(GoodClient())  # ⛔ 不抛
