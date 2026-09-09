@@ -1188,3 +1188,79 @@ tools/liaison/tests/test_liaison_logsetup.py
 回勾 `openspec/changes/hr-wecom-aibot-liaison/tasks.md` 的 8.4，并在同一次提交里
 把「未尽项」（按天数的日志留存清理）登记进 `docs/tech-debt.md`——⚠️ 编号在 commit
 前一刻现取，⛔ 不要提前占号（并行泳道会撞号）。
+
+---
+
+## 落地偏离登记（2026-09-09 run-build 收口，[Mac]0909M，无头执行）
+
+本节由 run-build 控制者在收口时写入。SDD 台账随 worktree 删除消失，此处是转写后的真源。
+执行协议：superpowers skill **实测取不到**（`Unknown skill: superpowers:subagent-driven-development`），
+按磁盘 `~/.claude/plugins/cache/.../subagent-driven-development/SKILL.md` 手工走完协议——
+每 Task 一个 implementer + 一次 task review + fix loop + 全分支 final review + 一轮 fix wave。
+
+### 偏离一：Task 2 提前吞掉了 Task 3 的实现部分
+
+Task 2 的 brief 自带的 `wired_logger` fixture 依赖 `setup_logging`/`teardown_logging`，
+而它们排在 Task 3。「反证不可选」这条要求 Task 2 当场能跑通三层拆解，故 implementer
+逐字从 `task-3-brief.md` Step 1 转写了 `LoggingStatus`/`setup_logging`/`teardown_logging`/
+`logging_status`。**判定：接受**，Task 3 相应缩为 test-only（`conftest.py` +
+`test_liaison_logsetup.py`），否则同名重复定义。
+
+### 偏离二：三个 Task 的 brief 逐字代码被改动（裁决留痕）
+
+计划给的是「完整文件，逐字」，但 review 在其中查出 7 条有实测复现的缺陷。
+无人值守下无人可裁决 plan 修订，控制者按 opener「保守方向」立了统一口径并全程适用：
+
+> **CLAUDE.md 合规红线与函数自身 docstring 契约，优先于 plan 的逐字代码；
+> 且只许往更安全的方向纠偏（宁可多脱敏，不可少脱敏；宁可降级，不可崩溃）。**
+
+据此改动，逐条：
+
+| # | 缺陷（均有实测复现） | 方向 |
+|---|---|---|
+| T1-1 | 保护段吞掉相邻文本：`thread_id=` 空值吞下一个 token，值跑过 `&` 边界 | 收窄豁免 |
+| T1-2 | 引号包裹的凭据键名整条失配，`{"LLM_API_KEY": "sk-…"}` 明文 | 多脱敏 |
+| T1-3 | `+86`/`0086` 前缀手机号不打码 | 多脱敏 |
+| T2-1 | `HR_LIAISON_LOG_LEVEL` 手抖值（`'INFO '`/`'20'`）抛异常打死进程 | 降级不崩 |
+| T2-2 | `teardown_logging` 不复位 logger.level，**实测已污染** `test_session_liveness` 一条既有用例 | 修真 bug |
+| T2-3 | `propagate=True` 下 root handler 读到未脱敏的 `exc_text` 缓存 | 多脱敏 |
+| F-1 | `~nosuchuser/logs` 让 `expanduser()` 抛 `RuntimeError`，launchd 崩溃循环且无日志 | 降级不崩 |
+| F-2 | handler 级 `setLevel` 让低于该级的记录**跳过 Filter** 直达 root handler，泄露的是整条消息体 | 多脱敏 |
+
+⚠️ **这些修正尚未回写进上文的代码块**——上文 Task 1/2/3 的「逐字」代码块相对
+`tools/liaison/logsetup.py` 现状**已过时**，后续任何人 ⛔ 不要照上文的代码块还原。
+
+### 偏离三：Task 4 少加一个守卫
+
+brief Step 3 给 4 个守卫，其中 `test_logsetup_module_never_uses_a_with_statement`
+已由 Task 3 落地。同名重定义只会静默遮蔽前者、并不新增测试，故只追加另外 3 个。
+
+### 偏离四：Task 4 的 task review 与全分支 final review 合并为一次
+
+Task 4 是末任务且 diff 仅「2 行接线 + 3 个守卫」，final review 本就全覆盖。预算考量。
+
+### ⏸ 未尽项与已登记技术债
+
+- **TD-30 日志留存期只有容量上界，缺时间维度**——本章按 opener 范围只做「轮转 + 有界容量 +
+  脱敏」，D7 借的第三条「留存期有上限」**未实现**。容量上界满足（≤ 30 MiB），
+  时间维度不满足。由 8.1 用独立的 `HR_LIAISON_LOG_RETENTION_DAYS`（默认 30）收口。
+- **TD-31 带分隔符/全角渲染的手机号不脱敏**（`138-1234-5678`、全角数字）。
+  reviewer 逐条读了全部 12 处非测试 `logger.*` 调用点，无一记录消息正文，当前不可达。
+- **TD-32 JSON/全角冒号渲染下 `thread_id` 反被打码**。修它＝扩大明文豁免面，
+  与合规红线反向，按保守方向裁定不修；现网两处调用点均为 `thread_id=%s` 无空格渲染。
+
+### 三条硬反证的实测输出
+
+1. **轮转有界**：有界（`backupCount=2`）→ 3 个文件通过；变异（`backupCount` 置 1000）
+   → 60 个文件、断言变红。reviewer 用更公平的**源码级**变异独立复现同一 60，
+   并另证下界守卫能抓住「根本没轮转」（`maxBytes=0`）与「轮转但不留备份」（`backupCount=0`）。
+2. **脱敏落盘**：一条含手机号 + 邮箱 + `HR_LIAISON_BOT_SECRET=xxxx` 的记录经**真实
+   `RotatingFileHandler`** 落盘后，三者皆无、`thread_id` 原样；`sender_userid` 仍被打码。
+   final reviewer 另用 23 种敌意调用形态（dict/dataclass/bytes/自定义 `__repr__`/
+   会抛的 `__str__`/`__cause__` 链/手搓 `LogRecord`/坏格式串）攻击，**零明文**落盘。
+3. **幂等**：`setup_logging()` 调两次 handler 数不增（2→2）；变异（摘掉两处 `_detach_*`）
+   → `assert 4 == 2` 变红。
+4. **三层拆层反证**：同时摘掉 handler 级 `RedactionFilter` 与 `RedactingFormatter` 后恰好
+   3 条变红（子 logger / traceback / 坏格式串）；单摘各自只红 1 条，与计划成稿时的实测表一致。
+   ⚠️ 但 final reviewer 实测**包级 logger 上那个 Filter 是冗余的**（handler filter 在
+   `callHandlers` 里先跑）。保留它是因为 opener 约束 2 逐字要求「脱敏 Filter 挂在包级 logger」。
