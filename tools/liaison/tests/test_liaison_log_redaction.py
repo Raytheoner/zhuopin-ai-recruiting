@@ -7,6 +7,10 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from tools.liaison import logsetup
 
 
@@ -193,3 +197,58 @@ def test_parent_thread_id_does_not_match_the_protected_thread_id_key():
     out = logsetup.compute_redacted_text(text)
     assert "13812345678" not in out
     assert logsetup.PHONE_MASK in out
+
+
+@pytest.fixture
+def wired_logger(tmp_path):
+    """把包级 logger 按生产方式装配好，返回日志文件路径。"""
+    logsetup.setup_logging(log_dir=tmp_path)
+    yield tmp_path / logsetup.LOG_FILENAME
+    logsetup.teardown_logging()
+
+
+def test_child_logger_records_are_redacted_too(wired_logger):
+    """🔴 证伪「Filter 只挂包级 logger 就够了」——本服务真正打日志的全是子 logger。
+
+    `Logger.handle()` 只对**发起记录的那个 logger** 跑 filter；子 logger 的记录
+    沿祖先链找 **handler**，⛔ 不会再跑祖先 logger 的 filter。本服务每个模块都是
+    `logging.getLogger(__name__)`，所以只挂包级 logger 等于对真正会打印个人信息
+    的那些行完全失明，而且**不报错、无症状**。
+    把 handler 上那层 filter 摘掉，这条必红。
+    """
+    logging.getLogger("tools.liaison.inbound").warning("候选人手机 13812345678")
+    text = wired_logger.read_text(encoding="utf-8")
+    assert "13812345678" not in text
+    assert logsetup.PHONE_MASK in text
+
+
+def test_exception_tracebacks_are_redacted(wired_logger):
+    """Filter 看不到 traceback：抛异常那一行的**源码原文**也会被写进日志。"""
+    logger = logging.getLogger("tools.liaison.archive")
+    try:
+        raise ValueError("联系 zhang.san@example.com 核对")
+    except ValueError:
+        logger.error("归档失败", exc_info=True)
+    text = wired_logger.read_text(encoding="utf-8")
+    assert "zhang.san@example.com" not in text
+    assert logsetup.EMAIL_MASK in text
+
+
+def test_thread_id_survives_the_whole_handler_chain(wired_logger):
+    """端到端反例：走完 Filter + Formatter 两层，`thread_id` 仍是明文。"""
+    logging.getLogger("tools.liaison.inbound").info(
+        "已归档 thread_id=%s msgid=%s", "13812345678", "MSG-0001"
+    )
+    text = wired_logger.read_text(encoding="utf-8")
+    assert "thread_id=13812345678" in text
+    assert "msgid=MSG-0001" in text
+
+
+def test_filter_neutralises_a_broken_format_string_instead_of_leaking_it(wired_logger):
+    """占位符与 args 对不上时 ⛔ 不许把原文交给 stdlib 的 handleError()。"""
+    logging.getLogger("tools.liaison.inbound").warning(
+        "手机 %s 邮箱 %s", "13812345678"
+    )
+    text = wired_logger.read_text(encoding="utf-8")
+    assert "13812345678" not in text
+    assert "[liaison-redaction] 日志格式化失败" in text
