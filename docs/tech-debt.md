@@ -1390,7 +1390,7 @@ checkout（`1f2d018`）跑，**通过**。
 
 ---
 
-## TD-35 · `assert_effect_log_identity` 对 `liaison_task` 的严格恒等与裁决一冲突
+## ~~TD-35~~ · `assert_effect_log_identity` 对 `liaison_task` 的严格恒等与裁决一冲突 ✅ 已还（`0909AN`）
 
 **登记**：2026-09-09 `0909T`（还冲突 B / 裁决一时当场发现）
 **位置**：`tools/liaison/tests/test_liaison_effects.py` 的 `assert_effect_log_identity`
@@ -1425,6 +1425,35 @@ checkout（`1f2d018`）跑，**通过**。
 还完之后 `test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row` 必须
 **改成正断言**（直接调 `assert_effect_log_identity(conn)` 且通过），⛔ 不许删掉了事
 ——删掉就等于把这个缺口重新变成静默的。
+
+**销账（2026-09-09 `0909AN`）**：豁免已放开，但**没有**按上面「还债动作」的字面写法
+（把 `liaison_task` 也整个 thread 豁免）——那个写法实测会把守卫变瞎，见下。
+
+- **落地判据（逐字）**：豁免的**不是 thread，是行**。等式改为按 thread 分组的
+  `effect 行数 == 业务表存活行数 + 已清行数`，其中「已清」＝本节点的 effect 行里、
+  `(thread_id, business_key)` **同时**留下过一行 `RETENTION_DELETE_NODE` 的条数。
+  没有清理发生时右项恒为 0，等式退化回原来的严格恒等。⛔ 没有总数比较、没有约等于。
+- **哪部分被豁免 / 哪部分仍红**：只豁免"有清理记录可解释"的那些行。**解释不掉的差额
+  一律仍红**——业务行不见了却没有清理记录、业务行凭空多出来，在**已被清理过**的
+  thread 上照样当场变红。
+- **为什么不按字面写法**：实测「两张表都按 thread 整个豁免」会让上述三种破裂在被清理过的
+  thread 上**全部静默通过**（`0909AN` 用复刻旧/朴素两版逻辑的脚本逐一喂过场景验证）。
+  行级抵扣三种全部抓住，比 TD-35 登记时的形态**更强**。
+- **`0909T` 的缺口用例已按要求改回正断言**：`test_retention.py` 的
+  `test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row`
+  → `test_identity_assertion_now_accounts_for_a_cleaned_queue_row`，`pytest.raises`
+  换成直调 `assert_effect_log_identity(conn)` 通过，⛔ 没有删除；同一条里补了下半段
+  证伪（同一个已清理 thread 上凭空多一行 ⇒ 仍必须红）。
+- **新增三条证伪 + 一条正向**（`test_liaison_effects.py`）：
+  `test_identity_accounts_for_a_collaterally_cleaned_queue_row`、
+  `test_identity_still_catches_an_unexplained_task_gap_on_a_cleaned_thread`、
+  `test_identity_still_catches_an_unexplained_message_gap_on_a_cleaned_thread`、
+  `test_identity_still_catches_an_unexplained_extra_row_on_a_cleaned_thread`。
+- `test_identity_assertion_still_catches_a_break_in_an_uncleaned_thread` 与
+  `test_identity_assertion_excludes_only_threads_that_were_actually_cleaned` 均**未删**
+  （后者名字保留自还债前，docstring 已注明粒度已从 thread 收到行）。
+- ⛔ 未动任何产品代码；`assert_retention_accounting` 的两条记账等式原样保留，与本守卫并行盯住，互不替代。
+- pytest：2066 passed / 5 skipped → **2070 passed / 5 skipped**，0 失败。
 
 **触发条件**：下一条持有 `test_liaison_effects.py` 的泳道；最迟不得晚于 8.6 单机灰度
 （灰度会真的产生终态队列行，那之后这条守卫的覆盖缺口开始有实际影响）。

@@ -719,18 +719,20 @@ def effect_write_widget(conn, *, thread_id, business_key):
 def assert_effect_log_identity(conn: sqlite3.Connection) -> None:
     """铁律 1 的 reviewer 判据，做成可复用的断言。
 
-    对 EFFECT_NODE_TO_TABLE 里每个节点：
-      按 thread_id 分组，该节点的 effect_log 条数 == 其业务表的行数。
+    对 EFFECT_NODE_TO_TABLE 里每个节点，按 thread_id 分组：
+
+        该节点的 effect_log 条数 == 业务表存活行数 + 能由留存清理解释的那部分差额
+
+    没有清理发生时右边第二项恒为 0，等式退化成原来的严格恒等。
 
     ⛔ **不要退化成"总数相等"**——总数相等可以由"A 会话多一行、B 会话少一行"凑出来，
     那恰恰是最需要被抓住的那种错。按 thread_id 逐组比才有意义。
 
     第 4／5／7 章的测试应当直接 import 本函数在各自的场景末尾调一次。
 
-    ⚠️ **隐含前提（终审 Minor 4 补记，第 7 章落地前必读）**：本断言成立的前提是
-    业务表**只增不删**。第 7 章的 180 天留存期清理一旦落地，清理会让业务表的
-    行数低于 effect_log 里同一 thread 的记录数，这条断言会**因为一个完全正当的
-    理由变红**。
+    ⚠️ **隐含前提（终审 Minor 4 补记）**：本断言原先成立的前提是业务表**只增不删**。
+    第 7 章的 180 天留存期清理让这个前提失效——清理会让业务表的行数低于 effect_log
+    里同一 thread 的记录数，这条断言会**因为一个完全正当的理由变红**。
 
     到那时正确的应对是下面两选一，⛔ 二选一之外的任何"修法"都不允许：
       1. 留存期清理与对应的 effect_log 行在同一个事务里连带删除；或
@@ -739,22 +741,36 @@ def assert_effect_log_identity(conn: sqlite3.Connection) -> None:
     真正的危险不是测试变红，而是那时候最顺手的"修法"是去削弱这条断言本身
     ——它是铁律 1 唯一的机器守卫，削弱它等于把守卫拆了。**⛔ 明确写死：
     不许把它改成总数比较、不许削弱成"约等于"。**
-    """
-    # 冲突 A / 方案 2（本函数 docstring 二选一的第 2 条）：留存期清理会让被清理过的
-    # thread 的业务表行数低于 effect_log 行数，那是一个**正当**的差额。
-    # 这里把它们排除出严格恒等的比对范围——它们由 test_retention.py 的
-    # `assert_retention_accounting` 用一条**更强**的记账等式单独盯住：
-    #     归档 effect 行数 == 台账行数 + 清理 effect 行数
-    # ⛔ 排除的依据必须是"留下过清理记录"这个事实，不是任何形式的白名单。
-    from tools.liaison.retention import RETENTION_DELETE_NODE
 
-    cleaned_threads = {
-        row[0]
-        for row in conn.execute(
-            "SELECT DISTINCT thread_id FROM effect_log WHERE node_name = ?",
-            (RETENTION_DELETE_NODE,),
-        ).fetchall()
-    }
+    🔴 **TD-35 还债（本函数当前形态）**：走的是方案 2，但把「限定范围」的粒度
+    从 **thread** 收到 **行**——见下面函数体的注释。
+    """
+    # ── 冲突 A / 方案 2（本函数 docstring 二选一的第 2 条），TD-35 还债后的形态 ──
+    #
+    # 【为什么改】终审 finding 2 曾把豁免**刻意收窄**到只对 `liaison_message` 成立，
+    # 理由逐字是「`liaison_task` 从不被清理删除（opener 约束 2）」。裁决一
+    # （2026-09-09）推翻了那个前提：**终态（`pushed`）且超期的队列行现在会被连带
+    # 清掉**，于是在被清理过的 thread 上 `effect_enqueue_task` 的 effect_log 行数
+    # 必然大于 `liaison_task` 行数——一个完全正当的差额。
+    #
+    # 【豁免判据，逐字】豁免的**不是 thread，是行**：某个 `(thread_id, business_key)`
+    # 若**同时**留下过本节点的 effect 行与一行 `RETENTION_DELETE_NODE`，那一行业务
+    # 数据就是被留存清理删掉的，把它计入"已清"补回等式右边。等式因此是
+    #
+    #     effect 行数 == 存活业务行数 + 已清行数（逐 thread 比）
+    #
+    # 【哪部分仍必须红】任何**解释不掉**的差额：业务行不见了却没有对应的清理记录、
+    # 或业务行凭空多出来。⛔ 这不是「行数对不上一律豁免」——被清理过的 thread 上
+    # 多删一行、多插一行都照样当场变红（`test_identity_still_catches_an_unexplained_*`
+    # 三条证伪用例钉住这一点）。
+    #
+    # 【为什么比旧写法强】旧写法把整个 `cleaned_threads` 从比对里 `pop` 掉，那个
+    # thread 上此后**任何**破裂都不再被检查；逐行抵扣只放过能被清理记录解释的那些行。
+    # ⛔ 依据必须是"留下过清理记录"这个事实，不是任何形式的白名单。
+    #
+    # 被清理过的 thread 另有 `test_retention.py::assert_retention_accounting` 用
+    # 记账等式并行盯住（归档 == 存活 + 已清；入队 == 存活 + 连带已清），两处互不替代。
+    from tools.liaison.retention import RETENTION_DELETE_NODE
 
     for node_name, table in EFFECT_NODE_TO_TABLE.items():
         effect_counts = dict(
@@ -767,19 +783,29 @@ def assert_effect_log_identity(conn: sqlite3.Connection) -> None:
         business_counts = dict(
             conn.execute(f"SELECT thread_id, COUNT(*) FROM {table} GROUP BY thread_id").fetchall()
         )
-        # 🔴 finding 2（终审）：只在清理真的会碰的那张表（`liaison_message`）
-        # 上收窄——`liaison_task` 从不被清理删除（opener 约束 2），所以
-        # `effect_enqueue_task` ↔ `liaison_task` 这一对必须继续走严格恒等。
-        # 之前不分表地把 `cleaned_threads` 从两对里都剔除，等于让"清理过的
-        # thread 上，队列 effect 行数与 liaison_task 行数是否一致"这件事
-        # 不再被任何断言检查——那正是铁律 1 的核心不变式。
-        if table == "liaison_message":
-            for thread_id in cleaned_threads:
-                effect_counts.pop(thread_id, None)
-                business_counts.pop(thread_id, None)
-        assert effect_counts == business_counts, (
-            f"恒等不变式破裂：节点 {node_name} 的 effect_log 分组计数 {effect_counts} "
-            f"≠ 业务表 {table} 的分组计数 {business_counts}"
+        # 能由留存清理解释的差额：本节点的 effect 行里，`(thread_id, business_key)`
+        # 同时留下过 RETENTION_DELETE_NODE 记录的那些。外键 `liaison_task.msgid →
+        # liaison_message(msgid)` 保证清理记录存在 ⇒ 两张表上那一行都确实已不在。
+        cleaned_counts = dict(
+            conn.execute(
+                "SELECT e.thread_id, COUNT(*) FROM effect_log AS e "
+                "WHERE e.node_name = ? AND EXISTS("
+                "SELECT 1 FROM effect_log AS d WHERE d.node_name = ? "
+                "AND d.thread_id = e.thread_id AND d.business_key = e.business_key"
+                ") GROUP BY e.thread_id",
+                (node_name, RETENTION_DELETE_NODE),
+            ).fetchall()
+        )
+        threads = set(effect_counts) | set(business_counts) | set(cleaned_counts)
+        actual = {thread_id: effect_counts.get(thread_id, 0) for thread_id in threads}
+        expected = {
+            thread_id: business_counts.get(thread_id, 0) + cleaned_counts.get(thread_id, 0)
+            for thread_id in threads
+        }
+        assert actual == expected, (
+            f"恒等不变式破裂：节点 {node_name} 的 effect_log 分组计数 {actual} "
+            f"≠ 业务表 {table} 的存活行数 + 留存清理可解释的差额 {expected}"
+            f"（存活 {business_counts}，已清 {cleaned_counts}）"
         )
 
 
@@ -800,16 +826,22 @@ def test_identity_assertion_still_catches_a_break_in_an_uncleaned_thread(conn):
 
 
 def test_identity_assertion_excludes_only_threads_that_were_actually_cleaned(conn):
-    """被排除的必须**恰好**是留下过清理记录的那些 thread 的 **liaison_message**
-    这一对——finding 2（终审）：`liaison_task` 从不被清理删除（opener 约束 2、
-    冲突 B），所以哪怕 thread 已经被清理过，`effect_enqueue_task` ↔
-    `liaison_task` 这一对仍必须严格恒等，⛔ 不许连带排除。
+    """被抵扣的必须**恰好**是留下过清理记录的那些行，⛔ 不是整个 thread。
+
+    ⚠️ **本条的名字保留自 TD-35 还债之前**（当时豁免的粒度确实是 thread）。
+    TD-35 之后粒度收到了**行**，本条的每一处断言仍然逐字成立且更强——名字里的
+    「excludes threads」请按「抵扣 thread 上那些确有清理记录的行」读。
+
+    下半段的 finding 2 证伪原本靠的是「`liaison_task` 从不被清理删除」这个前提，
+    裁决一（2026-09-09）已推翻它；但那处断言在新语义下**依然必须红**，理由换了：
+    被删掉的 `liaison_task` 行**没有**对应的清理记录，属于解释不掉的差额。
+    ⛔ 不许因为前提变了就把它删掉。
     """
     _process(conn, thread_id="u1", msgid="m1")  # m1 有队列行，冲突 B 下永远清不掉
     _process(conn, thread_id="u2", msgid="m2")
     # u1 上再放一条**没有队列行**的消息——这才是 cleanup 真的会删的那种
     # （有队列行的消息被 blocked_by_queue 挡住，FK 也不允许删它）。删掉它、
-    # 伪造一条清理痕迹，让 u1 进入 cleaned_threads。
+    # 伪造一条清理痕迹，让 m1-noq 这一行成为可被抵扣的「已清」行。
     effect_archive_message(
         conn, thread_id="u1", business_key="m1-noq", sender_userid="u1",
         received_at="2026-09-08T10:00:00+08:00", msgtype="text", content="x",
@@ -820,13 +852,13 @@ def test_identity_assertion_excludes_only_threads_that_were_actually_cleaned(con
         "'effect_delete_expired_message', 'm1-noq', datetime('now'))"
     )
     conn.commit()
-    # u1 的 liaison_message 计数被排除（m1-noq 已清），但 m1 的
-    # liaison_task ↔ effect_enqueue_task 仍严格恒等；u2 两对都未清理 ⇒ 通过。
+    # u1 的 liaison_message：effect 2 == 存活 1 + 已清 1（m1-noq）；m1 的
+    # liaison_task ↔ effect_enqueue_task 无清理记录 ⇒ 仍严格恒等；u2 两对都未清理。
     assert_effect_log_identity(conn)
 
-    # 🔴 finding 2 的证伪：在**已被清理过**的 u1 上制造一处 liaison_task 计数
-    # 破裂——旧版本的收窄不分表地把 cleaned_threads 从两对里都排除，这条
-    # 断言曾经连一个 liaison_task 计数不一致都抓不住。
+    # 🔴 finding 2 的证伪（TD-35 后重述）：在**已被清理过**的 u1 上制造一处
+    # liaison_task 计数破裂，且**没有**对应的清理记录 ⇒ 解释不掉 ⇒ 必须红。
+    # 「把 cleaned_threads 从两对里整个排除」的朴素修法在这里是瞎的。
     conn.execute("DELETE FROM liaison_task WHERE msgid = 'm1'")
     conn.commit()
     with pytest.raises(AssertionError, match="恒等不变式破裂"):
@@ -844,6 +876,86 @@ def test_identity_assertion_excludes_only_threads_that_were_actually_cleaned(con
     conn.commit()
     with pytest.raises(AssertionError, match="恒等不变式破裂"):
         assert_effect_log_identity(conn)
+
+def _fake_retention_clean(conn, *, thread_id, msgid):
+    """把一条消息做成"被留存清理删掉"的形状：先 task 后 message（FK 顺序），
+    再补一行 `RETENTION_DELETE_NODE` 的 effect_log。
+
+    ⛔ 这里不调 `retention.delete_expired_ledger_rows`——本文件是第 2 章的守卫，
+    ⛔ 不该反向依赖第 8 章的产品代码；真实清理路径由 `test_retention.py` 覆盖。
+    留下的形状与真实清理逐字一致：业务行没了、`effect_log` 一行不删、多出清理那一行。
+    """
+    from tools.liaison.retention import RETENTION_DELETE_NODE
+
+    conn.execute("DELETE FROM liaison_task WHERE msgid = ?", (msgid,))
+    conn.execute("DELETE FROM liaison_message WHERE msgid = ?", (msgid,))
+    conn.execute(
+        "INSERT INTO effect_log VALUES (?, ?, ?, ?, datetime('now'))",
+        (f"{thread_id}:{RETENTION_DELETE_NODE}:{msgid}", thread_id,
+         RETENTION_DELETE_NODE, msgid),
+    )
+    conn.commit()
+
+
+def test_identity_accounts_for_a_collaterally_cleaned_queue_row(conn):
+    """🔴 TD-35：裁决一让**终态且超期的 `liaison_task` 行被连带清掉**，于是
+    `effect_enqueue_task` ↔ `liaison_task` 这一对在被清理过的 thread 上必然不再
+    严格恒等——那是**完全正当**的差额，必须被逐条抵扣掉而不是变红。
+    """
+    _process(conn, thread_id="u1", msgid="m1")
+    _process(conn, thread_id="u1", msgid="m2")
+    _process(conn, thread_id="u2", msgid="m3")
+    _fake_retention_clean(conn, thread_id="u1", msgid="m1")
+    # u1：两对都是 effect 2 == 存活 1 + 已清 1；u2 两对都未清理，仍严格恒等。
+    assert_effect_log_identity(conn)
+
+
+def test_identity_still_catches_an_unexplained_task_gap_on_a_cleaned_thread(conn):
+    """🔴 TD-35 的核心证伪：豁免的是**行**不是 **thread**。
+
+    旧写法把整个 `cleaned_threads` 从比对里 `pop` 掉，那个 thread 上此后任何
+    `liaison_task` 破裂都不再被检查。这里在**已被清理过**的 u1 上删掉另一条
+    **没有清理记录**的队列行——解释不掉，必须当场红。
+    """
+    _process(conn, thread_id="u1", msgid="m1")
+    _process(conn, thread_id="u1", msgid="m2")
+    _fake_retention_clean(conn, thread_id="u1", msgid="m1")
+    assert_effect_log_identity(conn)
+    conn.execute("DELETE FROM liaison_task WHERE msgid = 'm2'")
+    conn.commit()
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)
+
+
+def test_identity_still_catches_an_unexplained_message_gap_on_a_cleaned_thread(conn):
+    """同上，台账侧。⛔ 「清理过的 thread 一律豁免」会让这条静默通过。"""
+    _process(conn, thread_id="u1", msgid="m1")
+    _process(conn, thread_id="u1", msgid="m2")
+    _fake_retention_clean(conn, thread_id="u1", msgid="m1")
+    conn.execute("DELETE FROM liaison_task WHERE msgid = 'm2'")   # 先解 FK
+    conn.execute("DELETE FROM liaison_message WHERE msgid = 'm2'")
+    conn.commit()
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)
+
+
+def test_identity_still_catches_an_unexplained_extra_row_on_a_cleaned_thread(conn):
+    """差额的**另一个方向**：业务行凭空多出来（没有任何 effect 行）也必须红。
+
+    这条钉住"抵扣只能往一个方向补"——`cleaned` 补的是右边的缺口，⛔ 不能顺带
+    把"多出来的业务行"也一起吞掉。
+    """
+    _process(conn, thread_id="u1", msgid="m1")
+    _fake_retention_clean(conn, thread_id="u1", msgid="m1")
+    assert_effect_log_identity(conn)
+    conn.execute(
+        "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+        "VALUES ('ghost', 'u1', 'u1', 't', 'text')"
+    )
+    conn.commit()
+    with pytest.raises(AssertionError, match="恒等不变式破裂"):
+        assert_effect_log_identity(conn)
+
 
 
 def _process(conn, *, thread_id, msgid, content="hello"):

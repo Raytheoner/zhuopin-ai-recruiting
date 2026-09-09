@@ -413,24 +413,24 @@ def test_terminal_queue_row_is_deleted_together_with_its_message(conn):
     assert_retention_accounting(conn)
 
 
-def test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row(conn):
-    """⚠️ **这条用例钉的是一个已登记的缺口，⛔ 不是在庆祝断言变红。**
+def test_identity_assertion_now_accounts_for_a_cleaned_queue_row(conn):
+    """TD-35 已还：`assert_effect_log_identity` 现在认得「连带清掉的队列行」。
 
-    `assert_effect_log_identity`（`test_liaison_effects.py`，本泳道 ⛔ 不许改的
-    文件）在终审 finding 2 时把"清理会让业务表行数变少"的豁免**刻意收窄**到只对
-    `liaison_message` 成立，理由逐字是「`liaison_task` 从不被清理删除（opener
-    约束 2）」。裁决一（2026-09-09）推翻了那个前提：终态且超期的队列行现在会被
-    连带清掉，于是 `effect_enqueue_task` ↔ `liaison_task` 这一对在**被清理过的
-    thread 上**必然不再严格恒等。
+    **本条是 `0909T` 留下的缺口用例改写而来**（原名
+    `test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row`，
+    原写法是 `pytest.raises(AssertionError)` ——⛔ 不是在庆祝断言变红，而是把一个
+    已登记的缺口钉成可见的）。缺口的由来：终审 finding 2 把「清理会让业务表行数
+    变少」的豁免**刻意收窄**到只对 `liaison_message` 成立，理由逐字是
+    「`liaison_task` 从不被清理删除（opener 约束 2）」；裁决一（2026-09-09）
+    推翻了那个前提。
 
-    队列侧的账目由 `assert_retention_accounting` 的第二条等式接住（入队 == 存活
-    + 连带已清，两边都从 `effect_log` 推出来，⛔ 不是宽松判据）。真正欠的是把
-    `assert_effect_log_identity` 的豁免范围一起放开——那要改另一个泳道持有的
-    文件，已登记为技术债（见 `docs/tech-debt.md`「`assert_effect_log_identity`
-    的 liaison_task 严格恒等与裁决一冲突」一条）。
+    TD-35 还债后的判据变了：豁免不再是「把清理过的 thread 整个排除出比对」，
+    而是**逐条抵扣**——`effect_log` 行数 == 业务表存活行数 ＋ 能由留存清理解释的
+    那部分差额（同 `thread_id` 同 `business_key` 既有本节点的 effect 行、又有
+    `RETENTION_DELETE_NODE` 行的条数）。所以这里必须**正向通过**。
 
-    🔴 那条债还完之后，本用例必须改成正断言（`assert_effect_log_identity(conn)`
-    直接通过），⛔ 不许删掉了事——删掉就等于把这个缺口重新变成静默的。
+    ⛔ 不许把本条删掉了事——删掉就等于把这个缺口重新变成静默的。下半段的证伪是
+    本条的另一半：解释不掉的差额仍然必须红。
     """
     _archive(conn, "m-pushed", archived_at=OLD)
     _enqueue(conn, "m-pushed")
@@ -439,8 +439,22 @@ def test_identity_assertion_does_not_yet_account_for_a_cleaned_queue_row(conn):
         conn, retention.compute_expired(NOW, 180, retention.load_message_rows(conn)).all_deletable
     )
     assert_retention_accounting(conn)          # 队列侧的账目是平的
+    assert_effect_log_identity(conn)           # 🔴 TD-35 还债后：豁免范围已放开，正向通过
+
+    # 🔴 证伪（TD-35 的「⛔ 不许放宽成行数对不上一律豁免」）：在**同一个已被清理过的
+    # thread** 上再制造一处**解释不掉**的差额——凭空补一条没有任何 effect 行的队列行。
+    # 旧的「整个 thread 排除」写法在这里是瞎的；逐条抵扣必须当场抓住它。
+    conn.execute(
+        "INSERT INTO liaison_message (msgid, thread_id, sender_userid, received_at, msgtype) "
+        "VALUES ('ghost', 'u1', 'u1', '2026-09-08T10:00:00+08:00', 'text')"
+    )
+    conn.execute(
+        "INSERT INTO liaison_task (msgid, thread_id, sender_userid, received_at, summary) "
+        "VALUES ('ghost', 'u1', 'u1', '2026-09-08T10:00:00+08:00', 's')"
+    )
+    conn.commit()
     with pytest.raises(AssertionError, match="恒等不变式破裂"):
-        assert_effect_log_identity(conn)       # 但那条守卫的豁免范围还没放开
+        assert_effect_log_identity(conn)
 
 
 def test_no_new_effect_node_name_was_introduced(conn):
