@@ -1518,15 +1518,29 @@ SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释�
 
 1. 在 `_prepare_client` 里补 `error` 事件监听器（记日志即可），让 pyee 走
    "有监听器 ⇒ 分发不抛"的分支，`ws.py:153` 的 `_schedule_reconnect()` 才能执行；
-2. 同时把 `max_reconnect_attempts` 改成 `-1`（无限重试）——见下方 N-1；
+2. 补一条 `liveness.json` `stamp_at` 看门狗，让外层 `run_forever` 真的能兜底——见下方 N-0。
+   ⛔ **不要改 `max_reconnect_attempts`**，它已经是 `-1`（原 N-1 已作废，见下）；
 3. 🔴 **两项都必须有断线重连的自动化测试覆盖**，⛔ 不许只靠手工复跑一遍就算还上。
    本条守的正是无症状故障：没有测试钉住，它下次回归时同样不会有任何症状。
 
-**次生问题（同批修，⛔ 不要只修根因就销账）**：
+**🔴 2026-09-09 `[Mac]0909AG` 订正（本条初版写错了一项，⛔ 按订正后的做）**：
 
-- **N-1 · 重试上限导致永久放弃**：`ws.py:68-69` `max_reconnect_attempts=10`、
-  退避 1s 起翻倍、上限 30s ⇒ 约 **181 秒**后打 `Max reconnect attempts reached, giving up`
-  并永久放弃。换网、路由器重启、机房割接都超过 3 分钟，同样静默死掉。改 `-1`。
+- **原 N-1 作废**：初版写「`max_reconnect_attempts=10` 会在 181 秒后永久放弃，应改 `-1`」。
+  **查证后不成立**——`session_client.py:145` 的 `build_ws_options` **已经**传了
+  `max_reconnect_attempts=UNLIMITED_RECONNECT_ATTEMPTS`（`= -1`，`session_client.py:41`）。
+  `ws.py:341` 的放弃分支是 `self._max_reconnect_attempts != -1 and …`，`-1` 直接短路。
+  ⛔ **不要去改这个值**，它本来就是对的。实测只重连 1 次的原因是 task 死了，**不是**次数用尽。
+- **新增 N-0（比根因更该看的一条）· 外层兜底被同一个故障模式一并废掉**：
+  `session_client.py:258-262` 的注释写「`client.run()` 几乎不会返回 …… 外层 `run_forever`
+  是**兜底**那一层」。这条假设在本故障下**不成立**：`_receive_loop` task 死后，
+  `loop.run_forever()` 照样挂着 ⇒ `client.run()` **仍然不返回** ⇒ 外层 `run_forever`
+  **永远等不到那次返回**，兜底一次都不会触发。
+  ⇒ **两层重连（SDK 内层 + 本模块外层）被同一个异常一并打掉**，这才是"永远回不来"的完整解释。
+  ⇒ 只补 `error` 监听器能修好本次这条路径，但**兜底层依然是空的**：SDK 里任何别的
+  "task 死了但 loop 还活着"的形态都会重演。**应同时补一条基于 `liveness.json`
+  `stamp_at` 的看门狗**（盖戳超时 ⇒ 主动断开重建），让外层真的成为兜底。
+
+**其余次生问题（同批修，⛔ 不要只修根因就销账）**：
 - **N-2 · 首跳撞在断网期**：attempt 1 固定 1 秒后重试，必然落在断网窗口内，白费一次机会。
 - **N-3 · `websockets` 次生崩栈**：`websockets/asyncio/client.py:741`
   `if 200 <= response.status_code < 300:` 在 `response is None` 时抛 `AttributeError`。
