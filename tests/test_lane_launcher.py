@@ -219,3 +219,92 @@ def test_no_request_is_a_silent_noop(repo: Path) -> None:
     proc = run_launcher(repo)
     assert proc.returncode == 0, proc.stderr
     assert not (repo / "args.txt").exists()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `scripts/install_lane_launcher.py` 生成的 plist —— 两处缺陷的回归钉（0909S）
+#
+# 09-09 首跑（0909Y）实测：监听 → 参数白名单 → `.started` 六秒内全通，run-lanes
+# 却被 launchd 连坐杀掉，`command -v claude` 另外退 10。两处根因都在 plist 字典里，
+# 而 plist 生成过去埋在 `main()` 里、跟 launchctl 调用绑在一起 —— 没装 LaunchAgent
+# 就测不到。所以先把字典构造提成纯函数 `build_plist`，再由这组用例钉住。
+#
+# 这两条都属于「错了不报错」的形态：连坐杀掉时 launchd 自己一切正常，
+# PATH 缺失时退出码是 10 而不是「找不到 claude」，所以只能靠断言守。
+# ─────────────────────────────────────────────────────────────────────────────
+
+from scripts.install_lane_launcher import LABEL, build_plist  # noqa: E402
+
+FAKE_HOME = Path("/Users/fake-home-0909S")
+
+
+@pytest.fixture
+def plist(tmp_path: Path) -> dict:
+    return build_plist(tmp_path, FAKE_HOME)
+
+
+def test_build_plist_abandons_process_group(plist: dict) -> None:
+    """① AbandonProcessGroup 必须为 True，否则 run-lanes 被连坐杀掉。
+
+    lane-launcher.sh 退出后，launchd 认为这条 job 已经结束，回收整个进程组 ——
+    它发的是 SIGKILL，`nohup`（只挡 SIGHUP）挡不住。症状是整批泳道在
+    `.started` 写完后几秒内集体消失，而 launchd 侧一切正常、退出码 0。
+    """
+    assert plist["AbandonProcessGroup"] is True
+
+
+def test_build_plist_path_is_absolute_and_covers_local_bin(plist: dict) -> None:
+    """② PATH 必须显式给，且 `~/.local/bin` 要写成绝对路径。
+
+    launchd 不继承登录 shell 的环境，默认 PATH 里没有 `~/.local/bin`；
+    `claude` 装在那儿，于是 `command -v claude` 让 launcher 退 10。
+    plist 也**不做波浪号展开** —— 留一个 `~` 等于留一个永远不存在的目录。
+    """
+    path = plist["EnvironmentVariables"]["PATH"]
+    entries = path.split(":")
+
+    assert "~" not in path, path
+    assert path.startswith("/"), path
+    assert all(entry.startswith("/") for entry in entries), entries
+    assert any(entry.endswith("/.local/bin") for entry in entries), entries
+    # HOME 按渲染时的绝对路径写死，且优先于系统目录 —— claude 就在这一条里。
+    assert entries[0] == f"{FAKE_HOME}/.local/bin", entries
+
+
+def test_build_plist_keeps_locale_pinned(plist: dict) -> None:
+    """③ 加 PATH 不许把 locale 挤掉。
+
+    run-lanes.sh 顶部「locale 钉死」：UTF-8 下 macOS 自带 awk 与 bash 3.2 处理
+    中文会**静默出错**。这两个变量掉了不会报错，只会让编排结果悄悄不对。
+    """
+    env = plist["EnvironmentVariables"]
+    assert env["LC_ALL"] == "C"
+    assert env["LANG"] == "C"
+
+
+def test_build_plist_keeps_trigger_contract(tmp_path: Path, plist: dict) -> None:
+    """本次修的是环境，触发契约一个字都不许动。
+
+    RunAtLoad 一旦为真，登录就自己发一批车；WatchPaths 指错目录则从此永不触发
+    且**不报错**（launchd 静默忽略）。两条都用断言钉住，防后续改动顺手带走。
+    """
+    assert plist["Label"] == LABEL
+    assert plist["RunAtLoad"] is False
+    watch_dir = tmp_path / ".claude" / "handoff" / "launch"
+    assert plist["WatchPaths"] == [str(watch_dir)]
+    assert plist["ProgramArguments"] == [
+        "/bin/bash",
+        str(tmp_path / "docs" / "openers" / "lane-launcher.sh"),
+    ]
+    assert plist["WorkingDirectory"] == str(tmp_path)
+
+
+def test_build_plist_is_pure(tmp_path: Path) -> None:
+    """build_plist 只算不写：建目录、跑 launchctl 都留在 main() 里。
+
+    不然这组用例本身就会在跑测试的机器上留下 `.claude/handoff/launch/`，
+    甚至换掉真的 LaunchAgent。
+    """
+    before = sorted(p.name for p in tmp_path.iterdir())
+    build_plist(tmp_path, FAKE_HOME)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before

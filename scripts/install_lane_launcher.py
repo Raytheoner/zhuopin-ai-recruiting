@@ -32,6 +32,67 @@ from pathlib import Path
 
 LABEL = "com.zhuopin.hr.lane-launcher"
 
+# launchd 不继承登录 shell 的环境。默认 PATH 里没有 `~/.local/bin`，而 `claude`
+# 就装在那儿 —— 缺了它，lane-launcher.sh 的 `command -v claude` 让整条链路退 10
+# （2026-09-09 `0909Y` 首跑实测）。
+# 🔴 ⛔ 不许留字面量 `~`：plist **不做波浪号展开**，`~/.local/bin` 会被当成一个
+#    名字里真带 `~` 的相对目录，于是等价于没写 —— 而且不报错。HOME 必须在渲染时
+#    展开成绝对路径。
+PATH_ENTRIES = (
+    "{home}/.local/bin",
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+)
+
+
+def launcher_path(repo_root: Path) -> Path:
+    return repo_root / "docs" / "openers" / "lane-launcher.sh"
+
+
+def watch_dir_path(repo_root: Path) -> Path:
+    return repo_root / ".claude" / "handoff" / "launch"
+
+
+def build_plist(repo_root: Path, home: Path) -> dict:
+    """算出 LaunchAgent 的 plist 字典。纯函数：不建目录、不碰 launchctl。
+
+    单独提出来是为了可测。这段过去埋在 `main()` 里、跟 `launchctl bootstrap`
+    绑在一起，不真装一次 LaunchAgent 就断言不到 —— 而它里面两处缺陷都属于
+    「错了不报错」：连坐杀进程时 launchd 侧退出码是 0，PATH 缺失时退出码是 10
+    而不是「找不到 claude」。断言见 `tests/test_lane_launcher.py`。
+    """
+    watch_dir = watch_dir_path(repo_root)
+    log_path = watch_dir / "launchd.log"
+
+    return {
+        "Label": LABEL,
+        "ProgramArguments": ["/bin/bash", str(launcher_path(repo_root))],
+        # ⛔ 不设 RunAtLoad：登录时不该自己发一批车。只由目录变化触发。
+        "RunAtLoad": False,
+        "WatchPaths": [str(watch_dir)],
+        "StandardOutPath": str(log_path),
+        "StandardErrorPath": str(log_path),
+        # 触发脚本自己会 cd 到仓库根；这里再钉一次，让 launchd 的 cwd 不是 /。
+        "WorkingDirectory": str(repo_root),
+        # launcher 退出后 launchd 认为这条 job 结束，回收**整个进程组** —— 它发的是
+        # SIGKILL，`nohup`（只挡 SIGHUP）挡不住，run-lanes.sh 被连坐杀掉。症状是
+        # 整批泳道在 `.started` 写完后几秒内集体消失，launchd 侧却一切正常、退出码 0
+        # （2026-09-09 `0909Y` 首跑实测）。
+        "AbandonProcessGroup": True,
+        # 与 run-lanes.sh 同口径：C locale 下中文比较按字节走，UTF-8 下 macOS 自带
+        # awk 与 bash 3.2 会**静默出错**（见 run-lanes.sh 顶部「locale 钉死」）。
+        # PATH 见 PATH_ENTRIES 上方的说明。
+        "EnvironmentVariables": {
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PATH": ":".join(entry.format(home=home) for entry in PATH_ENTRIES),
+        },
+    }
+
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
@@ -43,31 +104,18 @@ def main() -> int:
         return 1
 
     repo = Path(__file__).resolve().parent.parent
-    launcher = repo / "docs" / "openers" / "lane-launcher.sh"
+    launcher = launcher_path(repo)
     if not launcher.exists():
         print(f"✗ 找不到触发脚本：{launcher}", file=sys.stderr)
         return 1
 
     # WatchPaths 盯的是目录，目录不存在时 launchd 直接忽略这条 job —— 不报错，
     # 只是从此永远不触发。必须先建出来。
-    watch_dir = repo / ".claude" / "handoff" / "launch"
+    watch_dir = watch_dir_path(repo)
     watch_dir.mkdir(parents=True, exist_ok=True)
     log_path = watch_dir / "launchd.log"
 
-    plist = {
-        "Label": LABEL,
-        "ProgramArguments": ["/bin/bash", str(launcher)],
-        # ⛔ 不设 RunAtLoad：登录时不该自己发一批车。只由目录变化触发。
-        "RunAtLoad": False,
-        "WatchPaths": [str(watch_dir)],
-        "StandardOutPath": str(log_path),
-        "StandardErrorPath": str(log_path),
-        # 触发脚本自己会 cd 到仓库根；这里再钉一次，让 launchd 的 cwd 不是 /。
-        "WorkingDirectory": str(repo),
-        # 与 run-lanes.sh 同口径：C locale 下中文比较按字节走，UTF-8 下 macOS 自带
-        # awk 与 bash 3.2 会**静默出错**（见 run-lanes.sh 顶部「locale 钉死」）。
-        "EnvironmentVariables": {"LC_ALL": "C", "LANG": "C"},
-    }
+    plist = build_plist(repo, Path.home())
 
     agents_dir = Path.home() / "Library" / "LaunchAgents"
     agents_dir.mkdir(parents=True, exist_ok=True)
