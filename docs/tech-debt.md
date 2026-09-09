@@ -739,7 +739,7 @@ opener 逐条点名要放行的 `open` / `contextlib.*` / `tempfile.*` / `suppre
 `test_scanner_still_catches_connection_shaped_context_managers`（11 格证伪）、
 `test_scanner_still_catches_unknown_callees_by_default`。`test_liaison_effects.py` 55 passed。
 
-## TD-19 · 真实建连适配 ✅ 代码已就位（`0909AC`），⏳ 卡在 8.6 由 Shao Peishen 端到端跑通
+## ~~TD-19~~ · 真实建连适配 ✅ 已还（`0909AC`，`[Mac]0909AE` 实测验收）
 
 **欠的是什么**：Task 5 的探针实测（`docs/findings/2026-09-09-aibot-wsclient-表面实测.md`
 「遗留发现」）发现真实 SDK 的 `WSClient.connect` 是 `async def`——同步调用它只会返回一个
@@ -820,6 +820,18 @@ PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison
 
 ⚠️ 先跑一次 `... -m tools.liaison --self-check` 更省事：它把凭据与 SDK 表面全校验一遍
 就退出（exit 0），⛔ 不建连——凭据打错时不必等到真连才发现。
+
+
+**销账依据（`[Mac]0909AE`，2026-09-09 21:25:49 CST）**：用真实凭据前台跑
+`python -m tools.liaison`，SDK 日志出现 `WebSocket connection established` →
+`Authentication successful` → `Authenticated`，`data/liaison/liveness.json` 写出
+`state: connected`，`data/liaison.db` 建出五张表。**`client.run()` 接进
+`run_forever` 是对的，本条欠的东西已还清。** 全文见
+`docs/findings/2026-09-09-首次真实建连实测.md`。
+
+⚠️ **销账 ≠ 8.6 通过**：同一次实测暴露出**另一个**缺陷（心跳单位，**TD-38**），
+服务只在线 44 秒就被企微以 `45009 Too many requests` 判死。8.6 的阻断项从 TD-19
+**转移**到 TD-38，⛔ 不要因为本条已销就以为 8.6 可以往下走。
 
 ## ~~TD-20~~ · `start()` 的启动补记用"本次启动时间"当恢复时间，会低报"重启时网络仍未恢复"的中断时长 ✅ 已还（`08d8784`）
 
@@ -1390,3 +1402,60 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 
 **来源**：`[Mac]0909AC` 写 TD-19 适配时读 SDK 源码发现（⛔ 不是推测，`client.py`
 第 344-360 行原文）。相关：TD-19、`docs/findings/2026-09-09-aibot-wsclient-表面实测.md`
+
+## TD-38 · `heartbeat_interval` 单位错配：传秒当毫秒，心跳频率 ×1000，44 秒即被企微限流 🔴 阻断 8.6
+
+**欠的是什么**：`tools/liaison/session_client.py:37` 的 `DEFAULT_HEARTBEAT_SECONDS = 30`
+被 `build_ws_options`（同文件 118–131 行）原样传给 SDK 的 `heartbeat_interval=`，而
+`aibot==1.0.2` 的这个参数**单位是毫秒**（`types.py:49`：`heartbeat_interval: int = 30000`，
+docstring 明写「心跳间隔（毫秒），默认 30000」；`ws.py:299` 实际 `asyncio.sleep(interval/1000)`）。
+于是 30 秒被解读成 **30 毫秒**，心跳频率放大 **1000 倍**。
+
+**实证**（⛔ 不是推测，`[Mac]0909AE` 现网实测）：建连后 44 秒内发出 **1399** 次心跳
+（契约应为 1–2 次），日志首行即 `Heartbeat timer started, interval: 30ms`；
+21:26:33 企微返回 `errcode 45009 Too many requests`，SDK 随即
+`No heartbeat ack received for 2 consecutive pings, connection considered dead`。
+全文与统计见 `docs/findings/2026-09-09-首次真实建连实测.md`。
+
+**不还的后果**：🔴 **值守通道无法保持在线**，且每次拉起都在对企微生产端洪泛
+（≈32 次/秒）。**装了 launchd 会放大**：无人值守地反复重启 → 反复洪泛 → 反复吃 45009，
+存在 bot 凭据被限流甚至封禁的风险。⛔ **TD-38 未还前不得装 launchd。**
+
+**触发条件**：**立即**，8.6 的阻断项。
+
+**已考虑但未做的改法**（留给还它的人，⛔ 不要当成结论）：把常量改名成毫秒口径并按毫秒传
+（如 `DEFAULT_HEARTBEAT_MS = 30_000`），⛔ 不要只把取值从 30 改成 30000 而留着
+`_SECONDS` 的名字——那正是本条的成因。还它时**必须一并复核 `reconnect_interval`**：
+SDK 默认 `1000`（毫秒 = 1 秒），而 `session_client.py:22-25` 的注释称
+`MAX_BACKOFF_SECONDS = 30.0` 与「SDK 内置退避的封顶取同一个数」，那是在两种单位下比的，
+结论不成立（本模块当前没传该参数，故未爆）。
+
+**为什么表面校验没拦住**：`verify_client_surface` 守的是方法名、事件名、`run` 的签名与
+协程性，全部通过。这是一个**类型相同（int）、单位不同**的参数错配 —— 按设计就在那道护栏的
+盲区里，且**无任何本地症状**，只有真连上企微才暴露。这也是"必须真跑一次"的价值所在。
+
+**来源**：`[Mac]0909AE` 首次真实建连实测。相关：TD-19、TD-39、
+`docs/findings/2026-09-09-首次真实建连实测.md`
+
+## TD-39 · ⚠️ 待复核：SDK 判连接死亡后，断线事件疑似没到 `LiaisonSession`
+
+**疑点是什么**：`[Mac]0909AE` 实测中，SDK 在 21:26:33.988 打出
+`connection considered dead` 之后 **16 秒**，`data/liaison/liveness.json` 仍是
+`{"state": "connected", ...}`（`stamp_at` 21:26:49.898 说明值守线程还在正常盖戳），
+`liaison_outage_window` 表**一条记录都没有**，日志里也没有任何 `disconnected` /
+`reconnecting` 行。若属实，这正是 `make_sdk_connect` docstring 点名要消灭的静默故障：
+**中断窗口一条都不会有，"没有告警"被当成"一切正常"**。
+
+🔴 **⛔ 本条尚未定性，不要当成已确认的缺陷**：观察窗只有 16 秒就被人工强杀了，SDK 的
+`_ws.close()` → 接收循环收尾 → `on_disconnected`（`client.py:70`）这条链可能仍在途中。
+
+**复核方法**（还 TD-38 之后再做，否则 44 秒就被限流、复现的是限流不是断线）：
+心跳改对、连接稳定之后，**拔网线／关 Wi-Fi** 制造真实断线，观察 ①`liveness.json` 是否
+在合理时延内翻成 `disconnected`；②`liaison_outage_window` 是否落一条窗口；
+③ 恢复网络后是否自动重连并闭合该窗口。三项全绿则本条销账为"虚惊"，任一不绿则升级为缺陷。
+
+**触发条件**：TD-38 还上之后、8.6 灰度验收之前。⛔ 不许跳过——它守的正是
+"服务看起来在跑、其实早断了"这一类**无症状**故障。
+
+**来源**：`[Mac]0909AE` 首次真实建连实测。相关：TD-38、
+`docs/findings/2026-09-09-首次真实建连实测.md`
