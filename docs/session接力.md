@@ -1,7 +1,7 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-10 11:4x（云端 CC `[Mac]0910A` 落档：`0910A` 派号未落档、号池补登）
+> 最后更新：2026-09-10 12:0x（云端 CC `[Mac]0910A`：kickoff 判据落真源、答 `1b` 登记、查出 AT-1 worktree 矛盾）
 
 ---
 
@@ -20,7 +20,7 @@
 
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
-| **AS-1** | `[Mac]0910A` 正文落档后重开同号：先把正文写进 `docs/openers/0910A-解锁追平与TD42真实验证.md` 并提交，再贴 4 行引用块开工 | **Shao Peishen ＋ Mac Desktop CC**（2026-09-10 答 `1a`：正文现场给。⛔ 云端 CC 做不了，见上方三条） | ⏸ **待派发**；号池已补登（答 `2a`，本次已提交） | 该文件存在、首行 ＝ `[Mac]0910A-解锁追平与TD42真实验证`；接手 session 不再扑空；TD-42 四项真实验证跑完并落 `docs/findings/` | TD-42 真实验证继续悬着 ⇒ `docs/tech-debt.md` TD-42 那条「⛔ 在它还上**并真实验证通过**之前，不得再请任何专员发消息」一直挂着，汤丽萍发的每一条继续静默落空（**截至 2026-09-10 已白发 4 条**） |
+| **AS-1** | `[Mac]0910A` 正文落档后重开同号：先把正文写进 `docs/openers/0910A-解锁追平与TD42真实验证.md` 并提交，再贴 4 行引用块开工 | **Shao Peishen ＋ Mac Desktop CC**（2026-09-10 答 `1a`：正文现场给。⛔ 云端 CC 做不了，见上方三条） | ⏸ **待派发**；号池已补登（答 `2a`，本次已提交） | 该文件存在、首行 ＝ `[Mac]0910A-解锁追平与TD42真实验证`；接手 session 不再扑空；TD-42 四项真实验证跑完并落 `docs/findings/`；**并按答 `1b` 串行接 AT-1**（见下方 AT-1 行，⚠️ 带一个待你拍的 worktree 矛盾） | TD-42 真实验证继续悬着 ⇒ `docs/tech-debt.md` TD-42 那条「⛔ 在它还上**并真实验证通过**之前，不得再请任何专员发消息」一直挂着，汤丽萍发的每一条继续静默落空（**截至 2026-09-10 已白发 4 条**） |
 | **AS-2** | **引用式 opener 的被引文件必须与派号同一次落档并提交**——`docs/openers/<MMDDX>-<主题短名>.md` ＋ `OP-0820` 号池台账两处同时写 | 所有派发方（CC／Cowork 两端同等适用） | ✅ **已写进真源**（2026-09-10 答 `1a`）：`.claude/skills/kickoff/SKILL.md`「引用式 Opener」段新增判据「被引文件必须与派号同一次 commit 落档」＋ 本次实证 | 派号的那一条 commit 里同时出现 opener 正文文件与号池台账行；接手 session 不再出现「引用式 opener 指向不存在的文件」 | 引用式 opener 退化成**死链**：接手方既读不到正文、又在台账里查不到号 ⇒ 下轮必被重派或再扑空，且**全程不报错**（08-27 撞号 5 次是同一根因的第一次发作，本次是第二次） |
 
 ---
@@ -55,10 +55,23 @@ grill 八问 Shao Peishen 当场全按推荐答（Q1 无在途不标不起活／
 
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
-| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | **另起 session**（worktree ☑；触碰 `session_client.py` ⇒ ⛔ 须等 `0909AS` 合回 main 后派） | ⏸ **待派发**，⛔ 本 session 未改该包 `tasks.md` | `SUBSCRIBED_EVENTS` 含 `message`；`liaison_message` 有一条真实企微消息行 | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
+| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | **串行在 `[Mac]0910A` 之内**（2026-09-10 答 `1b`，改自原「另起 session」）｜⚠️ **worktree 归属待定**：原写 worktree ☑，但本条判据含「真实入站落库一条」，worktree 里没有 `.env`／没有 `tools/liaison/.venv`／没有真实库（`0909AJ` 已立此判据）⇒ ☑ 与判据自相矛盾，须拆或改，见本段下方「⚠️ AT-1 的 worktree 矛盾」 | ⏸ **待派发**。✅ **前置已解除**：`0909AS` 已在 `main`（`32d0cbc` ⊂ `8e4674e`）。⛔ 该包 `tasks.md` 仍未追加 8.5bis 条目（无人改过） | `SUBSCRIBED_EVENTS` 含 `message`；`liaison_message` 有一条真实企微消息行 | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
 | **AT-2** | design Open Question ①：章程 §〇 **第 ⑨ 条「回件附件疑似含候选人个人信息 ⇒ 不读入 prompt、只登记转人」的措辞与判据** | Shao Peishen | ✅ **已答 `1a`**（10:3x）：按起草措辞定稿，落 design D15 | P2 3.1 写章程时逐字取 D15 | — |
 | **AT-3** | `HR_LIAISON_UNPACK_BUDGET_USD` 默认值（起草建议 5） | Shao Peishen | ✅ **已答 `2a`**：默认 5，落 design D16 | P1 2.9 写进 `.env.example` 注释 | — |
 | **AT-4** | 本包开工顺序：§0 三门槛（TD-42 已还＋AT-1 接通＋真实入站一条）全勾 → P0→P1→P2→P3 各一条 worktree 泳道 → §5 真实起活实测（他重启服务＋等汤丽萍下一条入站） | Cowork 编排 → 泳道 | ⏸ 等 §0 | tasks §5 实测记录落 `docs/findings/` 后归档 | — |
+
+#### ⚠️ AT-1 的 worktree 矛盾（2026-09-10 云端 CC 查出，**待 Shao Peishen 拍**）
+
+AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性质不同**的事：
+
+| 子项 | 内容 | 需要什么 | 能不能在 worktree 做 |
+|---|---|---|---|
+| **AT-1a** | 代码接线：`SUBSCRIBED_EVENTS` 加 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling` | 只要源码 ＋ 单测 | ✅ 能，且 CLAUDE.md 固定判据「写代码 ⇒ worktree ✅」要求就在 worktree |
+| **AT-1b** | 判据「`liaison_message` 有一条**真实**企微消息行」 | `.env` ＋ `tools/liaison/.venv` ＋ 真实库 ＋ 值守服务真在跑 | ❌ **不能**——三者都被 gitignore 挡着，git 不带进 worktree（`0909AJ`／`0909AH` 已立此判据） |
+
+⇒ 答 `1b`「`0910A` 串行接 AT-1」在 **AT-1b 上成立**（`0910A` 本就在主工作区、本就要重启真实服务），
+但在 **AT-1a 上与「写代码走 worktree」相冲**：`0910A` 的【设置】是 worktree ❌ 不勾。
+**⛔ 本 session 未替你选**，三条去向见本轮回复「需你定夺」。
 
 
 ---
