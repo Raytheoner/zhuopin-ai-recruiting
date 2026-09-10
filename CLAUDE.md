@@ -41,7 +41,7 @@
 
 **Session 默认一律「新开」**：「利旧」只在有进度台账要接的场景成立。写「利旧即可」等于把执行时机绑到人身上——他转场后就找不到"旧"指的是哪个了。
 
-- **git 相关只能在 CC**：Cowork 的 bash 在隔离 VM 里，对 `.git/` 只能写不能删，git 操作必失败
+- **git 相关只能在 CC**：Cowork 的 bash 在隔离 VM 里，对 `.git/` 只能写不能删，git 操作必失败；⚠️ 连只读的 `git status` 也会在 `.git/` 留下删不掉的 `index.lock`，挡住 Mac 侧下一次 commit ⇒ Cowork 侧能不跑 git 就不跑（2026-09-10 实证，两把锁）
 - **三个坑**：提交 main 上的未提交改动必须**不勾 worktree**（否则改动不在工作区里）｜ **分支名不要指定**（CC Desktop 勾 worktree 后自生成 `claude/<任务名>-dev-<hash>`，指定只会多建一个）｜ **在服务器上跑的命令**写明"在 .51 上跑"并给 ssh 包装形式，⛔ 不给裸命令
 
 完整模板与 🔴 **引用式 opener**（2026-09-03 定：正文 > 500 字 ⇒ 正文落 `docs/openers/<MMDDX>-<主题短名>.md`，聊天只贴 4 行引用块）见 `.claude/skills/kickoff/SKILL.md`「引用式 Opener」。**每份指令必须完整可整块复制**——引用块本身即完整指令，⛔ 不让 Paul 拼接片段。
