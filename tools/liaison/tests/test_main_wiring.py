@@ -130,7 +130,7 @@ def credentials_in_env(tmp_path, monkeypatch):
 def test_main_exits_with_a_dedicated_code_when_the_sdk_is_missing(credentials_in_env, capsys):
     """SDK 装不上是配置问题，⛔ 不许进重试循环装作在等网络。"""
 
-    def boom(_credentials):
+    def boom(_credentials, **_kwargs):
         raise ImportError("No module named 'aibot'")
 
     ran = []
@@ -148,7 +148,7 @@ def test_main_exits_when_the_sdk_surface_does_not_match(credentials_in_env, caps
 
     ran = []
     assert (
-        liaison_main.main(client_builder=lambda _c: BareClient(), runner=lambda c: ran.append(1))
+        liaison_main.main(client_builder=lambda _c, **_: BareClient(), runner=lambda c: ran.append(1))
         == liaison_main.EXIT_SDK_SURFACE_UNVERIFIED
     )
     assert ran == [], "⛔ 表面对不上时不许硬着头皮跑起来"
@@ -173,7 +173,7 @@ def test_main_exits_when_the_sdk_run_is_a_coroutine_function(credentials_in_env,
     ran = []
     assert (
         liaison_main.main(
-            client_builder=lambda _c: AsyncRunClient(),
+            client_builder=lambda _c, **_: AsyncRunClient(),
             runner=lambda connect: ran.append(1),
         )
         == liaison_main.EXIT_SDK_SURFACE_UNVERIFIED
@@ -211,7 +211,7 @@ def test_main_accepts_the_real_sdk_shape_and_hands_run_to_the_runner(credentials
     assert (
         liaison_main.main(
             session_builder=session_builder,
-            client_builder=lambda _c: RealShapeClient(),
+            client_builder=lambda _c, **_: RealShapeClient(),
             runner=lambda connect: connect(),
         )
         == 0
@@ -234,7 +234,7 @@ def test_self_check_runs_the_whole_startup_path_then_stops_before_connecting(
 
     assert (
         liaison_main.main(
-            client_builder=lambda _c: BareClient(),
+            client_builder=lambda _c, **_: BareClient(),
             runner=lambda connect: connect(),
             self_check=True,
         )
@@ -253,7 +253,7 @@ def test_self_check_runs_the_whole_startup_path_then_stops_before_connecting(
 
     assert (
         liaison_main.main(
-            client_builder=lambda _c: RealShapeClient(),
+            client_builder=lambda _c, **_: RealShapeClient(),
             runner=lambda connect: ran_runner.append(1),
             self_check=True,
         )
@@ -291,7 +291,7 @@ def test_main_wires_both_callbacks_into_the_queue(credentials_in_env, tmp_path):
     assert (
         liaison_main.main(
             session_builder=session_builder,
-            client_builder=lambda _c: FakeClient(),
+            client_builder=lambda _c, **_: FakeClient(),
             runner=fake_runner,
         )
         == 0
@@ -407,13 +407,14 @@ def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
 
     real_make = session_client.make_sdk_connect
 
-    def spying_make(factory, *, on_connected, on_disconnected, loop_stopper=None):
+    def spying_make(factory, *, on_connected, on_disconnected, loop_stopper=None, on_activity=None):
         stoppers.append(loop_stopper)
         return real_make(
             factory,
             on_connected=on_connected,
             on_disconnected=on_disconnected,
             loop_stopper=loop_stopper,
+            on_activity=on_activity,
         )
 
     def fake_watchdog(**kwargs):
@@ -435,7 +436,7 @@ def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
         assert (
             liaison_main.main(
                 session_builder=session_builder,
-                client_builder=lambda _c: FakeClient(),
+                client_builder=lambda _c, **_: FakeClient(),
                 runner=fake_runner,
                 watchdog=fake_watchdog,
             )
@@ -452,9 +453,13 @@ def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
     assert watchdog_kwargs["request_rebuild"] == stoppers[0].request_stop, (
         "看门狗的 request_rebuild 必须是**同一个** LoopStopper 的 request_stop"
     )
-    assert callable(watchdog_kwargs["read_stamp_at"])
+    assert callable(watchdog_kwargs["read_liveness"])
     assert callable(watchdog_kwargs["clock"])
     assert callable(watchdog_kwargs["should_stop"])
+    # TD-42：终止路径的三样也要接上（`terminate` 用默认的 `terminate_process`，
+    # ⛔ 不在这里替换——本用例的假看门狗根本不调它）
+    assert "alert_sink" in watchdog_kwargs
+    assert watchdog_kwargs["ledger_path"] == liaison_main.DEFAULT_WATCHDOG_LEDGER_PATH
 
 
 def test_main_reads_the_stamp_the_session_thread_actually_writes(credentials_in_env, tmp_path):
@@ -465,8 +470,8 @@ def test_main_reads_the_stamp_the_session_thread_actually_writes(credentials_in_
     """
     stamp_path = tmp_path / "liveness.json"
     session.effect_write_liveness_stamp(stamp_path, state=session.STATE_CONNECTED, now=T0)
-    assert liaison_main.read_liveness_stamp_at(stamp_path) == session.format_instant(T0)
-    assert liaison_main.read_liveness_stamp_at(tmp_path / "缺席.json") is None
+    assert liaison_main.read_liveness_payload(stamp_path)["stamp_at"] == session.format_instant(T0)
+    assert liaison_main.read_liveness_payload(tmp_path / "缺席.json") is None
 
 
 def test_watchdog_default_path_matches_the_default_liveness_path():
@@ -476,9 +481,9 @@ def test_watchdog_default_path_matches_the_default_liveness_path():
     funcs = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "read_liveness_stamp_at"
+        if isinstance(node, ast.FunctionDef) and node.name == "read_liveness_payload"
     ]
-    assert len(funcs) == 1, "期望恰好一处 read_liveness_stamp_at 定义"
+    assert len(funcs) == 1, "期望恰好一处 read_liveness_payload 定义"
     default = funcs[0].args.defaults[-1]
     assert isinstance(default, ast.Attribute) and default.attr == "DEFAULT_LIVENESS_PATH", (
         "默认存活戳路径必须直接引用 session.DEFAULT_LIVENESS_PATH，"

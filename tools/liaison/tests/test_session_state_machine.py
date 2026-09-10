@@ -421,3 +421,59 @@ def test_starting_with_no_open_window_behaves_exactly_as_before(db_path, livenes
     second.on_connected(T0 + timedelta(minutes=20))
     assert windows(second.conn) == before, "首次连上 ⛔ 不许改动一个已闭合的窗口"
     assert sink.texts == []
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-42 · 状态机维护 `last_event_at`
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _event_at(liveness_path):
+    return json.loads(liveness_path.read_text(encoding="utf-8"))[session.LIVENESS_EVENT_KEY]
+
+
+def test_connected_event_sets_last_event_at(db_path, liveness_path):
+    svc = make_session(db_path, liveness_path, RecordingSink())
+    svc.start(T0)
+    assert _event_at(liveness_path) is None, "启动那一刻还没有任何 SDK 事件"
+    svc.on_connected(T0 + timedelta(seconds=1))
+    assert _event_at(liveness_path) == session.format_instant(T0 + timedelta(seconds=1))
+
+
+def test_sdk_activity_advances_last_event_at_while_ticks_alone_do_not(db_path, liveness_path):
+    """🔴 TD-42 的核心区分：`tick()` 推进 `stamp_at`，⛔ **不推进** `last_event_at`。
+
+    十小时的 `tick()` 之后 `last_event_at` 必须还停在最后一次真实 SDK 活动那一刻——
+    这正是外部（含人肉 `cat`）能一眼看出「连着但十小时没收到东西」的依据。
+    """
+    svc = make_session(db_path, liveness_path, RecordingSink())
+    svc.start(T0)
+    svc.on_connected(T0)
+    heard = T0 + timedelta(seconds=30)
+    svc.on_sdk_activity(heard)
+    assert _event_at(liveness_path) == session.format_instant(heard)
+
+    for minute in range(1, 601):
+        svc.tick(T0 + timedelta(minutes=minute))
+    payload = json.loads(liveness_path.read_text(encoding="utf-8"))
+    assert payload["state"] == session.STATE_CONNECTED
+    assert payload["stamp_at"] == session.format_instant(T0 + timedelta(minutes=600))
+    assert payload[session.LIVENESS_EVENT_KEY] == session.format_instant(heard), (
+        "tick() 把 last_event_at 也推进了——那就又回到「stamp_at 会骗人」"
+    )
+
+
+def test_sdk_activity_outside_connected_state_is_remembered_but_does_not_stamp(
+    db_path, liveness_path
+):
+    """断线期间也可能有 SDK 活动（比如认证回包晚到）：记住它，但 ⛔ 不在非 connected
+    状态下盖戳——存活戳定格在断线时刻是第 7 章的契约（`tick()` 同理）。"""
+    svc = make_session(db_path, liveness_path, RecordingSink())
+    svc.start(T0)
+    svc.on_connected(T0)
+    svc.on_disconnected(T0 + timedelta(minutes=1))
+    frozen = json.loads(liveness_path.read_text(encoding="utf-8"))
+    svc.on_sdk_activity(T0 + timedelta(minutes=2))
+    assert json.loads(liveness_path.read_text(encoding="utf-8")) == frozen
+    svc.on_connected(T0 + timedelta(minutes=3))
+    assert _event_at(liveness_path) == session.format_instant(T0 + timedelta(minutes=3))

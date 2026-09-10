@@ -20,7 +20,8 @@ T0 = datetime(2026, 9, 9, 10, 0, 0, tzinfo=session.CHINA_TZ)
 SESSION_SOURCE = pathlib.Path(session.__file__)
 
 
-def test_writing_a_stamp_creates_the_file_with_the_three_contract_keys(tmp_path):
+def test_writing_a_stamp_creates_the_file_with_the_contract_keys(tmp_path):
+    """三个契约键 ＋ TD-42 的 `last_event_at`（没有事件时为 null，键仍在）。"""
     path = tmp_path / "liveness.json"
     session.effect_write_liveness_stamp(path, state=session.STATE_CONNECTED, now=T0)
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -28,6 +29,7 @@ def test_writing_a_stamp_creates_the_file_with_the_three_contract_keys(tmp_path)
         "state": "connected",
         "stamp_at": session.format_instant(T0),
         "since": session.format_instant(T0),
+        session.LIVENESS_EVENT_KEY: None,
     }
 
 
@@ -95,7 +97,7 @@ def test_stamp_payload_carries_no_personal_information(tmp_path):
     path = tmp_path / "liveness.json"
     session.effect_write_liveness_stamp(path, state=session.STATE_CONNECTED, now=T0)
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert set(payload) == {"state", "stamp_at", "since"}
+    assert set(payload) == {"state", "stamp_at", "since", session.LIVENESS_EVENT_KEY}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -157,3 +159,54 @@ def test_session_module_never_uses_a_with_statement():
     """
     tree = ast.parse(SESSION_SOURCE.read_text(encoding="utf-8"), filename=str(SESSION_SOURCE))
     assert not [n for n in ast.walk(tree) if isinstance(n, (ast.With, ast.AsyncWith))]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# TD-42 · 存活戳带「距上次真实 SDK 事件」（`last_event_at`）
+# ─────────────────────────────────────────────────────────────────────────
+#
+# 2026-09-10 实测：`state=connected` ＋ `stamp_at` 推进了 **10 小时**，实际一条
+# 都没收到。`stamp_at` 只证明**值守线程**活着，⛔ 证明不了 SDK 在收东西。
+# 从此存活戳多带一个字段：SDK 最近一次真的把东西送到本进程的时刻。
+#
+# ⚠️ 它 ⛔ **不是**「上一条消息什么时候来的」：心跳回包、认证成功、连接事件
+# 都算——这是**连接健康**的证据，与消息多不多无关。上面的结构断言仍然守着
+# 「无消息 ≠ 断线」；`tick()` 的判据也仍然只有连接状态。
+
+
+def test_stamp_carries_last_event_at_when_given(tmp_path):
+    path = tmp_path / "liveness.json"
+    seen = T0 - timedelta(seconds=20)
+    session.effect_write_liveness_stamp(
+        path, state=session.STATE_CONNECTED, now=T0, last_event_at=seen
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload[session.LIVENESS_EVENT_KEY] == session.format_instant(seen)
+    assert payload["stamp_at"] == session.format_instant(T0)
+
+
+def test_stamp_writes_the_event_key_as_null_when_nothing_arrived_yet(tmp_path):
+    """键**必须在**、值为 null：`starting` 状态下还没有任何 SDK 事件是正常的。
+
+    ⛔ 不许干脆不写这个键：「键缺席」是留给**旧格式**的信号（看门狗按「未知、
+    需要关注」处理），与「本进程还没收到事件」是两回事。
+    """
+    path = tmp_path / "liveness.json"
+    session.effect_write_liveness_stamp(path, state=session.STATE_STARTING, now=T0)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert session.LIVENESS_EVENT_KEY in payload
+    assert payload[session.LIVENESS_EVENT_KEY] is None
+
+
+def test_reading_an_old_format_stamp_still_returns_the_payload_without_the_event_key(tmp_path):
+    """兼容：旧格式（三个键）读得出来，⛔ 不许因为少了新键就当「没有上一次记录」——
+    `start()` 还要靠它补记停机窗口。「按未知处理」是**看门狗**那一层的事。"""
+    path = tmp_path / "liveness.json"
+    path.write_text(
+        json.dumps({"state": "connected", "stamp_at": session.format_instant(T0),
+                    "since": session.format_instant(T0)}),
+        encoding="utf-8",
+    )
+    payload = session.read_liveness_stamp(path)
+    assert payload is not None
+    assert session.LIVENESS_EVENT_KEY not in payload

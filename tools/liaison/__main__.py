@@ -6,8 +6,11 @@
 - **主线程**只跑 `run_forever(connect)`。SDK 回调唯一做的事是把
   `(事件名, 当时的时间)` 放进队列，⛔ 回调里不碰库、不碰文件——sqlite 连接
   默认只能在创建它的线程里用，在断线回调里碰库会在最不该出错的那一刻抛异常。
-- **看门狗线程**（2026-09-09 加，TD-39·N-0）只读 `liveness.json` 的 `stamp_at`，
-  停更超阈值就停掉 SDK 的事件循环。⛔ 它不碰库、不碰状态机、不发消息。
+- **看门狗线程**（2026-09-09 加，TD-39·N-0）只读 `liveness.json`，
+  停更超阈值就停掉 SDK 的事件循环。⛔ 它不碰库、不碰状态机。
+  ⚠️ 2026-09-10（TD-42）起它还看 `last_event_at`（SDK 多久没送来东西），且判定假死后
+  **总能**终止进程（ERROR ＋ 告警 ＋ 台账之后 `os._exit`，launchd `KeepAlive` 拉起）——
+  「拿到事件循环把手」不再是前提。它写的只有自己的台账 `watchdog.json`。
   *为什么需要第三条*：主线程被 `client.run()` 里的 `loop.run_forever()` 占死，
   接收 task 一旦被异常打掉，那个 loop 照样挂着 ⇒ `run()` 永不返回 ⇒ 外层
   `run_forever` 一次都不会触发。没有一条独立线程，就没人能把它叫醒。
@@ -88,6 +91,12 @@ TICK_INTERVAL_SECONDS = 15.0
 
 EVENT_CONNECTED = session_client.EVENT_CONNECTED
 EVENT_DISCONNECTED = session_client.EVENT_DISCONNECTED
+#: 队列里的第三种事件（TD-42）：SDK 刚刚真的把东西送到了本进程（`authenticated`、
+#: 心跳回包、推送）。值守线程收到它只更新存活戳的 `last_event_at`，⛔ 不改状态。
+EVENT_SDK_ACTIVITY = "sdk_activity"
+
+#: 看门狗台账（连续终止计数）。与存活戳同目录、同一个真源推导，⛔ 不另写路径字面量。
+DEFAULT_WATCHDOG_LEDGER_PATH = session.DEFAULT_LIVENESS_PATH.with_name("watchdog.json")
 
 
 def resolve_dotenv_path() -> Path:
@@ -127,20 +136,20 @@ def now() -> datetime:
     return datetime.now(session.CHINA_TZ)
 
 
-def read_liveness_stamp_at(
+def read_liveness_payload(
     path: Path = session.DEFAULT_LIVENESS_PATH,
-) -> str | None:
-    """读存活戳里的 `stamp_at`（看门狗的唯一输入）。读不到一律 None。
+) -> dict | None:
+    """读整份存活戳（看门狗的唯一输入）。读不到一律 None。
+
+    ⚠️ 2026-09-10（TD-42）从只读 `stamp_at` 改成读整份：判据要看 `state` 与
+    `last_event_at`。
 
     ⚠️ **默认值必须直接引用 `session.DEFAULT_LIVENESS_PATH`**，⛔ 不许在本文件
     另写一份路径字面量：看门狗读的必须是值守线程**真的在写**的那一份。两处真源
     一旦漂移，看门狗要么盯着一个永远不更新的文件（每 3 分钟拆一次健康连接），
     要么盯着一个不存在的文件（永远不触发）——两种都没有任何症状。
     """
-    payload = session.read_liveness_stamp(path)
-    if payload is None:
-        return None
-    return payload.get("stamp_at")
+    return session.read_liveness_stamp(path)
 
 
 def build_session() -> session.LiaisonSession:
@@ -156,6 +165,8 @@ def apply_connection_event(svc: session.LiaisonSession, name: str, moment: datet
         svc.on_connected(moment)
     elif name == EVENT_DISCONNECTED:
         svc.on_disconnected(moment)
+    elif name == EVENT_SDK_ACTIVITY:
+        svc.on_sdk_activity(moment)
     else:
         logger.error("收到未知的连接事件 %r（时间 %s），已忽略", name, moment)
 
@@ -224,14 +235,28 @@ def main(
     # 什么都没做，且 ⛔ 没有任何症状。
     loop_stopper = session_client.LoopStopper()
 
+    # TD-42：SDK 活动的两个来源都汇到同一个回调——`authenticated` 事件（经
+    # `make_sdk_connect`）与 SDK 日志里的入站证据（经 `SdkLogObserver`，接在
+    # `WSClientOptions.logger` 上）。回调只做一件事：把 `(事件名, 当时的时间)` 放进
+    # 队列，与连接事件回调同一纪律——⛔ 不碰库、不碰文件。
+    # `on_any_log=loop_stopper.capture`：SDK 的每一行日志都在它的事件循环里打，
+    # 是抓 loop 把手的又一个时机（连接建立前 SDK 就会打 `Connecting to WebSocket`）。
+    def on_sdk_activity() -> None:
+        events.put((EVENT_SDK_ACTIVITY, now()))
+
+    sdk_logger = session_client.SdkLogObserver(
+        on_activity=on_sdk_activity, on_any_log=loop_stopper.capture
+    )
+
     try:
         # ⚠️ 传的是**工厂**不是对象：SDK 的 `_started` 闩锁让同一个连接对象没法
         # 重连第二次（详见 session_client.make_sdk_connect 的 docstring）。
         connect = session_client.make_sdk_connect(
-            lambda: client_builder(credentials),
+            lambda: client_builder(credentials, sdk_logger=sdk_logger),
             on_connected=lambda: events.put((EVENT_CONNECTED, now())),
             on_disconnected=lambda: events.put((EVENT_DISCONNECTED, now())),
             loop_stopper=loop_stopper,
+            on_activity=on_sdk_activity,
         )
     except ImportError as exc:
         print(
@@ -263,22 +288,26 @@ def main(
     )
     worker.start()
 
-    # ── 第三条线程：存活戳看门狗（TD-39·N-0 兜底）────────────────────────
+    # ── 第三条线程：存活戳看门狗（TD-39·N-0 兜底 ＋ TD-42 终止路径）──────────
     # 主线程被 `client.run()` 占着（它内部 `loop.run_forever()`），值守线程独占库，
-    # 所以这一层只能自己起一条线程。它什么都不碰，只读 `liveness.json` 的
-    # `stamp_at`：停更超阈值就用 `loop_stopper` 把 SDK 的事件循环停掉，
-    # `client.run()` 才会返回，外层 `run_forever` 才接得上手。
+    # 所以这一层只能自己起一条线程。它只读 `liveness.json`：陈旧就先用 `loop_stopper`
+    # 把 SDK 的事件循环停掉（`client.run()` 返回、外层 `run_forever` 接手）；没有把手
+    # 或停了仍假死 ⇒ ERROR ＋ 告警 ＋ 台账 ⇒ 终止进程，launchd `KeepAlive` 拉起。
     #
     # ⚠️ `sleep` 用 `stop_event.wait`：停服时看门狗立刻醒来退出，⛔ 不许让它在
     # `time.sleep` 里再挂满一个轮询周期。
+    # ⚠️ 告警走 `alerts.LoggingAlertSink`（与值守线程同一种出口）；⛔ 不许给看门狗
+    # 一条库连接去写窗口——它不碰库。
     threading.Thread(
         target=watchdog,
         kwargs={
-            "read_stamp_at": read_liveness_stamp_at,
+            "read_liveness": read_liveness_payload,
             "clock": now,
             "request_rebuild": loop_stopper.request_stop,
             "should_stop": stop_event.is_set,
             "sleep": stop_event.wait,
+            "alert_sink": alerts.LoggingAlertSink(),
+            "ledger_path": DEFAULT_WATCHDOG_LEDGER_PATH,
         },
         name="liaison-watchdog",
         daemon=True,

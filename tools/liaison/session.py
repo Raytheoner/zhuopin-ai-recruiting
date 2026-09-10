@@ -14,6 +14,10 @@
    （spec「存活戳区分空闲与断线」、design D3）。参考服务把"一段时间没消息"当断线，
    是一个真实发生过的生产 bug（06-企业AI转型资产借鉴清单.md §三）。
    tests/test_session_liveness.py 有一条 AST 断言守着这一点。
+   ⚠️ 2026-09-10（TD-42）起存活戳多带 `last_event_at`——SDK 最近一次**真的把东西送到
+   本进程**的时刻（连接事件、认证成功、心跳回包）。它是**连接健康**的证据，⛔ 不是
+   消息时序：心跳回包每 30 秒一次、与有没有人发消息无关。它 ⛔ 不参与 `tick()` 的
+   判据（判据仍只有连接状态），只被**写进**存活戳给看门狗与人看。
 """
 
 from __future__ import annotations
@@ -186,6 +190,13 @@ STATE_DISCONNECTED = "disconnected"
 #: 存活戳 JSON 的字段契约。少任何一个都当作"读不到上一次的记录"。
 LIVENESS_KEYS = ("state", "stamp_at", "since")
 
+#: TD-42 加的第四个键：SDK 最近一次真的把东西送到本进程的时刻（ISO8601 或 null）。
+#: ⛔ 刻意**不进** `LIVENESS_KEYS`：旧格式（只有三个键）必须仍能读出来，`start()`
+#: 还要靠它补记停机窗口。「键缺席 ⇒ 未知、需要关注」是看门狗那一层的判据
+#: （`session_client.compute_liveness_verdict`）；「键在、值为 null」则表示本进程
+#: 还没收到任何 SDK 事件——两者 ⛔ 不许混为一谈，所以写戳时这个键**永远在**。
+LIVENESS_EVENT_KEY = "last_event_at"
+
 
 def effect_write_liveness_stamp(
     path: pathlib.Path,
@@ -193,8 +204,12 @@ def effect_write_liveness_stamp(
     state: str,
     now: datetime,
     since: datetime | None = None,
+    last_event_at: datetime | None = None,
 ) -> None:
     """盖一次存活戳（覆写语义，末次写入即真相）。
+
+    `last_event_at`（TD-42）：SDK 最近一次真实活动的时刻，没有就写 null——键永远在，
+    见 `LIVENESS_EVENT_KEY` 处的说明。
 
     **⛔ 本函数刻意不挂 @idempotent_effect，这不是漏了。**
     幂等键的语义是"这件事做过就不再做"。心跳恰恰要求每次都做——挂上装饰器，
@@ -214,6 +229,9 @@ def effect_write_liveness_stamp(
         "state": state,
         "stamp_at": moment,
         "since": format_instant(since) if since is not None else moment,
+        LIVENESS_EVENT_KEY: (
+            format_instant(last_event_at) if last_event_at is not None else None
+        ),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(path.name + ".tmp")
@@ -264,6 +282,9 @@ class LiaisonSession:
         self.liveness_path = liveness_path
         self._state = STATE_STARTING
         self._since: datetime | None = None
+        #: SDK 最近一次真实活动（TD-42）。⛔ 只被写进存活戳，⛔ 不参与任何判据——
+        #: 见模块 docstring 第 3 条。
+        self._last_event_at: datetime | None = None
 
     @property
     def state(self) -> str:
@@ -335,8 +356,13 @@ class LiaisonSession:
         self._flush_pending_alerts(now)
         self._state = STATE_CONNECTED
         self._since = now
+        self._last_event_at = now
         effect_write_liveness_stamp(
-            self.liveness_path, state=STATE_CONNECTED, now=now, since=now
+            self.liveness_path,
+            state=STATE_CONNECTED,
+            now=now,
+            since=now,
+            last_event_at=now,
         )
 
     def on_disconnected(self, now: datetime) -> None:
@@ -355,9 +381,24 @@ class LiaisonSession:
         )
         self._state = STATE_DISCONNECTED
         self._since = now
+        self._last_event_at = now
         effect_write_liveness_stamp(
-            self.liveness_path, state=STATE_DISCONNECTED, now=now, since=now
+            self.liveness_path,
+            state=STATE_DISCONNECTED,
+            now=now,
+            since=now,
+            last_event_at=now,
         )
+
+    def on_sdk_activity(self, now: datetime) -> None:
+        """SDK 刚刚真的把东西送到了本进程（认证成功、心跳回包等，TD-42）。
+
+        只做两件事：记住时刻；若正连着就顺手盖一次戳，让 `last_event_at` 尽快
+        落到文件里。⛔ 不改状态、不开关窗口——它不是连接事件。
+        ⛔ 非 `connected` 状态下不盖戳：存活戳定格在断线时刻是本章契约（同 `tick()`）。
+        """
+        self._last_event_at = now
+        self.tick(now)
 
     # ── 心跳 ──────────────────────────────────────────────────────────
     def tick(self, now: datetime) -> None:
@@ -374,6 +415,9 @@ class LiaisonSession:
             state=STATE_CONNECTED,
             now=now,
             since=self._since if self._since is not None else now,
+            # ⛔ 这里传的是**记住的**那个时刻，不是 `now`：tick() 只证明值守线程活着，
+            # 证明不了 SDK 在收东西（TD-42 的十小时正是这样骗过去的）。
+            last_event_at=self._last_event_at,
         )
 
     # ── 内部 ──────────────────────────────────────────────────────────

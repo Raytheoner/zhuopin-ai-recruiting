@@ -220,6 +220,31 @@ def stamp(seconds_ago: float, *, base: datetime) -> str:
     return (base - timedelta(seconds=seconds_ago)).isoformat(timespec="microseconds")
 
 
+def liveness(seconds_ago: float, *, base: datetime) -> dict:
+    """一份 `connected` 的存活戳，`stamp_at` 与 `last_event_at` 都在 `seconds_ago` 秒前。"""
+    return {
+        "state": "connected",
+        "stamp_at": stamp(seconds_ago, base=base),
+        "since": stamp(seconds_ago, base=base),
+        session.LIVENESS_EVENT_KEY: stamp(seconds_ago, base=base),
+    }
+
+
+def watchdog_started_long_ago(base: datetime):
+    """看门狗的 `clock`：构造时（取 `started_at`）回一小时前，之后回 `base`。
+
+    ⚠️ 2026-09-10（TD-42）起早于 `started_at` 的存活戳算上一次运行的残留、⛔ 不算证据
+    （冷启动误报的修法），所以本节的假戳必须落在「看门狗起来之后」。
+    """
+    calls = [0]
+
+    def clock():
+        calls[0] += 1
+        return base - timedelta(hours=1) if calls[0] == 1 else base
+
+    return clock
+
+
 def test_watchdog_threshold_is_clearly_above_the_measured_death_latency():
     """阈值必须**明显大于**实测判死时延 55.75 秒（心跳 30s × 2 次未回 pong）。
 
@@ -268,24 +293,26 @@ def test_watchdog_requests_a_rebuild_when_the_stamp_goes_stale():
     """
     base = datetime(2026, 9, 9, 12, 0, 0, tzinfo=CHINA_TZ)
     rebuilds = []
-    triggered = session_client.check_liveness_once(
-        read_stamp_at=lambda: stamp(session_client.STALE_LIVENESS_SECONDS + 30, base=base),
-        clock=lambda: base,
+    verdict = session_client.LivenessWatchdog(
+        read_liveness=lambda: liveness(session_client.STALE_LIVENESS_SECONDS + 30, base=base),
+        clock=watchdog_started_long_ago(base),
         request_rebuild=lambda: rebuilds.append(1) or True,
-    )
-    assert triggered is True
+        terminate=lambda code: None,
+    ).check_once()
+    assert verdict.is_stale
     assert rebuilds == [1]
 
 
 def test_watchdog_stays_quiet_within_the_threshold():
     base = datetime(2026, 9, 9, 12, 0, 0, tzinfo=CHINA_TZ)
     rebuilds = []
-    triggered = session_client.check_liveness_once(
-        read_stamp_at=lambda: stamp(1.0, base=base),
-        clock=lambda: base,
+    verdict = session_client.LivenessWatchdog(
+        read_liveness=lambda: liveness(1.0, base=base),
+        clock=watchdog_started_long_ago(base),
         request_rebuild=lambda: rebuilds.append(1) or True,
-    )
-    assert triggered is False
+        terminate=lambda code: None,
+    ).check_once()
+    assert not verdict.is_stale
     assert rebuilds == []
 
 
@@ -301,13 +328,17 @@ def test_watchdog_loop_uses_the_injected_clock_and_never_sleeps_for_real():
     rounds = iter([False, False, False, True])
 
     session_client.run_liveness_watchdog(
-        read_stamp_at=lambda: stamp(session_client.STALE_LIVENESS_SECONDS + 5, base=base),
-        clock=lambda: base,
+        read_liveness=lambda: liveness(session_client.STALE_LIVENESS_SECONDS + 5, base=base),
+        clock=watchdog_started_long_ago(base),
         request_rebuild=lambda: rebuilds.append(1) or True,
         sleep=naps.append,
         should_stop=lambda: next(rounds),
+        terminate=lambda code: None,
     )
-    assert len(rebuilds) == 3, "每一轮陈旧都要请求一次重建"
+    # ⚠️ 2026-09-10（TD-42）从「每一轮陈旧都请求一次」改成「一段假死只请求一次」：
+    # 时钟不动 ⇒ 三轮都在同一段假死里 ⇒ 只请求一次；后续由宽限期与终止路径接手
+    # （见 test_session_client_td42.py）。三轮都要真的跑到（三次 sleep）。
+    assert len(rebuilds) == 1, "一段假死只请求一次重建，⛔ 不许每 15 秒把新连接再停一次"
     assert naps == [session_client.WATCHDOG_POLL_SECONDS] * 3
     assert all(nap > 0 for nap in naps), "⛔ 间隔为 0 就是满速自旋"
 
@@ -325,11 +356,12 @@ def test_watchdog_survives_a_failing_stamp_reader_but_leaves_a_symptom(caplog):
 
     with caplog.at_level(logging.ERROR, logger=session_client.__name__):
         session_client.run_liveness_watchdog(
-            read_stamp_at=exploding_reader,
+            read_liveness=exploding_reader,
             clock=lambda: datetime(2026, 9, 9, 12, 0, 0, tzinfo=CHINA_TZ),
             request_rebuild=lambda: rebuilds.append(1) or True,
             sleep=lambda _: None,
             should_stop=lambda: next(rounds),
+            terminate=lambda code: None,
         )
     assert rebuilds == [], "读不到戳 ⛔ 不许当成「连接死了」去拆连接"
     assert [r for r in caplog.records if r.levelno >= logging.ERROR], (
@@ -596,9 +628,12 @@ def run_n0_scenario(tmp_path, monkeypatch, *, connections: int = 2) -> N0Scenari
     `run_forever`、真的 `LiaisonSession`。注入的只有三样：
     ① 假 SDK（唯一能构造"事件静默但 loop 活着"的办法，见本节抬头）；
     ② 假时钟（跨 180 秒阈值要在毫秒里发生）；
-    ③ 看门狗的 `read_stamp_at` 指到 tmp 的存活戳、`poll_seconds` 压到 10 毫秒。
-       ⚠️ `read_stamp_at` 仍旧调**产品的** `liaison_main.read_liveness_stamp_at`，
+    ③ 看门狗的 `read_liveness` 指到 tmp 的存活戳、`poll_seconds` 压到 10 毫秒。
+       ⚠️ `read_liveness` 仍旧调**产品的** `liaison_main.read_liveness_payload`，
        只换路径——⛔ 不另写一份读法。阈值 ⛔ 没被调小。
+    ④ 🔴 看门狗的 `terminate` 换成记录器（TD-42 起它默认是 `os._exit`，在 pytest 里
+       真的调会把整个测试进程杀掉）、台账指到 tmp。本节验的是 TD-39 的「停 loop」
+       路径；终止路径由 `test_session_client_td42.py` 单独验。
     """
     base = datetime(2026, 9, 9, 12, 0, 0, tzinfo=CHINA_TZ)
     clock = _AdvanceableClock(base)
@@ -615,7 +650,7 @@ def run_n0_scenario(tmp_path, monkeypatch, *, connections: int = 2) -> N0Scenari
 
     clients: list[SilentlyDeadSdkClient] = []
 
-    def client_builder(_credentials):
+    def client_builder(_credentials, **_kwargs):
         client = SilentlyDeadSdkClient(
             index=len(clients),
             clock=clock,
@@ -632,9 +667,13 @@ def run_n0_scenario(tmp_path, monkeypatch, *, connections: int = 2) -> N0Scenari
         return session.LiaisonSession(conn, _RecordingSink(), liveness_path=stamp_path)
 
     def watchdog(**kwargs):
-        kwargs["read_stamp_at"] = lambda: liaison_main.read_liveness_stamp_at(stamp_path)
+        kwargs["read_liveness"] = lambda: liaison_main.read_liveness_payload(stamp_path)
         kwargs["poll_seconds"] = POLL_SECONDS_IN_TEST
+        kwargs["terminate"] = terminations.append
+        kwargs["ledger_path"] = tmp_path / "watchdog.json"
         session_client.run_liveness_watchdog(**kwargs)
+
+    terminations: list[int] = []
 
     naps: list[float] = []
 
