@@ -1,7 +1,7 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-10 12:0x（云端 CC `[Mac]0910A`：kickoff 判据落真源、答 `1b` 登记、查出 AT-1 worktree 矛盾）
+> 最后更新：2026-09-10 12:2x（云端 CC `[Mac]0910A`：AT-1 拆条 ⇒ `0910B` 正文落档、8.5bis 追加进 tasks.md）
 
 ---
 
@@ -55,7 +55,7 @@ grill 八问 Shao Peishen 当场全按推荐答（Q1 无在途不标不起活／
 
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
-| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | **串行在 `[Mac]0910A` 之内**（2026-09-10 答 `1b`，改自原「另起 session」）｜⚠️ **worktree 归属待定**：原写 worktree ☑，但本条判据含「真实入站落库一条」，worktree 里没有 `.env`／没有 `tools/liaison/.venv`／没有真实库（`0909AJ` 已立此判据）⇒ ☑ 与判据自相矛盾，须拆或改，见本段下方「⚠️ AT-1 的 worktree 矛盾」 | ⏸ **待派发**。✅ **前置已解除**：`0909AS` 已在 `main`（`32d0cbc` ⊂ `8e4674e`）。⛔ 该包 `tasks.md` 仍未追加 8.5bis 条目（无人改过） | `SUBSCRIBED_EVENTS` 含 `message`；`liaison_message` 有一条真实企微消息行 | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
+| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | ✅ **已拆两条**（2026-09-10 答 `1a`）：**AT-1a** 代码接线 ⇒ `[Mac]0910B`（worktree ☑）；**AT-1b** 真实入站落库一条 ⇒ `[Mac]0910A`（主工作区，串行在 `0910B` 合回 main 之后） | ⏸ **`0910B` 待派发，正文与号池已落档**（`docs/openers/0910B-SDK-message事件接线.md`）。✅ 前置已解除：`0909AS` 已在 `main`。✅ **`tasks.md` 8.5bis 已追加**（本次，`validate --strict` 过，进度 62/66→62/67） | `SUBSCRIBED_EVENTS` 含 `message`；`liaison_message` 有一条真实企微消息行 | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
 | **AT-2** | design Open Question ①：章程 §〇 **第 ⑨ 条「回件附件疑似含候选人个人信息 ⇒ 不读入 prompt、只登记转人」的措辞与判据** | Shao Peishen | ✅ **已答 `1a`**（10:3x）：按起草措辞定稿，落 design D15 | P2 3.1 写章程时逐字取 D15 | — |
 | **AT-3** | `HR_LIAISON_UNPACK_BUDGET_USD` 默认值（起草建议 5） | Shao Peishen | ✅ **已答 `2a`**：默认 5，落 design D16 | P1 2.9 写进 `.env.example` 注释 | — |
 | **AT-4** | 本包开工顺序：§0 三门槛（TD-42 已还＋AT-1 接通＋真实入站一条）全勾 → P0→P1→P2→P3 各一条 worktree 泳道 → §5 真实起活实测（他重启服务＋等汤丽萍下一条入站） | Cowork 编排 → 泳道 | ⏸ 等 §0 | tasks §5 实测记录落 `docs/findings/` 后归档 | — |
@@ -71,7 +71,7 @@ AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性�
 
 ⇒ 答 `1b`「`0910A` 串行接 AT-1」在 **AT-1b 上成立**（`0910A` 本就在主工作区、本就要重启真实服务），
 但在 **AT-1a 上与「写代码走 worktree」相冲**：`0910A` 的【设置】是 worktree ❌ 不勾。
-**⛔ 本 session 未替你选**，三条去向见本轮回复「需你定夺」。
+✅ **2026-09-10 Shao Peishen 答 `1a` 已拍：拆两条。** AT-1a ⇒ `[Mac]0910B`（worktree ☑，走 run-build 正轨，不需 `.env`）→ 合回 `main` → AT-1b ⇒ `[Mac]0910A` 在主工作区重启服务时顺带验。
 
 
 ---
