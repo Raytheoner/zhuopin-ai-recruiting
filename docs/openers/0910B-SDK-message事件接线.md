@@ -6,6 +6,11 @@
 > 依据：`openspec/changes/hr-wecom-aibot-liaison/tasks.md` 8.5bis（2026-09-10 追加）、
 > `openspec/changes/liaison-reply-bridge-and-patrol/design.md` D6（接线判给本包）。
 > Shao Peishen 2026-09-10 答 `1a` 授权拆条：本条只做 AT-1a。
+> **流程口径**：本条走**单条直接 TDD**，⛔ 不走 `spec-to-plan` → `run-build`
+> （Shao Peishen 2026-09-10 另答 `1a` 定）。依据＝`03-工具链协作规则.md`「轻量通道」第 4 条：
+> 8.5bis 是**补已批准 spec 与代码之间的缺口**（两份 spec 本就要求入站进归档与队列），
+> 需求侧无待定、⛔ 不动任何 spec 文本 ⇒ 按「未改行为」走。
+> ⚠️ 若开工后发现**必须改 spec 文本**，立刻停下报，改走全流程，⛔ 不要自行扩大本条范围。
 >
 > 🔴 **本条只写代码 + 自动化测试，⛔ 不做真实入站验证。** 「`liaison_message` 有一条真实
 > 企微消息行」归 **AT-1b**，由 `[Mac]0910A` 在主工作区跑（worktree 里没有 `.env`、
