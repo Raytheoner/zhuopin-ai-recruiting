@@ -303,22 +303,163 @@ def test_main_wires_both_callbacks_into_the_queue(credentials_in_env, tmp_path):
     assert callable(captured["connect"])
 
 
-def test_this_chapter_wires_no_message_handling():
-    """opener：本章 ⛔ 不实现归档／入队／群通知。这条断言让"顺手接上"当场变红。
+# ─────────────────────────────────────────────────────────────────────────
+# 入站消息接线（2026-09-10）
+# ─────────────────────────────────────────────────────────────────────────
+#
+# ⚰️ 这一段**取代**了原来的 `test_this_chapter_wires_no_message_handling`——
+# 那条断言守的是第 7 章的范围（"本章 ⛔ 不实现归档／入队"），它在本章内是对的，
+# 但接线做完之后它守的东西已经反过来了。⛔ **不要把它改成豁免版留着**：一条
+# "允许接 archive/queue"的断言什么也不守，只是噪音。这里换成**正向**断言——
+# 断"接上了"，而不是断"没接"。
+#
+# *为什么必须有正向断言*：漏接线的现象是 `liaison_message` 恒为 0，而这与
+# 「连接假死」「SDK 根本没送」从外部完全无法区分（TD-42 排查耗掉的十小时）。
+# 没有这几条，接线被后人顺手删掉不会有任何症状。
 
-    判据只看 `tools.liaison.` 开头的导入——⛔ 不能只匹配模块名里有没有 "queue"：
-    标准库 `queue` 是本文件自己要用的，那样写会把它误伤成违规。
+
+@pytest.fixture
+def fake_credentials(monkeypatch, tmp_path):
+    """凭据齐备但都是假的 —— `--self-check` 在建连之前就返回，⛔ 不会碰网络。"""
+    monkeypatch.setenv(liaison_main.DOTENV_PATH_ENV, str(tmp_path / "nope.env"))
+    monkeypatch.setenv("HR_LIAISON_BOT_ID", "fake-bot")
+    monkeypatch.setenv("HR_LIAISON_BOT_SECRET", "fake-secret")
+
+
+def test_main_wires_the_sdk_message_event_into_inbound_handling(fake_credentials):
+    """`make_sdk_connect` 必须拿到 `on_message`，且订阅的事件名用的是契约常量。"""
+    captured: dict = {"events": []}
+
+    class FakeClient:
+        def on(self, event, handler):
+            captured["events"].append(event)
+
+        def connect(self):
+            return None
+
+        def run(self):
+            raise AssertionError("本用例不应真的建连")
+
+    real_make = session_client.make_sdk_connect
+
+    def spying_make(factory, **kwargs):
+        captured["kwargs"] = kwargs
+        return real_make(factory, **kwargs)
+
+    original = session_client.make_sdk_connect
+    session_client.make_sdk_connect = spying_make
+    try:
+        assert (
+            liaison_main.main(
+                client_builder=lambda _c, **_: FakeClient(),
+                self_check=True,
+            )
+            == 0
+        )
+    finally:
+        session_client.make_sdk_connect = original
+
+    assert callable(captured["kwargs"].get("on_message")), (
+        "main() 没有把 on_message 传给 make_sdk_connect ⇒ 入站消息会被丢弃，"
+        "而现象是 liaison_message 恒为 0、⛔ 无任何症状"
+    )
+    assert session_client.EVENT_MESSAGE in captured["events"]
+
+
+def test_the_sdk_message_callback_body_only_enqueues():
+    """回调纪律的结构断言：`on_sdk_message` 的函数体**只有** `events.put(...)` 一句。
+
+    *为什么用结构断言*：回调跑在 SDK 自己的事件循环线程上，而 sqlite 连接只能在
+    创建它的线程里用。"顺手在回调里查一下库"不会当场报错，只会在最不该出错的
+    那一刻抛异常，再被 pyee 转成 error 事件把重连链打断（TD-39 的形状）。
+    行为测试测不出"多写了一句"，⛔ 所以这条只能这么守。
     """
     tree = ast.parse(MAIN_SOURCE.read_text(encoding="utf-8"), filename=str(MAIN_SOURCE))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module)
-        elif isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-    own = [name for name in imported if name.startswith("tools.liaison")]
-    forbidden = [name for name in own if "archive" in name or "queue" in name]
-    assert forbidden == [], f"__main__.py 接了本章范围外的模块：{forbidden}"
+    fns = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "on_sdk_message"
+    ]
+    assert len(fns) == 1, "__main__.py 里应恰好有一个 on_sdk_message"
+    body = [n for n in fns[0].body if not isinstance(n, ast.Expr) or
+            not isinstance(n.value, ast.Constant)]  # 去掉 docstring
+    assert len(body) == 1 and isinstance(body[0], ast.Expr), (
+        "on_sdk_message 的函数体不止一句 —— ⛔ 回调里只准把帧放进队列"
+    )
+    call = body[0].value
+    assert isinstance(call, ast.Call)
+    assert isinstance(call.func, ast.Attribute) and call.func.attr == "put"
+
+
+def test_worker_lands_an_inbound_message_in_the_ledger(svc, tmp_path, monkeypatch):
+    """端到端（进程内）：队列里放一条消息事件 ⇒ `liaison_message` 真的多一行。
+
+    这是"接线通了"的**唯一**行为判据。⛔ 不要用"import 了 channel"之类的结构断言
+    替代它：import 得到而调用不到，现象与根本没接线一模一样。
+    """
+    monkeypatch.setattr(
+        "tools.liaison.whitelist.DEFAULT_WHITELIST_PATH", tmp_path / "nobody.yaml"
+    )
+    frame = {
+        "headers": {"req_id": "r-1"},
+        "body": {
+            "msgid": "msg-0001",
+            "msgtype": "text",
+            "chatid": "wrkSHat_chat_001",
+            "from": {"userid": "TangLiPing"},
+            "text": {"content": "岗位需求：嵌入式工程师 2 人"},
+        },
+    }
+    events: queue.Queue = queue.Queue()
+    events.put((liaison_main.EVENT_INBOUND_MESSAGE, T0, frame))
+
+    liaison_main.run_session_worker(
+        svc, events, StoppingEvent(after=1), tick_interval=0.01, clock=lambda: T0
+    )
+
+    rows = svc.conn.execute(
+        "SELECT msgid, thread_id, sender_userid FROM liaison_message"
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [("msg-0001", "wrkSHat_chat_001", "TangLiPing")]
+
+
+def test_worker_survives_a_malformed_inbound_frame(svc, caplog):
+    """一条畸形报文 ⛔ 不许打死值守线程——它一死，存活戳停更 ⇒ 看门狗判假死 ⇒
+    终止进程 ⇒ launchd 拉起 ⇒ 同一条消息再来一次 ⇒ **无限重启循环**。"""
+    events: queue.Queue = queue.Queue()
+    events.put((liaison_main.EVENT_INBOUND_MESSAGE, T0, {"body": {"msgtype": "text"}}))
+
+    with caplog.at_level("ERROR"):
+        liaison_main.run_session_worker(
+            svc, events, StoppingEvent(after=1), tick_interval=0.01, clock=lambda: T0
+        )
+
+    assert any("帧形状不符" in record.getMessage() for record in caplog.records)
+    assert svc.conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 0
+
+
+def test_the_shape_error_log_never_leaks_message_content(svc, caplog):
+    """报错只列键名，⛔ 不列取值——取值是同事的 userid 与聊天正文（个人信息）。"""
+    events: queue.Queue = queue.Queue()
+    events.put(
+        (
+            liaison_main.EVENT_INBOUND_MESSAGE,
+            T0,
+            {"body": {"msgtype": "text", "from": {"userid": "TangLiPing"},
+                      "text": {"content": "这段正文绝不许进日志"}}},
+        )
+    )
+
+    with caplog.at_level("ERROR"):
+        liaison_main.run_session_worker(
+            svc, events, StoppingEvent(after=1), tick_interval=0.01, clock=lambda: T0
+        )
+
+    blob = "\n".join(record.getMessage() for record in caplog.records)
+    assert "这段正文绝不许进日志" not in blob
+    assert "TangLiPing" not in blob
+    # 键名必须在——不然这条报错没法用来定位字段名表哪里对不上。
+    assert "msgtype" in blob
 
 
 def test_main_module_never_uses_a_with_statement():
@@ -407,15 +548,13 @@ def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
 
     real_make = session_client.make_sdk_connect
 
-    def spying_make(factory, *, on_connected, on_disconnected, loop_stopper=None, on_activity=None):
-        stoppers.append(loop_stopper)
-        return real_make(
-            factory,
-            on_connected=on_connected,
-            on_disconnected=on_disconnected,
-            loop_stopper=loop_stopper,
-            on_activity=on_activity,
-        )
+    def spying_make(factory, **kwargs):
+        # ⚠️ `**kwargs` 而不是逐个列关键字：本用例只关心 `loop_stopper`，
+        # 把其余参数原样透传。写死清单的话，`make_sdk_connect` 每加一个接线缝
+        # （2026-09-10 的 `on_message` 就是一次）本用例都会红——而它红的原因
+        # 与它要守的东西毫无关系，是纯噪音。
+        stoppers.append(kwargs.get("loop_stopper"))
+        return real_make(factory, **kwargs)
 
     def fake_watchdog(**kwargs):
         watchdog_kwargs.update(kwargs)

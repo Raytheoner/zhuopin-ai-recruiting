@@ -2047,10 +2047,91 @@ CI 日志、粘给别人看的报错里都带着它。这条本身就构成一�
    人肉判据：`cat data/liaison/liveness.json`，`stamp_at` 在推进而 `last_event_at` 停在几小时前 ＝ 连着但收不到。
 
 ⚠️ **本条的实测证据（`liaison_message` 0 行）与「SDK `message` 事件未接线」不可区分**：
-`handle_inbound_message` 当前零生产调用方、`test_this_chapter_wires_no_message_handling` 明令 `__main__` 不接
+~~`handle_inbound_message` 当前零生产调用方、`test_this_chapter_wires_no_message_handling` 明令 `__main__` 不接~~
 （`liaison-reply-bridge-and-patrol/proposal.md` 已登记为前置）。⇒ 即便连接完全健康，`liaison_message` 也恒为 0。
+
+✅ **2026-09-10 `[Mac]0910C` 已接线**（`hr-wecom-aibot-liaison` tasks 7.10）：`SUBSCRIBED_EVENTS` 含 `message`，
+守卫测试已删并换成正向断言。⇒ **上面这条歧义从此不成立**：`last_event_at` 在推进而消息仍不落库 ⇒ 病根是接线
+（去看 ERROR 日志里的字段名，TD-43），两者都停 ⇒ 病根是假死。
+⚠️ 但**真实入站仍未验**（TD-43／TD-44），所以 `liaison_message` = 0 目前仍**可能**是"字段名表对不上"——
+区别在于那种情况下**有 ERROR 日志**，⛔ 不再是无症状。
 还上本条之后，`last_event_at` 每 30 秒随心跳回包推进 ⇒ 若它在推进而消息仍不落库，病根就是接线而不是假死。
 
 ⏸ **真实验证留步（Shao Peishen 本人做，⛔ 单测全绿不算验收）**：重启服务后 ① `cat data/liaison/liveness.json`
 看 `last_event_at` 是否每 ~30 秒推进；② 断网／静默 ≥ 13 分钟（600 秒活动阈值 ＋ 180 秒宽限），确认日志出现
 「看门狗终止进程」、进程自行退出并被 launchd 拉起、`data/liaison/watchdog.json` 计数 +1。
+
+---
+
+## TD-43 · `channel.py` 的 `_BODY_*` 字段名表是协议文档口径，**未经真实报文实测**
+
+**登记**：2026-09-10，`[Mac]0910C`（SDK `message` 事件接线）。
+
+**是什么**：`tools/liaison/channel.py` 把 `frame["body"]` 拆成 `handle_inbound_message` 的入参，
+用的五个键名 `msgid` / `msgtype` / `from.userid` / `chatid` / `text.content` 来自企微协议文档，
+**不是实测**。SDK 对这个 dict 是**原样透传**——`aibot/types.py` 只注释了 `cmd` / `headers` /
+`body` / `errcode` / `errmsg` 五个顶层键，body 内部一个字段都没定义。
+
+⚠️ **本条与事件名本身无关**：事件名 `"message"` 与「载荷是整个 `WsFrame`」这两点**已实证**，
+证据是钉死版本 `wecom-aibot-python-sdk==1.0.2` 的源码
+（`aibot/message_handler.py::_handle_message_callback` 逐字 `emitter.emit("message", frame)`）。
+不确定的只有 body 内部的字段名。
+
+**为什么现在不修**：修不了——真实报文只有在真实建连之后才拿得到，而 `0909AJ` 的判据是
+「真实建连必须在主工作区」。云端容器无 `.env`／无 `tools/liaison/.venv`／不在内网。
+
+**风险方向（已按安全方向处置，⛔ 不是静默的）**：字段名对不上 ⇒
+`InboundFrameShapeError` ＋ ERROR 日志 ＋ 该条消息被丢弃。⛔ **不静默跳过**，因为静默跳过的
+现象是 `liaison_message` 恒为 0——与「连接假死」「根本没订阅」三者从外部完全无法区分，
+TD-42 那十小时正是耗在这个歧义上。日志**只列键名、不列取值**（取值是同事的 userid 与
+聊天正文，属个人信息）。
+
+**还债动作**：8.6 灰度第一条真实入站到达时当场核五个键名，对不上就改 `channel.py` 的
+`_BODY_*` 常量——**集中成常量就是为了让这次核对只需要改一处**。改完把真实报文的键名结构
+（⛔ 只记键名，不记取值）落 `docs/findings/`，本条即销。
+
+**触发条件**：8.6 单机灰度。
+
+---
+
+## TD-44 · 入站附件的**字节**没有下载链路，带附件的消息只归档消息本身
+
+**登记**：2026-09-10，`[Mac]0910C`。
+
+**是什么**：`msgtype` ∈ {`image`, `voice`, `file`, `mixed`} 的入站消息，本轮**照常归档、照常
+入队**，但附件字节**没有落盘**（`handle_inbound_message(attachment=None)`）。
+
+**为什么现在不做**：取字节要 `client.download_file(url, aes_key)`——async ＋ 网络 ＋ AES 解密，
+而 `file.url` / `file.aeskey` / `file.filename` 这几个字段名与 TD-43 同源，**同样未经实测**。
+⛔ 不发明未经验证的适配器（TD-19 的教训逐字）。
+
+🔴 **对 8.6 的直接影响**：8.6 的三条链路里「**私信发文档 → 归档**」这条**本轮验不到**。
+⛔ 不要据「私信发了个文档、`liaison_message` +1」判定该链路已通——落库的是消息记录，
+不是材料。`channel.dispatch_inbound_frame` 每遇到这类消息都会留一条 WARNING，
+让这个缺口一直有症状。
+
+**还债动作**：TD-43 核完真实报文的附件字段名之后，在通道层接 `download_file` →
+`InboundAttachment(filename, payload)`。⚠️ 下载是网络 I/O，只能在 SDK 的事件循环里做，
+⛔ 不许挪进值守线程（那会把独占库连接的那条线程挂在网络上）。
+
+**触发条件**：TD-43 销账之后，且在 8.7（汤丽萍入名单）之前——她的回件大概率带附件。
+
+---
+
+## TD-45 · 名单外发送人收不到礼貌说明（接线层没有对外回复端口）
+
+**登记**：2026-09-10，`[Mac]0910C`。⚠️ 与 `inbound.py` 模块 docstring 里那条「礼貌回复是
+at-most-once」**不是同一条**：那条讲的是"发出去但可能丢一次"，本条讲的是**根本没有发出去的路**。
+
+**是什么**：`channel.dispatch_inbound_frame` 调 `handle_inbound_message` 时 `reply=None`
+⇒ 名单外的人发消息**只被归档，不会收到任何回复**（`inbound.py` 已有 WARNING「礼貌回复未能
+发出：没有接入 reply 通道」，⇒ 有症状、非静默）。
+
+**为什么现在不做**：① 对外发消息要走 SDK 的事件循环，而落库跑在值守线程，跨线程发送要另
+设一条出站队列；② **"对外发送"属本项目 🔴 不可代办一档**，⛔ 不许在一次接线任务里顺手接通。
+
+**风险方向**：方向安全——丢的是一条告知，⛔ 不丢材料、⛔ 不丢待办（归档照常）。
+
+**还债动作**：与第 6 章群通知外发合并设计（同一条出站通路），由 Shao Peishen 拍板后再做。
+
+**触发条件**：第 6 章群通知外发落地时一并收口。

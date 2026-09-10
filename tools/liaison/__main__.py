@@ -15,8 +15,13 @@
   接收 task 一旦被异常打掉，那个 loop 照样挂着 ⇒ `run()` 永不返回 ⇒ 外层
   `run_forever` 一次都不会触发。没有一条独立线程，就没人能把它叫醒。
 
-⛔ 消息处理（归档=第 4 章、入队=第 5 章、群通知=第 6 章）不在本文件里。
-tests/test_main_wiring.py::test_this_chapter_wires_no_message_handling 守着这条。
+**入站消息的接线**（2026-09-10 补，`liaison-reply-bridge-and-patrol` 的前置门槛②）：
+SDK 的 `message` 事件 → 回调只把 `(事件名, 时间, 帧)` 放进同一条队列 → 值守线程调
+`channel.dispatch_inbound_frame` → `inbound.handle_inbound_message`（归档=第 4 章、
+入队=第 5 章）。⛔ 回调里**仍然**不碰库、不碰文件——纪律与连接事件回调完全一样。
+⚠️ 在此之前本文件**一条消息都不接**，`liaison_message` 因此恒为 0；那个状态与
+「连接假死」从外部无法区分，正是 TD-42 排查耗掉十小时的原因之一。
+⛔ 群通知（第 6 章）与对外礼貌回复**仍然不在本文件里**，理由见 `channel.py`。
 
 ⛔ 模块层只 import 标准库与本服务自己的模块。任何 SDK import 都必须在凭据校验
 **之后**、且写在函数体里——理由见 config.py 的模块 docstring。
@@ -33,7 +38,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from tools.liaison import alerts, session, session_client
+from tools.liaison import alerts, channel, session, session_client
 from tools.liaison import logsetup
 from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
@@ -94,6 +99,14 @@ EVENT_DISCONNECTED = session_client.EVENT_DISCONNECTED
 #: 队列里的第三种事件（TD-42）：SDK 刚刚真的把东西送到了本进程（`authenticated`、
 #: 心跳回包、推送）。值守线程收到它只更新存活戳的 `last_event_at`，⛔ 不改状态。
 EVENT_SDK_ACTIVITY = "sdk_activity"
+
+#: 队列里的第四种事件（2026-09-10）：SDK 送来了一条入站消息。**载荷是第三个元素**
+#: （原始 `WsFrame`），这是队列里唯一带载荷的事件。
+#:
+#: ⛔ 名字刻意与 SDK 的事件名 `session_client.EVENT_MESSAGE`（值就是 `"message"`）
+#: **不同**：队列是本进程内部的协议，SDK 的事件名是外部契约，两者同名会让"改了哪一头"
+#: 在 grep 里分不出来。
+EVENT_INBOUND_MESSAGE = "inbound_message"
 
 #: 看门狗台账（连续终止计数）。与存活戳同目录、同一个真源推导，⛔ 不另写路径字面量。
 DEFAULT_WATCHDOG_LEDGER_PATH = session.DEFAULT_LIVENESS_PATH.with_name("watchdog.json")
@@ -171,6 +184,41 @@ def apply_connection_event(svc: session.LiaisonSession, name: str, moment: datet
         logger.error("收到未知的连接事件 %r（时间 %s），已忽略", name, moment)
 
 
+def apply_inbound_message(svc: session.LiaisonSession, moment: datetime, frame) -> None:
+    """把一条入站消息落库。**跑在值守线程里**——它是唯一碰 `svc.conn` 的线程。
+
+    ⚠️ `received_at` 用**事件自带的时间**（回调那一刻取的），⛔ 不许在这里重新取表：
+    队列里排队的那段时间会被算进"收到的时间"，而这个时间戳同时是归档目录的分日依据。
+    与 `run_session_worker` 对连接事件的纪律逐字一致。
+
+    ⛔ **异常一律吞在这里**：值守线程是独占库连接的那一条，它被一条畸形报文打死，
+    存活戳就此停更 ⇒ 看门狗判假死 ⇒ 终止进程 ⇒ launchd 拉起 ⇒ 同一条消息再来一次
+    ⇒ **无限重启循环**。吞掉的代价是这一条消息丢了，⛔ 所以必须记 ERROR。
+    """
+    try:
+        result = channel.dispatch_inbound_frame(
+            svc.conn, frame, received_at=session.format_instant(moment)
+        )
+    except channel.InboundFrameShapeError as exc:
+        # 字段名表对不上：这是**接线**的问题，不是发送方的问题。日志里已经
+        # 只带键名不带取值（见 InboundFrameShapeError 的 docstring）。
+        logger.error("入站消息落库失败（帧形状不符，⛔ 已丢弃这一条）：%s", exc)
+        return
+    except Exception:  # noqa: BLE001 —— 见 docstring：放出去会打死值守线程
+        logger.exception(
+            "入站消息落库失败（⛔ 已丢弃这一条，⛔ 不回抛，回抛会打死值守线程并"
+            "把单条坏报文放大成无限重启循环）"
+        )
+        return
+    logger.info(
+        "入站消息已处理：msgid=%s 名单内=%s 新归档=%s 已入队=%s",
+        result.outcome.msgid,
+        result.route.admitted,
+        result.outcome.newly_archived,
+        result.enqueued,
+    )
+
+
 def run_session_worker(
     svc: session.LiaisonSession,
     events: "queue.Queue",
@@ -186,9 +234,16 @@ def run_session_worker(
     """
     while not stop_event.is_set():
         try:
-            name, moment = events.get(timeout=tick_interval)
+            # ⚠️ `*payload` 而不是固定两元组：连接事件是 `(名字, 时间)`，入站消息是
+            # `(名字, 时间, 帧)`。写成 `name, moment, payload=None` 那种固定三元组会
+            # 逼着每一处 put 都补一个 None，改动面从"一处"扩到"全部"，
+            # 而多出来的那几个 None 本身没有任何含义。
+            name, moment, *payload = events.get(timeout=tick_interval)
         except queue.Empty:
             svc.tick(clock())
+            continue
+        if name == EVENT_INBOUND_MESSAGE:
+            apply_inbound_message(svc, moment, payload[0] if payload else None)
             continue
         apply_connection_event(svc, name, moment)
 
@@ -244,6 +299,13 @@ def main(
     def on_sdk_activity() -> None:
         events.put((EVENT_SDK_ACTIVITY, now()))
 
+    # 2026-09-10 · 入站消息回调。⛔ 与上面那个回调同一条纪律：**只往队列里放**，
+    # 不碰库、不碰文件、不下载附件。落库在值守线程的 `apply_inbound_message` 里。
+    #
+    # ⚠️ 时间在**这里**取（收到的那一刻），⛔ 不在值守线程那头取：队列可能正排着队。
+    def on_sdk_message(frame) -> None:
+        events.put((EVENT_INBOUND_MESSAGE, now(), frame))
+
     sdk_logger = session_client.SdkLogObserver(
         on_activity=on_sdk_activity, on_any_log=loop_stopper.capture
     )
@@ -257,6 +319,7 @@ def main(
             on_disconnected=lambda: events.put((EVENT_DISCONNECTED, now())),
             loop_stopper=loop_stopper,
             on_activity=on_sdk_activity,
+            on_message=on_sdk_message,
         )
     except ImportError as exc:
         print(
@@ -273,7 +336,8 @@ def main(
     if self_check:
         # ⛔ 到此为止：⛔ 不起值守线程、⛔ 不调 runner、⛔ 不碰网络。
         print(
-            "HR 值守通道启动期自检通过：凭据齐备、SDK 表面符合契约、连接事件已接线。"
+            "HR 值守通道启动期自检通过：凭据齐备、SDK 表面符合契约、"
+            "连接事件与入站消息事件均已接线。"
             "⛔ 本次未建立任何连接（--self-check）。",
             file=sys.stderr,
         )

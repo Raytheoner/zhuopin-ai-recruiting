@@ -83,11 +83,31 @@ EVENT_AUTHENTICATED = "authenticated"
 #: 实证：2026-09-09 断线实测，见 `docs/findings/2026-09-09-断线重连实测.md`。
 EVENT_ERROR = "error"
 
+#: 🔴 **入站消息事件**（2026-09-10 接线）。名字与载荷形状**已实证**，证据是钉死版本
+#: `wecom-aibot-python-sdk==1.0.2` 的源码：`aibot/message_handler.py`
+#: `_handle_message_callback` 逐字 `emitter.emit("message", frame)`，载荷是整个 `WsFrame`。
+#:
+#: ⛔ **不许改成订阅 `message.text` / `.image` / `.mixed` / `.voice` / `.file` 那五个细分
+#: 事件**：同一段源码里，msgtype 不在 `MessageType` 枚举里时 SDK 只
+#: `logger.debug("Received unhandled message type: ...")`、**一个细分事件都不 emit**。
+#: 按细分事件接线 ⇒ 新增/未知类型的消息静默消失，与 TD-39 同形、同样无症状。
+#:
+#: ⚠️ `emit("message", frame)` 在 `_handle_message_callback` 里，而 `handle_frame` 会先把
+#: `cmd == aibot_event_callback` 的帧岔到 `_handle_event_callback`（emit 的是 `"event"`）。
+#: ⇒ 本事件只承接**消息**回调，⛔ 不承接 `enter_chat` 之类的事件回调。
+EVENT_MESSAGE = "message"
+
 #: 本模块必须订阅的全部事件。**清单即契约**：`_prepare_client` 逐条接线，
 #: `tests/test_session_client_reconnect.py::test_every_event_in_the_contract_is_actually_subscribed`
 #: 断言"列了就必须真的接上"。⛔ 加常量不接线 = 该类事件永远到不了本模块，
 #: 与 TD-39 同形、同样无症状。
-SUBSCRIBED_EVENTS = (EVENT_CONNECTED, EVENT_DISCONNECTED, EVENT_ERROR, EVENT_AUTHENTICATED)
+SUBSCRIBED_EVENTS = (
+    EVENT_CONNECTED,
+    EVENT_DISCONNECTED,
+    EVENT_ERROR,
+    EVENT_AUTHENTICATED,
+    EVENT_MESSAGE,
+)
 
 #: 存活戳停更多久算"loop 还活着但连接已死"（N-0 兜底的判据）。
 #:
@@ -295,7 +315,7 @@ def verify_client_surface(client) -> None:
     if not callable(client.on):
         raise SdkSurfaceUnverifiedError(
             "SDK 连接对象的 on 不可调用，订阅不了 "
-            f"{list(SUBSCRIBED_EVENTS)} 这几个连接事件。"
+            f"{list(SUBSCRIBED_EVENTS)} 这几个事件。"
         )
     # ⚠️ 校验的是**清单本身**，⛔ 不是"接了几个就算几个"。`error` 在 2026-09-09
     # 之前不在清单里，那个缺口正是 TD-39 能发生的原因之一：漏订阅不报错，
@@ -305,6 +325,16 @@ def verify_client_surface(client) -> None:
             f"{EVENT_ERROR!r} 必须在 SUBSCRIBED_EVENTS 里。缺了它，pyee 对没有"
             "监听器的 error 事件会直接 raise，aibot/ws.py:152 当场炸掉，"
             "153 行的 _schedule_reconnect() 永远走不到（TD-39）。⛔ 不要绕过本检查。"
+        )
+    # ⚠️ 与上面那条同构（2026-09-10 加）。`message` 漏订阅**不会报错**，现象只是
+    # `liaison_message` 恒为 0 —— 而那与「连接假死」「对方没发」从外部完全无法区分，
+    # TD-42 排查耗掉的十小时正是这个歧义。⇒ 宁可拒绝启动，也 ⛔ 不许"连着但不收消息"。
+    if EVENT_MESSAGE not in SUBSCRIBED_EVENTS:
+        raise SdkSurfaceUnverifiedError(
+            f"{EVENT_MESSAGE!r} 必须在 SUBSCRIBED_EVENTS 里。缺了它，值守通道会"
+            "连得好好的但一条消息都收不到，且 ⛔ 没有任何报错——"
+            "`liaison_message` 恒为 0 与「连接假死」从外部无法区分（TD-42）。"
+            "⛔ 不要绕过本检查。"
         )
     run = client.run
     if not callable(run):
@@ -451,13 +481,66 @@ def _handle_sdk_error(loop_stopper: "LoopStopper", error) -> None:
         logger.warning("值守通道连接报错（错误详情无法呈现），已交给 SDK 重连")
 
 
+def _make_message_handler(loop_stopper, on_message, on_activity):
+    """`message` 事件的处理函数。**⛔ 绝不许把异常放出去。**
+
+    pyee 的 `AsyncIOEventEmitter` 会把处理函数抛出的异常拿去 `self.emit("error", exc)`
+    （`pyee/asyncio.py`），于是一条畸形报文就能顺着 error 事件把整条重连链搅进来——
+    这与 TD-39 是同一条路径。本函数因此把**所有**异常吞在自己肚子里，只记 ERROR。
+
+    ⚠️ 吞异常的代价是"这条消息丢了"，所以日志必须**说清楚丢了什么**（thread 级别的
+    键，⛔ 不打正文、不打 userid 取值）。⛔ 不要改成 `pass`。
+    """
+    def handler(*args, **kwargs):
+        loop_stopper.capture()
+        # ⚠️ 顺序刻意：**先**记活动戳再处理。处理失败也不该让看门狗把一条
+        # 明明在收消息的连接判成假死——那会把"报文解析不了"放大成"连接被拆"。
+        if on_activity is not None:
+            try:
+                on_activity()
+            except Exception:  # noqa: BLE001 —— 见 docstring，异常放出去会打断重连链
+                logger.exception("入站消息的活动戳回调抛异常（已吞下，⛔ 不回抛）")
+        if on_message is None:
+            # ⛔ 不是可有可无：没有去处 ＝ 这条消息被丢弃。接线漏传时必须有症状。
+            logger.error(
+                "收到入站消息，但 `on_message` 没有接线 ⇒ 这条消息已被丢弃。"
+                "⛔ 这不是正常状态：`liaison_message` 会恒为 0，且与"
+                "「连接假死」「根本没订阅」从外部完全无法区分（TD-42 的十小时）。"
+            )
+            return
+        try:
+            on_message(args[0] if args else None)
+        except Exception:  # noqa: BLE001 —— 同上
+            logger.exception(
+                "入站消息回调抛异常（已吞下，⛔ 不回抛，回抛会经 pyee 的 error 事件"
+                "打断重连链）。⚠️ 这条消息大概率没有落库，请核 channel.py 的字段名表。"
+            )
+
+    return handler
+
+
 def _prepare_client(
-    client_factory, on_connected, on_disconnected, loop_stopper, on_activity=None
+    client_factory,
+    on_connected,
+    on_disconnected,
+    loop_stopper,
+    on_activity=None,
+    on_message=None,
 ):
     """造一个连接对象、核表面、接事件。返回**尚未 run** 的那个对象。
 
     `on_activity`（TD-42）：`authenticated` 事件的去处——SDK 唯一能证明对端在应答
     的事件。不传就只抓 loop 把手、不通知任何人。
+
+    `on_message`（2026-09-10）：入站消息帧的去处，签名是 `(frame) -> None`。
+    ⛔ **它必须只做"把帧放进队列"这一件事**：SDK 回调跑在它自己的事件循环线程上，
+    在这里碰库会踩 sqlite 的线程归属，异常再被 pyee 转成 `error` 事件把重连链打断
+    （TD-39 的形状）。不传就只更新存活戳、**消息被丢弃**——所以 `__main__` 那条路
+    ⛔ 不许不传。
+
+    ⚠️ 入站消息**同时也是**"对端在应答"的铁证，所以它也喂 `on_activity`：不喂的话，
+    一个只收消息、久未心跳的连接会被看门狗判成假死拆掉（TD-42 的判据是
+    `last_event_at`）。
 
     先核表面再接线：对不上就 raise，⛔ 不许"能接的先接上、接不上的算了"。
 
@@ -484,6 +567,7 @@ def _prepare_client(
             loop_stopper, args[0] if args else None
         ),
         EVENT_AUTHENTICATED: wrap(on_activity if on_activity is not None else lambda: None),
+        EVENT_MESSAGE: _make_message_handler(loop_stopper, on_message, on_activity),
     }
     # ⛔ 断言清单与实现一一对应：漏一个就当场炸，⛔ 不许静默少接一个事件。
     missing = [event for event in SUBSCRIBED_EVENTS if event not in handlers]
@@ -504,10 +588,13 @@ def make_sdk_connect(
     on_disconnected: Callable[[], None],
     loop_stopper: "LoopStopper | None" = None,
     on_activity: Callable[[], None] | None = None,
+    on_message: Callable[[object], None] | None = None,
 ) -> Callable[[], None]:
     """返回一个交给 `run_forever` 用的、真正阻塞到断开为止的调用。
 
-    `on_activity`（TD-42）：见 `_prepare_client`。
+    `on_activity`（TD-42）／`on_message`（2026-09-10 入站消息接线）：见 `_prepare_client`。
+    ⚠️ 两者都要**每一轮重连都带上**——`connect_once` 里重新造对象那条分支漏传任何一个，
+    服务会在第一次重连之后变成"连着但不收消息"，且 ⛔ 没有任何症状。
 
     ⚠️ **参数是一个"每次造一个全新连接对象"的工厂，⛔ 不是一个连接对象**——
     这不是风格选择，是 SDK 的一个闩锁逼出来的（实测 `aibot==1.0.2`
@@ -539,7 +626,7 @@ def make_sdk_connect(
     if loop_stopper is None:
         loop_stopper = LoopStopper()
     prepared = _prepare_client(
-        client_factory, on_connected, on_disconnected, loop_stopper, on_activity
+        client_factory, on_connected, on_disconnected, loop_stopper, on_activity, on_message
     )
 
     def connect_once() -> None:
@@ -548,7 +635,12 @@ def make_sdk_connect(
         prepared = None
         if client is None:
             client = _prepare_client(
-                client_factory, on_connected, on_disconnected, loop_stopper, on_activity
+                client_factory,
+                on_connected,
+                on_disconnected,
+                loop_stopper,
+                on_activity,
+                on_message,
             )
         # ⛔ 必须在 run() **之前**丢掉上一轮的 loop 把手：`run()` 的 finally 会
         # `loop.close()`，留着旧把手会让看门狗去停一个已经关掉的 loop 并报成功。

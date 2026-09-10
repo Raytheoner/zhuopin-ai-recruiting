@@ -123,6 +123,109 @@ def test_every_event_in_the_contract_is_actually_subscribed():
     assert session_client.EVENT_ERROR in session_client.SUBSCRIBED_EVENTS
 
 
+# ── 入站消息事件（2026-09-10 接线）──────────────────────────────────────
+
+
+def test_startup_refuses_when_the_message_event_is_dropped_from_the_contract(monkeypatch):
+    """把 `message` 从清单里拿掉 ⇒ **拒绝启动**，⛔ 不许降级成 warning。
+
+    漏订阅不报错，现象只是 `liaison_message` 恒为 0——与「连接假死」「对方没发」
+    从外部无法区分（TD-42 的十小时）。与 `error` 那条守护同构。
+    """
+    monkeypatch.setattr(
+        session_client,
+        "SUBSCRIBED_EVENTS",
+        tuple(e for e in session_client.SUBSCRIBED_EVENTS if e != session_client.EVENT_MESSAGE),
+    )
+    with pytest.raises(session_client.SdkSurfaceUnverifiedError):
+        session_client.make_sdk_connect(
+            lambda: PyeeLikeClient(), on_connected=lambda: None, on_disconnected=lambda: None
+        )
+
+
+
+def test_message_event_hands_the_whole_frame_to_on_message():
+    """载荷是整个 `WsFrame`（SDK `message_handler.py` 逐字 `emit("message", frame)`）。"""
+    seen: list = []
+    client = PyeeLikeClient()
+    session_client.make_sdk_connect(
+        lambda: client,
+        on_connected=lambda: None,
+        on_disconnected=lambda: None,
+        on_message=seen.append,
+    )
+    frame = {"headers": {"req_id": "r-1"}, "body": {"msgid": "m-1"}}
+    client.emit(session_client.EVENT_MESSAGE, frame)
+    assert seen == [frame]
+
+
+def test_an_inbound_message_also_counts_as_sdk_activity():
+    """⚠️ 收到消息是"对端在应答"的铁证。不喂 `on_activity` 的话，一个只收消息、
+    久未心跳的连接会被看门狗按 `last_event_at` 判成假死拆掉（TD-42 的判据）。"""
+    beats: list = []
+    client = PyeeLikeClient()
+    session_client.make_sdk_connect(
+        lambda: client,
+        on_connected=lambda: None,
+        on_disconnected=lambda: None,
+        on_activity=lambda: beats.append("beat"),
+        on_message=lambda _frame: None,
+    )
+    client.emit(session_client.EVENT_MESSAGE, {"body": {}})
+    assert beats == ["beat"]
+
+
+def test_a_failing_message_handler_never_breaks_the_reconnect_chain(caplog):
+    """处理函数抛异常 ⇒ pyee 会拿去 `emit("error", exc)` ⇒ 与 TD-39 同一条路径。
+    ⛔ 所以必须吞在自己肚子里，且 ⛔ 不许吞成 `pass`——要留 ERROR。"""
+    client = PyeeLikeClient()
+    session_client.make_sdk_connect(
+        lambda: client,
+        on_connected=lambda: None,
+        on_disconnected=lambda: None,
+        on_message=lambda _frame: (_ for _ in ()).throw(RuntimeError("坏报文")),
+    )
+    with caplog.at_level(logging.ERROR, logger=session_client.__name__):
+        client.emit(session_client.EVENT_MESSAGE, {"body": {}})
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_not_wiring_on_message_is_loud_because_the_message_is_dropped(caplog):
+    """漏传 `on_message` ＝ 消息被丢弃。⛔ 这不许是静默的：现象会是
+    `liaison_message` 恒为 0，与「连接假死」「根本没订阅」从外部无法区分。"""
+    client = PyeeLikeClient()
+    session_client.make_sdk_connect(
+        lambda: client, on_connected=lambda: None, on_disconnected=lambda: None
+    )
+    with caplog.at_level(logging.ERROR, logger=session_client.__name__):
+        client.emit(session_client.EVENT_MESSAGE, {"body": {}})
+    assert any("丢弃" in r.getMessage() for r in caplog.records)
+
+
+def test_the_message_wiring_survives_a_rebuilt_client():
+    """每一轮重连都要重新接上：`connect_once` 里重造对象那条分支漏传 `on_message`，
+    服务会在第一次重连之后变成"连着但不收消息"，且 ⛔ 没有任何症状。"""
+    seen: list = []
+    clients: list = []
+
+    def factory():
+        client = PyeeLikeClient()
+        clients.append(client)
+        return client
+
+    connect = session_client.make_sdk_connect(
+        factory,
+        on_connected=lambda: None,
+        on_disconnected=lambda: None,
+        on_message=seen.append,
+    )
+    connect()  # 用掉预造的那个
+    connect()  # 这一次会重新造一个
+    assert len(clients) == 2
+    clients[-1].emit(session_client.EVENT_MESSAGE, {"body": {"msgid": "m-2"}})
+    assert seen == [{"body": {"msgid": "m-2"}}]
+
+
 def test_error_event_is_logged_loudly_and_says_reconnect_was_handed_to_the_sdk(caplog):
     """⛔ 不许吞掉当没事发生：至少 WARNING，且写清"已交给 SDK 重连"。
 

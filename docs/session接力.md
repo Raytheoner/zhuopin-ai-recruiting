@@ -22,6 +22,8 @@
 |---|---|---|---|---|---|
 | **AS-1** | `[Mac]0910A` 正文落档后重开同号：先把正文写进 `docs/openers/0910A-解锁追平与TD42真实验证.md` 并提交，再贴 4 行引用块开工 | **Shao Peishen ＋ Mac Desktop CC**（2026-09-10 答 `1a`：正文现场给。⛔ 云端 CC 做不了，见上方三条） | ⏸ **待派发**；号池已补登（答 `2a`，本次已提交） | 该文件存在、首行 ＝ `[Mac]0910A-解锁追平与TD42真实验证`；接手 session 不再扑空；TD-42 四项真实验证跑完并落 `docs/findings/` | TD-42 真实验证继续悬着 ⇒ `docs/tech-debt.md` TD-42 那条「⛔ 在它还上**并真实验证通过**之前，不得再请任何专员发消息」一直挂着，汤丽萍发的每一条继续静默落空（**截至 2026-09-10 已白发 4 条**） |
 | **AS-2** | **引用式 opener 的被引文件必须与派号同一次落档并提交**——`docs/openers/<MMDDX>-<主题短名>.md` ＋ `OP-0820` 号池台账两处同时写 | 所有派发方（CC／Cowork 两端同等适用） | ✅ **已写进真源**（2026-09-10 答 `1a`）：`.claude/skills/kickoff/SKILL.md`「引用式 Opener」段新增判据「被引文件必须与派号同一次 commit 落档」＋ 本次实证 | 派号的那一条 commit 里同时出现 opener 正文文件与号池台账行；接手 session 不再出现「引用式 opener 指向不存在的文件」 | 引用式 opener 退化成**死链**：接手方既读不到正文、又在台账里查不到号 ⇒ 下轮必被重派或再扑空，且**全程不报错**（08-27 撞号 5 次是同一根因的第一次发作，本次是第二次） |
+| **AS-3** | **给号池加机器强制**：写一个双向对账脚本（扫 `docs/openers/<MMDDX>-*.md` 与 `OP-0820-全量编排.md` 号池表，缺任一侧即报非 0），接进本地校验入口 | **另起 session**（`[Mac]0910C` 只登记、⛔ 不动手——本项要另起 session，按 CLAUDE.md §「需你定夺」路由规则不给选项） | ⏸ **待派发**（2026-09-10 Shao Peishen 答 `2a`：立此条） | 脚本存在且可跑；对当前仓库跑一遍能报出「`0910B` 有台账行但无 opener 正文文件」这一条；接进 CI／本地 hook 后，派号漏落档当场非 0 | AS-2 的判据已于 2026-09-10 写进真源（`8e4674e`）却**当天就被绕过一次**（`0910C`）⇒ 证明纯规则约束不起作用。按 08-27（撞号 5 次）、09-10（断链 2 次）的频率，下次发作大概率在一周内，且**全程不报错**——接手 session 只会扑空、零改动停下，白耗一整轮 |
+| **AS-4** | `[Mac]0910B` 的**正文与去向仍缺**：号池已补登（`0910C` 本次提交），但该号本身没有 `docs/openers/0910B-*.md`，主题只能从「它派出了 `0910C`」反推 | **Shao Peishen 或 `0910B` 母 session** | ⏸ **待补**（本次只补了号池行，消灭编号空洞） | `docs/openers/` 下存在 `0910B` 的正文文件，且号池「主题」列换成真实主题 | 09-10 的派号链断了**两层**。只补 `0910C` 而留着 `0910B` 空着，下次核队列看见 `0910B` 仍然分不清是漏跑还是取消——而这两者的处置完全相反 |
 
 ---
 
@@ -51,11 +53,11 @@
 
 **包**：`openspec/changes/liaison-reply-bridge-and-patrol/`（`intent.md` ＋ proposal／4 specs／design／tasks 0/33，`openspec validate --strict` ✅）。
 grill 八问 Shao Peishen 当场全按推荐答（Q1 无在途不标不起活／Q2 多在途拒标告警／Q3 权限层 `acceptEdits`＋白名单，⛔ 不用 `--dangerously-skip-permissions`／Q3b 红线八项照单／Q4 主工作区／Q5 消息接线归 liaison 包／Q6 只 add 列出路径＋commit 不 push／Q7 该发送人任何入站算回件）。
-🔴 **M2 查出的硬事实**：值守服务**根本没订阅 SDK `message` 事件**（`SUBSCRIBED_EVENTS` 只有三个连接事件，`test_this_chapter_wires_no_message_handling` 明令不接）⇒ 即使 TD-42 还了，`liaison_message` 仍是 0 行。这是比 TD-42 更靠前的前置，此前未登记。
+🔴 **M2 查出的硬事实**（⚠️ **代码侧已于 2026-09-10 由 `[Mac]0910C` 接线，下面这段描述的是当时的状态**；真实入站仍未验，前置门槛②因此**只还了一半**）：值守服务**根本没订阅 SDK `message` 事件**（`SUBSCRIBED_EVENTS` 只有三个连接事件，`test_this_chapter_wires_no_message_handling` 明令不接）⇒ 即使 TD-42 还了，`liaison_message` 仍是 0 行。这是比 TD-42 更靠前的前置，此前未登记。
 
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
-| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | **另起 session**（worktree ☑；触碰 `session_client.py` ⇒ ⛔ 须等 `0909AS` 合回 main 后派） | ⏸ **待派发**，⛔ 本 session 未改该包 `tasks.md` | `SUBSCRIBED_EVENTS` 含 `message`；`liaison_message` 有一条真实企微消息行 | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
+| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | **另起 session**（worktree ☑；触碰 `session_client.py` ⇒ ⛔ 须等 `0909AS` 合回 main 后派） | 🟡 **代码已接线、⏸ 真实入站未验**（2026-09-10 `[Mac]0910C` 做，落 `hr-wecom-aibot-liaison` `tasks.md` **7.10**——⛔ 不是当初设想的 8.5bis，接线属第 7 章「连接生命周期」范围）。已做：`SUBSCRIBED_EVENTS` 含 `message`、新增 `tools/liaison/channel.py`、守卫测试**已删**并换成正向断言、`tools/liaison/tests/` 969 passed。⛔ **未做**：真实入站落库（云端容器物理上做不到，`0909AJ` 判据）、附件字节下载（TD-44）、对外礼貌回复（TD-45）；字段名表未实测（TD-43） | `SUBSCRIBED_EVENTS` 含 `message`（✅ 已达成）；`liaison_message` 有一条**真实**企微消息行（⏸ **未达成**，并入 8.6 灰度，🔴 单测全绿 ⛔ 不算） | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
 | **AT-2** | design Open Question ①：章程 §〇 **第 ⑨ 条「回件附件疑似含候选人个人信息 ⇒ 不读入 prompt、只登记转人」的措辞与判据** | Shao Peishen | ✅ **已答 `1a`**（10:3x）：按起草措辞定稿，落 design D15 | P2 3.1 写章程时逐字取 D15 | — |
 | **AT-3** | `HR_LIAISON_UNPACK_BUDGET_USD` 默认值（起草建议 5） | Shao Peishen | ✅ **已答 `2a`**：默认 5，落 design D16 | P1 2.9 写进 `.env.example` 注释 | — |
 | **AT-4** | 本包开工顺序：§0 三门槛（TD-42 已还＋AT-1 接通＋真实入站一条）全勾 → P0→P1→P2→P3 各一条 worktree 泳道 → §5 真实起活实测（他重启服务＋等汤丽萍下一条入站） | Cowork 编排 → 泳道 | ⏸ 等 §0 | tasks §5 实测记录落 `docs/findings/` 后归档 | — |

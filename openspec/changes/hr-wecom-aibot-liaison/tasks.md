@@ -204,6 +204,11 @@
 - [x] 7.7 单测：空闲两小时不告警、真断线记窗口、进程被杀后重启补记窗口
 - [x] 7.8 单测：告警文本含起止时间与重发请求；告警发送失败时接收不中止
 - [x] 7.9 单测：重连间隔随失败次数增长、服务不退出
+- [x] 7.10 **SDK `message` 事件接线**（2026-09-10 追加，`[Mac]0910C`）：`message` 事件 → 队列 → 值守线程 → `channel.dispatch_inbound_frame` → `handle_inbound_message`。本条**不是本章原有范围**，是 `liaison-reply-bridge-and-patrol` 的前置门槛②按其 proposal「归 `hr-wecom-aibot-liaison` 追加任务（答 Q5a）」追加进来的。含**删**守卫测试 `test_this_chapter_wires_no_message_handling`（⛔ 不是加豁免，见 `docs/openers/0910C-SDK消息事件接线.md` §3.7），换成正向断言。
+  - 事件名与载荷形状**已实证**：钉死版本 `wecom-aibot-python-sdk==1.0.2` 源码 `aibot/message_handler.py::_handle_message_callback` 逐字 `emitter.emit("message", frame)`；⛔ 不许改订阅 `message.text` 等五个细分事件——未知 msgtype SDK 一个细分事件都不 emit，消息会静默消失。
+  - ⚠️ `frame["body"]` 的**字段名表未经实测**（SDK 原样透传该 dict，`types.py` 只定义了五个顶层键）。集中在 `channel.py` 的 `_BODY_*` 常量，对不上即 `InboundFrameShapeError` ＋ ERROR，⛔ 不静默跳过。TD-43。
+  - ⛔ **本轮不下载附件字节**（TD-44）、⛔ **不接对外礼貌回复端口**（TD-45），理由与去处见 `docs/tech-debt.md`。
+  - ⏸ **留步：真实验证未做**——云端容器无 `.env`／无 `tools/liaison/.venv`／不在内网（`0909AJ` 判据：真实建连必须在主工作区）。🔴 **单测全绿 ⛔ 不算验收**：它证明「按那张字段名表能跑通」，不证明「那张表是对的」。真实验收并入 8.6。
 
 **验收**：`liaison-channel-session` 全部场景通过。
 
@@ -224,7 +229,7 @@
 - [x] 8.3 写 launchd plist（`KeepAlive` + `ThrottleInterval`）与安装说明；⛔ 不移植 Windows 侧的三级退避重启脚本（design.md D12）。产出：`tools/liaison/launchd/com.zhuopin.hr.liaison.plist.template`（占位符渲染式，模板内 ⛔ 无任何凭据取值）＋ `tools/liaison/scripts/install_launchd.py`（幂等：渲染 → 写 `~/Library/LaunchAgents/` → bootout 忽略失败 → bootstrap → 打印 `launchctl print` 状态行；`--dry-run` 不写任何文件、不调 launchctl）＋ README「运行与守护」一节（装／停即 `bootout` 回滚／看日志）。⏸ **留步：本 session ⛔ 未执行安装**——起 LaunchAgent 属安全配置变更，由 Shao Peishen 在 Terminal 自己跑一次，时点＝灰度 8.6。⏸ **留步：`tools/liaison/.venv` 尚未创建**，安装脚本对此 fail-closed（解释器不存在即拒装并退非 0，理由＝`KeepAlive` 不区分退出码，装上会 30s 一轮无限重启一个必然失败的进程）。⛔ 本勾只表示配置与脚本已就位并被单测覆盖，**不得当作「守护已生效」的证据**
 - [x] 8.4 日志接入：轮转 + 有界容量 + 个人信息脱敏（借用 `runtime-observability` 的做法，不受其 HTTP 请求链路要求约束）
 - [x] 8.5 加结构性守护测试：`tools/` 不在 `sync-to-server.sh` 的 `SYNC_PATHS` 里、SDK 依赖不在根 `requirements.txt` 里（design.md D10 的两道门禁）。已由 `tools/liaison/tests/test_liaison_boundaries.py` 两条覆盖（第 1 章落地：`test_tools_is_not_in_sync_paths`、`test_root_requirements_has_no_liaison_dependency`）＋ 本条补 plist 守护（`test_launchd_template_carries_variable_names_but_no_credential_values`：凭据名 ⛔ 不得以 plist 键值形式进模板，只准以 XML 注释形式出现——`~/Library/LaunchAgents/` 不受 `.gitignore` 保护且会被备份链带走，凭据挪进 `EnvironmentVariables` 会静默扩大泄漏面）
-- [ ] 8.6 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 **前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人**——aibot 的单聊 chatid 要专员先私信才存在；⛔ 少这一步，**带附件的归档链路根本验不到**（群里 @ 机器人只收文字平信，**文档回灌只能走私信**）。⇒ 三条链路的验收面要拆开：群里发文字 → 入队；**私信发文档 → 归档**（顺带核 TD-22 真实 `msgid` 是否含 `_`）；群通知 → 回推
+- [ ] 8.6 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 **前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人**——aibot 的单聊 chatid 要专员先私信才存在；⛔ 少这一步，**带附件的归档链路根本验不到**（群里 @ 机器人只收文字平信，**文档回灌只能走私信**）。⇒ 三条链路的验收面要拆开：群里发文字 → 入队；**私信发文档 → 归档**（顺带核 TD-22 真实 `msgid` 是否含 `_`）；群通知 → 回推。🔴 **2026-09-10 追加（7.10 接线的验收面）**：这一步同时是 `channel.py` `_BODY_*` **字段名表的唯一实测机会**——第一条真实入站到达时当场核 `msgid` / `msgtype` / `from.userid` / `chatid` / `text.content` 五个键名是否与真实报文一致（对不上会抛 `InboundFrameShapeError` 并把**键名**打进日志，照着改 `channel.py` 一处即可）。⚠️ **带附件那条链路本轮验不到**（附件字节未下载，TD-44），⛔ 不要据「私信发了文档、`liaison_message` +1」判定归档链路已通
 - [ ] 8.7 加入汤丽萍（配置加一行 + 重启），并告知她"照原样在群里发即可、不用改任何习惯"
 - [ ] 8.8 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
 - [ ] 8.9 全部章节勾完后**当场**跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
