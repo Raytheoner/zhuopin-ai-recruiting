@@ -83,11 +83,30 @@ EVENT_AUTHENTICATED = "authenticated"
 #: 实证：2026-09-09 断线实测，见 `docs/findings/2026-09-09-断线重连实测.md`。
 EVENT_ERROR = "error"
 
+#: 入站消息事件（2026-09-10，tasks 8.5bis ①）。
+#:
+#: 事件名与载荷形状**有实测依据**：钉死版本 `wecom-aibot-python-sdk==1.0.2` 的
+#: `aibot/message_handler.py:55` 是 `emitter.emit("message", frame)`——名字是硬编码
+#: 字面量，载荷是**整个帧**、只有一个位置参数。⛔ 不许改成 `message.text` 之类的
+#: 细分事件：那几个是同一帧的**附加**分发（`message_handler.py:60-69`），漏掉
+#: `file`／`mixed` 就等于漏掉带附件的私信，而漏订阅**不报错**。
+#:
+#: 🔴 **在这之前（2026-09-10 前）本模块从不订阅它**：第 4 章「消息归档」与第 5 章
+#: 「值守任务队列」两章的代码都在，但运行期入口没接上 ⇒ 现网 `liaison_message`
+#: 恒为 0 行，且与「连接假死」的症状**一模一样**、分不清。
+EVENT_MESSAGE = "message"
+
 #: 本模块必须订阅的全部事件。**清单即契约**：`_prepare_client` 逐条接线，
 #: `tests/test_session_client_reconnect.py::test_every_event_in_the_contract_is_actually_subscribed`
 #: 断言"列了就必须真的接上"。⛔ 加常量不接线 = 该类事件永远到不了本模块，
 #: 与 TD-39 同形、同样无症状。
-SUBSCRIBED_EVENTS = (EVENT_CONNECTED, EVENT_DISCONNECTED, EVENT_ERROR, EVENT_AUTHENTICATED)
+SUBSCRIBED_EVENTS = (
+    EVENT_CONNECTED,
+    EVENT_DISCONNECTED,
+    EVENT_ERROR,
+    EVENT_AUTHENTICATED,
+    EVENT_MESSAGE,
+)
 
 #: 存活戳停更多久算"loop 还活着但连接已死"（N-0 兜底的判据）。
 #:
@@ -306,6 +325,17 @@ def verify_client_surface(client) -> None:
             "监听器的 error 事件会直接 raise，aibot/ws.py:152 当场炸掉，"
             "153 行的 _schedule_reconnect() 永远走不到（TD-39）。⛔ 不要绕过本检查。"
         )
+    # ⚠️ 同一形状的第二条（2026-09-10，tasks 8.5bis ②）。判据同样是**清单本身**。
+    # `message` 在 2026-09-10 之前不在清单里，缺口的形态与 `error` 那条一模一样：
+    # 漏订阅**不报错**，SDK 照常 `emit("message", frame)`，只是没有任何监听器
+    # （pyee 对非 `error` 事件的无监听器 emit 直接返回 False，⛔ 连一行日志都没有）
+    # ⇒ 归档、入队、群通知三条链路一条都不会被触发，而服务看起来完全正常。
+    if EVENT_MESSAGE not in SUBSCRIBED_EVENTS:
+        raise SdkSurfaceUnverifiedError(
+            f"{EVENT_MESSAGE!r} 必须在 SUBSCRIBED_EVENTS 里。缺了它，入站消息永远"
+            "到不了值守线程：`liaison_message` 恒为 0 行，且症状与「连接假死」完全"
+            "相同、分辨不出（tasks 8.5bis 的立条理由）。⛔ 不要绕过本检查。"
+        )
     run = client.run
     if not callable(run):
         raise SdkSurfaceUnverifiedError("SDK 连接对象的 run 不可调用，没有可阻塞的入口。")
@@ -451,8 +481,45 @@ def _handle_sdk_error(loop_stopper: "LoopStopper", error) -> None:
         logger.warning("值守通道连接报错（错误详情无法呈现），已交给 SDK 重连")
 
 
+def _drop_message_without_a_listener(frame) -> None:
+    """`on_message` 没接线时的兜底。**⛔ 不许写成静默的 `lambda: None`。**
+
+    *为什么不静默*：本条（8.5bis）修的就是"没人接消息、且没有任何症状"。默认值
+    再静默一次，等于把同一个 bug 换个地方原样复制——服务照跑、日志干净、
+    `liaison_message` 恒为 0 行。这里至少留一行 WARNING，排障时能一眼看到。
+    """
+    logger.warning(
+        "收到入站消息但 `message` 事件没有接线（on_message 未传），本帧已丢弃。"
+        "⛔ 这不是正常状态：`__main__.main()` 必须把 inbound 接线传进 make_sdk_connect"
+    )
+
+
+def _handle_sdk_message(loop_stopper: "LoopStopper", on_message, frame) -> None:
+    """`message` 事件的监听器。**只把帧交给接线层，⛔ 本函数不碰库、不碰文件。**
+
+    🔴 **回调跑在 SDK 自己的事件循环线程上**（工程铁律 1）：幂等记录与业务写必须
+    与业务连接同属一个 `BEGIN`，而那条 sqlite 连接归**值守线程**独占。跨线程拿它写
+    会把事务归属搅乱（`docs/findings/2026-08-13-sqlite-事务归属冲突.md` 同族），
+    而且 sqlite 连接默认就不许跨线程用——错法是在最不该出错的那一刻抛异常。
+    ⇒ 这里唯一允许做的事是把帧转手给 `on_message`（它只往队列里放）。
+
+    ⛔ **异常一律不许回抛**：从监听器里逃出去的异常会被 pyee 再 `emit("error", exc)`
+    （`pyee/asyncio.py:78-81`），而 `error` 那条链是重连的命门（TD-39）。一条畸形
+    消息⛔ 不许打断整条连接。
+    """
+    loop_stopper.capture()
+    try:
+        on_message(frame)
+    except Exception:  # noqa: BLE001 —— 见 docstring：回抛会打断重连链
+        logger.error(
+            "入站消息回调失败，本帧已丢弃（⛔ 不回抛，回抛会经 pyee 的 error 分支"
+            "打断重连链）", exc_info=True
+        )
+
+
 def _prepare_client(
-    client_factory, on_connected, on_disconnected, loop_stopper, on_activity=None
+    client_factory, on_connected, on_disconnected, loop_stopper, on_activity=None,
+    on_message=None,
 ):
     """造一个连接对象、核表面、接事件。返回**尚未 run** 的那个对象。
 
@@ -484,6 +551,11 @@ def _prepare_client(
             loop_stopper, args[0] if args else None
         ),
         EVENT_AUTHENTICATED: wrap(on_activity if on_activity is not None else lambda: None),
+        EVENT_MESSAGE: lambda *args, **kwargs: _handle_sdk_message(
+            loop_stopper,
+            on_message if on_message is not None else _drop_message_without_a_listener,
+            args[0] if args else None,
+        ),
     }
     # ⛔ 断言清单与实现一一对应：漏一个就当场炸，⛔ 不许静默少接一个事件。
     missing = [event for event in SUBSCRIBED_EVENTS if event not in handlers]
@@ -504,10 +576,15 @@ def make_sdk_connect(
     on_disconnected: Callable[[], None],
     loop_stopper: "LoopStopper | None" = None,
     on_activity: Callable[[], None] | None = None,
+    on_message: Callable[[object], None] | None = None,
 ) -> Callable[[], None]:
     """返回一个交给 `run_forever` 用的、真正阻塞到断开为止的调用。
 
     `on_activity`（TD-42）：见 `_prepare_client`。
+
+    `on_message`（8.5bis）：入站帧的去处，**只允许把帧放进队列**（见
+    `_handle_sdk_message`）。不传就走 `_drop_message_without_a_listener`（丢帧 ＋
+    WARNING）——⛔ 这不是可接受的生产接法，只是让"没接线"这件事有症状。
 
     ⚠️ **参数是一个"每次造一个全新连接对象"的工厂，⛔ 不是一个连接对象**——
     这不是风格选择，是 SDK 的一个闩锁逼出来的（实测 `aibot==1.0.2`
@@ -539,7 +616,7 @@ def make_sdk_connect(
     if loop_stopper is None:
         loop_stopper = LoopStopper()
     prepared = _prepare_client(
-        client_factory, on_connected, on_disconnected, loop_stopper, on_activity
+        client_factory, on_connected, on_disconnected, loop_stopper, on_activity, on_message
     )
 
     def connect_once() -> None:
@@ -548,7 +625,8 @@ def make_sdk_connect(
         prepared = None
         if client is None:
             client = _prepare_client(
-                client_factory, on_connected, on_disconnected, loop_stopper, on_activity
+                client_factory, on_connected, on_disconnected, loop_stopper, on_activity,
+                on_message,
             )
         # ⛔ 必须在 run() **之前**丢掉上一轮的 loop 把手：`run()` 的 finally 会
         # `loop.close()`，留着旧把手会让看门狗去停一个已经关掉的 loop 并报成功。

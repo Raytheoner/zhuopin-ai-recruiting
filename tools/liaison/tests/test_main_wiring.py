@@ -303,22 +303,44 @@ def test_main_wires_both_callbacks_into_the_queue(credentials_in_env, tmp_path):
     assert callable(captured["connect"])
 
 
-def test_this_chapter_wires_no_message_handling():
-    """opener：本章 ⛔ 不实现归档／入队／群通知。这条断言让"顺手接上"当场变红。
+def test_this_chapter_wires_message_handling():
+    """🔴 **正向判据（2026-09-10，tasks 8.5bis ⑥）**：入站消息的接线必须真的在。
 
-    判据只看 `tools.liaison.` 开头的导入——⛔ 不能只匹配模块名里有没有 "queue"：
-    标准库 `queue` 是本文件自己要用的，那样写会把它误伤成违规。
+    ⚠️ 本条**取代**了原来的 `test_this_chapter_wires_no_message_handling`。那条
+    禁令在第 7 章是对的（当时消息处理还没轮到接），但它一直留到了第 8 章——于是
+    第 4 章「归档」6/6、第 5 章「入队」10/10 全绿，运行期入口却从来没接上，
+    现网 `liaison_message` 恒为 0 行，且症状与「连接假死」完全一样、分不清。
+
+    🔴 ⛔ **只删禁令不换正向断言＝这块回到无判据状态**：下一轮谁把接线拆掉都不会
+    变红，而拆掉之后**没有任何症状**。三条一条都不能少——
+    导入在（第 4/5 章的模块真的被接进来了）、调用在（真的调了那个入口）、
+    事件在清单里（真的会被订阅到）。
     """
     tree = ast.parse(MAIN_SOURCE.read_text(encoding="utf-8"), filename=str(MAIN_SOURCE))
     imported: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module)
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported.add(node.module)
+            imported.update(f"{node.module}.{alias.name}" for alias in node.names)
         elif isinstance(node, ast.Import):
             imported.update(alias.name for alias in node.names)
-    own = [name for name in imported if name.startswith("tools.liaison")]
-    forbidden = [name for name in own if "archive" in name or "queue" in name]
-    assert forbidden == [], f"__main__.py 接了本章范围外的模块：{forbidden}"
+    assert any(name.endswith("inbound") for name in imported), (
+        "__main__.py 必须接上 tools.liaison.inbound——它是归档/入队/回复的唯一入口"
+    )
+
+    called = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "handle_inbound_message" in called, (
+        "⛔ 导入了却不调用等于没接线：帧到了值守线程也不会落库，且无症状"
+    )
+
+    assert session_client.EVENT_MESSAGE in session_client.SUBSCRIBED_EVENTS, (
+        "⛔ `message` 不在订阅清单里，SDK 的入站帧永远到不了本进程（漏订阅不报错）"
+    )
 
 
 def test_main_module_never_uses_a_with_statement():
@@ -407,14 +429,26 @@ def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
 
     real_make = session_client.make_sdk_connect
 
-    def spying_make(factory, *, on_connected, on_disconnected, loop_stopper=None, on_activity=None):
+    def spying_make(
+        factory,
+        *,
+        on_connected,
+        on_disconnected,
+        loop_stopper=None,
+        on_activity=None,
+        on_message=None,
+    ):
         stoppers.append(loop_stopper)
+        # ⚠️ `on_message` 必须原样透传（8.5bis）：吞掉它，本用例就会在"接线已拆掉"
+        # 的代码上照样绿——间谍替身把被测接线改窄，是最难发现的一种假绿。
+        assert on_message is not None, "main() 必须把入站消息接线传给 make_sdk_connect"
         return real_make(
             factory,
             on_connected=on_connected,
             on_disconnected=on_disconnected,
             loop_stopper=loop_stopper,
             on_activity=on_activity,
+            on_message=on_message,
         )
 
     def fake_watchdog(**kwargs):
