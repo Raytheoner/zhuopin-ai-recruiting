@@ -1,7 +1,60 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-10 13:5x（Cowork·HR业务线-接力0909AU：`0910A` 正文重写并改名、两份旧稿挪出、出 `[Mac]0910F` 落档提交＋解锁；派发链定 **`0910F` → `0910B` → `0910A`** 三条串行）
+> 最后更新：2026-09-10 14:2x（Cowork·HR业务线-接力0909AU：`0910F` 已落地 `541cac1`；机制侧六环节核真身；编排第十七批波次 1 四条并行 plan 泳道 `0910G`–`0910J` ＋ 落档 `0910K`）
+
+---
+
+## 🆕 第十七批 · `liaison-reply-bridge-and-patrol` 建造批（2026-09-10 14:2x，Cowork·0909AU 编排）
+
+### 🔴 先答一个常被问错的问题：「回灌自动落档、自动拆件」建成了吗？—— **没有。链路六环，四环是零。**
+
+按读法纪律核的**真身**（只看函数体、调度配置、测试三处，⛔ 不读 proposal 的问题陈述当现状）：
+
+| # | 环节 | 状态 | 真身判据（2026-09-10 14:0x 实核） |
+|---|---|---|---|
+| ① | 回件到达 → 值守服务收到 | 🔴 **零** | `session_client.SUBSCRIBED_EVENTS` 只有 4 个连接事件、无 `message`；`test_this_chapter_wires_no_message_handling` 明令不接 |
+| ② | 落档（消息归档＋附件） | 🟡 **代码齐，从未真跑过** | `inbound.handle_inbound_message` 归档→入队→礼貌回复三步齐全（第 4 章 6/6），但**产品代码里零调用方**——只有测试调它 |
+| ③ | 入队（待办台账） | 🟡 **代码齐，零消费方** | `enqueue_task` 只被 `inbound.py` 调；`defer_task` / `mark_task_pushed` 在产品代码里**零调用方**（只在 `queue_view` docstring 与 `retention` 注释里被提到） |
+| ④ | **回件 → 跟进信 那座桥** | 🔴 **零** | `followup.py` 里 grep `liaison_message` / `inbound` / `msgid` **零命中** ⇒ 发信侧与收信侧完全不通 |
+| ⑤ | **打标即开班（自动拆件）** | 🔴 **零** | 产品代码无 `unpack` / `dispatch` / `bridge` / `patrol` 任何模块；`install_launchd.py` 只装**一个** job（`com.zhuopin.hr.liaison` 值守服务），**无巡检 job** |
+| ⑥ | 章程正本／口径点台账 | 🔴 **零** | 同上 |
+
+⇒ **不是「差最后一公里」，是中间断了两处**：入口没接（AT-1a／`0910B`）、出口没桥（P0）。
+变更包 `liaison-reply-bridge-and-patrol` ＝ **0/33**，§0 三门槛一条未勾。
+📌 **数据佐证**：`data/liaison.db` 现在 `liaison_message` ＝ 0、`liaison_task` ＝ 0、`effect_log` ＝ 15。
+
+### 编排：波次 1（四条并行）→ 波次 2（四条串行）
+
+🔴 **整批前置＝§0 三门槛全勾**（TD-42 真实验证／SDK `message` 接线／一条真实入站落库），
+由 `[Mac]0910B` → `[Mac]0910A` 清。⛔ **门槛没全勾不许开工**，本包 `tasks.md` 抬头写死了这条。
+
+**波次 1 · 四条并行 plan 泳道**（`spec-to-plan`，worktree ❌，各写一份 plan 文件，**触碰区零重叠**）：
+
+| 号 | 单元 | 输入 spec | 产出 |
+|---|---|---|---|
+| `[Mac]0910G` | P0 · 回件桥＋第九态 | `specs/liaison-reply-bridge/spec.md` | `docs/superpowers/plans/2026-09-10-liaison-reply-bridge.md` |
+| `[Mac]0910H` | P1 · 信号与打标即开班 | `specs/liaison-unpack-dispatch/spec.md` | `…-liaison-unpack-dispatch.md` |
+| `[Mac]0910I` | P2 · 拆件章程正本 | `specs/liaison-unpack-charter/spec.md` | `…-liaison-unpack-charter.md` |
+| `[Mac]0910J` | P3 · 口径点台账 | `specs/liaison-criteria-ledger/spec.md` | `…-liaison-criteria-ledger.md` |
+
+⚠️ **四条可并行的理由是文件级零重叠**（各写一个 plan 文件），⛔ 不是「看起来无关」。
+四份 opener 正文里都逐字内嵌了并发四条与同伴触碰区。**手动贴四个 CC session 即可，⛔ 不必走 `run-lanes.sh` 看护者**。
+
+**波次 2 · 四条串行 run-build 泳道**（worktree ☑，从 `[Mac]0910L` 起连号取）：
+🔴 **P0→P1→P2→P3 全串行，⛔ 不可并行**——不是文件撞车，是**真依赖**：
+P1 的 2.7 要改 P0 的 `bridge.run_bridge`；P2 的 3.2/3.4 要 P1 的 `dispatch` 与 `HEADLESS_ARGV_TEMPLATE`；
+`__main__.py` 被 P0（1.7 值守线程接线）／P1（2.8 子命令）／P3（4.2 子命令）三方触碰。
+🔴 **波次 2 的 opener 正文等波次 1 的 plan 文件真的存在之后再写**，⛔ 不预先写（预先写＝引用死链，AS-1 已演过一次）。
+
+**§5 验收 · 真实起活实测** ＝ 不可代，Shao Peishen 本人（⛔ 单测全绿不算，本包 `tasks.md` 抬头写死）。
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| **Q-1** | 跑 `[Mac]0910K` 落档提交（四份 opener 正文 ＋ 号池四行 ＋ 本节） | Shao Peishen 贴内联 opener → CC | ⏸ **待派发，⛔ 必须先于 `0910G`–`0910J`** | `git show --stat` 里四份 opener 与 `OP-0820` 同时在场 | 四份正文与号池行停在未提交态 ⇒ 贴引用块时接手方 `git show` 不到，重演 AS-2 那条死链 |
+| **Q-2** | 波次 1 四条并行发车 | Shao Peishen 贴四个引用块 → 四个 CC session | ⏸ 等 §0 三门槛全勾（`0910B`→`0910A`）。🔴 **2026-09-10 答 `1a` 已裁决：⛔ 不放行到门槛之前**，理由＝`0910B` 收工报告才会给出「帧字段映射走实际字段还是 fail-closed」，那个答案直接决定 P0 第九态与 P1 dispatch 计划里的字段名；门槛没清就写计划＝在猜。**裁决已逐字落进四份 opener 正文【零】门槛 1**，⛔ 不要再当待决项重提 | 四份 plan 文件都存在，且各自 `grep -c '^### Task '` 不为 0 | 波次 2 无输入 |
+| **Q-3** | 波次 2 四条 opener 正文与取号（`0910L` 起） | Cowork 编排 | ⏸ 等波次 1 出 plan | 四份 run-build opener 落档 ＋ 号池登记 ＋ 同一条 commit | 同 Q-1 |
+| **Q-4** | 🔴 **⛔ 汤丽萍现在不得发任何测试消息** | — | 🔴 **仍然锁着**（2026-09-10 14:1x Shao Peishen 问过一次，已答「不行」） | 解锁判据＝`0910A` 跑完后**他本人**在群里 @ 一条，`liaison_message` 由 **0 变 1**。看到 1 之后才请她**私信**一次（私信才有单聊 chatid，第 4 章附件归档链路只能在带附件的私信上验） | 她已白发 4 条；现在再发是第 5 条，且现象与前 4 次一模一样（服务显示 connected、库里 0 行），**分不清是假死还是没接线**——正是 TD-42 末段那条「不可区分」 |
 
 ---
 
