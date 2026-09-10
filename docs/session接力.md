@@ -42,8 +42,8 @@
 ⚠️ **四条可并行的理由是文件级零重叠**（各写一个 plan 文件），⛔ 不是「看起来无关」。
 四份 opener 正文里都逐字内嵌了并发四条与同伴触碰区。**手动贴四个 CC session 即可，⛔ 不必走 `run-lanes.sh` 看护者**。
 
-**波次 2 · 四条串行 run-build 泳道**（worktree ☑，从 **`[Mac]0910M`** 起连号取）：
-🔴 **2026-09-10 订正（答 `2a`）**：原写「从 `0910L` 起」——`0910L` 已被「判据订正提交」占用，⛔ 不再是波次 2 的起点。
+**波次 2 · 四条串行 run-build 泳道**（worktree ☑，从 **`[Mac]0910N`** 起连号取）：
+🔴 **2026-09-10 两次订正**：原写「从 `0910L` 起」——`0910L` 已被「判据订正提交」、`0910M` 已被其「合入 main」占用，⛔ 两者都不再是波次 2 的起点。
 🔴 **P0→P1→P2→P3 全串行，⛔ 不可并行**——不是文件撞车，是**真依赖**：
 P1 的 2.7 要改 P0 的 `bridge.run_bridge`；P2 的 3.2/3.4 要 P1 的 `dispatch` 与 `HEADLESS_ARGV_TEMPLATE`；
 `__main__.py` 被 P0（1.7 值守线程接线）／P1（2.8 子命令）／P3（4.2 子命令）三方触碰。
@@ -55,7 +55,7 @@ P1 的 2.7 要改 P0 的 `bridge.run_bridge`；P2 的 3.2/3.4 要 P1 的 `dispat
 |---|---|---|---|---|---|
 | **Q-1** | 跑 `[Mac]0910K` 落档提交（四份 opener 正文 ＋ 号池四行 ＋ 本节） | Shao Peishen 贴内联 opener → CC | ⏸ **待派发，⛔ 必须先于 `0910G`–`0910J`** | `git show --stat` 里四份 opener 与 `OP-0820` 同时在场 | 四份正文与号池行停在未提交态 ⇒ 贴引用块时接手方 `git show` 不到，重演 AS-2 那条死链 |
 | **Q-2** | 波次 1 四条并行发车 | Shao Peishen 贴四个引用块 → 四个 CC session | ⏸ 等 §0 三门槛全勾（`0910B`→`0910A`）。🔴 **2026-09-10 答 `1a` 已裁决：⛔ 不放行到门槛之前**，理由＝`0910B` 收工报告才会给出「帧字段映射走实际字段还是 fail-closed」，那个答案直接决定 P0 第九态与 P1 dispatch 计划里的字段名；门槛没清就写计划＝在猜。**裁决已逐字落进四份 opener 正文【零】门槛 1**，⛔ 不要再当待决项重提 | 四份 plan 文件都存在，且各自 `grep -c '^### Task '` 不为 0 | 波次 2 无输入 |
-| **Q-3** | 波次 2 四条 opener 正文与取号（**`0910M`** 起，⚠️ 2026-09-10 订正，原为 `0910L`） | Cowork 编排 | ⏸ 等波次 1 出 plan | 四份 run-build opener 落档 ＋ 号池登记 ＋ 同一条 commit | 同 Q-1 |
+| **Q-3** | 波次 2 四条 opener 正文与取号（**`0910N`** 起，⚠️ 2026-09-10 两次订正，原为 `0910L`→`0910M`） | Cowork 编排 | ⏸ 等波次 1 出 plan | 四份 run-build opener 落档 ＋ 号池登记 ＋ 同一条 commit | 同 Q-1 |
 | **Q-4** | 🔴 **⛔ 汤丽萍现在不得发任何测试消息** | — | 🔴 **仍然锁着**（2026-09-10 14:1x Shao Peishen 问过一次，已答「不行」） | 解锁判据＝`0910A` 跑完后**他本人**在群里 @ 一条，`liaison_message` 由 **0 变 1**。看到 1 之后才请她**私信**一次（私信才有单聊 chatid，第 4 章附件归档链路只能在带附件的私信上验） | 她已白发 4 条；现在再发是第 5 条，且现象与前 4 次一模一样（服务显示 connected、库里 0 行），**分不清是假死还是没接线**——正是 TD-42 末段那条「不可区分」 |
 
 ---
@@ -84,8 +84,24 @@ Shao Peishen 2026-09-10 答 `1a` 改为在云端重做订正、答 `3b` **Mac �
 
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
-| **L-1** | 把 `claude/criteria-correction-commit-3kqfgz` 合进 `main` | Shao Peishen 派一条 `[Mac]` CC 合入 opener | ⏸ **待派发** | `main` 上 `grep -c "会随时间漂移" .claude/skills/kickoff/SKILL.md` ≥ 1，且 `0910B` 自检② 已是内容判据 | `0910B` 的坏判据继续在线；worktree 从 `main` 拉，读到的还是旧自检②，下一个跑它的 session 照样假失败 |
-| **L-2** | Mac 主工作区那四条未提交改动 `git checkout --` 丢弃 | 同 L-1 那条 CC | ⏸ 待派发（答 `3b`） | Mac 侧 `git status --short` 里这四条消失（`_to_delete/` 不动） | 两份订正并存、内容还不一定一致，合入时冲突且分不清哪份是准的 |
+| **L-1** | 把 `claude/criteria-correction-commit-3kqfgz`（`28499f1`）合进 `main` | Shao Peishen 贴 `[Mac]0910M` 引用块 → CC | 📮 **opener 正文已落档，待派发**（`docs/openers/0910M-判据订正合入.md`，答 `1a`）。🔴 独占 main，⛔ 不与泳道并行 | `main` 上 `grep -c "会随时间漂移" .claude/skills/kickoff/SKILL.md` ≥ 1，且 `0910B` 自检② 已是内容判据 | `0910B` 的坏判据继续在线；worktree 从 `main` 拉，读到的还是旧自检②，下一个跑它的 session 照样假失败 |
+| **L-2** | Mac 主工作区那四条未提交改动逐条 `git checkout --` 丢弃（⛔ 不 `checkout -- .`／不 `reset --hard`／不 `stash`，会卷走别的泳道） | `[Mac]0910M` 的【二】 | 📮 已写进 `0910M` 正文，待派发（答 `3b`） | Mac 侧 `git status --short` 里这四条消失（`_to_delete/` 不动） | 两份订正并存、内容还不一定一致，合入时冲突且分不清哪份是准的 |
+
+🔴 **2026-09-10 Shao Peishen 答 `2a` 裁决：`0910B` ⛔ 不重跑，视为已完成。** 依据＝三条机器判据在 `main` 上全部成立：
+① `tools/liaison/session_client.py:108` `SUBSCRIBED_EVENTS` 已含 `EVENT_MESSAGE`；
+② `tools/liaison/__main__.py:234` 值守线程已调 `inbound.handle_inbound_message`；
+③ `test_this_chapter_wires_no_message_handling` 函数定义已不存在，由
+`test_main_wiring.py:306` 的正向测试 `test_this_chapter_wires_message_handling` 取代。
+⇒ **`liaison-reply-bridge-and-patrol` 的 §0 门槛 0.2 已勾 `[x]`**（本条一并落）。
+订正后的自检② 只是拦住「再跑一次」，⛔ 不是说这条没做完。
+
+⚠️ **帧字段映射的答案已经有了：走 fail-closed**（`__main__.py:225-231`——「帧字段映射未经真实帧确认，
+fail-closed」，只记 ERROR ＋ `describe_frame_shape` 打键名与类型、⛔ 不打取值，然后 `return False`）。
+Q-2 当初等的就是这个答案 ⇒ 波次 1 四份 plan 里的字段名**按 fail-closed 那条路径写**，⛔ 不要再等 `0910B` 的收工报告。
+
+🔴 **但 §0 三门槛仍未全勾，波次 1 继续等**：0.1 未清（`docs/tech-debt.md:1982` 写着
+`~~TD-42~~ ✅ 已还（20a2848，⏸ 真实验证待 Shao Peishen）`——销账行**没有**真实「假死→自终止→launchd 拉起」
+实测记录，⛔ 单测不算）；0.3 未清（`liaison_message` 尚无真实行）。两条都归 `[Mac]0910A`。
 
 ---
 
