@@ -21,6 +21,7 @@
 | ⑥ | 章程正本／口径点台账 | 🔴 **零** | 同上 |
 
 ⇒ **不是「差最后一公里」，是中间断了两处**：入口没接（AT-1a／`0910B`）、出口没桥（P0）。
+> **2026-09-10 订正（`[Mac]0910B` 落地，commit `7636613`）**：入口那半的**接线**已接上（`SUBSCRIBED_EVENTS` 含 `message`、回调只放帧、值守线程调 `handle_inbound_message`、幂等断言齐全）。⚠️ 但 `liaison_message` **现在仍会是 0**——帧字段映射未经真实帧确认，已按 TD-19 同一处置 fail-closed（**TD-43**），收口＝AT-1b。⛔ 不要据此把入口标成「已通」。
 变更包 `liaison-reply-bridge-and-patrol` ＝ **0/33**，§0 三门槛一条未勾。
 📌 **数据佐证**：`data/liaison.db` 现在 `liaison_message` ＝ 0、`liaison_task` ＝ 0、`effect_log` ＝ 15。
 
@@ -66,8 +67,7 @@ P1 的 2.7 要改 P0 的 `bridge.run_bridge`；P2 的 3.2/3.4 要 P1 的 `dispat
 >     ＋ 给 CLAUDE.md「git 相关只能在 CC」那条补一句 Cowork `git status` 会埋锁。
 >     🔴 **必须排在 `0910B` 之前**：`index.lock` 挡住一切 commit、`ORIG_HEAD.lock` 挡住 merge ⇒ `0910B` 收工合回 `main` 会当场失败。
 > - **`0910F` 的 `git add` 是六条路径**（含它自己的正文文件 ＋ H-5 的 `docs/跟进信/README-跟进信清单.md`），清单以正文【三】为准，⛔ 别按聊天里早先那版四条／五条抄。
-> - `0910B`（引用式，worktree ☑）＝AT-1a 接线。正文 `docs/openers/0910B-SDK-message事件接线.md` 已在 `main`，
->   四项开工前自检 Cowork 侧已代核**全过**（8.5bis 在 `tasks.md:227`；`SUBSCRIBED_EVENTS` 仍是四个、无 `message`；禁令测试仍在；`main` 与 `origin` ahead/behind 均 0）。
+> - ~~`0910B`（引用式，worktree ☑）＝AT-1a 接线~~ ✅ **已跑完（2026-09-10，commit `7636613`）**：七件事中 ①②③④⑥⑦ 落地并有测试守护，⑤ 帧字段映射走 fail-closed（TD-43）。⛔ **不表示入站已通**——真实入站落库一条仍归 AT-1b／`[Mac]0910A`。
 > - `0910A`（引用式，worktree ❌，主工作区）＝TD-42 真实验证 ＋ AT-1b 真实入站，**正文已重写并改名**为
 >   `docs/openers/0910A-TD42真实验证与AT1b真实入站.md`（随 `0910F` 提交）。
 >
@@ -163,7 +163,7 @@ grill 八问 Shao Peishen 当场全按推荐答（Q1 无在途不标不起活／
 
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
-| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | ✅ **已拆两条**（2026-09-10 答 `1a`）：**AT-1a** 代码接线 ⇒ `[Mac]0910B`（worktree ☑）；**AT-1b** 真实入站落库一条 ⇒ `[Mac]0910A`（主工作区，串行在 `0910B` 合回 main 之后） | ⏸ **`0910B` 待派发，正文与号池已落档**（`docs/openers/0910B-SDK-message事件接线.md`）。✅ 前置已解除：`0909AS` 已在 `main`。✅ **`tasks.md` 8.5bis 已追加**（本次，`validate --strict` 过，进度 62/66→62/67） | `SUBSCRIBED_EVENTS` 含 `message`；`liaison_message` 有一条真实企微消息行 | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
+| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | ✅ **已拆两条**（2026-09-10 答 `1a`）：**AT-1a** 代码接线 ⇒ `[Mac]0910B`（worktree ☑）；**AT-1b** 真实入站落库一条 ⇒ `[Mac]0910A`（主工作区，串行在 `0910B` 合回 main 之后） | ✅ **AT-1a 已落地**（2026-09-10 `[Mac]0910B`，commit `7636613`；`tasks.md` 8.5bis 已勾，进度 62/67→63/67，`validate --strict` 过；测试 934→952）／⏸ **AT-1b 待 `[Mac]0910A` 在主工作区验**。⚠️ **AT-1a 里的帧字段映射走了 fail-closed 支**（**TD-43**）：SDK 只命名 `body.msgtype` 与 `headers.req_id`，`msgid`／发送人 userid／会话 id 落在哪个键上无真实帧依据 ⇒ `frames.FIELD_PATHS` 留空、本帧不落库、只打一行**无取值**的帧键结构。⇒ **AT-1b 多一步**：照日志里那行结构把 `FIELD_PATHS` 四个键填上，`liaison_message` 才会由 0 变 1 | `SUBSCRIBED_EVENTS` 含 `message`（✅ 已满足，`7636613`）；`liaison_message` 有一条真实企微消息行（⏸ 未满足，归 AT-1b；⛔ 不许因为前半条已勾就把整条 AT-1 标成完成） | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
 | **AT-2** | design Open Question ①：章程 §〇 **第 ⑨ 条「回件附件疑似含候选人个人信息 ⇒ 不读入 prompt、只登记转人」的措辞与判据** | Shao Peishen | ✅ **已答 `1a`**（10:3x）：按起草措辞定稿，落 design D15 | P2 3.1 写章程时逐字取 D15 | — |
 | **AT-3** | `HR_LIAISON_UNPACK_BUDGET_USD` 默认值（起草建议 5） | Shao Peishen | ✅ **已答 `2a`**：默认 5，落 design D16 | P1 2.9 写进 `.env.example` 注释 | — |
 | **AT-4** | 本包开工顺序：§0 三门槛（TD-42 已还＋AT-1 接通＋真实入站一条）全勾 → P0→P1→P2→P3 各一条 worktree 泳道 → §5 真实起活实测（他重启服务＋等汤丽萍下一条入站） | Cowork 编排 → 泳道 | ⏸ 等 §0 | tasks §5 实测记录落 `docs/findings/` 后归档 | — |
