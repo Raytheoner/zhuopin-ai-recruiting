@@ -28,9 +28,14 @@
 
 1. `pwd` 确认在 worktree 内（路径含 `.claude/worktrees/`），`git branch --show-current`
    **不是** `main`／`master`。**报出实际分支名**，⛔ 不要指定或改名。
-2. `git log --oneline -3` 应能看到 2026-09-10 那条 `docs(openspec): 给 hr-wecom-aibot-liaison
-   追加任务 8.5bis…`。看不到 → `git pull --rebase --autostash origin main` 后重看；
-   仍看不到 → 停下报（说明本条前提还没上 main）。
+2. `grep -n '^- \[.\] 8.5bis' openspec/changes/hr-wecom-aibot-liaison/tasks.md` **必须命中**
+   ——这就是「8.5bis 已上 main」的判据。未命中 → `git pull --rebase --autostash origin main`
+   后重看；仍未命中 → 停下报（说明本条前提还没上 main）。
+   ⚠️ **2026-09-10 订正**：本条原判据写的是「`git log --oneline -3` 里应能看到那条追加 8.5bis 的
+   commit」，**已作废**。历史窗口会随时间漂移——那条 commit（`ba61a6d`）当天就被后续提交挤到
+   第 16 位，前提明明成立、判据却假失败，照它跑的 session 会白 pull 一轮再「停下报」，
+   报出的理由还是错的。前提判据一律落在**内容**上，⛔ 不落在历史位置上。
+   判据真源见 `.claude/skills/kickoff/SKILL.md`「前置判据只落内容」。
 3. `grep -n "8.5bis" openspec/changes/hr-wecom-aibot-liaison/tasks.md` 必须命中。
    **本条要做的七件事以该条目为准**，⛔ 不以本文件的复述为准（两者不一致时停下报）。
 4. `grep -n "SUBSCRIBED_EVENTS = " tools/liaison/session_client.py` 应看到**四个**事件
