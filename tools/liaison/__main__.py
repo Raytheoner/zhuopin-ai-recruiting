@@ -15,8 +15,11 @@
   接收 task 一旦被异常打掉，那个 loop 照样挂着 ⇒ `run()` 永不返回 ⇒ 外层
   `run_forever` 一次都不会触发。没有一条独立线程，就没人能把它叫醒。
 
-⛔ 消息处理（归档=第 4 章、入队=第 5 章、群通知=第 6 章）不在本文件里。
-tests/test_main_wiring.py::test_this_chapter_wires_no_message_handling 守着这条。
+**入站消息的去处**（2026-09-10，tasks 8.5bis）：SDK 的 `message` 回调与连接事件回调
+同一纪律——**只把帧放进队列**，归档／入队／回复全部由**值守线程**做（工程铁律 1：
+幂等记录与业务写必须与业务连接同属一个 `BEGIN`，而那条连接归值守线程独占）。
+判据见 tests/test_inbound_wiring.py 与 tests/test_main_wiring.py::
+test_this_chapter_wires_message_handling。⛔ 不许把 `handle_inbound_message` 挪进回调。
 
 ⛔ 模块层只 import 标准库与本服务自己的模块。任何 SDK import 都必须在凭据校验
 **之后**、且写在函数体里——理由见 config.py 的模块 docstring。
@@ -30,11 +33,14 @@ import queue
 import re
 import sys
 import threading
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from tools.liaison import alerts, session, session_client
+from tools.liaison import alerts, frames, inbound, session, session_client
 from tools.liaison import logsetup
+from tools.liaison.archive import DEFAULT_ARCHIVE_ROOT
 from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
 from tools.liaison.storage import db as liaison_db
@@ -94,6 +100,11 @@ EVENT_DISCONNECTED = session_client.EVENT_DISCONNECTED
 #: 队列里的第三种事件（TD-42）：SDK 刚刚真的把东西送到了本进程（`authenticated`、
 #: 心跳回包、推送）。值守线程收到它只更新存活戳的 `last_event_at`，⛔ 不改状态。
 EVENT_SDK_ACTIVITY = "sdk_activity"
+
+#: 队列里的第四种事件（8.5bis）：一条入站消息。**只有这一种事件带第三个元素**
+#: （帧本身）——连接事件仍是二元组，⛔ 不许为了"整齐"把它们也改成三元组，那会
+#: 让 test_main_wiring 里一批既有用例的入队形状跟着改，改动面远大于收益。
+EVENT_MESSAGE = session_client.EVENT_MESSAGE
 
 #: 看门狗台账（连续终止计数）。与存活戳同目录、同一个真源推导，⛔ 不另写路径字面量。
 DEFAULT_WATCHDOG_LEDGER_PATH = session.DEFAULT_LIVENESS_PATH.with_name("watchdog.json")
@@ -171,6 +182,82 @@ def apply_connection_event(svc: session.LiaisonSession, name: str, moment: datet
         logger.error("收到未知的连接事件 %r（时间 %s），已忽略", name, moment)
 
 
+@dataclass(frozen=True)
+class InboundPorts:
+    """入站处理要用到的三个外部落点。**默认值就是生产用的那一份。**
+
+    ⚠️ 它存在的理由只有一个：让用例把归档根与名单指到 `tmp_path`，⛔ 不是配置项，
+    ⛔ 不许给它加环境变量开关（口径与 `main()` 那四个接线缝关键字参数一致）。
+
+    `reply`：礼貌回复的外发端口。**现在是 `None`**——本条（8.5bis）⛔ 不发任何真实
+    消息；`handle_inbound_message` 对 `None` 有明确处置（留一条 WARNING，⛔ 不静默）。
+    """
+
+    archive_root: Path = DEFAULT_ARCHIVE_ROOT
+    whitelist_path: Path | None = None
+    reply: Callable[[str, str], object] | None = None
+
+
+def handle_message_frame(
+    svc: session.LiaisonSession,
+    moment: datetime,
+    frame,
+    ports: InboundPorts,
+) -> bool:
+    """值守线程侧的入站处理：帧 → 参数 → 归档／入队／（名单外）回复。
+
+    **跑在值守线程上**，用的是 `svc.conn`——那条独占连接，工程铁律 1 要求的
+    "同一连接、同一 `BEGIN`"由 `handle_inbound_message` 内部的 `effect_*` 保证。
+    ⛔ 不许从 SDK 回调线程调本函数。
+
+    两类异常都**不许打死值守线程**（它死了 = 存活戳停更 = 看门狗把整个进程重启，
+    一条畸形消息⛔ 不配有这种破坏力），但两类的性质不同、日志也分开：
+
+    1. 映射对不上（`InboundFrameUnverifiedError`，现状必走这一支）——**fail-closed，
+       本帧不落库**，并把帧的**键结构**（⛔ 无取值）打进日志，供 AT-1b 填路径表；
+    2. 落库本身失败——材料没落定，ERROR 记清 `msgid`。⛔ 不吞、⛔ 不假装成功。
+
+    返回是否真的落库了（用例据此断言，⛔ 不靠日志文本判断）。
+    """
+    try:
+        fields = frames.compute_inbound_frame(frame)
+    except session_client.SdkSurfaceUnverifiedError as exc:
+        logger.error(
+            "入站帧未落库（帧字段映射未经真实帧确认，fail-closed）：%s｜"
+            "帧结构（只有键名与类型，⛔ 无取值）：%s",
+            exc,
+            frames.describe_frame_shape(frame),
+        )
+        return False
+
+    try:
+        inbound.handle_inbound_message(
+            svc.conn,
+            thread_id=fields.thread_id,
+            msgid=fields.msgid,
+            sender_userid=fields.sender_userid,
+            received_at=session.format_instant(moment),
+            msgtype=fields.msgtype,
+            content=fields.content,
+            # ⛔ 附件恒为 None：帧里的附件**句柄**要再走一次 SDK 下载才变成字节，
+            # 那是一次网络调用，且句柄落在哪个键同样未经真实帧确认。与映射一起
+            # 由 AT-1b 收口（已登记 TD）。⛔ 不许在这里猜一个 URL 去下载。
+            attachment=None,
+            archive_root=ports.archive_root,
+            whitelist_path=ports.whitelist_path,
+            reply=ports.reply,
+        )
+    except Exception:  # noqa: BLE001 —— 见 docstring：⛔ 不许打死值守线程
+        logger.error(
+            "入站消息处理失败，本条未落库。thread_id=%s msgid=%s",
+            fields.thread_id,
+            fields.msgid,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 def run_session_worker(
     svc: session.LiaisonSession,
     events: "queue.Queue",
@@ -178,17 +265,28 @@ def run_session_worker(
     *,
     tick_interval: float = TICK_INTERVAL_SECONDS,
     clock=now,
+    ports: InboundPorts | None = None,
 ) -> None:
     """值守线程主体：处理事件，没事件就盖存活戳。
 
     ⚠️ 事件自带时间戳（回调那一刻取的），这里 ⛔ 不许用 `clock()` 覆盖它——
     否则中断窗口的起点会比真实断线时间晚最多一个心跳间隔。
     """
+    if ports is None:
+        ports = InboundPorts()
     while not stop_event.is_set():
         try:
-            name, moment = events.get(timeout=tick_interval)
+            name, moment, *payload = events.get(timeout=tick_interval)
         except queue.Empty:
             svc.tick(clock())
+            continue
+        if name == EVENT_MESSAGE:
+            # ⚠️ 先记一次"SDK 真的送来了东西"（TD-42 的第二条判据看的就是它）：
+            # 一条真实入站消息是对端在应答的最强证据，⛔ 不许让它只算"消息"不算
+            # "活动"——否则一条消息流量正常、却因 authenticated/日志沉默被看门狗
+            # 判成假死，把一条健康连接拆掉。
+            svc.on_sdk_activity(moment)
+            handle_message_frame(svc, moment, payload[0] if payload else None, ports)
             continue
         apply_connection_event(svc, name, moment)
 
@@ -244,6 +342,14 @@ def main(
     def on_sdk_activity() -> None:
         events.put((EVENT_SDK_ACTIVITY, now()))
 
+    # 8.5bis ③：入站消息回调**只做这一件事**。
+    # 🔴 ⛔ 这个函数体里**永远只许有 `events.put`**：它跑在 SDK 的事件循环线程上，
+    # 碰库会跨线程用值守线程那条 sqlite 连接（工程铁律 1 的事务归属当场破掉），
+    # 碰文件会在回调里做阻塞 IO 把心跳拖住。判据：tests/test_inbound_wiring.py::
+    # test_the_sdk_message_callback_body_only_puts_the_frame_on_the_queue（AST 扫本函数体）。
+    def on_message(frame) -> None:
+        events.put((EVENT_MESSAGE, now(), frame))
+
     sdk_logger = session_client.SdkLogObserver(
         on_activity=on_sdk_activity, on_any_log=loop_stopper.capture
     )
@@ -257,6 +363,7 @@ def main(
             on_disconnected=lambda: events.put((EVENT_DISCONNECTED, now())),
             loop_stopper=loop_stopper,
             on_activity=on_sdk_activity,
+            on_message=on_message,
         )
     except ImportError as exc:
         print(

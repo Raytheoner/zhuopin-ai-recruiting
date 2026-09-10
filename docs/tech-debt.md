@@ -2054,3 +2054,45 @@ CI 日志、粘给别人看的报错里都带着它。这条本身就构成一�
 ⏸ **真实验证留步（Shao Peishen 本人做，⛔ 单测全绿不算验收）**：重启服务后 ① `cat data/liaison/liveness.json`
 看 `last_event_at` 是否每 ~30 秒推进；② 断网／静默 ≥ 13 分钟（600 秒活动阈值 ＋ 180 秒宽限），确认日志出现
 「看门狗终止进程」、进程自行退出并被 launchd 拉起、`data/liaison/watchdog.json` 计数 +1。
+
+---
+
+## TD-43 · `message` 帧的字段映射未经真实帧确认，现为 fail-closed（入站消息一条都不落库）
+
+**登记**：2026-09-10（`[Mac]0910B`，tasks 8.5bis ⑤ 的 fail-closed 支）
+**位置**：`tools/liaison/frames.py` 的 `FIELD_PATHS`
+**级别**：🔴 **阻断 8.6**——接线已通，但没有这张表，入站链路仍然一条都落不了库
+
+**欠的是什么**：`tools/liaison/frames.py` 的 `FIELD_PATHS` **是空的**。SDK 的 `message`
+事件已经订上了（8.5bis，`SUBSCRIBED_EVENTS` 含 `message`），回调、队列、值守线程消费、
+幂等断言全部就位，但「`msgid` / 发送人 userid / 会话 id / 正文 / 附件句柄**落在帧的哪个
+键上**」至今**没有任何真实帧依据** ⇒ `compute_inbound_frame` 一律抛
+`InboundFrameUnverifiedError`，本帧**不落库**，只把帧的**键结构**（⛔ 无取值）打进 ERROR 日志。
+
+**为什么不先猜一版**（这条是刻意的，⛔ 不是没做完）：`thread_id` 与 `msgid` 是归档路径与
+幂等键 `{thread_id}:{node_name}:{business_key}` 的组成部分。猜错的后果不是报错，是
+**归档互相覆盖**或**同一条消息永远重复入队**，而台账里一切正常——与工程铁律 1 要消灭的
+失效形态同族。⇒ 按 TD-19 同一处置：表面未验就不许跑。
+
+**为什么确认不了**（2026-09-10 实测，钉死版本 `wecom-aibot-python-sdk==1.0.2` 包内源码）：
+SDK 只命名了两个字段——`body.msgtype`（`aibot/message_handler.py:34-38`、`types.py:98-114`）
+与 `headers.req_id`（`client.py:130-132`）；`body` 的类型就是 `Any`（`types.py:166`
+`WsFrame = Dict[str, Any]`），其余字段 SDK 原样透传、从不读也从不命名。企微官方文档不算
+依据（8.5bis ⑤ 逐字：「⛔ 不照文档猜」）。win 端 `wecom-aibot-service` 只用它**主动发**
+（`aibot_service/dispatch.py` / `delivery.py` 全是出站），入站解析在那边也不存在。
+
+**触发条件（怎么还）**：**AT-1b** —— `[Mac]0910A` 在主工作区起真实服务、由 Shao Peishen
+本人私信一次机器人；日志里那行「帧结构（只有键名与类型）」就是答案，照它把 `FIELD_PATHS`
+四个键填上（⛔ 只改这张表，别处不动），再把附件句柄那一段接通（见下）。填完后
+`tools/liaison/tests/test_inbound_wiring.py` 里的
+`test_production_field_paths_are_still_unverified_so_mapping_refuses` 会转红——**那是预期的**，
+把它改成"真实映射能取到四个字段"的正向断言即可，⛔ 不许删掉不换。
+
+**一并欠着的**：`handle_message_frame` 传 `attachment=None`。帧里的附件是**句柄**，变成字节
+要再走一次 SDK 下载（一次网络调用），且句柄落在哪个键同样未验。⇒ 与本条同一时点收口。
+⚠️ 与 8.6 灰度的顺序耦合：**文档只能走私信**（`docs/findings/2026-09-09-win端aibot收发实证-
+对8.6灰度的三条影响.md` §二），群里 @ 机器人核不出附件链路，也核不出 TD-22 的 `msgid` 字符集。
+
+**不还的后果**：服务连得上、订得到、日志干净、**`liaison_message` 仍然恒为 0 行**——与
+TD-42「连接假死」的症状**看起来一样**。⚠️ 但两者现在可分辨了：假死时日志**一条 ERROR 都
+没有**，本条则每来一条消息就打一行「帧结构」。⇒ 日志里有帧结构 = 连接是好的、只差这张表。
