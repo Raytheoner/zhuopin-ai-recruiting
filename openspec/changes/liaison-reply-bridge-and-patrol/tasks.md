@@ -6,7 +6,7 @@
 ## 0. 前置门槛（⛔ 本包不实现，只核验；三条都勾才开工）
 
 - [ ] 0.1 核验 **TD-42 已销账且有真实验证记录**：`docs/tech-debt.md` 里 `~~TD-42~~ ✅ 已还（<commit>）` 存在，且销账行引用了一次真实的「假死→自终止→launchd 拉起」实测（⛔ 单测不算）。未满足 ⇒ 本包停在此处，登记接力文档
-- [ ] 0.2 核验 **SDK `message` 事件接线已完成**（`hr-wecom-aibot-liaison` 追加任务 8.5bis，design D6）：`session_client.SUBSCRIBED_EVENTS` 含 `message`；`__main__.py` 值守线程调 `handle_inbound_message`；`test_this_chapter_wires_no_message_handling` 已删。未满足 ⇒ 停，登记待派发
+- [x] 0.2 核验 **SDK `message` 事件接线已完成**（`hr-wecom-aibot-liaison` 追加任务 8.5bis，design D6）：`session_client.SUBSCRIBED_EVENTS` 含 `message`；`__main__.py` 值守线程调 `handle_inbound_message`；`test_this_chapter_wires_no_message_handling` 已删。未满足 ⇒ 停，登记待派发（2026-09-13 `[Mac]0913A` 核验：三条均在 main 上已满足，实现由 `[Mac]0910B AT-1a` 于 2026-09-10 完成并合回，commit `7636613`/`cd48966`；帧字段映射走 **fail-closed**）
 - [ ] 0.3 核验 **一条真实入站已落库**：`data/liaison.db` 的 `liaison_message` ≥1 行、来源为真实企微消息（⛔ 不是测试库）。这是 F1「接线缺失单独就足以造成 0 行」的反证
 
 ## 1. P0 · 回件桥＋第九态（`liaison-reply-bridge`）
