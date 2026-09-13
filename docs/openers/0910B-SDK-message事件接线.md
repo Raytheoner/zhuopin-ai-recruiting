@@ -28,9 +28,17 @@
 
 1. `pwd` 确认在 worktree 内（路径含 `.claude/worktrees/`），`git branch --show-current`
    **不是** `main`／`master`。**报出实际分支名**，⛔ 不要指定或改名。
-2. `git log --oneline -3` 应能看到 2026-09-10 那条 `docs(openspec): 给 hr-wecom-aibot-liaison
-   追加任务 8.5bis…`。看不到 → `git pull --rebase --autostash origin main` 后重看；
-   仍看不到 → 停下报（说明本条前提还没上 main）。
+2. 🔴 **前提是「8.5bis 在不在 `tasks.md` 里」，⛔ 不是「在不在最近几条 git log 里」**（2026-09-10 订正）：
+   判据就是下面第 3 条的 `grep`，命中即前提成立 ⇒ 直接往下走。
+   ⛔ **不许再用 `git log --oneline -3` 找那条 commit 来判前提**——main 上每天都在叠 docs commit，
+   `-3` 这种**带深度上限**的写法会随时间漂移成**假阴性**，而且它给出的结论（「前提还没上 main」）
+   是**反的**，会让本条白停一轮。
+   *实证*：本 opener 写于 09-10 05:27，当时 8.5bis 那条 `ba61a6d` 排第 1；到 09-10 15:xx 已被
+   `a904787` / `541cac1` / `e57ebb6` 等挤到**第 12 条**，而前提**一直成立**。
+   要留痕就用**不带深度上限**的写法：
+   `git log --oneline -S"8.5bis" -- openspec/changes/hr-wecom-aibot-liaison/tasks.md | tail -1`
+   （预期回 `ba61a6d docs(openspec): 追加 8.5bis（SDK message 事件接线）＋ 派 0910B 落档 AT-1a`）。
+   worktree 里看不到 main 的最新提交 → `git pull --rebase --autostash origin main` 后重看。
 3. `grep -n "8.5bis" openspec/changes/hr-wecom-aibot-liaison/tasks.md` 必须命中。
    **本条要做的七件事以该条目为准**，⛔ 不以本文件的复述为准（两者不一致时停下报）。
 4. `grep -n "SUBSCRIBED_EVENTS = " tools/liaison/session_client.py` 应看到**四个**事件
