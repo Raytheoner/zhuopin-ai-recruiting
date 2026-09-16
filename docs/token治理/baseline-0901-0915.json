@@ -1,0 +1,610 @@
+{
+ "by_model": {
+  "opus": {
+   "input": 12610,
+   "cache_create": 19174602,
+   "cache_read": 724322548,
+   "output": 5555717,
+   "cost": 620.9585115000002,
+   "calls": 6304
+  },
+  "sonnet": {
+   "input": 10332,
+   "cache_create": 19677958,
+   "cache_read": 415727517,
+   "output": 1326251,
+   "cost": 145.6235724000001,
+   "calls": 5166
+  },
+  "haiku": {
+   "input": 736,
+   "cache_create": 365106,
+   "cache_read": 2853860,
+   "output": 250,
+   "cost": 0.7437545000000001,
+   "calls": 90
+  }
+ },
+ "total_cost": 767.3258,
+ "total_calls": 11560,
+ "sessions": 416,
+ "ctx_band_calls": {
+  "50–150k": 7547,
+  "150–250k": 1862,
+  "≥250k": 276,
+  "<50k": 1875
+ },
+ "first_ctx_median": {
+  "main": 42701,
+  "subagent": 30606
+ },
+ "by_kind": {
+  "泳道/opener": {
+   "sessions": 102,
+   "cost": 527.588027,
+   "calls": 5152
+  },
+  "交互/其他": {
+   "sessions": 7,
+   "cost": 2.87600365,
+   "calls": 24
+  },
+  "看护": {
+   "sessions": 11,
+   "cost": 60.2199334,
+   "calls": 837
+  },
+  "子代理": {
+   "sessions": 296,
+   "cost": 176.6418743500001,
+   "calls": 5547
+  }
+ },
+ "big_outputs": [
+  [
+   "Bash:sed",
+   114,
+   1715230
+  ],
+  [
+   "Read:2026-09-03-ai-audit-trail-unitU7-boundary-ci.md",
+   9,
+   560574
+  ],
+  [
+   "Read:task-1-brief.md",
+   29,
+   487457
+  ],
+  [
+   "Read:task-2-brief.md",
+   26,
+   444197
+  ],
+  [
+   "Bash:echo",
+   26,
+   418400
+  ],
+  [
+   "Read:task-3-brief.md",
+   24,
+   368126
+  ],
+  [
+   "Read:assertions.py",
+   13,
+   339317
+  ],
+  [
+   "Read:server.py",
+   12,
+   329415
+  ],
+  [
+   "Agent",
+   24,
+   327905
+  ],
+  [
+   "Read:task-4-brief.md",
+   17,
+   271318
+  ],
+  [
+   "Bash:cat SKILL.md",
+   10,
+   265229
+  ],
+  [
+   "Bash:wc",
+   15,
+   245804
+  ],
+  [
+   "Read:task-5-brief.md",
+   12,
+   227910
+  ],
+  [
+   "Read:SKILL.md",
+   7,
+   209895
+  ],
+  [
+   "Read:tasks.md",
+   4,
+   171639
+  ]
+ ],
+ "tools": [
+  [
+   "Bash",
+   9631
+  ],
+  [
+   "Read",
+   1050
+  ],
+  [
+   "Edit",
+   823
+  ],
+  [
+   "Agent",
+   296
+  ],
+  [
+   "Write",
+   265
+  ],
+  [
+   "ToolSearch",
+   112
+  ],
+  [
+   "Skill",
+   86
+  ],
+  [
+   "mcp__ccd_session_mgmt__set_session_title",
+   46
+  ],
+  [
+   "Monitor",
+   38
+  ],
+  [
+   "SendMessage",
+   32
+  ],
+  [
+   "mcp__ccd_session__mark_chapter",
+   21
+  ],
+  [
+   "SendUserFile",
+   19
+  ]
+ ],
+ "most_read": [
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/intake-unit6-approval/.superpowers/sdd/2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/global-constraints.md",
+   16
+  ],
+  [
+   "/Users/paulshao/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/implementer-prompt.md",
+   14
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/unit8-web-list-detail-queue/tests/test_static_frontend.py",
+   13
+  ],
+  [
+   "/Users/paulshao/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/task-reviewer-prompt.md",
+   12
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/unit9-6-exemption-line/app/audit/assertions.py",
+   11
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/hard-requirement/app/agents/hard_requirement.py",
+   11
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/unit8-web-list-detail-queue/app/web/static/index.html",
+   11
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/u7-boundary-ci/scripts/check_boundary.py",
+   10
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/app/graph/nodes.py",
+   9
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/td9-outbound-retry-audit-trace/tests/test_outbound_end_to_end.py",
+   9
+  ]
+ ],
+ "synthetic_msgs": 15,
+ "top": [
+  {
+   "title": "[Mac]0909AC-TD19适配与TD36隔离",
+   "kind": "泳道/opener",
+   "file": "11c80b9d-3f76-454a-bc02-95ee3187d43f.jsonl",
+   "date": "09-09",
+   "model": "opus:144",
+   "calls": 144,
+   "peak_ctx": 350663,
+   "first_ctx": 74201,
+   "cache_read": 32452424,
+   "output": 139150,
+   "cost": 21.65,
+   "agents": 0,
+   "big_outputs": 3
+  },
+  {
+   "title": "[Mac]0909AS-TD42连接假死兜底",
+   "kind": "泳道/opener",
+   "file": "bcc82cf0-ff9f-4186-8aa7-4ef8bb1a7f7d.jsonl",
+   "date": "09-10",
+   "model": "opus:128",
+   "calls": 128,
+   "peak_ctx": 370778,
+   "first_ctx": 67174,
+   "cache_read": 30074663,
+   "output": 158641,
+   "cost": 21.12,
+   "agents": 0,
+   "big_outputs": 4
+  },
+  {
+   "title": "[Mac]0909AH-TD39重连链修复",
+   "kind": "泳道/opener",
+   "file": "e45e0b88-631b-4cdd-aac4-cf010266a24e.jsonl",
+   "date": "09-09",
+   "model": "opus:97",
+   "calls": 97,
+   "peak_ctx": 301489,
+   "first_ctx": 74522,
+   "cache_read": 19089600,
+   "output": 92994,
+   "cost": 13.49,
+   "agents": 0,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0909B-值守第4章消息归档开工",
+   "kind": "泳道/opener",
+   "file": "8b375086-848e-4f5b-ab05-2498f3adf86e.jsonl",
+   "date": "09-08",
+   "model": "opus:125",
+   "calls": 125,
+   "peak_ctx": 246552,
+   "first_ctx": 31156,
+   "cache_read": 17561248,
+   "output": 114747,
+   "cost": 13.11,
+   "agents": 19,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0908B-51四次发版与巡检",
+   "kind": "泳道/opener",
+   "file": "ee1616b6-27ad-4907-bd0e-f2757f812d4b.jsonl",
+   "date": "09-08",
+   "model": "opus:122",
+   "calls": 122,
+   "peak_ctx": 232938,
+   "first_ctx": 72474,
+   "cache_read": 17781484,
+   "output": 88921,
+   "cost": 13.02,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0908D-网关双供应商与重试转人工开工",
+   "kind": "泳道/opener",
+   "file": "f0be567b-3f87-435b-9348-1d463208ccc3.jsonl",
+   "date": "09-08",
+   "model": "opus:105",
+   "calls": 105,
+   "peak_ctx": 264633,
+   "first_ctx": 30545,
+   "cache_read": 16401814,
+   "output": 110470,
+   "cost": 12.54,
+   "agents": 16,
+   "big_outputs": 9
+  },
+  {
+   "title": "[Mac]0909AJ-TD39真实断网复验",
+   "kind": "泳道/opener",
+   "file": "37908e19-17ec-4571-9197-3213574cef39.jsonl",
+   "date": "09-09",
+   "model": "opus:93",
+   "calls": 93,
+   "peak_ctx": 235516,
+   "first_ctx": 74103,
+   "cache_read": 13910330,
+   "output": 90774,
+   "cost": 11.59,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0908O-值守第2章存储基座开工",
+   "kind": "泳道/opener",
+   "file": "8e17f631-83f8-478f-82cb-3617ec7d2433.jsonl",
+   "date": "09-08",
+   "model": "opus:95",
+   "calls": 95,
+   "peak_ctx": 240949,
+   "first_ctx": 29645,
+   "cache_read": 13065500,
+   "output": 110284,
+   "cost": 10.72,
+   "agents": 17,
+   "big_outputs": 4
+  },
+  {
+   "title": "[Mac]0908Q-值守第3章准入名单开工",
+   "kind": "泳道/opener",
+   "file": "49d49489-90af-4355-80ab-1d55a424820b.jsonl",
+   "date": "09-08",
+   "model": "opus:91",
+   "calls": 91,
+   "peak_ctx": 251963,
+   "first_ctx": 30794,
+   "cache_read": 12578017,
+   "output": 115033,
+   "cost": 10.66,
+   "agents": 15,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0904E-intake第7章JD溯源与导出开工",
+   "kind": "泳道/opener",
+   "file": "fbcf3749-d002-4f00-a390-397df4640f02.jsonl",
+   "date": "09-04",
+   "model": "opus:99",
+   "calls": 99,
+   "peak_ctx": 197765,
+   "first_ctx": 42739,
+   "cache_read": 14487580,
+   "output": 60818,
+   "cost": 10.63,
+   "agents": 10,
+   "big_outputs": 4
+  },
+  {
+   "title": "[Mac]0903Q-TD9修复开工与双归档",
+   "kind": "泳道/opener",
+   "file": "9e2814cd-d193-4fa2-b713-ee6afbe04ecc.jsonl",
+   "date": "09-04",
+   "model": "opus:90",
+   "calls": 90,
+   "peak_ctx": 230927,
+   "first_ctx": 43129,
+   "cache_read": 14101538,
+   "output": 82312,
+   "cost": 10.42,
+   "agents": 14,
+   "big_outputs": 3
+  },
+  {
+   "title": "[Mac]0909AD-跟进信群发CLI",
+   "kind": "泳道/opener",
+   "file": "f420fdc9-5d74-4369-af25-fd81a3ab9459.jsonl",
+   "date": "09-09",
+   "model": "opus:98",
+   "calls": 98,
+   "peak_ctx": 227034,
+   "first_ctx": 72706,
+   "cache_read": 14537883,
+   "output": 70842,
+   "cost": 10.22,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0909AE-首次真实建连验证",
+   "kind": "泳道/opener",
+   "file": "08ff8fb0-fafc-4be3-8765-f4bf8a1d08c6.jsonl",
+   "date": "09-09",
+   "model": "opus:86",
+   "calls": 86,
+   "peak_ctx": 253137,
+   "first_ctx": 72569,
+   "cache_read": 13705610,
+   "output": 76712,
+   "cost": 10.09,
+   "agents": 0,
+   "big_outputs": 2
+  },
+  {
+   "title": "[Mac]0909K-值守8.1留存清理开工",
+   "kind": "泳道/opener",
+   "file": "a557df50-6fc1-4d15-80b2-d8c495f096da.jsonl",
+   "date": "09-09",
+   "model": "opus:97",
+   "calls": 97,
+   "peak_ctx": 228763,
+   "first_ctx": 31265,
+   "cache_read": 12510383,
+   "output": 94731,
+   "cost": 9.97,
+   "agents": 17,
+   "big_outputs": 4
+  },
+  {
+   "title": "[Mac]0909AA凭据验证与liaison-venv",
+   "kind": "泳道/opener",
+   "file": "f82acb21-ccf7-4341-8857-7ae80fc4f977.jsonl",
+   "date": "09-09",
+   "model": "opus:99",
+   "calls": 99,
+   "peak_ctx": 206775,
+   "first_ctx": 72982,
+   "cache_read": 13245114,
+   "output": 73013,
+   "cost": 9.87,
+   "agents": 0,
+   "big_outputs": 2
+  },
+  {
+   "title": "[Mac]0908F-需求识别开工(5.3)",
+   "kind": "泳道/opener",
+   "file": "36147e9b-b5f3-4df6-bbdd-e8f52ab40889.jsonl",
+   "date": "09-08",
+   "model": "opus:87",
+   "calls": 87,
+   "peak_ctx": 231640,
+   "first_ctx": 30364,
+   "cache_read": 12059344,
+   "output": 97934,
+   "cost": 9.85,
+   "agents": 15,
+   "big_outputs": 6
+  },
+  {
+   "title": "[Mac]0904L-Web列表详情与转人工队列计划(8.1与8.2与8.4)",
+   "kind": "泳道/opener",
+   "file": "c9e40f6f-e155-4e65-af49-1a17869af0c0.jsonl",
+   "date": "09-04",
+   "model": "opus:69",
+   "calls": 69,
+   "peak_ctx": 230928,
+   "first_ctx": 42725,
+   "cache_read": 11705218,
+   "output": 102830,
+   "cost": 9.73,
+   "agents": 0,
+   "big_outputs": 4
+  },
+  {
+   "title": "[Mac]0909T-留存冲突B与日志留存期",
+   "kind": "泳道/opener",
+   "file": "e605a193-d22e-4223-b08b-910f1a173fd7.jsonl",
+   "date": "09-09",
+   "model": "opus:87",
+   "calls": 87,
+   "peak_ctx": 208832,
+   "first_ctx": 32450,
+   "cache_read": 11577724,
+   "output": 91527,
+   "cost": 9.3,
+   "agents": 0,
+   "big_outputs": 2
+  },
+  {
+   "title": "[Mac]0909Z-泳道批次看护",
+   "kind": "看护",
+   "file": "f50f3022-4122-4330-9d23-03a2b1f6fcff.jsonl",
+   "date": "09-08",
+   "model": "opus:106",
+   "calls": 106,
+   "peak_ctx": 184706,
+   "first_ctx": 72821,
+   "cache_read": 13715659,
+   "output": 39318,
+   "cost": 9.0,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0904K-硬门槛规则提取开工",
+   "kind": "泳道/opener",
+   "file": "49a442f3-fd93-4cf6-b9fc-41c6e3f9252f.jsonl",
+   "date": "09-04",
+   "model": "opus:69",
+   "calls": 69,
+   "peak_ctx": 229010,
+   "first_ctx": 42647,
+   "cache_read": 10140551,
+   "output": 89625,
+   "cost": 8.61,
+   "agents": 14,
+   "big_outputs": 4
+  },
+  {
+   "title": "[Mac]0909I-值守第6章群通知开工",
+   "kind": "泳道/opener",
+   "file": "ed330537-0ddc-4c80-a832-5aeb2b4fbbc3.jsonl",
+   "date": "09-09",
+   "model": "opus:98",
+   "calls": 98,
+   "peak_ctx": 194167,
+   "first_ctx": 31534,
+   "cache_read": 11324082,
+   "output": 65452,
+   "cost": 8.43,
+   "agents": 9,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0904C-intake第6章确认断点开工",
+   "kind": "泳道/opener",
+   "file": "4864660e-c88b-48dc-afdb-22b74e2edaa3.jsonl",
+   "date": "09-04",
+   "model": "opus:87",
+   "calls": 87,
+   "peak_ctx": 194269,
+   "first_ctx": 43095,
+   "cache_read": 10781210,
+   "output": 70166,
+   "cost": 8.22,
+   "agents": 18,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0903H-intake第8章数据与回放(8.2/8.1/8.5)",
+   "kind": "泳道/opener",
+   "file": "cbe5a228-52de-4251-b6c2-b0f34faabc99.jsonl",
+   "date": "09-03",
+   "model": "opus:104",
+   "calls": 104,
+   "peak_ctx": 166496,
+   "first_ctx": 43930,
+   "cache_read": 11876449,
+   "output": 51119,
+   "cost": 8.12,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0908M-值守第1章骨架与SDK可行性开工",
+   "kind": "泳道/opener",
+   "file": "606f0bbd-bc42-4e15-9fdb-0474b850224a.jsonl",
+   "date": "09-08",
+   "model": "opus:85",
+   "calls": 85,
+   "peak_ctx": 190388,
+   "first_ctx": 31115,
+   "cache_read": 10586322,
+   "output": 62677,
+   "cost": 7.97,
+   "agents": 12,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0904Z-泳道批次看护",
+   "kind": "看护",
+   "file": "6f0b5370-3c7f-4cf7-89e9-8352d5990519.jsonl",
+   "date": "09-04",
+   "model": "sonnet:119",
+   "calls": 119,
+   "peak_ctx": 352010,
+   "first_ctx": 84274,
+   "cache_read": 27236784,
+   "output": 169893,
+   "cost": 7.88,
+   "agents": 1,
+   "big_outputs": 1
+  }
+ ]
+}
