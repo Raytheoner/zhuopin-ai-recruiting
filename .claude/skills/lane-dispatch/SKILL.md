@@ -85,6 +85,17 @@ ls -t docs/superpowers/plans/*.md | head -6   # 哪些单元的 plan 已就绪
 只有推理密集的条目（openspec design、疑难并发/状态机调试）才在【设置】行末尾加 `｜ 模型: Opus`；dry-run 每条会打印「模型 X（来源）」，核对这一行。
 写了 Opus/Sonnet/Haiku 以外的值 ⇒ 预检 exit 13 拒跑。`--model` 命令行参数是整批覆盖，launchd 请求文件路不接受它（白名单外），⛔ 不要试图用它。
 
+**长 run-build 按 Task 拆成同泳道串行多条（2026-09-16 Token 治理 P7·A 路）**：
+依据 `docs/token治理/P7-拆段推演.md`——P0 基线里能靠拆分省钱的全是 run-build 建造 opener（每条 91–125 次调用，主会话逐个派子代理时上下文一路累积）。
+- 判据：plan 的 `### Task` ≥ 5 ⇒ 拆成同一泳道里连续几条，每条 ≤ 3 个 Task，块内写明「Task a–b」
+- 第 1 条：建 worktree 分支，执行 Task 1–3，逐条提交在分支上；⛔ 不做 final review、⛔ 不合 main、⛔ 不删 worktree、⛔ 不回勾 tasks.md
+- 中间条：进同一个 worktree，从 superpowers 进度台账续跑「Task a–b」，同样只提交在分支上
+- 最后一条：做完剩余 Task ＋ 全分支 final review ＋ 合回 main ＋ 回勾 ＋ 清 worktree（run-build 原收口动作全在这一条）
+- 交接只靠文件：分支名、worktree 路径、上一条的 commit hash 写进下一条块内「前置」；⛔ 不传对话。前置核验＝`git log <分支> --oneline` 能看到上一条的提交
+- 某条 FAIL/NO-SENTINEL ⇒ 同泳道后续条自动不跑（run-lanes 现有语义），修好后 `--only` 从该条续
+- 确实不能拆（Task 间共享进程内状态、必须一口气调通）⇒ 块内写「拆分豁免：<理由>」
+- **机器闸**：④ dry-run 之后跑 `python3 scripts/opener_split_check.py`，退出码 1 ⇒ 按提示拆或写豁免，⛔ 不许绕过
+
 ### ④ 核对并发车
 
 ```bash
