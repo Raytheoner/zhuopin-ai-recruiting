@@ -133,3 +133,12 @@ def test_mcp_on_opt_in_skips_strict_flag(sandbox):
     c = calls_for(sandbox)
     assert "--strict-mcp-config" in c["0101A"]
     assert "--strict-mcp-config" not in c["0101B"]
+
+
+def test_bold_sentinel_counts_as_done(sandbox):
+    fake = sandbox["script"].parent / "bin" / "claude"
+    fake.write_text(fake.read_text(encoding="utf-8").replace("echo OPENER_DONE", "echo '**OPENER_DONE**'"), encoding="utf-8")
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101A")
+    assert r.returncode == 0, r.stdout + r.stderr
+    results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
+    assert results.read_text(encoding="utf-8").split("\t")[2] == "OK"

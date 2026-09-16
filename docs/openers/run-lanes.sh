@@ -587,8 +587,9 @@ run_lane() {
     t1=$(date +%s); mins=$(( (t1 - t0) / 60 ))
 
     # 哨兵扫全文，不扫 tail —— 原版实测哨兵落在第 2 行，扫 tail 会误判
-    if   grep -qE '^OPENER_DONE[[:space:]]*$' "$log"; then sentinel=DONE
-    elif grep -qE '^OPENER_PARTIAL'           "$log"; then sentinel=PARTIAL
+    # 容忍模型把哨兵加粗/包反引号（2026-09-16 0916K 实证：输出 `**OPENER_DONE**`，活已干完却判 NO-SENTINEL）
+    if   grep -qE '^[*`_]*OPENER_DONE[*`_]*[[:space:]]*$' "$log"; then sentinel=DONE
+    elif grep -qE '^[*`_]*OPENER_PARTIAL'                   "$log"; then sentinel=PARTIAL
     else sentinel=NONE; fi
 
     # 撞预算上限单独成一档：它和真失败的退出码一样，但**活可能已经干完**，
