@@ -30,6 +30,7 @@ from app.storage.idempotency import idempotent_effect
 EFFECT_NODE_TO_TABLE = {
     "effect_archive_message": "liaison_message",
     "effect_enqueue_task": "liaison_task",
+    "effect_unpack_audit": "liaison_unpack_audit",
 }
 
 
@@ -81,3 +82,38 @@ def effect_enqueue_task(
         (business_key, thread_id, sender_userid, received_at, summary),
     )
     return cursor.lastrowid
+
+
+@idempotent_effect("effect_unpack_audit")
+def effect_unpack_audit(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    sender_userid: str,
+    letter_number: str | None,
+    kind: str,
+    detail: str = "",
+) -> str:
+    """写一条拆件审计记录。`business_key` 调用方必须传 `f"{msgid}:{kind}"`
+    （design D11 的幂等键是 `{thread_id}:effect_unpack_audit:{msgid}:{kind}`，
+    而 `idempotent_effect` 固定拼 `f"{thread_id}:{node_name}:{business_key}"`，
+    ⛔ 不能只传 `msgid`——那会让同一条消息的 `bridge_marked`／`bridge_failed`
+    等不同 `kind` 互相当成重复短路掉）。
+
+    `msgid` 本身不单独入参：调用方已经把它编进 `business_key`，这里如果
+    再单独存一列 `msgid`，两处必须永远一致，不如从 `business_key` 里切出来，
+    但为了 SQL 按 msgid 查询方便，仍然显式建了 `msgid` 列——因此调用方
+    还要把裸 `msgid` 通过下面这行插入。⚠️ 这不是重复存储两份真源：
+    `business_key`（幂等键分量）与 `msgid`（业务列）服务于不同目的，
+    `msgid` 列的值就是从 `business_key` 按 `:` 切出来的第一段，
+    由调用方保证一致（`run_bridge` 是唯一调用方）。
+    """
+    msgid = business_key.split(":", 1)[0]
+    cursor = conn.execute(
+        "INSERT INTO liaison_unpack_audit "
+        "(thread_id, msgid, sender_userid, letter_number, kind, detail) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (thread_id, msgid, sender_userid, letter_number, kind, detail),
+    )
+    return str(cursor.lastrowid)

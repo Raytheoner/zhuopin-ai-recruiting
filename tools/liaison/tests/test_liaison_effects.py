@@ -19,6 +19,7 @@ from tools.liaison.storage.effects import (
     EFFECT_NODE_TO_TABLE,
     effect_archive_message,
     effect_enqueue_task,
+    effect_unpack_audit,
 )
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -1276,6 +1277,95 @@ def test_constraint_violation_in_archive_write_leaves_no_trace(conn):
     assert result == "m-bad"
     assert conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 1
+    assert_effect_log_identity(conn)
+
+
+def test_unpack_audit_table_exists_with_all_nine_kind_values(conn):
+    kinds = [
+        "bridge_marked",
+        "bridge_skipped_no_inflight",
+        "bridge_refused_serial_violation",
+        "bridge_skipped_already_marked",
+        "bridge_failed",
+        "signal_file_replaced",
+        "dispatch_started",
+        "dispatch_skipped_busy",
+        "dispatch_failed",
+    ]
+    for kind in kinds:
+        conn.execute(
+            "INSERT INTO liaison_unpack_audit (thread_id, msgid, sender_userid, kind) "
+            "VALUES (?, ?, ?, ?)",
+            ("t1", f"msg-{kind}", "u1", kind),
+        )
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM liaison_unpack_audit").fetchone()[0] == len(kinds)
+
+
+def test_unpack_audit_table_rejects_an_unknown_kind(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO liaison_unpack_audit (thread_id, msgid, sender_userid, kind) "
+            "VALUES (?, ?, ?, ?)",
+            ("t1", "msg-1", "u1", "not_a_real_kind"),
+        )
+
+
+def test_effect_unpack_audit_is_idempotent_per_msgid_and_kind(conn):
+    effect_unpack_audit(
+        conn,
+        thread_id="ShaoPeiShen",
+        business_key="msg-1:bridge_marked",
+        sender_userid="ShaoPeiShen",
+        letter_number="人事部#1",
+        kind="bridge_marked",
+    )
+    effect_unpack_audit(
+        conn,
+        thread_id="ShaoPeiShen",
+        business_key="msg-1:bridge_marked",
+        sender_userid="ShaoPeiShen",
+        letter_number="人事部#1",
+        kind="bridge_marked",
+    )
+    assert conn.execute(
+        "SELECT COUNT(*) FROM liaison_unpack_audit WHERE msgid = 'msg-1'"
+    ).fetchone()[0] == 1
+
+
+def test_effect_unpack_audit_allows_different_kinds_for_the_same_msgid(conn):
+    effect_unpack_audit(
+        conn,
+        thread_id="ShaoPeiShen",
+        business_key="msg-1:bridge_marked",
+        sender_userid="ShaoPeiShen",
+        letter_number="人事部#1",
+        kind="bridge_marked",
+    )
+    effect_unpack_audit(
+        conn,
+        thread_id="ShaoPeiShen",
+        business_key="msg-1:dispatch_started",
+        sender_userid="ShaoPeiShen",
+        letter_number="人事部#1",
+        kind="dispatch_started",
+    )
+    assert conn.execute(
+        "SELECT COUNT(*) FROM liaison_unpack_audit WHERE msgid = 'msg-1'"
+    ).fetchone()[0] == 2
+
+
+def test_unpack_audit_effect_log_identity_holds(conn):
+    """铁律 1 的恒等不变式：登记进 EFFECT_NODE_TO_TABLE 之后，通用脚手架
+    `assert_effect_log_identity` 直接可以验证本节点，不需要另写断言。"""
+    effect_unpack_audit(
+        conn,
+        thread_id="ShaoPeiShen",
+        business_key="msg-1:bridge_marked",
+        sender_userid="ShaoPeiShen",
+        letter_number="人事部#1",
+        kind="bridge_marked",
+    )
     assert_effect_log_identity(conn)
 
 

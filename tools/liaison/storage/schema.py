@@ -184,7 +184,50 @@ CREATE INDEX IF NOT EXISTS idx_liaison_group_notify_state
     ON liaison_group_notify (state, created_at);
 """
 
+#: P0/P1 共用的拆件审计表（design D11）。append-only，⛔ 不得就地改写既有行
+#: （合规红线：本表是"AI 只做排序推荐，不做自动淘汰"之外另一条不可回滚的
+#: 审计契约——第九态是否真的发生、何时发生，只有这张表说了算）。
+#:
+#: `kind` 的九个取值里，本表由 P0（回件桥）建，但 P1（信号与打标即开班）
+#: 会往同一张表写 `signal_file_replaced`/`dispatch_*` 四个值——CHECK 约束
+#: 必须把全部九个值一次性放进去，不能只放 P0 用得到的五个，否则 P1 一上线
+#: 这条 CHECK 就会拒绝合法写入。
+UNPACK_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS liaison_unpack_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- 与 effect_log 同域：assert_effect_log_identity 的通用脚手架按 thread_id
+    -- 分组比对 effect_log 与业务表的行数，本表必须带这一列才能被那套脚手架
+    -- 直接复用（端到端提取验证实测发现：不带这一列会在 Task 4 Step 6 炸出
+    -- `sqlite3.OperationalError: no such column: thread_id`）。
+    thread_id TEXT NOT NULL,
+    msgid TEXT NOT NULL,
+    sender_userid TEXT NOT NULL,
+    letter_number TEXT,
+    kind TEXT NOT NULL CHECK (kind IN (
+        'bridge_marked',
+        'bridge_skipped_no_inflight',
+        'bridge_refused_serial_violation',
+        'bridge_skipped_already_marked',
+        'bridge_failed',
+        'signal_file_replaced',
+        'dispatch_started',
+        'dispatch_skipped_busy',
+        'dispatch_failed'
+    )),
+    detail TEXT NOT NULL DEFAULT '',
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 「按消息与结果计数」（spec 原文）要按 msgid 分组，也要按 kind 分组。
+CREATE INDEX IF NOT EXISTS idx_liaison_unpack_audit_msgid ON liaison_unpack_audit (msgid);
+CREATE INDEX IF NOT EXISTS idx_liaison_unpack_audit_kind ON liaison_unpack_audit (kind, at);
+"""
+
 #: 本服务的全量 DDL。
 SCHEMA = (
-    EFFECT_LOG_SCHEMA + MESSAGE_AND_TASK_SCHEMA + OUTAGE_WINDOW_SCHEMA + GROUP_NOTIFY_SCHEMA
+    EFFECT_LOG_SCHEMA
+    + MESSAGE_AND_TASK_SCHEMA
+    + OUTAGE_WINDOW_SCHEMA
+    + GROUP_NOTIFY_SCHEMA
+    + UNPACK_AUDIT_SCHEMA
 )
