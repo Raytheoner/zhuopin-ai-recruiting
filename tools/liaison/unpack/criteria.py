@@ -12,8 +12,11 @@
 
 from __future__ import annotations
 
+import argparse
 import datetime
+import os
 import re
+import sys
 from pathlib import Path
 
 # tools/liaison/unpack/criteria.py → parents[0]=unpack, [1]=liaison, [2]=tools, [3]=仓库根
@@ -104,11 +107,6 @@ def compute_criteria_transition(
         lines[index] = "|".join(cells)
         return "".join(lines), True
     raise LookupError(id)
-
-
-import argparse
-import os
-import sys
 
 
 def build_parser() -> argparse.ArgumentParser:
