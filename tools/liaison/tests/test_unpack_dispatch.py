@@ -132,3 +132,228 @@ def test_build_headless_argv_shape():
 def test_default_budget_env_name_and_value():
     assert BUDGET_ENV == "HR_LIAISON_UNPACK_BUDGET_USD"
     assert DEFAULT_BUDGET_USD == "5"
+
+
+# 追加到 tools/liaison/tests/test_unpack_dispatch.py 末尾
+"""🔴 本节起，测试文件文首那条纪律再强调一次：以下用例的 `popen` 参数一律是
+fake（`_FakeProcess`/`_raising_popen`），⛔ 没有一条调用真实 subprocess.Popen。
+"""
+
+import io
+import json
+from datetime import datetime, timezone
+
+from tools.liaison.unpack.dispatch import DispatchOutcome, dispatch_headless_unpack
+
+
+class _FakeStdin(io.BytesIO):
+    def close(self):
+        self.closed_with = self.getvalue()
+        super().close()
+
+
+class _FakeProcess:
+    def __init__(self, pid: int = 4242):
+        self.pid = pid
+        self.stdin = _FakeStdin()
+
+
+def _fake_popen_factory(process: "_FakeProcess"):
+    calls = []
+
+    def _popen(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return process
+
+    _popen.calls = calls
+    return _popen
+
+
+NOW = datetime(2026, 9, 10, 14, 3, 0, tzinfo=timezone.utc)
+
+
+def test_dispatch_charter_missing_is_failed_without_touching_anything(tmp_path):
+    popen = _fake_popen_factory(_FakeProcess())
+    outcome = dispatch_headless_unpack(
+        charter_text=None,
+        prompt="prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome == DispatchOutcome(status="failed", reason="charter_missing", pid=None, log_path=None)
+    assert popen.calls == []
+    assert not (tmp_path / "logs").exists()
+    assert not (tmp_path / "lock.json").exists()
+
+
+def test_dispatch_skipped_busy_when_lock_alive(tmp_path, monkeypatch):
+    lock_path = tmp_path / "lock.json"
+    lock_path.write_text('{"pid": 99999, "started_at": "x", "log": "y"}', encoding="utf-8")
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: True
+    )
+    popen = _fake_popen_factory(_FakeProcess())
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=lock_path,
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome.status == "skipped_busy"
+    assert popen.calls == []
+
+
+def test_dispatch_log_dir_unwritable_is_failed(tmp_path, monkeypatch):
+    # 把 log_dir 的父目录做成一个文件，mkdir(parents=True) 必炸 NotADirectoryError（OSError 子类）。
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: "/usr/local/bin/claude"
+    )
+    popen = _fake_popen_factory(_FakeProcess())
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        log_dir=blocker / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome.status == "failed"
+    assert outcome.reason == "log_file_failed"
+    assert popen.calls == []
+
+
+def test_dispatch_binary_not_found_is_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: None
+    )
+    popen = _fake_popen_factory(_FakeProcess())
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome.status == "failed"
+    assert outcome.reason == "binary_not_found"
+    assert popen.calls == []
+
+
+def test_dispatch_popen_raises_is_process_create_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: "/usr/local/bin/claude"
+    )
+
+    def _raising_popen(argv, **kwargs):
+        raise FileNotFoundError("二进制没了")
+
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=_raising_popen,
+    )
+    assert outcome.status == "failed"
+    assert outcome.reason == "process_create_failed"
+    assert not (tmp_path / "lock.json").exists()
+
+
+def test_dispatch_started_writes_lock_and_stdin_and_does_not_wait(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: "/usr/local/bin/claude"
+    )
+    process = _FakeProcess(pid=4242)
+    popen = _fake_popen_factory(process)
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="给拆件会话的完整 prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome.status == "started"
+    assert outcome.pid == 4242
+    # 非阻塞：fake process 没有 wait() 方法，能走到这里就证明本函数没调它。
+    assert not hasattr(process, "wait_called")
+    # stdin 写了 prompt 并关闭。
+    assert process.stdin.closed_with == "给拆件会话的完整 prompt".encode("utf-8")
+    assert process.stdin.closed is True
+    # 锁文件已写。
+    lock_payload = json.loads((tmp_path / "lock.json").read_text(encoding="utf-8"))
+    assert lock_payload["pid"] == 4242
+    # popen 的 argv/cwd/stdin/stdout/stderr 形状正确。
+    argv, kwargs = popen.calls[0]
+    assert argv[0] == "/usr/local/bin/claude"
+    assert kwargs["stdin"] is not None
+    assert kwargs["cwd"] == str(_repo_root_for_test())
+
+
+def _repo_root_for_test():
+    from tools.liaison.unpack.dispatch import REPO_ROOT
+
+    return REPO_ROOT
+
+
+def test_dispatch_never_raises_even_on_unexpected_stdin_error(tmp_path, monkeypatch):
+    """第四类失败——「其它未预期异常」：stdin.write 抛异常时不上抛、返回 failed。"""
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: "/usr/local/bin/claude"
+    )
+
+    class _BrokenStdinProcess:
+        pid = 5555
+
+        class _stdin:
+            @staticmethod
+            def write(data):
+                raise BrokenPipeError("对端已关闭")
+
+            @staticmethod
+            def close():
+                pass
+
+        stdin = _stdin()
+
+    popen = _fake_popen_factory(_BrokenStdinProcess())
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome.status == "failed"
+    assert outcome.reason == "unexpected_error"

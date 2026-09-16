@@ -11,7 +11,10 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -111,3 +114,120 @@ def build_headless_argv(claude_bin: str, budget: str) -> list[str]:
     ⛔ 绝不使用跳过全部确认的模式（合规红线 + design D4）。
     """
     return [claude_bin, *HEADLESS_ARGV_FIXED_PART, "--max-budget-usd", budget]
+
+
+# tools/liaison/unpack/dispatch.py → parents[0]=unpack, [1]=liaison, [2]=tools, [3]=仓库根
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@dataclass(frozen=True)
+class DispatchOutcome:
+    """一次起活尝试的结果。`status` 三态对应 spec「起活审计三态」。"""
+
+    status: str  # "started" | "skipped_busy" | "failed"
+    reason: str | None = None
+    pid: int | None = None
+    log_path: str | None = None
+
+
+class _ClaudeBinaryNotFound(Exception):
+    """内部哨兵：区分「二进制解析失败」与「popen 本身抛异常」，两者的审计
+    `reason` 不同（`binary_not_found` vs `process_create_failed`），⛔ 不让
+    调用方看到——只在本函数体内捕获。"""
+
+
+def _utc_log_stamp(now: datetime) -> str:
+    """日志文件名用 UTC 戳（design D12，⚠️ 与台账的 CST 口径故意不同——
+    台账是给人看的，日志戳只用于排序与去重，用 UTC 免去夏令时/时区换算的坑）。
+    """
+    return now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def _write_lock_atomic(path: Path, *, pid: int, started_at: datetime, log_path: Path) -> None:
+    payload = {
+        "pid": pid,
+        "started_at": started_at.astimezone(timezone.utc).isoformat(timespec="microseconds"),
+        "log": str(log_path),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def dispatch_headless_unpack(
+    *,
+    charter_text: str | None,
+    prompt: str,
+    log_dir: Path,
+    lock_path: Path,
+    env: Mapping[str, str],
+    now: datetime,
+    popen: Callable[..., Any] = subprocess.Popen,
+) -> DispatchOutcome:
+    """非阻塞起一个拆件会话。⛔ **本函数不读写信号文件**（spec 明写）——信号由
+    `bridge.run_bridge` 追加、由 `unpack-signal --clear` 清除，两头都不是这里。
+
+    四类失败——`charter_missing` / `log_file_failed` /
+    `binary_not_found`+`process_create_failed`（同属「进程创建失败」一类，
+    两个具体原因） / `unexpected_error`——**全部**转成 `DispatchOutcome(status="failed")`
+    返回，⛔ 一个 `raise` 都不许漏到调用方。
+    """
+    if charter_text is None:
+        return DispatchOutcome(status="failed", reason="charter_missing")
+
+    try:
+        lock_text = lock_path.read_text(encoding="utf-8") if lock_path.is_file() else None
+    except OSError:
+        # 锁文件读不出来，按 spec「查询失败归不存活」同一精神处理——不存活即不忙。
+        lock_text = None
+    if compute_is_busy(lock_text, compute_is_alive):
+        return DispatchOutcome(status="skipped_busy")
+
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{_utc_log_stamp(now)}.log"
+        log_file = open(log_path, "wb")
+    except OSError as exc:
+        logger.error("拆件会话日志文件建不了：%s", log_path if 'log_path' in dir() else log_dir, exc_info=True)
+        return DispatchOutcome(status="failed", reason="log_file_failed")
+
+    try:
+        try:
+            claude_bin = resolve_claude_bin(env)
+            if claude_bin is None:
+                raise _ClaudeBinaryNotFound()
+            budget = (env.get(BUDGET_ENV) or DEFAULT_BUDGET_USD).strip()
+            argv = build_headless_argv(claude_bin, budget)
+            process = popen(
+                argv,
+                cwd=str(REPO_ROOT),
+                stdin=subprocess.PIPE,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=dict(env),
+            )
+        except _ClaudeBinaryNotFound:
+            return DispatchOutcome(status="failed", reason="binary_not_found")
+        except Exception as exc:
+            logger.error("拆件会话进程创建失败：%s", exc, exc_info=True)
+            return DispatchOutcome(status="failed", reason="process_create_failed")
+    finally:
+        # Popen 已经把 log_file 的 fd 复制给子进程（POSIX 语义）；父进程这边
+        # 关闭它不影响子进程继续写——⛔ 不许因为"看起来该等"就调 process.wait()，
+        # 那会把值守线程拖进拆件会话的整个生命周期，违反「不阻塞」。
+        log_file.close()
+
+    try:
+        if process.stdin is not None:
+            process.stdin.write(prompt.encode("utf-8"))
+            process.stdin.close()
+        _write_lock_atomic(lock_path, pid=process.pid, started_at=now, log_path=log_path)
+    except Exception as exc:
+        logger.error(
+            "拆件会话已起（pid=%s）但收尾步骤失败（写 prompt / 写锁）：%s",
+            getattr(process, "pid", None), exc, exc_info=True,
+        )
+        return DispatchOutcome(status="failed", reason="unexpected_error")
+
+    return DispatchOutcome(status="started", pid=process.pid, log_path=str(log_path))
