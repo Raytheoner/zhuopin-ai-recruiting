@@ -198,16 +198,17 @@ def load_whitelist(path: Path | None = None) -> frozenset[str]:
         path = DEFAULT_WHITELIST_PATH
     failures = _FailureLog()
     try:
-        return _read_roster(path, failures)
+        members = _read_roster_members(path, failures)
+        return frozenset(userid for userid, _name in members)
     except Exception as exc:  # noqa: BLE001
-        # 兜底带：_read_roster 已按类型分支捕获了预期失败。这里接住的是未预期的
+        # 兜底带：_read_roster_members 已按类型分支捕获了预期失败。这里接住的是未预期的
         # 异常——⛔ 不允许它逃到调用方——spec 要求"任何判定路径上的失败结果
         # 都必须是未命中"。
         #
         # 真实原因（终审 Critical 实测纠正过一版过于乐观的评估）：这里接住的
         # 异常不是本模块写的，是 `yaml.safe_load` 内部——PyYAML 对 `!!int`
         # `!!bool` 这类标签在标量构造失败时，抛的是 `ValueError`/`KeyError`
-        # 而不是 `yaml.YAMLError`，绕过了上面 `_read_roster` 里专门加固的
+        # 而不是 `yaml.YAMLError`，绕过了上面 `_read_roster_members` 里专门加固的
         # YAMLError 分支。这些异常的 **消息本身**（`str(exc)`）原样嵌着触发
         # 解析失败的标量文本——例如 `invalid literal for int() with base 10:
         # '13800138000abc'`——如果那段文本是配置里的手机号，`exc_info=True`
@@ -241,6 +242,57 @@ def load_whitelist(path: Path | None = None) -> frozenset[str]:
         return frozenset()
     finally:
         failures.finish()
+
+
+def load_whitelist_names(path: Path | None = None) -> dict[str, str]:
+    """读名单文件，返回 userid → name 的映射。
+
+    与 `load_whitelist()` 共用 `_read_roster_members()` 这同一套 YAML 解析、
+    fail-closed、TD-15 去重日志管线，⛔ 不重写一份新的解析逻辑。
+
+    `name` 为空或非字符串的成员**不会**出现在返回的映射里（但仍然会出现在
+    `load_whitelist()` 的 userid 集合里——两个函数对同一条脏数据的容忍度
+    不同是刻意的：`load_whitelist()` 只关心"能不能识别这个人"，本函数关心
+    "能不能显示这个人的名字"，后者的门槛更高、后果更轻——查不到姓名只是
+    `run_bridge` 那边把这条消息当"无在途信"处理，不是拒绝整个人的准入）。
+    """
+    if path is None:
+        path = DEFAULT_WHITELIST_PATH
+    failures = _FailureLog()
+    try:
+        members = _read_roster_members(path, failures)
+    except Exception as exc:  # noqa: BLE001
+        frames = "; ".join(
+            f"{frame.filename}:{frame.lineno}:{frame.name}"
+            for frame in traceback.extract_tb(exc.__traceback__)
+        )
+        if failures.fingerprint is None:
+            failures.fingerprint = _content_fingerprint(
+                f"{type(exc).__name__}|{path!r}".encode("utf-8", "replace")
+            )
+        failures.error(
+            "准入名单加载出现未预期异常（姓名映射），按空映射处理（⛔ 不记录异常消息本身）："
+            "path=%s error_type=%s frames=%s",
+            path,
+            type(exc).__name__,
+            frames,
+        )
+        return {}
+    finally:
+        failures.finish()
+
+    names: dict[str, str] = {}
+    for userid, raw_name in members:
+        if isinstance(raw_name, str) and raw_name.strip():
+            names[userid] = raw_name.strip()
+        else:
+            failures.error(
+                "准入名单里 userid=%s 的 name 为空或非字符串，该成员不会出现在姓名映射里"
+                "（仍出现在 load_whitelist() 的 userid 集合里）：path=%s",
+                userid,
+                path,
+            )
+    return names
 
 
 def admit(sender_userid: Any, path: Path | None = None) -> bool:
@@ -280,7 +332,7 @@ def _yaml_error_location(exc: yaml.YAMLError) -> str:
     return " " + " ".join(parts)
 
 
-def _read_roster(path: Path, failures: _FailureLog) -> frozenset[str]:
+def _read_roster_members(path: Path, failures: _FailureLog) -> list[tuple[str, Any]]:
     # TD-16 ③：类型标注写的是 `Path`，但第 4／5 章的调用方完全可能传字符串。
     # 不归一化的话 `str` 会一路走到 `.read_text` 才炸成"未预期异常"——
     # fail-closed 正确但诊断错位（运维看到的是内部异常，不是"文件读不到"）。
@@ -297,7 +349,7 @@ def _read_roster(path: Path, failures: _FailureLog) -> frozenset[str]:
         # directory: '...'"），不会携带文件*内容*——这里 err=%s 是安全的，
         # 不需要像下面 YAMLError 分支那样做行列号改写。
         failures.error("准入名单不可读，按空名单全拒：path=%s err=%s", path, exc)
-        return frozenset()
+        return []
 
     failures.fingerprint = _roster_fingerprint(path, raw_bytes)
 
@@ -317,7 +369,7 @@ def _read_roster(path: Path, failures: _FailureLog) -> frozenset[str]:
             exc.start,
             exc.reason,
         )
-        return frozenset()
+        return []
 
     try:
         document = yaml.load(raw, Loader=_NoDuplicateKeySafeLoader)  # noqa: S506
@@ -333,12 +385,12 @@ def _read_roster(path: Path, failures: _FailureLog) -> frozenset[str]:
             exc.line,
             exc.column,
         )
-        return frozenset()
+        return []
     except yaml.YAMLError as exc:
         # ⛔ 故意不记 str(exc) / exc.problem / problem_mark.get_snippet()。
         # PyYAML 的报错信息内嵌出错行的源码片段（Mark.__str__ 会触发
         # get_snippet()），如果运维往名单里填了手机号又恰好写坏了文件，
-        # 号码会原样被这个片段转印进日志——绕开 `_validated_userid` 里
+        # 号码会原样被这个片段转印进日志——绕开 `_validated_member` 里
         # 做的全部字段名/值区分。这里只取行列号定位问题，不取内容，
         # 不要为了"调试方便"把异常文本加回来。
         failures.error(
@@ -349,11 +401,11 @@ def _read_roster(path: Path, failures: _FailureLog) -> frozenset[str]:
             type(exc).__name__,
             _yaml_error_location(exc),
         )
-        return frozenset()
+        return []
 
     if not isinstance(document, Mapping):
         failures.error("准入名单顶层不是映射，按空名单全拒：path=%s", path)
-        return frozenset()
+        return []
 
     top_level_extra = set(document.keys()) - ALLOWED_TOP_LEVEL_KEYS
     if top_level_extra:
@@ -368,32 +420,36 @@ def _read_roster(path: Path, failures: _FailureLog) -> frozenset[str]:
             sorted(ALLOWED_TOP_LEVEL_KEYS),
             path,
         )
-        return frozenset()
+        return []
 
     members = document.get("members")
     if not isinstance(members, list):
         failures.error("准入名单缺 members 列表或类型不对，按空名单全拒：path=%s", path)
-        return frozenset()
+        return []
 
-    admitted = {
-        userid
+    validated = [
+        pair
         for index, entry in enumerate(members)
-        if (userid := _validated_userid(entry, index, path, failures)) is not None
-    }
+        if (pair := _validated_member(entry, index, path, failures)) is not None
+    ]
 
-    if not admitted:
+    if not validated:
         failures.error("准入名单为零条有效条目，全部发送人判为未命中：path=%s", path)
 
-    return frozenset(admitted)
+    return validated
 
 
-def _validated_userid(
+def _validated_member(
     entry: Any, index: int, path: Path, failures: _FailureLog
-) -> str | None:
-    """校验单条名单条目。不合格返回 None（整条丢弃），并记 ERROR。
+) -> tuple[str, Any] | None:
+    """校验单条名单条目，返回 `(userid, 原始 name 值)` 或 `None`（整条丢弃）。
 
-    ⛔ 日志只写字段**名**，绝不写字段**值**——多余字段的值恰恰可能就是
-    手机号／邮箱这类不该被采集的个人信息，写进日志等于把它换个地方留存。
+    ⛔ 校验规则与原 `_validated_userid` 逐字相同——只有 `userid` 无效才丢弃
+    整条。`name` 的取值合法性检查刻意**不**放在这里，放到
+    `load_whitelist_names` 自己的聚合步骤：如果这里连 `name` 的值也校验，
+    一条"`userid` 合法但 `name` 恰好是空串"的记录会突然从 `load_whitelist()`
+    的结果里消失——那是新增 `name` 消费方引入的、与 `load_whitelist()`
+    毫无关系的副作用，`load_whitelist()` 现有近 30 条用例都假设了这条不发生。
     """
     if not isinstance(entry, Mapping):
         failures.error("准入名单第 %d 条不是映射，整条丢弃：path=%s", index, path)
@@ -427,4 +483,4 @@ def _validated_userid(
         )
         return None
 
-    return userid.strip()
+    return userid.strip(), entry["name"]

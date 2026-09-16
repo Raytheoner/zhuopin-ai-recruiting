@@ -778,6 +778,57 @@ def test_str_path_loads_like_a_path_object(tmp_path):
     assert admit("TangLiPing", str(path)) is True
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Task 5: `load_whitelist_names` 映射函数
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_load_whitelist_names_maps_userid_to_name(tmp_path):
+    from tools.liaison.whitelist import load_whitelist_names
+
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        "members:\n"
+        "  - userid: TangLiPing\n"
+        "    name: 汤丽萍\n"
+        "    role: HR\n",
+        encoding="utf-8",
+    )
+    assert load_whitelist_names(path) == {"TangLiPing": "汤丽萍"}
+
+
+def test_load_whitelist_names_returns_empty_dict_on_missing_file(tmp_path):
+    from tools.liaison.whitelist import load_whitelist_names
+
+    assert load_whitelist_names(tmp_path / "absent.yaml") == {}
+
+
+def test_load_whitelist_names_does_not_break_load_whitelist_when_name_is_blank(tmp_path):
+    """userid 合法但 name 是空字符串：`load_whitelist()` 仍然要放行这个
+    userid（既有行为不变），`load_whitelist_names()` 只是不给它一个姓名映射。"""
+    from tools.liaison.whitelist import load_whitelist, load_whitelist_names
+
+    path = tmp_path / "whitelist.yaml"
+    path.write_text(
+        "members:\n"
+        "  - userid: TangLiPing\n"
+        "    name: \"\"\n"
+        "    role: HR\n",
+        encoding="utf-8",
+    )
+    assert load_whitelist(path) == frozenset({"TangLiPing"})
+    assert load_whitelist_names(path) == {}
+
+
+def test_load_whitelist_names_matches_the_shipped_config():
+    from tools.liaison.whitelist import load_whitelist_names
+
+    assert load_whitelist_names(SHIPPED_CONFIG) == {
+        "TangLiPing": "汤丽萍",
+        "ShaoPeiShen": "邵培申",
+    }
+
+
 def test_str_path_that_is_missing_reports_unreadable_not_unexpected(tmp_path, caplog):
     """诊断必须落到"文件不可读"这一类，⛔ 不是"未预期异常"。"""
     with caplog.at_level(logging.ERROR):
