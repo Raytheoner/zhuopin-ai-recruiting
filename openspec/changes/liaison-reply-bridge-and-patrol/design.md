@@ -49,7 +49,7 @@
 
 ### D4 · 权限层：`acceptEdits` ＋ `allowedTools` 白名单，⛔ 不用 `--dangerously-skip-permissions`（答 Q3a）
 
-起活 argv（`dispatch.py` 单点常量 `HEADLESS_ARGV_TEMPLATE`）：
+起活 argv（`dispatch.py` 单点常量 `HEADLESS_ARGV_FIXED_PART`）：
 
 ```
 claude -p --output-format text --permission-mode acceptEdits

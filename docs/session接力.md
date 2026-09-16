@@ -67,7 +67,7 @@
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
 | **R-1** | `[Mac]0917C` 转场落档提交 | CC | ✅ **已完成**（`73a5be2`，已推，ahead/behind 0；`tasks.md` 抬头已是 27/33） | — | — |
-| **R-2** | **3.2 章程接入生产路径**（`charter.py` 代码早已交付，缺的是 `__main__.py`／`dispatch_wiring.py` 仍各持副本）＋ 顺手还 TD-45 ＋ design D4 常量名 | 编排文件泳道「第十七批收尾重发」：`[Mac]0917G`（体积闸归档落档提交，main）→ `[Mac]0917H`（worktree `lane-0917h-charter-wiring`，单条 TDD）。首发 `0917E`/`0917F` 已作废（E 撞 tech-debt 体积闸未提交，F 前置正确停下零改动） | 🚀 **2026-09-17 06:3x Cowork·0917D 经 launchd 重发** | `tasks.md` 28/33 ＋ `grep P2-TODO\|CHARTER_RELPATH` 生产代码零命中 ＋ `rev-list`/`cherry` 真合 | §5 验收里 prompt 缺检查点/信号路径字段、spec「单点常量」持续为假 |
+| **R-2** | **3.2 章程接入生产路径**（`charter.py` 代码早已交付，缺的是 `__main__.py`／`dispatch_wiring.py` 仍各持副本）＋ 顺手还 TD-45 ＋ design D4 常量名 | 编排文件泳道「第十七批收尾重发」：`[Mac]0917G`（体积闸归档落档提交，main）→ `[Mac]0917H`（worktree `lane-0917h-charter-wiring`，单条 TDD）。首发 `0917E`/`0917F` 已作废（E 撞 tech-debt 体积闸未提交，F 前置正确停下零改动） | ✅ **已完成**（`59e9a78`，TDD：`dispatch_wiring.bridge_dispatch` 改用 `charter.read_charter`/`charter.compute_prompt`，`letter_number=None` 时从信号文件按 msgid 补查；顺手还 TD-45；design D4 常量名同步） | `tasks.md` 28/33 ＋ `grep P2-TODO\|CHARTER_RELPATH` 生产代码零命中 ＋ `rev-list`/`cherry` 真合 | §5 验收待 Shao Peishen 本人真实起活实测 |
 | **R-3** | §5 五条真实起活实测 | 🔴 **Shao Peishen 本人**（重启真实服务、等真实入站、请人发消息） | ⏸ 等 R-2 | 5.1–5.5 全勾，实测记录落 `docs/findings/` | 本包归档不了；「打标即开班」仍只在单测层面成立 |
 | **R-4** | 汤丽萍解锁 | — | ✅ **已解锁**（§0 的 0.3 已勾＝真实入站已落库一条） | — | — |
 | **R-5** | `hr-wecom-aibot-liaison` 8.6–8.9 灰度四条 | Shao Peishen 本人 | ⏸ 等本包 §5 | 四条全勾并归档 | 值守通道停在「代码齐、没真用过」 |
@@ -165,9 +165,9 @@ commit 见收工报告）。终审（Opus）放行「With fixes」，一波修�
 
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
-| 1 | `compute_prompt` 未接生产路径：`__main__.py`/`dispatch_wiring.py` 仍各自持有 `CHARTER_RELPATH` 字面量与 `_build_minimal_prompt`（两处都带 `P2-TODO` 注释指名本变更包收尾时删除） | 下一条 CC 泳道（建议单独起 opener，读 `docs/superpowers/plans/2026-09-10-liaison-unpack-charter.md` 与本条后追加一个 wiring task，走 TDD） | 待派发 | `grep -rn CHARTER_RELPATH tools/liaison/__main__.py tools/liaison/unpack/dispatch_wiring.py` 零命中 ＋ `bridge_dispatch` 实际调用 `charter.compute_prompt` ＋ 单测覆盖 | tasks.md 3.2 **保持不勾**，`liaison-reply-bridge-and-patrol` 不得归档——spec「该路径只在一处常量定义」持续为假 |
-| 2 | 章程 §二.6／`dispatch.py` 白名单的 `python -m tools.liaison criteria` 都是裸形式，且本机只有 `python3` 无 `python`；`criteria.py` 尚未交付（P3，`2026-09-10-liaison-criteria-ledger.md`） | P3 交付时顺带修（章程改 `PYTHONPATH=. tools/liaison/.venv/bin/python` 前缀形式 ＋ 同步改 `dispatch.py` 白名单，否则 Task5 的双向核对测试会红） | 待 P3 | P3 落地后 `test_unpack_charter_allowlist.py` 两条测试仍绿 ＋ 章程与白名单用词一致 | 沿用与 `unpack-signal` 曾经一样的静默卡死风险（会话收到权限拒绝但外部看不到报错），只是眼下 `criteria` 命令还没人真的会跑到 |
-| 3 | `design.md` D4 行 52 仍写 `HEADLESS_ARGV_TEMPLATE`，代码实际常量名是 `HEADLESS_ARGV_FIXED_PART`（P1 交付时改的名，design 文档没跟着改） | 下次碰 design.md D4 的人顺手改一个词 | 待顺手 | `grep -n HEADLESS_ARGV_TEMPLATE openspec/changes/liaison-reply-bridge-and-patrol/design.md` 零命中 | 纯文档漂移，无功能影响，只是读 design 的人会对不上代码 |
+| 1 | `compute_prompt` 未接生产路径：`__main__.py`/`dispatch_wiring.py` 仍各自持有 `CHARTER_RELPATH` 字面量与 `_build_minimal_prompt`（两处都带 `P2-TODO` 注释指名本变更包收尾时删除） | 下一条 CC 泳道（建议单独起 opener，读 `docs/superpowers/plans/2026-09-10-liaison-unpack-charter.md` 与本条后追加一个 wiring task，走 TDD） | ✅ **已还**（`0917H`） | `grep -rn CHARTER_RELPATH tools/liaison/__main__.py tools/liaison/unpack/dispatch_wiring.py` 零命中 ＋ `bridge_dispatch` 实际调用 `charter.compute_prompt` ＋ 单测覆盖 | — |
+| 2 | 章程 §二.6／`dispatch.py` 白名单的 `python -m tools.liaison criteria` 都是裸形式，且本机只有 `python3` 无 `python`；`criteria.py` 尚未交付（P3，`2026-09-10-liaison-criteria-ledger.md`） | P3 交付时顺带修（章程改 `PYTHONPATH=. tools/liaison/.venv/bin/python` 前缀形式 ＋ 同步改 `dispatch.py` 白名单，否则 Task5 的双向核对测试会红） | ✅ **已还**（`0917H`，即 TD-45 销账） | P3 落地后 `test_unpack_charter_allowlist.py` 两条测试仍绿 ＋ 章程与白名单用词一致 | — |
+| 3 | `design.md` D4 行 52 仍写 `HEADLESS_ARGV_TEMPLATE`，代码实际常量名是 `HEADLESS_ARGV_FIXED_PART`（P1 交付时改的名，design 文档没跟着改） | 下次碰 design.md D4 的人顺手改一个词 | ✅ **已还**（`0917H`） | `grep -n HEADLESS_ARGV_TEMPLATE openspec/changes/liaison-reply-bridge-and-patrol/design.md` 零命中 | — |
 
 SDD 台账（`.superpowers/sdd/2026-09-10-liaison-unpack-charter/progress.md`，worktree 内、gitignored）
 有完整的终审全文摘要与逐条裁决理由，worktree 删除前已转写本条要点，原台账即将随收口清除。
