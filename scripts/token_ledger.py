@@ -106,7 +106,7 @@ def new_session():
         "calls": 0, "synthetic": 0, "models": Counter(),
         "u": defaultdict(lambda: {"input": 0, "cache_create": 0, "cache_read": 0, "output": 0}),
         "ctx": [], "tools": Counter(), "big": Counter(), "big_bytes": Counter(), "read_files": Counter(),
-        "agent_spawns": 0,
+        "agent_spawns": 0, "first_prompt": "",
     }
 
 
@@ -175,6 +175,12 @@ def scan_file(path, since, until):
                 s["ctx"].append(u["input"] + u["cache_create"] + u["cache_read"])
             elif t == "user":
                 content = msg.get("content")
+                if s["is_sub"] and not s["first_prompt"]:
+                    if isinstance(content, str):
+                        s["first_prompt"] = content[:2000]
+                    elif isinstance(content, list):
+                        s["first_prompt"] = " ".join(str(c.get("text", "")) for c in content
+                                                     if isinstance(c, dict) and c.get("type") == "text")[:2000]
                 if isinstance(content, list):
                     for c in content:
                         if isinstance(c, dict) and c.get("type") == "tool_result":
@@ -187,6 +193,26 @@ def scan_file(path, since, until):
     return s
 
 
+# 子代理角色：按委派消息（子代理首条 user 消息）关键词分类。Phase 6（0916I）加。
+# 模式按 superpowers subagent-driven-development 模板的常见措辞写，**未经真实日志逐字核对**——
+# 报告里「其他」样例就是用来校正这张表的：样例里反复出现的措辞补进来再跑。
+ROLE_PATTERNS = [
+    ("final-review", re.compile(r"final (code )?review|whole[- ]branch|entire (branch|implementation)|全分支", re.I)),
+    ("spec-review", re.compile(r"spec(ification)? (compliance|review)|reviewing .*against .*spec|规格(合规|审查)", re.I)),
+    ("quality-review", re.compile(r"code[- ]quality|quality review|代码质量", re.I)),
+    ("fix", re.compile(r"\bfix(es|ing)?\b.*(review|finding|issue)|修复.*(意见|问题)", re.I)),
+    ("implementer", re.compile(r"implement(ing|er|ation)? (task|the task)|you are implementing|实现 ?task", re.I)),
+    ("explore", re.compile(r"\b(search|explore|find|locate)\b|查找|搜索", re.I)),
+]
+
+
+def role_of(prompt):
+    for name, pat in ROLE_PATTERNS:
+        if pat.search(prompt or ""):
+            return name
+    return "其他"
+
+
 def summarize(sessions):
     tot = defaultdict(lambda: {"input": 0, "cache_create": 0, "cache_read": 0, "output": 0, "cost": 0.0, "calls": 0})
     band = Counter()  # cache_read 按单次上下文分段
@@ -194,6 +220,9 @@ def summarize(sessions):
     first_main, first_sub = [], []
     big, big_bytes, tools, reads = Counter(), Counter(), Counter(), Counter()
     by_kind = defaultdict(lambda: {"sessions": 0, "cost": 0.0, "calls": 0})
+    roles = defaultdict(lambda: {"n": 0, "cost": 0.0, "calls": 0, "peak": []})
+    parents = defaultdict(lambda: {"cost": 0.0, "roles": Counter()})
+    other_samples = Counter()
     for s in sessions:
         if s["calls"] == 0:
             continue
@@ -214,6 +243,12 @@ def summarize(sessions):
         kind = ("子代理" if s["is_sub"] else "看护" if "看护" in title else
                 "泳道/opener" if title.startswith("[Mac]") else "交互/其他")
         by_kind[kind]["sessions"] += 1; by_kind[kind]["cost"] += c; by_kind[kind]["calls"] += s["calls"]
+        if s["is_sub"]:
+            ro = role_of(s["first_prompt"])
+            roles[ro]["n"] += 1; roles[ro]["cost"] += c; roles[ro]["calls"] += s["calls"]; roles[ro]["peak"].append(max(s["ctx"]))
+            parents[s["parent"]]["cost"] += c; parents[s["parent"]]["roles"][ro] += 1
+            if ro == "其他":
+                other_samples[re.sub(r"\s+", " ", s["first_prompt"])[:70]] += 1
         rows.append({
             "title": title, "kind": kind, "file": os.path.basename(s["file"]),
             "date": s["start"].strftime("%m-%d") if s["start"] else "?",
@@ -238,6 +273,11 @@ def summarize(sessions):
         "most_read": reads.most_common(10),
         "synthetic_msgs": sum(s["synthetic"] for s in sessions),
         "top": rows[:25],
+        "sub_roles": {k: {"n": v["n"], "cost": round(v["cost"], 2), "calls": v["calls"],
+                          "avg_calls": round(v["calls"] / v["n"], 1), "median_peak": med(v["peak"])} for k, v in roles.items()},
+        "sub_parents": sorted(({"parent": k, "cost": round(v["cost"], 2), "roles": dict(v["roles"])} for k, v in parents.items()),
+                              key=lambda x: -x["cost"])[:15],
+        "sub_other_samples": other_samples.most_common(12),
     }
 
 
@@ -274,6 +314,17 @@ def render(sm, args, base=None):
           "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for r in sm["top"]:
         L.append(f"| {r['date']} | {r['title'][:36]} | {r['kind']} | {r['model']} | {r['calls']} | {fmt(r['first_ctx'])} | {fmt(r['peak_ctx'])} | {fmt(r['cache_read'])} | {r['agents']} | {r['big_outputs']} | {r['cost']:.1f} |")
+    if sm.get("sub_roles"):
+        L += ["", "## 子代理按角色（Phase 6）", "", "| 角色 | 个数 | 调用 | 平均调用/个 | 峰值上下文中位数 | 成本$ |", "|---|---:|---:|---:|---:|---:|"]
+        for k, v in sorted(sm["sub_roles"].items(), key=lambda x: -x[1]["cost"]):
+            L.append(f"| {k} | {v['n']} | {v['calls']} | {v['avg_calls']} | {fmt(v['median_peak'])} | {v['cost']:.0f} |")
+        L += ["", "### 子代理成本 Top 15 父会话", "", "| 父会话文件 | 子代理成本$ | 角色分布 |", "|---|---:|---|"]
+        title_of = {r["file"].replace(".jsonl", ""): r["title"] for r in sm["top"]}
+        for p in sm["sub_parents"]:
+            L.append(f"| {title_of.get(p['parent'], p['parent'][:8])} | {p['cost']:.1f} | {p['roles']} |")
+        L += ["", "### 「其他」委派消息样例（用来校正 ROLE_PATTERNS）", ""]
+        for t, n in sm["sub_other_samples"]:
+            L.append(f"- {n}× `{t}`")
     return "\n".join(L) + "\n"
 
 
