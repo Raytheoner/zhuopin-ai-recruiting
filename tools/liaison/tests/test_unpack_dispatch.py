@@ -68,3 +68,67 @@ def test_compute_is_busy_false_when_is_alive_raises():
 
     lock_text = '{"pid": 123, "started_at": "x", "log": "y"}'
     assert compute_is_busy(lock_text, _raiser) is False
+
+
+from pathlib import Path
+
+from tools.liaison.unpack.dispatch import (
+    BUDGET_ENV,
+    CLAUDE_BIN_ENV,
+    DEFAULT_BUDGET_USD,
+    build_headless_argv,
+    resolve_claude_bin,
+)
+
+
+def test_resolve_claude_bin_prefers_env_override():
+    assert resolve_claude_bin({CLAUDE_BIN_ENV: "/opt/claude/bin/claude"}) == "/opt/claude/bin/claude"
+
+
+def test_resolve_claude_bin_falls_back_to_path(monkeypatch):
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.shutil.which", lambda name: "/usr/local/bin/claude"
+    )
+    assert resolve_claude_bin({}) == "/usr/local/bin/claude"
+
+
+def test_resolve_claude_bin_falls_back_to_known_install_path(monkeypatch, tmp_path):
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.shutil.which", lambda name: None)
+    fake_home = tmp_path / "home"
+    fake_local_bin = fake_home / ".local" / "bin"
+    fake_local_bin.mkdir(parents=True)
+    (fake_local_bin / "claude").write_text("", encoding="utf-8")
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.Path.home", lambda: fake_home)
+    assert resolve_claude_bin({}) == str(fake_local_bin / "claude")
+
+
+def test_resolve_claude_bin_none_when_all_three_fail(monkeypatch, tmp_path):
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.shutil.which", lambda name: None)
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.Path.home", lambda: tmp_path / "empty-home")
+    assert resolve_claude_bin({}) is None
+
+
+def test_build_headless_argv_shape():
+    argv = build_headless_argv("/usr/local/bin/claude", "5")
+    assert argv[0] == "/usr/local/bin/claude"
+    assert "-p" in argv
+    assert "--output-format" in argv and "text" in argv
+    assert "--permission-mode" in argv and "acceptEdits" in argv
+    assert "--max-budget-usd" in argv and "5" in argv
+    assert "--dangerously-skip-permissions" not in argv
+    joined = " ".join(argv)
+    assert "send-followup" not in joined
+    assert "git push" not in joined
+    for required in (
+        "Read", "Edit", "Write", "Glob", "Grep",
+        "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)",
+        "Bash(git diff:*)", "Bash(git log:*)",
+        "Bash(python -m tools.liaison unpack-signal:*)",
+        "Bash(python -m tools.liaison criteria:*)",
+    ):
+        assert required in argv
+
+
+def test_default_budget_env_name_and_value():
+    assert BUDGET_ENV == "HR_LIAISON_UNPACK_BUDGET_USD"
+    assert DEFAULT_BUDGET_USD == "5"

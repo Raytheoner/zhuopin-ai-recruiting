@@ -10,10 +10,21 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("tools.liaison.unpack.dispatch")
+
+#: 环境变量名。⛔ 只在这里写死一次——`.env.example`（Task 7）与
+#: `build_headless_argv` 的调用方都从这里 import，⛔ 不许各处重写字面量。
+CLAUDE_BIN_ENV = "HR_LIAISON_CLAUDE_BIN"
+BUDGET_ENV = "HR_LIAISON_UNPACK_BUDGET_USD"
+
+#: 预算默认值（design D16，Shao Peishen 2026-09-10 答 2a）。取字符串——它只会被
+#:拼进 argv，⛔ 不参与任何数值运算，存成 `str` 免得调用方还要 `str(int(...))`。
+DEFAULT_BUDGET_USD = "5"
 
 
 def compute_is_alive(pid: int, *, _kill: Callable[[int, int], None] = os.kill) -> bool:
@@ -55,3 +66,48 @@ def compute_is_busy(lock_text: str | None, is_alive: Callable[[int], bool]) -> b
         return bool(is_alive(pid))
     except Exception:
         return False
+
+
+def resolve_claude_bin(env: Mapping[str, str]) -> str | None:
+    """`claude` 二进制路径解析（design D12 三级顺序）。均找不到 ⇒ `None`，
+    调用方（Task 4）据此转 `failed(reason=binary_not_found)`。
+
+    ⛔ 不在这里抛异常——"找不到"是一个**正常、被 spec 预期到**的结果，抛异常
+    会强迫调用方用 `try/except` 来处理一个其实只是"返回值是 None"的情形。
+    """
+    override = env.get(CLAUDE_BIN_ENV)
+    if override and override.strip():
+        return override.strip()
+    found = shutil.which("claude")
+    if found:
+        return found
+    fallback = Path.home() / ".local" / "bin" / "claude"
+    if fallback.is_file():
+        return str(fallback)
+    return None
+
+
+#: 受限权限 argv 模板（design D4）。⛔ **唯一真源**——白名单是否放行某条命令、
+#: 预算参数是否存在，全部由 `subagent-driven-development` 的 reviewer 对着*这个
+#: 常量*核对，⛔ 不许在别处再拼一份 argv 字面量。
+HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
+    "-p",
+    "--output-format", "text",
+    "--permission-mode", "acceptEdits",
+    "--allowedTools",
+    "Read", "Edit", "Write", "Glob", "Grep",
+    "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)",
+    "Bash(git diff:*)", "Bash(git log:*)",
+    "Bash(python -m tools.liaison unpack-signal:*)",
+    "Bash(python -m tools.liaison criteria:*)",
+)
+
+
+def build_headless_argv(claude_bin: str, budget: str) -> list[str]:
+    """拼出完整 argv（含二进制路径与预算值）。**纯函数**，⛔ 不读环境、不起进程。
+
+    白名单里 ⛔ **不出现** `send-followup`（合规红线：对外通道不可代）、
+    ⛔ 不出现 `git push`（design D7），且权限模式固定 `acceptEdits`——
+    ⛔ 绝不使用跳过全部确认的模式（合规红线 + design D4）。
+    """
+    return [claude_bin, *HEADLESS_ARGV_FIXED_PART, "--max-budget-usd", budget]
