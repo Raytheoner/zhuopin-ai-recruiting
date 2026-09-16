@@ -1974,7 +1974,7 @@ CI 日志、粘给别人看的报错里都带着它。这条本身就构成一�
 
 ---
 
-## ~~TD-42~~ · 连接假死：看门狗有判据无把手，`liveness=connected` 会骗人 ✅ 已还（`20a2848`，⏸ 真实验证待 Shao Peishen）
+## ~~TD-42~~ · 连接假死：看门狗有判据无把手，`liveness=connected` 会骗人 ✅ 已还（`20a2848`），✅ 真实验证 2026-09-16 14:27 CST
 
 **登记**：2026-09-10 09:4x（Cowork·0909Q 实测发现）
 **位置**：`tools/liaison/session_client.py` 的存活戳看门狗（`0909AH` 加的 N-0 兜底层）
@@ -2049,6 +2049,18 @@ CI 日志、粘给别人看的报错里都带着它。这条本身就构成一�
 ⏸ **真实验证留步（Shao Peishen 本人做，⛔ 单测全绿不算验收）**：重启服务后 ① `cat data/liaison/liveness.json`
 看 `last_event_at` 是否每 ~30 秒推进；② 断网／静默 ≥ 13 分钟（600 秒活动阈值 ＋ 180 秒宽限），确认日志出现
 「看门狗终止进程」、进程自行退出并被 launchd 拉起、`data/liaison/watchdog.json` 计数 +1。
+
+**✅ 真实验证已跑完（2026-09-16 14:13–14:27 CST，`[Mac]0910A` §四，全自动断网脚本，Shao Peishen 在场）**：
+`en1` 断网 9 分钟（14:13:30–14:22:35）＋ 复网观察 3 分钟，六项判读全过：
+① 判死——`14:17:34` 存活戳 185 秒未刷新（阈值 180 秒）；
+② 看门狗判定——同一行 WARNING，先请求停掉事件循环让外层重连接手；
+③ 终止——`14:20:35` 看门狗终止进程（退出码 5，交给 launchd `KeepAlive` 拉起），存活戳已 366 秒未刷新、
+本进程已运行 1927 秒、连续第 1 次；
+④ 告警行——`【HR 值守通道·连接假死】` 同时刻打出，文案与③一致；
+⑤ pid 变化——`41272` → `44355`（`launchctl print` 与日志双重确认）；
+⑥ 复网自愈——`14:23:06` 起新连接 `since`，`14:25:xx` 起稳定 `state=connected` 且 `last_event_at` 持续推进。
+`data/liaison/watchdog.json`：`{"consecutive": 1, "reason": "stale_stamp", "last_terminated_at": "2026-09-16T14:20:35...", "process_lifetime_seconds": 1927}`。
+脚本 `trap`／900 秒独立兜底均未触发（正常收尾，`RESTORE-TRAP` 只在脚本自然退出时打了一次）。
 
 ---
 
