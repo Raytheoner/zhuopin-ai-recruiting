@@ -568,5 +568,16 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "unpack-dispa
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == SELF_CHECK_ARG:
     raise SystemExit(main(self_check=True))
 
+# ── P3·口径点台账子命令 ──────────────────────────────────────────────────
+# ⛔ 又一段"纯插入"：与上面 cleanup / send-followup 两段同一纪律，互不改动。
+#
+# `criteria` 不需要企微凭据、不需要 SDK 连接，只读写一个 markdown 文件，
+# 所以同样必须短路在 `main()` 的 `load_credentials()` 之前——理由与
+# cleanup/send-followup 完全一致：机器没配 BOT_ID 时这条子命令也要能跑。
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "criteria":
+    from tools.liaison.unpack.criteria import criteria_main
+
+    raise SystemExit(criteria_main(sys.argv[2:]))
+
 if __name__ == "__main__":
     raise SystemExit(main())

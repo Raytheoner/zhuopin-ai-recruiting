@@ -104,3 +104,96 @@ def compute_criteria_transition(
         lines[index] = "|".join(cells)
         return "".join(lines), True
     raise LookupError(id)
+
+
+import argparse
+import os
+import sys
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m tools.liaison criteria",
+        description=(
+            "口径点台账：新增一条口径点，或把已有口径点转态。"
+            "⛔ 无按时间/超期的批量参数——已签认必须人工给 evidence。"
+        ),
+    )
+    parser.add_argument("--add", action="store_true", help="新增一条口径点")
+    parser.add_argument(
+        "--from", dest="from_letter", metavar="信编号", help="--add 时必填，如 人事部#1"
+    )
+    parser.add_argument("--desc", help="--add 时必填，口径点描述")
+    parser.add_argument("--id", metavar="HR-G-NN", help="转态时必填，目标口径点 ID")
+    parser.add_argument(
+        "--to", choices=list(ALLOWED_TRANSITIONS), help="转态时必填，目标状态"
+    )
+    parser.add_argument("--evidence", help="转 已签认 时必填；其它转态可选")
+    return parser
+
+
+def _write_ledger_atomic(path: Path, text: str) -> None:
+    """原子写：临时文件 + `os.replace`。
+
+    ⛔ 不用 `with open(...)`：本仓库 `session.py` / `session_client.py` /
+    `logsetup.py` / `queue_view.py` 已一致选择"文件读写只用
+    `Path.write_text()`/`read_text()` + `os.replace()`，全不写 `with`"，
+    本模块跟随同一约定，不再另开一种写法。
+    """
+    tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    tmp_path.write_text(text, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def criteria_main(
+    argv: list[str],
+    *,
+    ledger_path: Path | None = None,
+    today: datetime.date | None = None,
+) -> int:
+    """子命令入口。`ledger_path`/`today` 是测试注入缝，⛔ 不是配置项。"""
+    args = build_parser().parse_args(argv)
+    today = today or datetime.date.today()
+    path = ledger_path if ledger_path is not None else LEDGER_PATH
+
+    if args.add and args.id:
+        print("--add 与 --id 不能同时给：新增和转态是两件事", file=sys.stderr)
+        return EXIT_BAD_ARGS
+    if not args.add and not args.id:
+        print("需要 --add 或 --id 之一", file=sys.stderr)
+        return EXIT_BAD_ARGS
+    if not path.is_file():
+        print(f"找不到台账 {path}", file=sys.stderr)
+        return EXIT_BAD_ARGS
+
+    text = path.read_text(encoding="utf-8")
+
+    if args.add:
+        if not args.from_letter or not args.desc:
+            print("--add 需要同时给 --from 与 --desc", file=sys.stderr)
+            return EXIT_BAD_ARGS
+        new_text, new_id = compute_new_criterion(
+            text, from_letter=args.from_letter, desc=args.desc, today=today
+        )
+        _write_ledger_atomic(path, new_text)
+        print(f"已新增 {new_id}｜{path}")
+        return EXIT_OK
+
+    if not args.to:
+        print("--id 需要同时给 --to", file=sys.stderr)
+        return EXIT_BAD_ARGS
+    try:
+        new_text, _changed = compute_criteria_transition(
+            text, id=args.id, to=args.to, evidence=args.evidence, today=today
+        )
+    except MissingEvidenceError:
+        print(
+            f"转 已签认 缺 --evidence ⇒ 拒绝，台账不变：{args.id}", file=sys.stderr
+        )
+        return EXIT_MISSING_EVIDENCE
+    except LookupError:
+        print(f"台账里没有 {args.id} 这一行", file=sys.stderr)
+        return EXIT_BAD_ARGS
+    _write_ledger_atomic(path, new_text)
+    print(f"{args.id} → {args.to}｜{path}")
+    return EXIT_OK
