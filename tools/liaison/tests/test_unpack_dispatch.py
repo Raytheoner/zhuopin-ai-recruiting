@@ -123,7 +123,10 @@ def test_build_headless_argv_shape():
         "Read", "Edit", "Write", "Glob", "Grep",
         "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)",
         "Bash(git diff:*)", "Bash(git log:*)",
-        "Bash(python -m tools.liaison unpack-signal:*)",
+        # I4：必须是本仓库唯一 canonical 的调法（venv 解释器 + PYTHONPATH=.），
+        # ⛔ 不是裸 "python -m tools.liaison unpack-signal:*"——那条匹配不上拆件
+        # 会话实际会敲的命令，会让它在唯一需要的自我轮询命令上被拒绝。
+        "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal:*)",
         "Bash(python -m tools.liaison criteria:*)",
     ):
         assert required in argv
@@ -357,3 +360,100 @@ def test_dispatch_never_raises_even_on_unexpected_stdin_error(tmp_path, monkeypa
     )
     assert outcome.status == "failed"
     assert outcome.reason == "unexpected_error"
+
+
+def test_dispatch_kills_the_child_process_when_lock_write_fails(tmp_path, monkeypatch):
+    """I5：进程已经起来了，但收尾（写锁）失败——⛔ 不许留下一个已经在跑、却没有
+    锁文件记录它存在的孤儿会话：下一次 `compute_is_busy` 读不到锁会判「不忙」，
+    在同一份工作区上再起一个会话。修复要求这个失败分支必须 kill 掉已起的子进程。
+    """
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: "/usr/local/bin/claude"
+    )
+
+    class _KillableProcess(_FakeProcess):
+        def __init__(self, pid: int = 7777):
+            super().__init__(pid=pid)
+            self.killed = False
+
+        def kill(self):
+            self.killed = True
+
+    process = _KillableProcess()
+    popen = _fake_popen_factory(process)
+
+    def _raising_write_lock_atomic(*args, **kwargs):
+        raise OSError("磁盘满")
+
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch._write_lock_atomic", _raising_write_lock_atomic
+    )
+
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome.status == "failed"
+    assert outcome.reason == "unexpected_error"
+    assert process.killed is True, "写锁失败后必须 kill 掉已经起来的子进程"
+
+
+def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
+    """I6：子进程持有 Write + Bash(git commit:*)，⛔ 不能把父进程整份环境
+    （含 HR_LIAISON_BOT_SECRET / HR_LIAISON_GROUP_WEBHOOK）透传下去——只放行
+    子进程真正需要的四个键。"""
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: "/usr/local/bin/claude"
+    )
+    process = _FakeProcess(pid=8888)
+    popen = _fake_popen_factory(process)
+    parent_env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/home/x",
+        "PYTHONPATH": ".",
+        "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
+        "HR_LIAISON_BOT_SECRET": "top-secret",
+        "HR_LIAISON_GROUP_WEBHOOK": "https://example.invalid/webhook",
+        "SOME_UNRELATED_VAR": "x",
+    }
+
+    dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env=parent_env,
+        now=NOW,
+        popen=popen,
+    )
+
+    _, kwargs = popen.calls[0]
+    child_env = kwargs["env"]
+    assert "HR_LIAISON_BOT_SECRET" not in child_env
+    assert "HR_LIAISON_GROUP_WEBHOOK" not in child_env
+    assert "SOME_UNRELATED_VAR" not in child_env
+    assert child_env == {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/home/x",
+        "PYTHONPATH": ".",
+        "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
+    }
+
+
+def test_filter_child_env_omits_keys_absent_from_the_source_env():
+    """白名单键在源环境里缺失时 ⛔ 不编造——结果字典里干脆没有那个键。"""
+    from tools.liaison.unpack.dispatch import _filter_child_env
+
+    assert _filter_child_env({"PATH": "/usr/bin"}) == {"PATH": "/usr/bin"}
+    assert _filter_child_env({}) == {}

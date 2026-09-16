@@ -101,9 +101,30 @@ HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
     "Read", "Edit", "Write", "Glob", "Grep",
     "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)",
     "Bash(git diff:*)", "Bash(git log:*)",
-    "Bash(python -m tools.liaison unpack-signal:*)",
+    # I4（2026-09-16 修）：⛔ 裸 "python -m tools.liaison unpack-signal:*" 匹配不上
+    # 本仓库的真实调法——`tools.liaison` 不是装进 site-packages 的包，必须
+    # `PYTHONPATH=.` 才能被解析到，且必须用 `tools/liaison/.venv/bin/python`
+    # （唯一装了 `tools/liaison/requirements.txt` 的解释器），不是 PATH 上随便
+    # 一个 `python`。这是本仓库文档里反复出现的唯一canonical 调用形式（见
+    # `docs/archive/tech-debt-已还.md:353` 等处），子进程 cwd 已固定为 REPO_ROOT
+    # （见下面 `dispatch_headless_unpack` 的 `cwd=str(REPO_ROOT)`），相对路径可解析。
+    # 旧的裸写法会让拆件会话在它唯一需要的自我轮询命令上被 permission-denied。
+    "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal:*)",
     "Bash(python -m tools.liaison criteria:*)",
 )
+
+
+#: I6（2026-09-16 修）：子进程持有 `Write` + `Bash(git commit:*)` 权限，⛔ 不把父
+#: 进程整份 `os.environ`（含 `HR_LIAISON_BOT_SECRET`/`HR_LIAISON_GROUP_WEBHOOK`）
+#: 透传下去——凭据边界应当由这份显式白名单可审计地保证，而不是靠"权限模式凑巧
+#: 没用上"这种偶然性撑着。只放行子进程真正需要的四个键。
+_CHILD_ENV_ALLOWLIST: tuple[str, ...] = (CLAUDE_BIN_ENV, "PATH", "HOME", "PYTHONPATH")
+
+
+def _filter_child_env(env: Mapping[str, str]) -> dict[str, str]:
+    """把父进程环境收窄成子进程需要的四个键，只保留源环境里实际存在的——
+    ⛔ 不为不存在的键编造值。"""
+    return {key: env[key] for key in _CHILD_ENV_ALLOWLIST if key in env}
 
 
 def build_headless_argv(claude_bin: str, budget: str) -> list[str]:
@@ -205,7 +226,7 @@ def dispatch_headless_unpack(
                 stdin=subprocess.PIPE,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
-                env=dict(env),
+                env=_filter_child_env(env),
             )
         except _ClaudeBinaryNotFound:
             return DispatchOutcome(status="failed", reason="binary_not_found")
@@ -228,6 +249,18 @@ def dispatch_headless_unpack(
             "拆件会话已起（pid=%s）但收尾步骤失败（写 prompt / 写锁）：%s",
             getattr(process, "pid", None), exc, exc_info=True,
         )
+        # I5（2026-09-16 修）：这里失败时子进程已经真的跑起来了，但锁文件没写
+        # （或写了一半）——不 kill 掉它就会留下一个「活着、却没人知道它活着」的
+        # 会话：下一次 `compute_is_busy` 读不到锁，会当成"不忙"再起一个,两个
+        # headless 会话同时改同一份工作区。kill 本身也可能失败（进程已经自己退出、
+        # 权限问题），⛔ 不让这个次生失败掩盖掉原始异常，只记日志。
+        try:
+            process.kill()
+        except Exception:
+            logger.error(
+                "kill 已起的子进程（pid=%s）本身也失败，可能留下无人监管的会话",
+                getattr(process, "pid", None), exc_info=True,
+            )
         return DispatchOutcome(status="failed", reason="unexpected_error")
 
     return DispatchOutcome(status="started", pid=process.pid, log_path=str(log_path))
