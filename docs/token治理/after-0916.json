@@ -1,0 +1,768 @@
+{
+ "by_model": {
+  "sonnet": {
+   "input": 4344,
+   "cache_create": 6409179,
+   "cache_read": 299791247,
+   "output": 1192091,
+   "cost": 87.91079490000001,
+   "calls": 2172
+  },
+  "opus": {
+   "input": 130,
+   "cache_create": 392795,
+   "cache_read": 4652401,
+   "output": 938,
+   "cost": 4.80526925,
+   "calls": 65
+  },
+  "haiku": {
+   "input": 2476,
+   "cache_create": 1067163,
+   "cache_read": 12014820,
+   "output": 670,
+   "cost": 2.5412617500000003,
+   "calls": 303
+  }
+ },
+ "total_cost": 95.2573,
+ "total_calls": 2540,
+ "sessions": 115,
+ "ctx_band_calls": {
+  "50–150k": 1424,
+  "<50k": 486,
+  "150–250k": 343,
+  "≥250k": 287
+ },
+ "first_ctx_median": {
+  "main": 51314,
+  "subagent": 28996
+ },
+ "by_kind": {
+  "交互/其他": {
+   "sessions": 18,
+   "cost": 1.3646562999999998,
+   "calls": 25
+  },
+  "看护": {
+   "sessions": 1,
+   "cost": 0.6931423000000001,
+   "calls": 25
+  },
+  "泳道/opener": {
+   "sessions": 27,
+   "cost": 73.16867950000002,
+   "calls": 1661
+  },
+  "子代理": {
+   "sessions": 69,
+   "cost": 20.0308478,
+   "calls": 829
+  }
+ },
+ "big_outputs": [
+  [
+   "Read:session接力.md",
+   7,
+   167975
+  ],
+  [
+   "Read:__main__.py",
+   5,
+   122194
+  ],
+  [
+   "Read:review-c491230..506346f.diff",
+   6,
+   94656
+  ],
+  [
+   "Read:whitelist.py",
+   4,
+   89586
+  ],
+  [
+   "Read:task-5-brief.md",
+   6,
+   80166
+  ],
+  [
+   "Read:2026-09-10-liaison-criteria-ledger.md",
+   3,
+   78170
+  ],
+  [
+   "Read:task-7-brief.md",
+   3,
+   59124
+  ],
+  [
+   "Read:tasks.md",
+   4,
+   54286
+  ],
+  [
+   "Read:task-2-brief.md",
+   4,
+   50688
+  ],
+  [
+   "Read:design.md",
+   3,
+   46164
+  ],
+  [
+   "Read:task-4-brief.md",
+   3,
+   45684
+  ],
+  [
+   "Read:2026-09-10-liaison-unpack-charter.md",
+   2,
+   43036
+  ],
+  [
+   "Read:test_inbound_wiring.py",
+   2,
+   42282
+  ],
+  [
+   "Read:frames.py",
+   3,
+   39339
+  ],
+  [
+   "Read:test_notify_webhook.py",
+   1,
+   36543
+  ]
+ ],
+ "tools": [
+  [
+   "Bash",
+   1623
+  ],
+  [
+   "Read",
+   465
+  ],
+  [
+   "Edit",
+   240
+  ],
+  [
+   "Write",
+   84
+  ],
+  [
+   "Agent",
+   69
+  ],
+  [
+   "Skill",
+   30
+  ],
+  [
+   "ToolSearch",
+   17
+  ],
+  [
+   "mcp__ccd_session_mgmt__set_session_title",
+   9
+  ],
+  [
+   "ScheduleWakeup",
+   7
+  ],
+  [
+   "SendMessage",
+   5
+  ],
+  [
+   "ListAgents",
+   4
+  ],
+  [
+   "AskUserQuestion",
+   2
+  ]
+ ],
+ "most_read": [
+  [
+   "/Users/paulshao/Projects/HumanResource/docs/session接力.md",
+   13
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/wave2-p0-bridge/tools/liaison/unpack/bridge.py",
+   12
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/wave2-p0-bridge/tools/liaison/tests/test_inbound_wiring.py",
+   9
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/docs/tech-debt.md",
+   8
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/wave2-p2-charter/tools/liaison/unpack/charter.py",
+   8
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/tools/liaison/tests/test_inbound_wiring.py",
+   7
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/wave2-p1-dispatch/docs/superpowers/plans/2026-09-10-liaison-unpack-dispatch.md",
+   6
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/wave2-p0-bridge/.superpowers/sdd/2026-09-10-liaison-reply-bridge/review-c491230..506346f.diff",
+   6
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/wave2-p0-bridge/tools/liaison/tests/test_unpack_bridge.py",
+   6
+  ],
+  [
+   "/Users/paulshao/Projects/HumanResource/.claude/worktrees/wave2-p0-bridge/tools/liaison/tests/test_whitelist.py",
+   6
+  ]
+ ],
+ "synthetic_msgs": 14,
+ "top": [
+  {
+   "title": "[Mac]0916D-Token治理P3-滚动大文件归档与体积闸",
+   "kind": "泳道/opener",
+   "file": "7f3c46b2-9ae5-4ca9-856d-df739affc44a.jsonl",
+   "date": "09-16",
+   "model": "sonnet:329",
+   "calls": 329,
+   "peak_ctx": 542342,
+   "first_ctx": 83658,
+   "cache_read": 113692529,
+   "output": 201732,
+   "cost": 25.95,
+   "agents": 0,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0910G-P0回件桥实现计划",
+   "kind": "泳道/opener",
+   "file": "66c1f1e5-a090-4c51-a1a1-bfee69a18beb.jsonl",
+   "date": "09-16",
+   "model": "sonnet:116",
+   "calls": 116,
+   "peak_ctx": 321777,
+   "first_ctx": 43837,
+   "cache_read": 22977287,
+   "output": 129774,
+   "cost": 6.65,
+   "agents": 0,
+   "big_outputs": 7
+  },
+  {
+   "title": "[Mac]0916P-P0建造Task7至9",
+   "kind": "泳道/opener",
+   "file": "6920be1e-4ee9-468a-9001-033bddab1bd4.jsonl",
+   "date": "09-16",
+   "model": "sonnet:99",
+   "calls": 99,
+   "peak_ctx": 239755,
+   "first_ctx": 44969,
+   "cache_read": 14960658,
+   "output": 83038,
+   "cost": 4.36,
+   "agents": 12,
+   "big_outputs": 2
+  },
+  {
+   "title": "[Mac]0916U-P2建造Task4至5",
+   "kind": "泳道/opener",
+   "file": "6a125878-1883-4a08-b87a-c6b08000a2f9.jsonl",
+   "date": "09-16",
+   "model": "sonnet:105",
+   "calls": 105,
+   "peak_ctx": 191454,
+   "first_ctx": 45272,
+   "cache_read": 12553403,
+   "output": 66749,
+   "cost": 3.6,
+   "agents": 9,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0916V-P3建造Task1至4",
+   "kind": "泳道/opener",
+   "file": "6545d844-4a17-4e79-a2aa-a671e16b5df3.jsonl",
+   "date": "09-17",
+   "model": "sonnet:93",
+   "calls": 93,
+   "peak_ctx": 202509,
+   "first_ctx": 45511,
+   "cache_read": 11611505,
+   "output": 63929,
+   "cost": 3.41,
+   "agents": 13,
+   "big_outputs": 4
+  },
+  {
+   "title": "[Mac]0910H-P1打标即开班实现计划",
+   "kind": "泳道/opener",
+   "file": "4aebc095-a427-4672-b879-165baafd7546.jsonl",
+   "date": "09-16",
+   "model": "sonnet:56",
+   "calls": 56,
+   "peak_ctx": 212885,
+   "first_ctx": 43839,
+   "cache_read": 7536944,
+   "output": 90991,
+   "cost": 2.89,
+   "agents": 0,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0916E-TD29收尾liaison测试脚手架收编与config文案",
+   "kind": "泳道/opener",
+   "file": "4fd33d49-cd2c-4401-b7fe-4d5a10c7f8e3.jsonl",
+   "date": "09-16",
+   "model": "sonnet:81",
+   "calls": 81,
+   "peak_ctx": 167124,
+   "first_ctx": 47484,
+   "cache_read": 10253731,
+   "output": 29514,
+   "cost": 2.72,
+   "agents": 0,
+   "big_outputs": 3
+  },
+  {
+   "title": "[Mac]0916G-Token治理P4大回显拦截与P5底座实测",
+   "kind": "泳道/opener",
+   "file": "46fbd927-4832-4fc0-b313-89cf1f35b8d6.jsonl",
+   "date": "09-16",
+   "model": "sonnet:79",
+   "calls": 79,
+   "peak_ctx": 172211,
+   "first_ctx": 83705,
+   "cache_read": 9873156,
+   "output": 35606,
+   "cost": 2.64,
+   "agents": 0,
+   "big_outputs": 5
+  },
+  {
+   "title": "[Mac]0910J-P3口径点台账实现计划",
+   "kind": "泳道/opener",
+   "file": "5a7dccc7-df1f-4e1e-93e0-2946c7bee44b.jsonl",
+   "date": "09-16",
+   "model": "sonnet:62",
+   "calls": 62,
+   "peak_ctx": 181859,
+   "first_ctx": 43842,
+   "cache_read": 6965772,
+   "output": 67943,
+   "cost": 2.47,
+   "agents": 0,
+   "big_outputs": 2
+  },
+  {
+   "title": "agent-a0",
+   "kind": "子代理",
+   "file": "agent-a0764507b27b6f36a.jsonl",
+   "date": "09-16",
+   "model": "sonnet:58",
+   "calls": 58,
+   "peak_ctx": 186834,
+   "first_ctx": 28878,
+   "cache_read": 7888315,
+   "output": 4218,
+   "cost": 2.09,
+   "agents": 0,
+   "big_outputs": 4
+  },
+  {
+   "title": "agent-a6",
+   "kind": "子代理",
+   "file": "agent-a6ce216b610f2b110.jsonl",
+   "date": "09-16",
+   "model": "opus:25",
+   "calls": 25,
+   "peak_ctx": 139402,
+   "first_ctx": 27104,
+   "cache_read": 2339742,
+   "output": 688,
+   "cost": 2.06,
+   "agents": 0,
+   "big_outputs": 6
+  },
+  {
+   "title": "[Mac]0916T-P2建造Task1至3",
+   "kind": "泳道/opener",
+   "file": "b84dc347-5050-4085-8508-7d85cdd77e96.jsonl",
+   "date": "09-16",
+   "model": "sonnet:54",
+   "calls": 54,
+   "peak_ctx": 133552,
+   "first_ctx": 44911,
+   "cache_read": 5054045,
+   "output": 35333,
+   "cost": 1.64,
+   "agents": 7,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0916Q-P1建造Task1至3",
+   "kind": "泳道/opener",
+   "file": "36c20a14-0430-478f-bc6d-bd705e6fadbe.jsonl",
+   "date": "09-16",
+   "model": "sonnet:55",
+   "calls": 55,
+   "peak_ctx": 143921,
+   "first_ctx": 44652,
+   "cache_read": 5159699,
+   "output": 29443,
+   "cost": 1.63,
+   "agents": 6,
+   "big_outputs": 1
+  },
+  {
+   "title": "agent-ac",
+   "kind": "子代理",
+   "file": "agent-ac22804d801019e1b.jsonl",
+   "date": "09-16",
+   "model": "sonnet:46",
+   "calls": 46,
+   "peak_ctx": 146833,
+   "first_ctx": 31712,
+   "cache_read": 4626136,
+   "output": 3607,
+   "cost": 1.61,
+   "agents": 0,
+   "big_outputs": 3
+  },
+  {
+   "title": "[Mac]0916C-Token治理P2-模型分级与AB基线",
+   "kind": "泳道/opener",
+   "file": "845cb675-b57f-4b52-b501-56a2ccd3fb65.jsonl",
+   "date": "09-16",
+   "model": "sonnet:46",
+   "calls": 46,
+   "peak_ctx": 161664,
+   "first_ctx": 83455,
+   "cache_read": 5096193,
+   "output": 27750,
+   "cost": 1.57,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0916R-P1建造Task4至6",
+   "kind": "泳道/opener",
+   "file": "32660202-a76e-4358-a388-5124739f5961.jsonl",
+   "date": "09-16",
+   "model": "sonnet:46",
+   "calls": 46,
+   "peak_ctx": 138255,
+   "first_ctx": 44607,
+   "cache_read": 4455090,
+   "output": 29984,
+   "cost": 1.48,
+   "agents": 6,
+   "big_outputs": 3
+  },
+  {
+   "title": "[Mac]0916I-Token治理P6-长会话护栏与子代理画像",
+   "kind": "泳道/opener",
+   "file": "17fb68ef-9c3b-462d-aa0e-21b8121cf1e7.jsonl",
+   "date": "09-16",
+   "model": "sonnet:42",
+   "calls": 42,
+   "peak_ctx": 145673,
+   "first_ctx": 83404,
+   "cache_read": 4487942,
+   "output": 29662,
+   "cost": 1.43,
+   "agents": 0,
+   "big_outputs": 0
+  },
+  {
+   "title": "[Mac]0910I-P2拆件章程正本实现计划",
+   "kind": "泳道/opener",
+   "file": "10bcb198-3f02-465e-b780-5085dd940173.jsonl",
+   "date": "09-16",
+   "model": "sonnet:42",
+   "calls": 42,
+   "peak_ctx": 128102,
+   "first_ctx": 43843,
+   "cache_read": 3568151,
+   "output": 39142,
+   "cost": 1.37,
+   "agents": 0,
+   "big_outputs": 0
+  },
+  {
+   "title": "[Mac]0916A-Token治理P0-账本基线与报告对账",
+   "kind": "泳道/opener",
+   "file": "56613a72-eb69-47eb-a2a6-f03e7d3f33b1.jsonl",
+   "date": "09-16",
+   "model": "sonnet:38",
+   "calls": 38,
+   "peak_ctx": 139647,
+   "first_ctx": 82942,
+   "cache_read": 4147522,
+   "output": 30117,
+   "cost": 1.37,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0916H-Token治理P5-启动底座瘦身",
+   "kind": "泳道/opener",
+   "file": "76091128-80f5-4e58-8d06-517c765c4035.jsonl",
+   "date": "09-16",
+   "model": "sonnet:41",
+   "calls": 41,
+   "peak_ctx": 136319,
+   "first_ctx": 83686,
+   "cache_read": 4480365,
+   "output": 24374,
+   "cost": 1.36,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0916N-P0建造Task1至3",
+   "kind": "泳道/opener",
+   "file": "dc7b4e2a-67d5-4914-9de7-9e0b0bf470bc.jsonl",
+   "date": "09-16",
+   "model": "sonnet:43",
+   "calls": 43,
+   "peak_ctx": 134773,
+   "first_ctx": 44555,
+   "cache_read": 3739257,
+   "output": 26678,
+   "cost": 1.29,
+   "agents": 6,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0916S-P1建造Task7至7",
+   "kind": "泳道/opener",
+   "file": "23ecfdc9-4eaa-48d1-93b7-2dac7e12e943.jsonl",
+   "date": "09-16",
+   "model": "sonnet:40",
+   "calls": 40,
+   "peak_ctx": 128904,
+   "first_ctx": 45103,
+   "cache_read": 3345543,
+   "output": 26075,
+   "cost": 1.19,
+   "agents": 4,
+   "big_outputs": 1
+  },
+  {
+   "title": "[Mac]0916O-P0建造Task4至6",
+   "kind": "泳道/opener",
+   "file": "6c35d25e-bf35-4a27-8aa0-ecfc1b90fe26.jsonl",
+   "date": "09-16",
+   "model": "sonnet:38",
+   "calls": 38,
+   "peak_ctx": 120535,
+   "first_ctx": 44494,
+   "cache_read": 3369545,
+   "output": 14341,
+   "cost": 1.06,
+   "agents": 6,
+   "big_outputs": 2
+  },
+  {
+   "title": "agent-a8",
+   "kind": "子代理",
+   "file": "agent-a88bd7bf7a5ce10b7.jsonl",
+   "date": "09-16",
+   "model": "opus:16",
+   "calls": 16,
+   "peak_ctx": 84434,
+   "first_ctx": 24683,
+   "cache_read": 913233,
+   "output": 50,
+   "cost": 0.99,
+   "agents": 0,
+   "big_outputs": 1
+  },
+  {
+   "title": "agent-a8",
+   "kind": "子代理",
+   "file": "agent-a8353908c96e186b8.jsonl",
+   "date": "09-16",
+   "model": "opus:15",
+   "calls": 15,
+   "peak_ctx": 82354,
+   "first_ctx": 24261,
+   "cache_read": 887684,
+   "output": 41,
+   "cost": 0.96,
+   "agents": 0,
+   "big_outputs": 3
+  }
+ ],
+ "sub_roles": {
+  "final-review": {
+   "n": 25,
+   "cost": 11.58,
+   "calls": 292,
+   "avg_calls": 11.7,
+   "median_peak": 55362
+  },
+  "spec-review": {
+   "n": 7,
+   "cost": 1.23,
+   "calls": 46,
+   "avg_calls": 6.6,
+   "median_peak": 52676
+  },
+  "implementer": {
+   "n": 22,
+   "cost": 5.33,
+   "calls": 395,
+   "avg_calls": 18.0,
+   "median_peak": 58243
+  },
+  "fix": {
+   "n": 5,
+   "cost": 0.37,
+   "calls": 14,
+   "avg_calls": 2.8,
+   "median_peak": 33535
+  },
+  "其他": {
+   "n": 9,
+   "cost": 1.37,
+   "calls": 75,
+   "avg_calls": 8.3,
+   "median_peak": 49016
+  },
+  "explore": {
+   "n": 1,
+   "cost": 0.15,
+   "calls": 7,
+   "avg_calls": 7.0,
+   "median_peak": 51806
+  }
+ },
+ "sub_parents": [
+  {
+   "parent": "6920be1e-4ee9-468a-9001-033bddab1bd4",
+   "cost": 6.57,
+   "roles": {
+    "final-review": 6,
+    "spec-review": 1,
+    "implementer": 3,
+    "fix": 2
+   }
+  },
+  {
+   "parent": "23ecfdc9-4eaa-48d1-93b7-2dac7e12e943",
+   "cost": 3.36,
+   "roles": {
+    "final-review": 2,
+    "spec-review": 1,
+    "implementer": 1
+   }
+  },
+  {
+   "parent": "6545d844-4a17-4e79-a2aa-a671e16b5df3",
+   "cost": 2.88,
+   "roles": {
+    "final-review": 7,
+    "implementer": 4,
+    "fix": 2
+   }
+  },
+  {
+   "parent": "6a125878-1883-4a08-b87a-c6b08000a2f9",
+   "cost": 2.31,
+   "roles": {
+    "implementer": 2,
+    "其他": 3,
+    "spec-review": 1,
+    "final-review": 3
+   }
+  },
+  {
+   "parent": "32660202-a76e-4358-a388-5124739f5961",
+   "cost": 1.22,
+   "roles": {
+    "implementer": 3,
+    "spec-review": 3
+   }
+  },
+  {
+   "parent": "6c35d25e-bf35-4a27-8aa0-ecfc1b90fe26",
+   "cost": 1.19,
+   "roles": {
+    "其他": 2,
+    "implementer": 3,
+    "spec-review": 1
+   }
+  },
+  {
+   "parent": "36c20a14-0430-478f-bc6d-bd705e6fadbe",
+   "cost": 0.98,
+   "roles": {
+    "final-review": 3,
+    "其他": 3
+   }
+  },
+  {
+   "parent": "dc7b4e2a-67d5-4914-9de7-9e0b0bf470bc",
+   "cost": 0.8,
+   "roles": {
+    "implementer": 3,
+    "final-review": 3
+   }
+  },
+  {
+   "parent": "b84dc347-5050-4085-8508-7d85cdd77e96",
+   "cost": 0.72,
+   "roles": {
+    "fix": 1,
+    "其他": 1,
+    "explore": 1,
+    "implementer": 3,
+    "final-review": 1
+   }
+  }
+ ],
+ "sub_other_samples": [
+  [
+   "⚠️ CRITICAL: You must do ALL work inside this exact worktree directory",
+   2
+  ],
+  [
+   "You are a task reviewer for a Superpowers subagent-driven-development ",
+   2
+  ],
+  [
+   "你在仓库 worktree `/Users/paulshao/Projects/HumanResource/.claude/worktree",
+   1
+  ],
+  [
+   "Run these two commands from `/Users/paulshao/Projects/HumanResource` a",
+   1
+  ],
+  [
+   "I need you to run shell commands and report their EXACT, LITERAL outpu",
+   1
+  ],
+  [
+   "You are the task reviewer for Task 5 of the `liaison-unpack-charter` p",
+   1
+  ],
+  [
+   "You are reviewing one task's implementation: first whether it matches ",
+   1
+  ]
+ ]
+}
