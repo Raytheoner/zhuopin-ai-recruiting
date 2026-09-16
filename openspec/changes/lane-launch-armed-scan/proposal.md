@@ -1,3 +1,9 @@
+> ⏸ **2026-09-16 Shao Peishen 裁定：搁置**（答 `2b`，见 `docs/session接力.md`）。维持现有 launchd 请求文件路，⛔ 不投入实现。
+> 理由：本提案的前提（`496f55e` 修复前 plist 缺 `AbandonProcessGroup`／`PATH` 导致请求文件路不可靠）已在
+> `496f55e`（早于本提案立项）修复；`[Mac]0916E` 2026-09-16 11:30 用同一条路径实测——写 `.request` 后 6 秒内
+> `.started` 出现、`pid` 正确、无需人在场点 Run。**本提案要解决的问题目前没有复现**，⛔ 不代表设计被否定，
+> 只是当前没有证据支撑投入——若请求文件路再次出现「写了但拦下 / 不触发」的复现，回来重启本提案。
+
 ## Why
 
 泳道发车至今没有一条能无人值守走通的路。看护者（CC Desktop session）无论用 Bash `nohup`、`run_in_background`、Write 工具还是 Bash 重定向，只要动作的效果是"起一批会自主 commit/push 的无头 session"，就会被 Auto Mode 分类器拦下——2026-09-03 至 09-09 五次实证，`permissions.allow` 三条齐全也拦（`0904Z`）。09-08 `0909G` 设计的 launchd `WatchPaths` 路只搬走了"起进程"这一半，"写请求文件"那一半仍在看护者手里，2026-09-09 第十五批实测**写 `.request` 同样被拦**；同一行内容写到无关路径成功，证明拦的是 `.claude/handoff/launch/` 这个路径本身，不是内容。

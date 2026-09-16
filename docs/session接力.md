@@ -1,7 +1,18 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-13 23:4x（Cowork·HR业务线-接力0909AU：`0913A` 已跑完，门槛 **0.2 ✅**；查出 `FIELD_PATHS` fail-closed 会让 `0910A` 第一轮误判，已把 `0910A` 的 AT-1b 改成**两轮**）
+> 最后更新：2026-09-16 11:4x（`[Mac]0916D`：`[Mac]0910A` 已贴引用块派发，等他本人在主工作区跑完 TD-42 真实验证 ＋ AT-1b；`lane-launch-armed-scan` 已裁定搁置）
+
+## 🆕 2026-09-16 两条裁决 ＋ `[Mac]0910A` 已派发（`[Mac]0916D`）
+
+- **`lane-launch-armed-scan` 搁置**（答 `2b`）：维持现有 launchd 请求文件路，⛔ 不投入实现。裁定已写进
+  `openspec/changes/lane-launch-armed-scan/proposal.md` 顶部——本提案前提（`AbandonProcessGroup`／`PATH`
+  缺失致请求文件路不可靠）已在 `496f55e` 修复，`[Mac]0916E` 当天实测请求文件路 6 秒内 `.started`，问题未复现。
+  若再次出现「写了但拦下 / 不触发」，回来重启本提案，⛔ 不代表设计被否定。
+- **`[Mac]0910A` 已贴引用块**（答 `1a`）：TD-42 真实验证 ＋ AT-1b 真实入站落库，主工作区、worktree ❌，
+  需他本人发两条企微消息（群 @ 一条 ＋ 私信一条）。这是解开 `liaison-reply-bridge-and-patrol` §0 门槛
+  （0.1／0.3）、进而重开后续全部泳道的唯一动作。跑完后 `docs/tech-debt.md` TD-42 应见 `✅ 已还`、
+  `openspec/changes/liaison-reply-bridge-and-patrol/tasks.md` 0.1／0.3 应勾。
 
 ---
 
