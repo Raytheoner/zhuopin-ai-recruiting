@@ -681,3 +681,18 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 **来源**：全分支 final review（opus，`[Mac]0916P`）逐条核实，均判 Minor、不阻塞合并。
 
 ---
+
+## TD-44 · `criteria` 子命令的调用引用在两处用了不存在的 `python` 二进制名
+
+**登记时间**：2026-09-17（`[Mac]0916V`，P3 口径点台账 全分支 final review 发现，Important 级、判定超出本单元 Files 范围，不在本单元内改）
+**触发条件**：下次任何人碰 `.claude/skills/liaison-unpack/SKILL.md` 或 `tools/liaison/unpack/dispatch.py` 的白名单/接线时顺手改掉；⛔ 在此之前不单独占泳道。
+
+**缺口**：`.claude/skills/liaison-unpack/SKILL.md`（第 46 行左右）指示无头拆件会话跑 `python -m tools.liaison criteria --id … --to …`，`tools/liaison/unpack/dispatch.py` 的 `HEADLESS_ARGV_FIXED_PART`／allowlist 同样白名单了 `Bash(python -m tools.liaison criteria:*)`——但本机（乃至目标部署环境）不存在裸 `python` 这个二进制，只有 `python3` 与两个 venv（`venv/bin/python`、`tools/liaison/.venv/bin/python`）。这条命令在无头会话里会直接 `command not found`。
+
+**为什么不是本次顺手改**：这两处文件都在本单元（P3 口径点台账，Task 1–4）声明的 Files 范围之外，属于 P1（`liaison-unpack-dispatch`）泳道的触碰区；P1 曾修过同类问题（`unpack-signal` 的白名单条目已改成 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal`），`criteria` 是后于那次修复才接入 `__main__.py` 的新分支，两处引用沿用了旧写法，没人跟着改。`test_unpack_charter_allowlist.py` 只做"章程文本 vs 白名单文本"互相对照，两边一起错时测试照样绿，抓不出这类问题。
+
+**还债动作**：三处一次性改掉——`SKILL.md` 第 46 行、`dispatch.py` 的 `HEADLESS_ARGV_FIXED_PART`、`test_unpack_charter_allowlist.py` 的 `_REQUIRED_USES`——把 `python -m tools.liaison criteria` 统一改成 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria`（与 `unpack-signal` 同款写法）。命令本身是纯标准库、`python3` 裸跑即可，只是这两处引用里的二进制名要修。
+
+**来源**：全分支 final review（opus，`[Mac]0916V`）实测确认——`which python` 在本机查无此二进制，`python3` 裸跑该命令正常。
+
+---

@@ -1,4 +1,4 @@
-> **进度**：21/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态 ＋ §2 P1 信号与打标即开班全部完成并合回 main，2026-09-16 `[Mac]0916S`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
+> **进度**：24/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态 ＋ §2 P1 信号与打标即开班 ＋ §4 P3 口径点台账全部完成并合回 main，2026-09-17 `[Mac]0916V`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
 > 🔴 **§0 三条门槛全部勾完之前，§1–§5 ⛔ 不得开工**——「打标即开班」建在一条会假死且看不出来（TD-42）、且根本收不到消息（F1 接线缺失）的通道上，是在为一个不存在的入站做自动化。
 > 🔴 **验收纪律**：§5 的真实起活实测记录是本包的验收标准，⛔ 单测全绿不算（win 端同族纪律，`docs/findings/2026-09-10-win端打标即开班机制核验与HR移植方案.md` §五）。
 > 粒度：每个 `##` 章节 ＝ 一个 superpowers plan ＝ 一条 worktree 分支。每份 plan 必须含 Global Constraints 段（CLAUDE.md「工程铁律」逐字）。
@@ -46,9 +46,13 @@
 
 ## 4. P3 · 口径点台账（`liaison-criteria-ledger`）
 
-- [ ] 4.1 建 `docs/跟进信/口径点台账.md`：表头 `口径点ID | 来源信 | 描述 | 状态 | evidence | 更新`；抬头写四态语义与「`已签认` 必须带 evidence、⛔ 无超期自动签认」；把人事部#1 的决策点 a 登记为 `HR-G-01`（状态 `待专员`，evidence 空）
-- [ ] 4.2 `unpack/criteria.py` ＋ `__main__.py` 子命令 `criteria --add --from <信编号> --desc <…>` / `criteria --id HR-G-NN --to 已回复|已签认|已作废 [--evidence <…>]`：纯函数 `compute_criteria_transition(text, *, id, to, evidence) -> (new_text, changed)`；`已签认` 缺 evidence ⇒ 退出码 3、文件不变。⛔ 不 import `storage.db`
-- [ ] 4.3 单测：缺 evidence 签认 ⇒ exit 3 且文件逐字节不变；带 evidence ⇒ 状态与 evidence 列正确；ID 连续唯一；argparse ⛔ 无 `--auto`/`--expire`/`--before`/`--older-than` 类选项；源码 AST 无按时间改写状态为 `已签认` 的分支（测试用「不存在 `datetime`/`time` 参与状态判断」的形状断言）
+🔴 **落地偏离**：4.2 字面签名 `compute_criteria_transition(text, *, id, to, evidence)` 缺一个时刻值——「更新」列需要落一个日期，纯函数又不能内部读系统时钟。实现计划（`docs/superpowers/plans/2026-09-10-liaison-criteria-ledger.md`）已按此加了必填关键字参数 `today: datetime.date`，与 `followup.py::compute_backfilled_ledger` 同款处理，⛔ 不改 `design.md`，本行即偏离记录。
+
+- [x] 4.1 建 `docs/跟进信/口径点台账.md`：表头 `口径点ID | 来源信 | 描述 | 状态 | evidence | 更新`；抬头写四态语义与「`已签认` 必须带 evidence、⛔ 无超期自动签认」；把人事部#1 的决策点 a 登记为 `HR-G-01`（状态 `待专员`，evidence 空）
+- [x] 4.2 `unpack/criteria.py` ＋ `__main__.py` 子命令 `criteria --add --from <信编号> --desc <…>` / `criteria --id HR-G-NN --to 已回复|已签认|已作废 [--evidence <…>]`：纯函数 `compute_criteria_transition(text, *, id, to, evidence) -> (new_text, changed)`；`已签认` 缺 evidence ⇒ 退出码 3、文件不变。⛔ 不 import `storage.db`
+- [x] 4.3 单测：缺 evidence 签认 ⇒ exit 3 且文件逐字节不变；带 evidence ⇒ 状态与 evidence 列正确；ID 连续唯一；argparse ⛔ 无 `--auto`/`--expire`/`--before`/`--older-than` 类选项；源码 AST 无按时间改写状态为 `已签认` 的分支（测试用「不存在 `datetime`/`time` 参与状态判断」的形状断言）
+
+**§4 收口（2026-09-17 `[Mac]0916V`）**：Task 1-4 全部 review clean（Task 3/Task 4 各一次 fix round）并合回 main，全分支 final review（opus）发现 5 条 Important，4 条在本单元 Files 范围内（time-decision AST 门/argparse 门覆盖不全、CLI 字段 `|` 注入可绕过 evidence 门、`__main__.py` 接线缺自动化测试）——已并作一次 fix wave 修完、scoped re-review clean；第 5 条（`SKILL.md`／`dispatch.py` 白名单里 `criteria` 引用了不存在的 `python` 二进制名）触碰区在 P1（§2）泳道之外，登记为 `docs/tech-debt.md` TD-44，未在本单元内改。测试从基线 1060 passed/5 skipped 涨到 1091 passed/5 skipped。
 
 ## 5. 验收 · 真实起活实测（⛔ 单测不算）
 
