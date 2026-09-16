@@ -17,24 +17,26 @@
   `aibot_event_callback`（进会话/卡片/反馈）走另一条分支，⛔ 不会 emit `message`
   （`message_handler.py:41-46`）。
 
-## 二、至今**没有**实测依据的 ⇒ 本模块 fail-closed
+## 二、AT-1b 已用真实帧确认（2026-09-16，`[Mac]0910A`，两轮：群 @ 一条＋私信一条）
 
-`msgid`、发送人 userid、会话 id、正文、附件句柄**落在 `body` 的哪个键上**，SDK 里
-一处都查不到：`body` 的类型就是 `Any`，SDK 自己只读 `body["msgtype"]` 与
-`headers["req_id"]`（`client.py:130-132`），其余字段原样透传、从不命名。
-⇒ 只有一条**真实入站帧**能确认（AT-1b，由 `[Mac]0910A` 在主工作区取）。
+真实帧结构（键名与类型，取自值守线程的 fail-closed 诊断行；参照 win 端
+`5-平台底座/wecom-aibot-service/aibot_service/frame_parsing.py` 逐条核对，路径一致）：
 
-🔴 所以 `FIELD_PATHS` **现在是空的**，`compute_inbound_frame` 一律抛
-`InboundFrameUnverifiedError`（`SdkSurfaceUnverifiedError` 的子类）——与 TD-19 同一处置：
-**表面未验就不许跑**。⛔ 不许"先照文档猜一版让它先跑起来"：猜错的后果是 `thread_id`
-或 `msgid` 落成错值 ⇒ 幂等键错 ⇒ 归档互相覆盖、或同一条消息永远重复入队，而
-**没有任何症状**（归档成功、台账有行、内容是错的）。登记在 `docs/tech-debt.md`。
+- `msgid` = `body.msgid`（顶层，两种 `chattype` 都有）。
+- 发送人 userid = `body.from.userid`（两种 `chattype` 都有）。
+- 正文 = `body.text.content`（`msgtype == "text"` 时）。
+- **会话标识按 `chattype` 分叉**（design.md D6/`hr-wecom-aibot-liaison` 64 行明写）：
+  单聊（`chattype == "single"`）取发送人 `userid`；群聊（`chattype == "group"`）
+  取顶层 `body.chatid`。私聊帧里**没有 `chatid` 这个键**（2026-09-16 实测证实），
+  ⇒ 单一固定路径表达不了这条分叉，`compute_inbound_frame` 按 `chattype` 分两支取，
+  见 `THREAD_ID_PATHS_BY_CHATTYPE`。
 
-## 三、AT-1b 怎么收口（把这段留给拿到真实帧的那个人）
+## 三、`FIELD_PATHS` 现在的样子
 
-值守线程收到映射不出来的帧时，会把 `describe_frame_shape()` 的输出打进日志——
-那是一份**只有键名与值类型、⛔ 没有任何取值**的结构图（正文与姓名是个人信息，
-⛔ 不许为了排障把帧原文打进日志）。照它把 `FIELD_PATHS` 填上即可，⛔ 不改别处。
+`msgid` / `sender_userid` / `content` 三项是固定路径（不随 `chattype` 变），照旧放在
+`FIELD_PATHS` 里；`thread_id` 因为要分叉，单独放 `THREAD_ID_PATHS_BY_CHATTYPE`。
+帧里 `chattype` 不是 `"single"`/`"group"` 之一（协议变了，或 SDK 表面变了）⇒ fail-closed，
+⛔ 不猜、不用 `userid` 顶替（那会让两个不同群里的人共享同一个 `thread_id`）。
 """
 
 from __future__ import annotations
@@ -54,22 +56,37 @@ MSGTYPE_PATH = ("body", "msgtype")
 
 #: 帧里取不到就**拒绝落库**的三个字段。它们都是键：`thread_id` 是归档目录与幂等键的
 #: 第一段，`msgid` 是幂等键的 business_key，`sender_userid` 决定准入与否。
-#: ⛔ 任何一个取错，错法都是静默的。
+#: ⛔ 任何一个取错，错法都是静默的。⚠️ `thread_id` 不在 `FIELD_PATHS` 里
+#: （见 `THREAD_ID_PATHS_BY_CHATTYPE`），但仍是必需字段，处理逻辑见
+#: `compute_inbound_frame`。
 REQUIRED_FIELDS = ("thread_id", "msgid", "sender_userid")
 
 #: 正文即材料本身的那些消息类型：取不到正文就等于丢材料 ⇒ 一并拒绝落库。
 #: 其余类型（图片/语音/文件）的正文本来就可以为空，⛔ 不因空正文拒收。
 CONTENT_REQUIRED_MSGTYPES = frozenset({"text", "mixed"})
 
-#: 🔴 **帧内取值路径表——现在是空的，这不是漏写。**
-#:
-#: 键 = `handle_inbound_message` 的参数名（`thread_id` / `msgid` / `sender_userid` /
-#: `content`）；值 = 在帧里逐级取 dict 键的路径，例如 `("body", "from", "userid")`。
-#:
-#: ⛔ **不许凭企微文档、凭别的项目、凭"看起来应该是"填这张表**——本条（8.5bis）
-#: 的立条理由之一就是"⛔ 不许先写个猜的映射让它静默跑错"。填它的唯一依据是一条
-#: 真实入站帧的结构（AT-1b）。
-FIELD_PATHS: dict[str, tuple[str, ...]] = {}
+#: 帧内取值路径表（2026-09-16 AT-1b 真实帧确认，见模块 docstring 第二节）。
+#: 键 = `handle_inbound_message` 的参数名；值 = 在帧里逐级取 dict 键的路径。
+#: ⚠️ 不含 `thread_id`——那一项按 `chattype` 分叉，见 `THREAD_ID_PATHS_BY_CHATTYPE`。
+FIELD_PATHS: dict[str, tuple[str, ...]] = {
+    "msgid": ("body", "msgid"),
+    "sender_userid": ("body", "from", "userid"),
+    "content": ("body", "text", "content"),
+}
+
+#: `chattype` 的取值路径（`aibot/message_handler.py` 顶层字段，两种消息都有）。
+CHATTYPE_PATH = ("body", "chattype")
+
+#: `thread_id` 按 `chattype` 分叉的取值路径（design.md D6 / `hr-wecom-aibot-liaison`
+#: 第 64 行：「`thread_id` = 消息来源会话标识（私聊取 `userid`，群聊取 `chatid`）」）。
+#: 单聊帧**没有 `chatid` 这个键**（2026-09-16 实测证实），⇒ 不能用一条固定路径
+#: 表达这条分叉；`compute_inbound_frame` 先读 `chattype` 再挑对应的路径。
+#: 不是 `"single"`/`"group"` 之一 ⇒ fail-closed，⛔ 不猜、不用 `userid` 顶替
+#: （那会让两个不同群里的人共享同一个 `thread_id`）。
+THREAD_ID_PATHS_BY_CHATTYPE: dict[str, tuple[str, ...]] = {
+    "single": ("body", "from", "userid"),
+    "group": ("body", "chatid"),
+}
 
 
 class InboundFrameUnverifiedError(SdkSurfaceUnverifiedError):
@@ -136,22 +153,44 @@ def verify_message_frame_envelope(frame: Any) -> str:
 def compute_inbound_frame(frame: Any) -> InboundFrameFields:
     """帧 → 参数的纯映射。**取不到就抛，⛔ 绝不返回半份或带默认值的结果。**
 
-    `FIELD_PATHS` 为空（现状）⇒ 必抛。这是本条刻意的终态：接线、订阅、幂等、
-    测试全部就位，只差一条真实帧把路径表填上（AT-1b）。
+    `FIELD_PATHS`／`THREAD_ID_PATHS_BY_CHATTYPE` 任一为空 ⇒ 必抛——那是「表还没填」
+    的终态，不该发生在填表之后，留着当防线（比如测试里手滑把表清空）。
     """
     msgtype = verify_message_frame_envelope(frame)
 
-    if not FIELD_PATHS:
+    if not FIELD_PATHS or not THREAD_ID_PATHS_BY_CHATTYPE:
         raise InboundFrameUnverifiedError(
-            "帧字段映射表 frames.FIELD_PATHS 是空的：`msgid` / 发送人 userid / 会话 id "
-            "落在帧的哪个键上，至今没有任何**真实帧**依据（SDK 只命名了 body.msgtype 与 "
-            "headers.req_id）。按 TD-19 同一处置 fail-closed：⛔ 宁可这条消息不落库，"
-            "也不落一条键取错了的归档。收口路径见 frames.py 模块 docstring 第三节（AT-1b）。"
+            "帧字段映射表 frames.FIELD_PATHS／THREAD_ID_PATHS_BY_CHATTYPE 是空的：`msgid` / "
+            "发送人 userid / 会话 id 落在帧的哪个键上，没有真实帧依据。按 TD-19 同一处置 "
+            "fail-closed：⛔ 宁可这条消息不落库，也不落一条键取错了的归档。"
         )
 
     values: dict[str, Any] = {}
     missing: list[str] = []
-    for field in REQUIRED_FIELDS:
+
+    # thread_id 按 chattype 分叉（design.md D6），不在 FIELD_PATHS 里，单独处理。
+    chattype_value = _read_path(frame, CHATTYPE_PATH)
+    thread_path = (
+        THREAD_ID_PATHS_BY_CHATTYPE.get(chattype_value)
+        if isinstance(chattype_value, str)
+        else None
+    )
+    if thread_path is None:
+        missing.append(
+            f"thread_id（body.chattype={chattype_value!r} 不是 "
+            f"{sorted(THREAD_ID_PATHS_BY_CHATTYPE)} 之一，不知道会话标识落在哪个键）"
+        )
+    else:
+        thread_value = _read_path(frame, thread_path)
+        if not isinstance(thread_value, str) or not thread_value:
+            missing.append(
+                f"thread_id（chattype={chattype_value!r} 对应路径 "
+                f"{'.'.join(thread_path)} 取到 {type(thread_value).__name__}）"
+            )
+        else:
+            values["thread_id"] = thread_value
+
+    for field in ("msgid", "sender_userid"):
         path = FIELD_PATHS.get(field)
         if path is None:
             missing.append(f"{field}（路径表里没有这一项）")

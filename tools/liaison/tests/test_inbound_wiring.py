@@ -30,27 +30,30 @@ T0 = datetime(2026, 9, 10, 10, 0, 0, tzinfo=session.CHINA_TZ)
 ADMITTED_USERID = "tanglp"
 OUTSIDER_USERID = "someone-else"
 
-#: ⚠️ **构造的占位路径，⛔ 不是真实企微帧的形状证据。**
-#:
-#: 键名刻意取成 `stand_in_*` 这种一眼就不是企微字段的名字：真实映射至今没有依据
-#: （见 `frames.py` 模块 docstring 第二节），而一份"看起来很像真的"的占位映射，
-#: 下一个人很容易顺手抄进 `FIELD_PATHS` 当成实测结论——那正是本条明令禁止的
-#: "先写个猜的映射让它静默跑错"。
+#: ⚠️ **构造的占位路径，⛔ 不是真实企微帧的形状证据**——本文件测的是"接线"
+#: （回调→队列→值守线程→落库），不是"帧长什么样"，那部分见 `frames.py` 模块
+#: docstring 第二节与下面「⑤」节的正向断言。键名刻意取成 `stand_in_*`，一眼就不是
+#: 企微字段名，防止被人顺手当成实测结论抄进生产的 `FIELD_PATHS`。
+#: ⚠️ 不含 `thread_id`——那一项已挪到 `frames.THREAD_ID_PATHS_BY_CHATTYPE`（按
+#: `chattype` 分叉），`mapped` fixture 另外用 `STAND_IN_CHATTYPE` monkeypatch 它。
 STAND_IN_PATHS = {
-    "thread_id": ("body", "stand_in_thread"),
     "msgid": ("body", "stand_in_msgid"),
     "sender_userid": ("body", "stand_in_sender"),
     "content": ("body", "stand_in_text", "stand_in_content"),
 }
+STAND_IN_THREAD_PATH = ("body", "stand_in_thread")
+STAND_IN_CHATTYPE = "stand_in_chattype"
 
 
 def make_frame(*, msgid="MSGID0001", sender=ADMITTED_USERID, content="下周要两个嵌入式"):
-    """一份符合**已实测部分**（cmd/headers/body.msgtype）的帧，其余键用占位名。"""
+    """一份符合**已实测部分**（cmd/headers/body.msgtype/body.chattype）的帧，
+    其余键用占位名。"""
     return {
         "cmd": frames.MESSAGE_CALLBACK_CMD,
         "headers": {"req_id": "req-1"},
         "body": {
             "msgtype": "text",
+            "chattype": STAND_IN_CHATTYPE,
             "stand_in_thread": "threadA",
             "stand_in_msgid": msgid,
             "stand_in_sender": sender,
@@ -146,10 +149,17 @@ def ports(tmp_path, roster):
 def mapped(monkeypatch):
     """把占位路径表装上，⛔ 只在本文件的用例里有效。
 
-    ⚠️ 生产表 `frames.FIELD_PATHS` 仍然是空的（fail-closed）：用例要验的是**接线**，
-    ⛔ 不是"我们已经知道真实帧长什么样"。
+    2026-09-16 起 `frames.FIELD_PATHS` 在生产里已经是真实路径（AT-1b），但本文件
+    这批用例要验的仍是**接线**（回调→队列→值守线程→落库），⛔ 不是"真实帧长什么样"
+    ——继续用占位路径表隔离，真实映射的正向/fail-closed 断言在下面「⑤」节单独测。
+    ⚠️ `thread_id` 不在 `FIELD_PATHS` 里（见 `frames.THREAD_ID_PATHS_BY_CHATTYPE`），
+    单独 monkeypatch 那张表：`make_frame()` 的帧固定 `chattype=STAND_IN_CHATTYPE`，
+    这里把它映射到占位的 `STAND_IN_THREAD_PATH`。
     """
     monkeypatch.setattr(frames, "FIELD_PATHS", dict(STAND_IN_PATHS))
+    monkeypatch.setattr(
+        frames, "THREAD_ID_PATHS_BY_CHATTYPE", {STAND_IN_CHATTYPE: STAND_IN_THREAD_PATH}
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -359,15 +369,80 @@ def test_a_broken_frame_never_kills_the_session_thread(svc, ports, mapped, caplo
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_production_field_paths_are_still_unverified_so_mapping_refuses():
-    """🔴 现状钉子：`FIELD_PATHS` 没被真实帧填之前，`compute_inbound_frame` **必抛**。
+#: ⚠️ **AT-1b 真实帧确认后的形状（2026-09-16，`[Mac]0910A`），键名照抄、取值全假**——
+#: 键名是从两次真实企微消息（群 @ 一条＋私信一条）触发的 fail-closed 诊断行里核实的
+#: （只有键名与类型，日志本身就不带取值），⛔ 不把任何真实 userid/msgid/正文抄进测试。
+def make_real_shaped_frame(
+    *,
+    chattype: str,
+    msgid: str = "FAKEMSGID00000000000000000000AA",
+    sender: str = "fake-sender-userid",
+    content: str = "fake content",
+    chatid: str | None = "fake-chat-id",
+    msgtype: str = "text",
+):
+    body: dict = {
+        "msgid": msgid,
+        "aibotid": "aib-fakeaibotidfakeaibotidfakeaibotidfa",
+        "chattype": chattype,
+        "from": {"userid": sender},
+        "msgtype": msgtype,
+        "response_url": "https://example.invalid/cgi-bin/aibot/response",
+        "text": {"content": content},
+    }
+    if chattype == "group" and chatid is not None:
+        body["chatid"] = chatid
+    return {
+        "cmd": frames.MESSAGE_CALLBACK_CMD,
+        "headers": {"req_id": "fake-req-id-0000000000"},
+        "body": body,
+    }
 
-    ⛔ 不许改成"取不到就给个默认值"：落一条 `thread_id`／`msgid` 取错的归档，
-    比不落这条难查一个数量级——台账有行、材料在错的地方、幂等键从此错位，
-    且**没有任何症状**。AT-1b 拿到真实帧填上路径表后，本条自然转为验真实映射。
+
+def test_production_field_paths_map_a_real_shaped_private_frame():
+    """AT-1b 填表后的正向断言（私聊）：真实键名结构能被 `compute_inbound_frame`
+    完整取出四个字段。私聊帧没有 `chatid`，design.md D6 要求 `thread_id` 取
+    发送人 `userid`。
     """
+    frame = make_real_shaped_frame(
+        chattype="single", msgid="M1", sender="U1", content="C1"
+    )
+    fields = frames.compute_inbound_frame(frame)
+    assert fields.thread_id == "U1"
+    assert fields.msgid == "M1"
+    assert fields.sender_userid == "U1"
+    assert fields.msgtype == "text"
+    assert fields.content == "C1"
+
+
+def test_production_field_paths_map_a_real_shaped_group_frame():
+    """正向断言（群聊）：design.md D6 要求群聊 `thread_id` 取 `chatid`——
+    ⛔ 不是 `userid`，否则同一个群里不同的人会共享一个 `thread_id`。
+    """
+    frame = make_real_shaped_frame(
+        chattype="group", msgid="M2", sender="U2", content="C2", chatid="CHAT1"
+    )
+    fields = frames.compute_inbound_frame(frame)
+    assert fields.thread_id == "CHAT1"
+    assert fields.msgid == "M2"
+    assert fields.sender_userid == "U2"
+    assert fields.content == "C2"
+
+
+def test_group_frame_without_chatid_still_fails_closed():
+    """理论上不该发生（SDK 群聊消息必带 `chatid`），但真出现了必须 fail-closed，
+    ⛔ 不许悄悄退化成用 `userid` 顶替 `thread_id`。
+    """
+    frame = make_real_shaped_frame(chattype="group", chatid=None)
     with pytest.raises(frames.InboundFrameUnverifiedError):
-        frames.compute_inbound_frame(make_frame())
+        frames.compute_inbound_frame(frame)
+
+
+def test_unrecognized_chattype_still_fails_closed():
+    """`chattype` 不是 `single`/`group` 之一（协议变了）⇒ fail-closed，⛔ 不猜。"""
+    frame = make_real_shaped_frame(chattype="weird-new-chattype")
+    with pytest.raises(frames.InboundFrameUnverifiedError):
+        frames.compute_inbound_frame(frame)
 
 
 def test_an_unmapped_frame_is_not_archived_and_logs_the_field_structure(svc, ports, caplog):

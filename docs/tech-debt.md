@@ -2052,11 +2052,26 @@ CI 日志、粘给别人看的报错里都带着它。这条本身就构成一�
 
 ---
 
-## TD-43 · `message` 帧的字段映射未经真实帧确认，现为 fail-closed（入站消息一条都不落库）
+## ~~TD-43~~ · `message` 帧的字段映射未经真实帧确认，现为 fail-closed（入站消息一条都不落库）✅ 已还（本次 commit，`[Mac]0910A` AT-1b）
 
 **登记**：2026-09-10（`[Mac]0910B`，tasks 8.5bis ⑤ 的 fail-closed 支）
 **位置**：`tools/liaison/frames.py` 的 `FIELD_PATHS`
 **级别**：🔴 **阻断 8.6**——接线已通，但没有这张表，入站链路仍然一条都落不了库
+
+**已还（2026-09-16，`[Mac]0910A` 轮 1）**：真实帧结构由群 @ 一条 ＋ 私信一条两条真实企微
+消息确认（值守线程 fail-closed 诊断行，只有键名与类型）。`msgid`=`body.msgid`、
+发送人=`body.from.userid`、正文=`body.text.content`（三项固定路径，进 `FIELD_PATHS`）；
+`thread_id` 按 `chattype` 分叉（design.md D6：私聊取 `userid`、群聊取 `chatid`，私聊帧
+**没有 `chatid` 这个键**，实测证实），单一固定路径表达不了，单独放
+`THREAD_ID_PATHS_BY_CHATTYPE`、`compute_inbound_frame` 按 `chattype` 分支取值，
+不识别的 `chattype` 仍 fail-closed。`test_production_field_paths_are_still_unverified_so_mapping_refuses`
+已按预案改写成两条正向断言（群/私聊各一条）＋两条 fail-closed 回归（群消息缺 `chatid`／
+`chattype` 不识别）。⚠️ **顺带订正一处旧记录**：下面「为什么确认不了」一节说"win 端
+入站解析…不存在"是错的——`5-平台底座/wecom-aibot-service/aibot_service/frame_parsing.py`
+`intake.py` 就是入站解析，`2026-09-16` 已用它核对字段路径（`sender`/`chatid` 路径与本条
+实测完全一致），仅供当年判断留痕、⛔ 不要再引用那句话当现状。
+**未还、有意搁置**：附件句柄（下方"一并欠着的"那段）——本次仍是 `attachment=None`，
+归 TD-22，与 8.6 灰度私信验证顺序耦合，⛔ 不属本次范围。
 
 **欠的是什么**：`tools/liaison/frames.py` 的 `FIELD_PATHS` **是空的**。SDK 的 `message`
 事件已经订上了（8.5bis，`SUBSCRIBED_EVENTS` 含 `message`），回调、队列、值守线程消费、
