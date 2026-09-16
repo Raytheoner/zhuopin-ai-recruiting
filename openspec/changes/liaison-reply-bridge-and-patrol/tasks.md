@@ -1,4 +1,4 @@
-> **进度**：12/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态全部完成并合回 main，2026-09-16 `[Mac]0916P`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
+> **进度**：21/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态 ＋ §2 P1 信号与打标即开班全部完成并合回 main，2026-09-16 `[Mac]0916S`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
 > 🔴 **§0 三条门槛全部勾完之前，§1–§5 ⛔ 不得开工**——「打标即开班」建在一条会假死且看不出来（TD-42）、且根本收不到消息（F1 接线缺失）的通道上，是在为一个不存在的入站做自动化。
 > 🔴 **验收纪律**：§5 的真实起活实测记录是本包的验收标准，⛔ 单测全绿不算（win 端同族纪律，`docs/findings/2026-09-10-win端打标即开班机制核验与HR移植方案.md` §五）。
 > 粒度：每个 `##` 章节 ＝ 一个 superpowers plan ＝ 一条 worktree 分支。每份 plan 必须含 Global Constraints 段（CLAUDE.md「工程铁律」逐字）。
@@ -27,15 +27,15 @@
 
 ## 2. P1 · 信号与打标即开班（`liaison-unpack-dispatch`）
 
-- [ ] 2.1 `unpack/signal.py`：`append_signal(path, item)`（按 `msgid` 去重；文件缺失/损坏 ⇒ 新文件替换并返回 `replaced=True` 供调用方审计 `signal_file_replaced`）、`probe_signal(path) -> bool`、`clear_signal_before(path, checkpoint)`（只清 `at < checkpoint`）。纯文件操作，⛔ 不 import `storage.db`
-- [ ] 2.2 单测 signal：去重、损坏替换、`--before` 只清检查点前保留其后项、空文件视同无信号
-- [ ] 2.3 `unpack/dispatch.py`：锁文件读写、`compute_is_alive(pid) -> bool`（`os.kill(pid, 0)`；`ProcessLookupError`/`PermissionError`/任何异常 ⇒ `False`）、`compute_is_busy(lock_text, is_alive)`（坏锁/缺字段 ⇒ 不忙）；单测覆盖 D12 四种形状（活/死/坏锁/判活抛异常）
-- [ ] 2.4 `dispatch.resolve_claude_bin(env)`：`HR_LIAISON_CLAUDE_BIN` → `shutil.which` → `~/.local/bin/claude`；`build_headless_argv(bin, budget)`：单点常量 `HEADLESS_ARGV_TEMPLATE`（design D4）。单测断言 argv 含 `-p`、`--output-format text`、`--permission-mode acceptEdits`、`--max-budget-usd`，⛔ 不含 `--dangerously-skip-permissions`，allowedTools 不含 `send-followup`/`git push`
-- [ ] 2.5 `dispatch.dispatch_headless_unpack(*, charter_text, prompt, log_dir, lock_path, env, now, popen=subprocess.Popen) -> DispatchOutcome`：忙 ⇒ `skipped_busy`；否则建日志文件 → 写锁 → 非阻塞 `Popen`（stdin 传 prompt 后关闭，⛔ 不 `wait`）→ `started`。四类失败（章程读不到／日志建不了／Popen 抛／兜底）各转 `failed(reason)`，⛔ 不上抛，⛔ 本函数不读写信号文件（spec）。**幂等策略**：本函数无业务写；审计由调用方按 msgid+kind 幂等
-- [ ] 2.6 单测 dispatch：四类失败各一条（注入抛异常的 `popen`/不可写 `log_dir`/缺章程），每条断言不上抛且返回原因；忙 ⇒ `skipped_busy` 且未调 `popen`；🔴 「真实 `Popen`／真实 `os.kill` 一律不在单测里调用」写进测试文件文首（win 端同族纪律）
-- [ ] 2.7 把 dispatch 接进 `bridge.run_bridge`（1.6 的 `dispatch` 注入位）：审计 `dispatch_started / dispatch_skipped_busy / dispatch_failed` 各走 1.5 的 effect；审计写失败本身吞掉只记日志
-- [ ] 2.8 `__main__.py` 子命令 `unpack-signal --probe|--clear --before <ISO>` 与 `unpack-dispatch --dry-run|--force`；AST 测试：这两条子命令的模块 ⛔ 不 import `tools.liaison.storage.db`（spec「子命令不碰库」）
-- [ ] 2.9 `tools/liaison/.env.example` 加 `HR_LIAISON_CLAUDE_BIN`（可选）与 `HR_LIAISON_UNPACK_BUDGET_USD`（注释写明默认 5，design D16），只写变量名与说明，⛔ 无凭据取值；`test_liaison_boundaries` 的 plist/凭据守卫不受影响（回归跑一遍）
+- [x] 2.1 `unpack/signal.py`：`append_signal(path, item)`（按 `msgid` 去重；文件缺失/损坏 ⇒ 新文件替换并返回 `replaced=True` 供调用方审计 `signal_file_replaced`）、`probe_signal(path) -> bool`、`clear_signal_before(path, checkpoint)`（只清 `at < checkpoint`）。纯文件操作，⛔ 不 import `storage.db`
+- [x] 2.2 单测 signal：去重、损坏替换、`--before` 只清检查点前保留其后项、空文件视同无信号
+- [x] 2.3 `unpack/dispatch.py`：锁文件读写、`compute_is_alive(pid) -> bool`（`os.kill(pid, 0)`；`ProcessLookupError`/`PermissionError`/任何异常 ⇒ `False`）、`compute_is_busy(lock_text, is_alive)`（坏锁/缺字段 ⇒ 不忙）；单测覆盖 D12 四种形状（活/死/坏锁/判活抛异常）
+- [x] 2.4 `dispatch.resolve_claude_bin(env)`：`HR_LIAISON_CLAUDE_BIN` → `shutil.which` → `~/.local/bin/claude`；`build_headless_argv(bin, budget)`：单点常量 `HEADLESS_ARGV_TEMPLATE`（design D4）。单测断言 argv 含 `-p`、`--output-format text`、`--permission-mode acceptEdits`、`--max-budget-usd`，⛔ 不含 `--dangerously-skip-permissions`，allowedTools 不含 `send-followup`/`git push`
+- [x] 2.5 `dispatch.dispatch_headless_unpack(*, charter_text, prompt, log_dir, lock_path, env, now, popen=subprocess.Popen) -> DispatchOutcome`：忙 ⇒ `skipped_busy`；否则建日志文件 → 写锁 → 非阻塞 `Popen`（stdin 传 prompt 后关闭，⛔ 不 `wait`）→ `started`。四类失败（章程读不到／日志建不了／Popen 抛／兜底）各转 `failed(reason)`，⛔ 不上抛，⛔ 本函数不读写信号文件（spec）。**幂等策略**：本函数无业务写；审计由调用方按 msgid+kind 幂等
+- [x] 2.6 单测 dispatch：四类失败各一条（注入抛异常的 `popen`/不可写 `log_dir`/缺章程），每条断言不上抛且返回原因；忙 ⇒ `skipped_busy` 且未调 `popen`；🔴 「真实 `Popen`／真实 `os.kill` 一律不在单测里调用」写进测试文件文首（win 端同族纪律）
+- [x] 2.7 把 dispatch 接进 `bridge.run_bridge`（1.6 的 `dispatch` 注入位）：审计 `dispatch_started / dispatch_skipped_busy / dispatch_failed` 各走 1.5 的 effect；审计写失败本身吞掉只记日志
+- [x] 2.8 `__main__.py` 子命令 `unpack-signal --probe|--clear --before <ISO>` 与 `unpack-dispatch --dry-run|--force`；AST 测试：这两条子命令的模块 ⛔ 不 import `tools.liaison.storage.db`（spec「子命令不碰库」）
+- [x] 2.9 `tools/liaison/.env.example` 加 `HR_LIAISON_CLAUDE_BIN`（可选）与 `HR_LIAISON_UNPACK_BUDGET_USD`（注释写明默认 5，design D16），只写变量名与说明，⛔ 无凭据取值；`test_liaison_boundaries` 的 plist/凭据守卫不受影响（回归跑一遍）
 
 ## 3. P2 · 拆件章程正本（`liaison-unpack-charter`）
 
