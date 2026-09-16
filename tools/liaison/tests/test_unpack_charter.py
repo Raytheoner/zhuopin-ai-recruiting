@@ -86,3 +86,24 @@ def test_事件驱动前言不改写章程原文() -> None:
     assert "[NO-SIGNAL]" in preamble
     # 「再探一次直到无信号」只在前言，不得混进章程原文
     assert "[NO-SIGNAL]" not in charter_text
+
+
+from tools.liaison.tests._source_scan import is_vendored  # noqa: E402
+
+
+def test_代码里无章程副本() -> None:
+    text = charter.read_charter(REPO_ROOT)
+    red_line_sentences = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith(("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"))
+    ]
+    assert len(red_line_sentences) == 9, "章程 §〇 应恰好九条红线整句"
+
+    package_root = Path(charter.__file__).resolve().parents[1]  # tools/liaison
+    for py in sorted(package_root.rglob("*.py")):
+        if "__pycache__" in py.parts or is_vendored(py):
+            continue
+        source = py.read_text(encoding="utf-8")
+        for sentence in red_line_sentences:
+            assert sentence not in source, f"{py} 含章程 §〇 整句副本：{sentence}"
