@@ -15,6 +15,7 @@ import pytest
 
 from tools.liaison.storage import db as liaison_db
 from tools.liaison.storage.effects import EFFECT_NODE_TO_TABLE
+from tools.liaison.unpack import dispatch_wiring, unpack_cli
 from tools.liaison.unpack.dispatch import DispatchOutcome
 from tools.liaison.unpack.dispatch_wiring import bridge_dispatch
 
@@ -98,20 +99,74 @@ def test_charter_missing_still_produces_one_audit_row(conn, monkeypatch, tmp_pat
 
 
 def test_same_msgid_dispatch_twice_only_one_started_audit_row(conn, monkeypatch, tmp_path):
-    """幂等策略：同 msgid 同 kind 只落一行（design D11 / 铁律1）。"""
+    """幂等策略：同 msgid 只真的起一次拆件会话（I2 修复）。
+
+    🔴 这条用例此前用 `lambda **kwargs: DispatchOutcome(...)` 接住
+    `dispatch_headless_unpack`——lambda 对调用次数结构性失明，即便 P1 两次都真的
+    调用了它（=两个真实、billable 的 Claude 会话被起了两次），这条用例照样会绿。
+    现在换成会计数的 fake，直接断言「起活」这个动作本身只发生一次，不是只断言
+    审计表的行数（那一层的幂等短路发生在起活**之后**，挡不住第二次真的起进程，
+    见 finding I2）。
+    """
     charter_path = tmp_path / "charter.md"
     charter_path.write_text("章程全文", encoding="utf-8")
+    launch_calls: list[dict] = []
+
+    def _counting_dispatch_headless_unpack(**kwargs):
+        launch_calls.append(kwargs)
+        return DispatchOutcome(status="started", pid=1, log_path="x.log")
+
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
-        lambda **kwargs: DispatchOutcome(status="started", pid=1, log_path="x.log"),
+        _counting_dispatch_headless_unpack,
     )
     kwargs = dict(
         conn=conn, thread_id="t1", msgid="m5", sender_userid="u1", letter_number="人事部#1",
         charter_relpath=charter_path.name, charter_root=charter_path.parent, now=NOW,
     )
-    bridge_dispatch(**kwargs)
-    bridge_dispatch(**kwargs)
+    first = bridge_dispatch(**kwargs)
+    second = bridge_dispatch(**kwargs)
+    assert len(launch_calls) == 1, "第二次同 msgid 调用 ⛔ 不许真的再起一次拆件会话"
+    assert first.status == "started"
+    assert second.status == "started"
+    assert second.reason == "idempotent_replay_skipped_relaunch"
     assert _audit_rows(conn, "m5") == [("dispatch_started",)]
+
+
+def test_prior_launch_probe_ignores_non_started_kinds(conn, monkeypatch, tmp_path):
+    """I2 的探测只认 `dispatch_started`：`skipped_busy`/`dispatch_failed` 都没有
+    真的花钱起活，第二次调用允许重试（不该被误拦）。"""
+    charter_path = tmp_path / "charter.md"
+    charter_path.write_text("章程全文", encoding="utf-8")
+    launch_calls: list[dict] = []
+
+    def _counting_dispatch_headless_unpack(**kwargs):
+        launch_calls.append(kwargs)
+        return DispatchOutcome(status="skipped_busy")
+
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
+        _counting_dispatch_headless_unpack,
+    )
+    kwargs = dict(
+        conn=conn, thread_id="t1", msgid="m7", sender_userid="u1", letter_number="人事部#1",
+        charter_relpath=charter_path.name, charter_root=charter_path.parent, now=NOW,
+    )
+    bridge_dispatch(**kwargs)
+    bridge_dispatch(**kwargs)
+    assert len(launch_calls) == 2, "非 dispatch_started 的结果不该拦下重试"
+
+
+def test_signal_root_matches_unpack_cli_data_root():
+    """I3：`dispatch_wiring.py`／`unpack_cli.py` 两份独立维护的路径常量必须
+    REPO_ROOT 锚定且逐字相等——⛔ 不许再退回裸 `Path("data/liaison")`（部署约束是
+    Windows 计划任务，cwd 不保证是仓库根，裸相对路径会静默落到别处）。"""
+    assert dispatch_wiring.REPO_ROOT == unpack_cli.REPO_ROOT
+    assert dispatch_wiring.DEFAULT_SIGNAL_ROOT == unpack_cli._DATA_ROOT
+    assert dispatch_wiring.DEFAULT_LOG_DIR == unpack_cli.DEFAULT_LOG_DIR
+    assert dispatch_wiring.DEFAULT_LOCK_PATH == unpack_cli.DEFAULT_LOCK_PATH
+    assert dispatch_wiring.DEFAULT_SIGNAL_ROOT.is_absolute()
+    assert unpack_cli._DATA_ROOT.is_absolute()
 
 
 def test_audit_write_failure_is_swallowed_and_outcome_still_returned(conn, monkeypatch, tmp_path, caplog):

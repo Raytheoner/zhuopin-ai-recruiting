@@ -21,12 +21,20 @@ from tools.liaison.unpack.dispatch import (
 )
 from tools.liaison.unpack.signal import clear_signal_before, probe_signal
 
+#: I3（2026-09-16 修）：`tools/liaison/unpack/unpack_cli.py` → parents[0]=unpack,
+#: [1]=liaison, [2]=tools, [3]=仓库根——与 `dispatch.py`/`dispatch_wiring.py` 的
+#: `REPO_ROOT` 同一口径、同一深度（三个文件同目录）。
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 #: 三个落位默认值(design D12)。⚠️ 与 `dispatch_wiring.py` 的
 #: `DEFAULT_SIGNAL_ROOT`/`DEFAULT_LOG_DIR`/`DEFAULT_LOCK_PATH` 是**同一份路径
 #: 字面量的独立副本**——本模块刻意不 import `dispatch_wiring`（那个模块 import
 #: 了 `storage.effects`，间接可能拉库依赖），两处路径值必须逐字相同，
-#: 改一处务必同步改另一处（Task 7 的 `.env.example` 注释里会提醒）。
-_DATA_ROOT = Path("data/liaison")
+#: 改一处务必同步改另一处（Task 7 的 `.env.example` 注释里会提醒；
+#: `test_unpack_dispatch_wiring.py::test_signal_root_matches_unpack_cli_data_root`
+#: 守着两处 REPO_ROOT 锚定后仍然相等）。⛔ 不许再退回裸 `Path("data/liaison")`
+#: ——部署约束是 Windows 计划任务，cwd 不保证是仓库根。
+_DATA_ROOT = REPO_ROOT / "data" / "liaison"
 DEFAULT_SIGNAL_PATH = _DATA_ROOT / "unpack-signal.json"
 DEFAULT_LOG_DIR = _DATA_ROOT / "logs" / "unpack-headless"
 DEFAULT_LOCK_PATH = _DATA_ROOT / "unpack-session.lock"

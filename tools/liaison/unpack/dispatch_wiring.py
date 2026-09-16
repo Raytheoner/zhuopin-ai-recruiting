@@ -37,9 +37,16 @@ _OUTCOME_STATUS_TO_AUDIT_KIND = {
     "failed": "dispatch_failed",
 }
 
+#: I3（2026-09-16 修）：`tools/liaison/unpack/dispatch_wiring.py` →
+#: parents[0]=unpack, [1]=liaison, [2]=tools, [3]=仓库根——与 `dispatch.py` 的
+#: `REPO_ROOT` 同一口径、同一深度。⛔ **必须 REPO_ROOT 锚定，不能是裸相对路径**：
+#: 部署约束是 Windows 计划任务（SYSTEM 账户 + AtStartup），守护进程的 cwd 不保证
+#: 是仓库根，裸 `Path("data/liaison")` 会静默落到别处且没有任何报错。
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 #: 信号/锁/日志的默认落位（design D12）。⛔ 单点常量——`__main__.py`
 #: 的 CLI 子命令（Task 6）与本模块共用同一份，防止两处路径字面量漂移。
-DEFAULT_SIGNAL_ROOT = Path("data/liaison")
+DEFAULT_SIGNAL_ROOT = REPO_ROOT / "data" / "liaison"
 DEFAULT_LOG_DIR = DEFAULT_SIGNAL_ROOT / "logs" / "unpack-headless"
 DEFAULT_LOCK_PATH = DEFAULT_SIGNAL_ROOT / "unpack-session.lock"
 
@@ -64,6 +71,27 @@ def _build_minimal_prompt(*, letter_number: str, msgid: str, charter_text: str) 
     return preamble + charter_text
 
 
+def _prior_launch_already_recorded(conn, *, thread_id: str, msgid: str) -> bool:
+    """I2（2026-09-16 修）：redelivery 守卫，探测「这条消息是不是已经真的起过一次
+    拆件会话」——⛔ 不能靠 `effect_unpack_audit` 自身的幂等短路，那个短路发生在
+    `dispatch_headless_unpack`（会花钱、会起进程）**之后**，挡得住"审计重复写"，
+    挡不住"再起一个真实进程"（企微对同一 msgid 的重投，或值守服务重启后重放）。
+
+    探测键与 `idempotent_effect` 装饰器（`app/storage/idempotency.py`）拼的幂等键
+    同一口径：`f"{thread_id}:{node_name}:{business_key}"`，这里
+    `node_name="effect_unpack_audit"`、`business_key=f"{msgid}:dispatch_started"`
+    （`effects.py::effect_unpack_audit` docstring 逐字给出的拼法）。
+
+    只探测 `dispatch_started` 这一种 kind——`skipped_busy`/`dispatch_failed` 都
+    没有真的花钱起活，允许下一次重试；只有已经真launch过一次才需要拦下来。
+    """
+    effect_key = f"{thread_id}:effect_unpack_audit:{msgid}:dispatch_started"
+    row = conn.execute(
+        "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
+    ).fetchone()
+    return row is not None
+
+
 def bridge_dispatch(
     conn,
     *,
@@ -78,6 +106,14 @@ def bridge_dispatch(
     """P0 `bridge.run_bridge` 的 `dispatch=` 注入点。**结果三态一律落一条审计**，
     审计写失败本身吞掉只记日志（spec 明写），⛔ 不让审计失败掩盖起活本身的结果。
     """
+    if _prior_launch_already_recorded(conn, thread_id=thread_id, msgid=msgid):
+        logger.warning(
+            "msgid=%s 已经起过一次拆件会话（dispatch_started 审计已存在），"
+            "本次判定为重投/重放，跳过再起一个真实进程",
+            msgid,
+        )
+        return DispatchOutcome(status="started", reason="idempotent_replay_skipped_relaunch")
+
     charter_text = _read_charter_text(charter_root, charter_relpath)
     prompt = (
         _build_minimal_prompt(letter_number=letter_number, msgid=msgid, charter_text=charter_text)
