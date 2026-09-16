@@ -28,3 +28,33 @@ def read_charter(repo_root: Path) -> str:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise CharterMissing(f"章程正本缺失：{path}") from exc
+
+
+def compute_prompt(
+    *,
+    letter_number: str,
+    msgid: str,
+    signal_relpath: str,
+    checkpoint_iso: str,
+    charter_text: str,
+) -> str:
+    """拼出起活 prompt：事件驱动前言在前，章程全文逐字在后。
+
+    前言携带本次触发的信件编号、消息标识、信号文件路径、检查点时刻，以及
+    「走完一轮再探一次信号，仍有则再走一轮，直到无信号」这条循环规则——
+    这条规则只属于前言，不得混进 ``charter_text``（spec 要求章程正文不可被
+    前言改写，也不可反过来把只在前言里的规则塞进章程）。
+    """
+
+    preamble = (
+        "# 拆件会话起活\n\n"
+        f"- 信件编号：{letter_number}\n"
+        f"- 消息标识（msgid）：{msgid}\n"
+        f"- 信号文件：{signal_relpath}\n"
+        f"- 检查点时刻：{checkpoint_iso}\n\n"
+        "走完一轮拆件后，再探测一次信号（`python -m tools.liaison unpack-signal "
+        "--probe`）；仍有信号则再走一轮，直到输出 `[NO-SIGNAL]` 为止。这条规则"
+        "只在本前言里，不在下面的章程正文里。\n\n"
+        "---\n\n"
+    )
+    return preamble + charter_text

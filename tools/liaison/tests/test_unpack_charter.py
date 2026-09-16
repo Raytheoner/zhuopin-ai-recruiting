@@ -65,3 +65,24 @@ def test_章程结构小节完整() -> None:
         "docs/跟进信/回件/",
     ]:
         assert phrase in text, f"章程缺规定短语：{phrase}"
+
+
+def test_事件驱动前言不改写章程原文() -> None:
+    charter_text = "§〇 红线\n①对外发送\n"
+    prompt = charter.compute_prompt(
+        letter_number="人事部#3",
+        msgid="abc123",
+        signal_relpath="data/liaison/unpack-signal.json",
+        checkpoint_iso="2026-09-16T14:00:00+08:00",
+        charter_text=charter_text,
+    )
+    assert prompt.endswith(charter_text)
+    preamble = prompt[: -len(charter_text)]
+    assert preamble.strip() != ""
+    assert "人事部#3" in preamble
+    assert "abc123" in preamble
+    assert "data/liaison/unpack-signal.json" in preamble
+    assert "2026-09-16T14:00:00+08:00" in preamble
+    assert "[NO-SIGNAL]" in preamble
+    # 「再探一次直到无信号」只在前言，不得混进章程原文
+    assert "[NO-SIGNAL]" not in charter_text
