@@ -5,7 +5,7 @@ description: 编排并发车一批泳道任务。当 Shao Peishen 说"开始泳�
 
 把"下一批做什么"变成一次可发车的泳道编排。**产出是编排 + 两条命令，不是代码。**
 
-真源：`docs/openers/OP-0820-全量编排.md`（编排与全部 opener 正文）、
+真源：`docs/openers/OP-0820-全量编排.md`（**只放待执行的无头 opener**，写在「## 待执行区」之后；已跑完的批次由 `python3 scripts/archive_docs.py --apply` 原样搬到 `docs/openers/归档/OP-0820-历史批次.md`，2026-09-16 `0916D` 起）、
 `docs/openers/run-lanes.sh`（执行器）。口径以 `CLAUDE.md` 为准，不一致以 CLAUDE.md 为准。
 
 ---
@@ -156,7 +156,7 @@ python3 /Users/paulshao/Projects/HumanResource/scripts/install_lane_launcher.py
 `scripts/install_lane_launcher.py`（装/重装，幂等）、`tests/test_lane_launcher.py`（行为断言）。
 
 然后给 Shao Peishen **一样东西：看护者 opener 的 4 行引用块**（2026-09-03 起走引用式，见 `kickoff` skill「引用式 Opener」）：
-看护者正文写进 `docs/openers/MMDDZ-泳道批次看护.md`（编排文件里的「看护者 Opener」节改为只留指针），
+看护者正文写进 `docs/openers/MMDDZ-泳道批次看护.md`（⛔ 不再往编排文件里写「看护者 Opener」节——编排文件只放带 `> 泳道：` 的无头块），
 引用块第 4 行「读该文件全文并逐节执行；文件不存在或首行编号不一致即停」。
 
 > 🔴 **⛔ 不要另给发车命令，不要给任何裸 bash。已犯多次，这是本节最容易错的地方。**
