@@ -600,6 +600,68 @@ def test_worker_leaves_the_ledger_untouched_for_an_outsider(svc, roster, mapped,
     assert svc.conn.execute("SELECT COUNT(*) FROM liaison_unpack_audit").fetchone()[0] == 0
 
 
+def test_worker_wires_bridge_dispatch_with_the_partial_bound_at_the_call_site(
+    svc, roster, mapped, tmp_path, monkeypatch
+):
+    """C1：`handle_message_frame` 必须真的把 `dispatch_wiring.bridge_dispatch` 绑给
+    `run_bridge` 的 `dispatch=`。此前 `signal_path=`/`append_signal=`/`dispatch=`
+    三个都没传，每条 admitted+marked 消息都走 `bridge._emit_signal_and_dispatch`
+    的 `None` 分支——只记两条 WARNING，起活功能整条链路是死的（现网 `liaison_
+    unpack_audit` 里永远只有 `bridge_marked`，没有任何 `dispatch_*` 行）。
+
+    用 fake 接住 `dispatch_wiring.bridge_dispatch`（⛔ 不真的起 Claude 子进程），
+    断言 `__main__.py` 里 `functools.partial` 绑的那几个在调用点真实可得的值全部
+    绑对：`conn` 是值守线程独占的那条连接、`thread_id`/`msgid`/`sender_userid`
+    取自这条帧、`charter_root`/`charter_relpath` 是模块级 P2-TODO 常量、`now`
+    是事件自带的时间戳（⛔ 不是处理时才取的 `now()`）。
+    """
+    from tools.liaison.unpack.dispatch import DispatchOutcome
+
+    calls: list[tuple[object, dict]] = []
+
+    def fake_bridge_dispatch(conn, **kwargs):
+        calls.append((conn, kwargs))
+        return DispatchOutcome(status="started", pid=1, log_path="x.log")
+
+    monkeypatch.setattr(liaison_main.dispatch_wiring, "bridge_dispatch", fake_bridge_dispatch)
+
+    ledger_path = tmp_path / "README-跟进信清单.md"
+    ledger_path.write_text(
+        "| 编号 | 日期 | 收信人 | 主要事项 | 交期要点 | 发送状态 |\n"
+        "|---|---|---|---|---|---|\n"
+        "| `人事部#1` | 2026-09-09 | 汤丽萍 | 事项 | 无 | `✅ 已推送 2026-09-09` |\n",
+        encoding="utf-8",
+    )
+    ports = liaison_main.InboundPorts(
+        archive_root=tmp_path / "archive",
+        whitelist_path=roster,
+        reply=ReplySpy(),
+        ledger_path=ledger_path,
+    )
+    events: queue.Queue = queue.Queue()
+    events.put((liaison_main.EVENT_MESSAGE, T0, make_frame()))
+    liaison_main.run_session_worker(
+        svc, events, StoppingEvent(after=1), tick_interval=0.01, ports=ports
+    )
+
+    assert len(calls) == 1, (
+        "dispatch_wiring.bridge_dispatch 必须恰好被调用一次——"
+        "⛔ 回归时它一次都不会被调用（run_bridge 的 dispatch= 仍是 None）"
+    )
+    conn, kwargs = calls[0]
+    assert conn is svc.conn
+    assert kwargs["thread_id"] == "threadA"
+    assert kwargs["msgid"] == "MSGID0001"
+    assert kwargs["sender_userid"] == ADMITTED_USERID
+    assert kwargs["charter_root"] == liaison_main.REPO_ROOT
+    assert kwargs["charter_relpath"] == liaison_main.CHARTER_RELPATH
+    assert kwargs["now"] == T0
+    # 已知缺口（不在本次 7 条 finding 范围内，⛔ 不在本 wave 修）：P0 的
+    # `dispatch: Callable[[], object]` 零参契约不会把 run_bridge 内部算出来的
+    # letter_number 传回来，只能绑 None，留给 P2 通过 signal 项自己补上。
+    assert kwargs["letter_number"] is None
+
+
 def test_worker_survives_a_missing_ledger_file_without_killing_the_thread(
     svc, roster, mapped, tmp_path
 ):

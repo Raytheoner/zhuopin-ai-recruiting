@@ -27,6 +27,7 @@ test_this_chapter_wires_message_handling。⛔ 不许把 `handle_inbound_message
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import queue
@@ -44,7 +45,10 @@ from tools.liaison.archive import DEFAULT_ARCHIVE_ROOT
 from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
 from tools.liaison.storage import db as liaison_db
+from tools.liaison.unpack import dispatch_wiring
 from tools.liaison.unpack.bridge import run_bridge
+from tools.liaison.unpack.signal import append_signal as unpack_append_signal
+from tools.liaison.unpack.unpack_cli import DEFAULT_SIGNAL_PATH as UNPACK_SIGNAL_PATH
 from tools.liaison.whitelist import load_whitelist_names
 
 #: ⛔ **⛔ 不写 `logging.getLogger(__name__)`**（TD-44）：本文件是 `python -m
@@ -87,6 +91,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: `InboundPorts.ledger_path` 的默认值就是这一份，测试通过构造
 #: `InboundPorts(ledger_path=tmp_path / ...)` 覆盖它。
 LEDGER_PATH = REPO_ROOT / "docs" / "跟进信" / "README-跟进信清单.md"
+
+#: P2-TODO（`liaison-unpack-charter` 落地后由该变更包的执行者删除，见
+#: `dispatch_wiring.py` 模块 docstring 同一条 P2-TODO）：拆件章程文件的仓库相对
+#: 路径。目前硬编码占位——`liaison-unpack-charter` 变更包（`unpack/charter.py`）
+#: 还没落地，`charter.CHARTER_RELATIVE_PATH` 尚不存在。文件此刻可能还不存在于
+#: 仓库里：`dispatch_wiring.bridge_dispatch` 读不到时会把这次起活判成
+#: `failed(reason="charter_missing")`，这是预期内的降级，不是本条要修的 bug。
+CHARTER_RELPATH = ".claude/skills/liaison-unpack/SKILL.md"
 
 #: 🔴 值守通道的 .env 在 **tools/liaison/**，⛔ 不是仓库根（2026-09-09 迁，TD-40）。
 #:
@@ -275,6 +287,27 @@ def handle_message_frame(
         # `run_bridge` 的实现今后若有变化，这条纪律不应该系在"相信它"上。
         try:
             names = load_whitelist_names(ports.whitelist_path)
+            # C1（2026-09-16 修）：把 P1 的 `dispatch_wiring.bridge_dispatch` 真的绑给
+            # `run_bridge` 的 `dispatch=`。P0 把 `dispatch` 声明成零参
+            # `Callable[[], object]`（`bridge.py:271/428`，本次不改），所以只能在
+            # 这里用 `functools.partial` 把「这条消息此刻可得的值」提前绑死，
+            # `dispatch()` 真正触发时不再需要任何参数。
+            # ⚠️ `letter_number` 绑成 `None`：它是 `run_bridge` 内部按台账匹配算出来的
+            # （`compute_bridge_decision` 之后才知道），P0 的零参 `dispatch()` 契约
+            # 不会把它传回来——这是 P0/P1 接口之间的已知缺口，不在本次修复范围内
+            # （P0 的 `dispatch` 签名不属于这 7 条 finding），留给 P2 通过读
+            # `append_signal` 落的 signal 项（同样带 `letter_number`）自己补上。
+            dispatch = functools.partial(
+                dispatch_wiring.bridge_dispatch,
+                svc.conn,
+                thread_id=fields.thread_id,
+                msgid=fields.msgid,
+                sender_userid=fields.sender_userid,
+                letter_number=None,
+                charter_relpath=CHARTER_RELPATH,
+                charter_root=REPO_ROOT,
+                now=moment,
+            )
             run_bridge(
                 svc.conn,
                 thread_id=fields.thread_id,
@@ -288,6 +321,9 @@ def handle_message_frame(
                 ledger_path=ports.ledger_path,
                 archive_root=ports.archive_root,
                 now=moment,
+                signal_path=UNPACK_SIGNAL_PATH,
+                append_signal=unpack_append_signal,
+                dispatch=dispatch,
             )
         except Exception:  # noqa: BLE001 —— 双保险，见上
             logger.error(
