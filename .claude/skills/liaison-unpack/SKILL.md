@@ -15,7 +15,7 @@ description: 拆件会话章程正本——回件打标即开班后自动起的�
 ② 建造——不修改 `tools/`、`app/`、`scripts/`、`tests/` 下的任何文件。
 ③ 新下裁决——不自行做出需要 Shao Peishen 或代理人拍板的新判断，转「待人」栏（见 §四）。
 ④ 不修改 `openspec/` 下任何 spec、design、tasks 文件。
-⑤ 不写 `data/liaison.db*`、不写任何 `.env`；归档目录（`data/liaison/archive/`）只读；信号只经 CLI（`python -m tools.liaison unpack-signal`）操作，不直接改信号文件。
+⑤ 不写 `data/liaison.db*`、不写任何 `.env`；归档目录（`data/liaison/archive/`）只读；信号只经 CLI（`PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal`）操作，不直接改信号文件。
 ⑥ 不修改白名单配置（`tools/liaison/config/whitelist.yaml` 等）。
 ⑦ 不 `git push`；不做任何针对生产服务器（`.51`）的动作。
 ⑧ 不修改 `CLAUDE.md` 与 `.claude/skills/` 下任何文件（含本文件自身）。
@@ -25,11 +25,11 @@ description: 拆件会话章程正本——回件打标即开班后自动起的�
 
 ## §一 信号探测与循环
 
-1. 开工先探测信号：`python -m tools.liaison unpack-signal --probe`。
+1. 开工先探测信号：`PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal --probe`。
 2. 输出 `[NO-SIGNAL]` ⇒ 本次会话结束，不做任何后续步骤。
 3. 输出 `[SIGNAL]` ⇒ 按 §二 处理其中一条 pending 项。
 4. 探测命令返回非零、命令缺失、或输出既不是 `[SIGNAL]` 也不是 `[NO-SIGNAL]` ⇒ **一律按「有信号」处理**，不得当成「无信号」结束。
-5. 清信号只在 §二 的回灌结论已落档并 `git commit` 完成之后执行：`python -m tools.liaison unpack-signal --clear --before <检查点时刻>`；只清检查点之前的项，检查点之后新落的信号项保留给下一轮。
+5. 清信号只在 §二 的回灌结论已落档并 `git commit` 完成之后执行：`PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal --clear --before <检查点时刻>`；只清检查点之前的项，检查点之后新落的信号项保留给下一轮。
 
 ## §二 拆件步骤
 
