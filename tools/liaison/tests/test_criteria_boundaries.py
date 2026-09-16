@@ -66,6 +66,21 @@ def test_criteria_module_does_not_import_the_database():
 _FORBIDDEN_OPTIONS = ("--auto", "--expire", "--before", "--older-than")
 
 
+def test_the_argparse_scanner_would_catch_a_violation():
+    import argparse
+
+    bad_parser = argparse.ArgumentParser()
+    bad_parser.add_argument("--auto", action="store_true")
+
+    option_strings = {
+        option
+        for action in bad_parser._actions
+        for option in action.option_strings
+    }
+    hits = option_strings & set(_FORBIDDEN_OPTIONS)
+    assert hits, "扫描器应该报告 --auto 等禁用的时间相关选项"
+
+
 def test_argparse_has_no_time_based_batch_options():
     from tools.liaison.unpack.criteria import build_parser
 
