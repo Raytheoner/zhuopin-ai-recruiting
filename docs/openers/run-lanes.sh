@@ -582,7 +582,7 @@ run_lane() {
     fi
     echo "model=$lmodel（$lsrc）subagent=$SUBAGENT_MODEL" >> "$log"
 
-    ( cd "$REPO" && printf '%s\n%s\n' "$HEADER" "$body" | CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) >> "$log" 2>&1
+    ( cd "$REPO" && printf '%s\n%s\n' "$HEADER" "$body" | HR_HEADLESS_LANE=1 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) >> "$log" 2>&1
     code=$?
     t1=$(date +%s); mins=$(( (t1 - t0) / 60 ))
 

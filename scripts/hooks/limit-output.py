@@ -22,6 +22,8 @@ import shlex
 import sys
 
 LIMIT = 20_000
+READ_LIMIT = 40_000      # Read 工具不带 limit 整读的文件上限（0916K）
+READ_MAX_LINES = 400     # 带 limit 时允许的最大行数
 ESCAPE = "# allow-big-output"
 
 
@@ -128,12 +130,41 @@ def check(command, cwd):
     return None
 
 
+def check_read(inp, cwd):
+    """Read 工具：不带 limit（或 limit 过大）地整读 > 40 KB 的文件 → 拦。
+    依据（0916K）：Win 端 #584 泳道 78 次请求里上下文 29k→170k，主因是开工就整份 Read 大文件；
+    本仓库同类大文件：docs/superpowers/plans/*（90–165 KB）、tasks.md（100 KB）、tech-debt.md、kickoff SKILL.md（36 KB）、run-lanes.sh（40 KB）。
+    带 offset 或 limit ≤ 400 行一律放行（分段读正是要引导的读法；也保证 Edit 前的「先读」能满足）。"""
+    path = str(inp.get("file_path") or "")
+    if not path:
+        return None
+    p = path if os.path.isabs(path) else os.path.join(cwd, path)
+    if not os.path.isfile(p):
+        return None
+    limit = inp.get("limit")
+    if inp.get("offset") or (limit and int(limit) <= READ_MAX_LINES):
+        return None
+    if p.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ipynb")):
+        return None
+    size = os.path.getsize(p)
+    if size <= READ_LIMIT:
+        return None
+    return (f"⛔ 已拦截：Read 整读 `{os.path.basename(p)}`（约 {size // 1024} KB，上限 {READ_LIMIT // 1000} KB），读进来之后每一轮都要重付。\n"
+            f"改法：先 Grep／`grep -n '<关键词>' {path}` 找到行号，再用 Read 带 offset＋limit（≤ {READ_MAX_LINES} 行）只读那一段；"
+            f"要改文件时同样先分段读到目标段再 Edit。（Token 治理 0916K，scripts/hooks/limit-output.py）")
+
+
 def main():
     try:
         data = json.load(sys.stdin)
-        if data.get("tool_name") != "Bash":
+        tool = data.get("tool_name")
+        cwd = data.get("cwd") or os.getcwd()
+        if tool == "Read":
+            msg = check_read(data.get("tool_input") or {}, cwd)
+        elif tool == "Bash":
+            msg = check(str((data.get("tool_input") or {}).get("command", "")), cwd)
+        else:
             return 0
-        msg = check(str((data.get("tool_input") or {}).get("command", "")), data.get("cwd") or os.getcwd())
     except Exception:
         return 0                      # fail-open
     if msg:

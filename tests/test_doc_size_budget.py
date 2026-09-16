@@ -16,6 +16,7 @@ LIMITS_KB = {
     "docs/session接力.md": 58,
     "docs/openers/OP-0820-全量编排.md": 60,
     "docs/openers/号池台账.md": 60,
+    "docs/tech-debt.md": 50,   # 0916K 归档后基线
     "CLAUDE.md": 24,   # 0916H 瘦身后基线（22.5 KB 向上取整 23 ＋2＝25，封顶 24）
 }
 

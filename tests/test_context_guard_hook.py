@@ -26,9 +26,9 @@ def transcript(tmp_path, ctxs, sidechain_last=None):
     return p
 
 
-def run(tmp_path, path, sid="s1"):
+def run(tmp_path, path, sid="s1", extra_env=None):
     payload = {"session_id": sid, "transcript_path": str(path) if path else None, "prompt": "x"}
-    env = {"CC_CONTEXT_GUARD_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    env = {"CC_CONTEXT_GUARD_DIR": str(tmp_path), "PATH": "/usr/bin:/bin", **(extra_env or {})}
     return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=20)
 
 
@@ -63,3 +63,13 @@ def test_missing_or_bad_input_is_silent(tmp_path):
     assert run(tmp_path, tmp_path / "nope.jsonl").stdout == ""
     r = subprocess.run([sys.executable, str(HOOK)], input="garbage", capture_output=True, text=True, timeout=20)
     assert r.returncode == 0 and r.stdout == ""
+
+
+def test_headless_lane_never_warns(tmp_path):
+    t = transcript(tmp_path, [300_000])
+    assert run(tmp_path, t, extra_env={"HR_HEADLESS_LANE": "1"}).stdout == ""
+
+
+def test_warning_forbids_early_wrapup(tmp_path):
+    out = run(tmp_path, transcript(tmp_path, [170_000])).stdout
+    assert "不许因为上下文大而提前收尾" in out

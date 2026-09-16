@@ -42,6 +42,8 @@ def last_context(path):
 
 def main():
     try:
+        if os.environ.get("HR_HEADLESS_LANE"):
+            return 0          # 无头泳道一律不提醒（0916K：Win 端 #584/#585 泳道被 150k 提醒叫停、半途收尾）
         data = json.load(sys.stdin)
         path = data.get("transcript_path")
         if not path or not os.path.isfile(path):
@@ -63,7 +65,7 @@ def main():
             f"【Token 护栏·自动注入，非用户原话】本会话上下文已约 {ctx // 1000}k，之后每一轮都要整段重读。"
             "判断用户这条消息：若是**本会话主任务之外的新任务**（另派 opener、另一件事的落档/裁决/排查），"
             "先用一句话建议他新开 session，并给出可直接粘贴的接续要点（≤5 行，或指向已落档的文件），⛔ 不要在本会话里直接展开；"
-            "若是同一任务的延续，照常继续，⛔ 不必提这条。"
+            "若是同一任务的延续，照常继续做完，⛔ 不必提这条、⛔ 不许因为上下文大而提前收尾或缩小任务范围。"
         )
     except Exception:
         return 0

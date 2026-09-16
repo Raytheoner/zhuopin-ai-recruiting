@@ -26,8 +26,8 @@ def files(tmp_path):
     return tmp_path
 
 
-def run(cmd, cwd, tool="Bash"):
-    payload = {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(cwd)}
+def run(cmd, cwd, tool="Bash", tool_input=None):
+    payload = {"tool_name": tool, "tool_input": tool_input if tool_input is not None else {"command": cmd}, "cwd": str(cwd)}
     return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True, timeout=20)
 
 
@@ -67,8 +67,33 @@ def test_allows_safe_forms(files, cmd):
     assert r.returncode == 0, (cmd, r.stderr)
 
 
-def test_non_bash_tool_ignored(files):
-    assert run("cat big.md", files, tool="Read").returncode == 0
+def test_other_tools_ignored(files):
+    assert run("cat big.md", files, tool="Grep").returncode == 0
+
+
+def test_read_whole_big_file_blocked(files):
+    r = run(None, files, tool="Read", tool_input={"file_path": str(files / "big.md")})
+    assert r.returncode == 2 and "offset" in r.stderr
+
+
+@pytest.mark.parametrize("inp", [
+    {"file_path": "big.md", "offset": 300, "limit": 100},
+    {"file_path": "big.md", "limit": 200},
+    {"file_path": "big.md", "offset": 10},
+    {"file_path": "small.md"},
+    {"file_path": "nosuch.md"},
+    {"file_path": ""},
+])
+def test_read_allowed_forms(files, inp):
+    inp = dict(inp)
+    if inp["file_path"]:
+        inp["file_path"] = str(files / inp["file_path"])
+    assert run(None, files, tool="Read", tool_input=inp).returncode == 0
+
+
+def test_read_big_limit_blocked(files):
+    r = run(None, files, tool="Read", tool_input={"file_path": str(files / "big.md"), "limit": 2000})
+    assert r.returncode == 2
 
 
 def test_garbage_stdin_fails_open():

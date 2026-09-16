@@ -62,7 +62,7 @@ def sandbox(tmp_path: Path):
     fake = bindir / "claude"
     fake.write_text(
         "#!/usr/bin/env bash\n"
-        f'echo "ARGS $* SUB=${{CLAUDE_CODE_SUBAGENT_MODEL:-unset}}" >> "{calls}"\n'
+        f'echo "ARGS $* SUB=${{CLAUDE_CODE_SUBAGENT_MODEL:-unset}} LANE=${{HR_HEADLESS_LANE:-unset}}" >> "{calls}"\n'
         "cat >/dev/null\n"
         "echo OPENER_DONE\n",
         encoding="utf-8",
@@ -111,7 +111,8 @@ def test_real_run_passes_models_and_subagent_env(sandbox):
     c = calls_for(sandbox)
     assert "--model sonnet" in c["0101A"] and "SUB=sonnet" in c["0101A"]
     assert "--model opus" in c["0101B"] and "SUB=sonnet" in c["0101B"]
-    assert "--strict-mcp-config" in c["0101A"] and "--strict-mcp-config" in c["0101B"]   # Phase 5：无头默认不载 MCP
+    assert "--strict-mcp-config" in c["0101A"] and "--strict-mcp-config" in c["0101B"]
+    assert "LANE=1" in c["0101A"]   # 0916K：context-guard 据此不在无头泳道里提醒   # Phase 5：无头默认不载 MCP
     results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
     rows = {l.split("\t")[1]: l.split("\t") for l in results.read_text(encoding="utf-8").splitlines()}
     assert rows["0101A"][2] == "OK" and rows["0101A"][5] == "sonnet"

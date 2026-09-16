@@ -43,6 +43,8 @@ REL = {
     "ledger_arch": "docs/openers/归档/号池台账-归档.md",
     "relay": "docs/session接力.md",
     "relay_arch": "docs/archive/session接力-归档.md",
+    "td": "docs/tech-debt.md",
+    "td_arch": "docs/archive/tech-debt-已还.md",
 }
 PENDING = re.compile(r"^>\s*泳道：")
 KEEP_PLAN = ("并发协议", "待执行区")
@@ -66,7 +68,7 @@ def main():
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--init-ledger", action="store_true")
     ap.add_argument("--verify-tags", action="store_true")
-    ap.add_argument("--scope", choices=["all", "plan", "relay"], default="all",
+    ap.add_argument("--scope", choices=["all", "plan", "relay", "techdebt"], default="all",
                     help="plan＝编排文件＋号池台账；relay＝接力文件")
     ap.add_argument("--today", help="测试用，YYYY-MM-DD")
     a = ap.parse_args()
@@ -105,6 +107,7 @@ def main():
     # 0. 一次性拆出号池台账
     plan = after["plan"]
     do_plan, do_relay = a.scope in ("all", "plan"), a.scope in ("all", "relay")
+    do_td = a.scope in ("all", "techdebt")
     if a.init_ledger and do_plan:
         if after["ledger"] is not None:
             report.append("号池台账.md 已存在，--init-ledger 跳过")
@@ -180,6 +183,21 @@ def main():
     if drop:
         report.append(f"session接力：搬走 {len(drop)} 行")
     after["relay"] = [l for i, l in enumerate(relay) if i not in drop]
+
+    # 4. tech-debt：标题形如 `## ~~TD-N~~ …`（已还）的整段 → 归档（0916K）
+    if do_td and after["td"] is not None:
+        td, keep_td, moved_td = after["td"], [], 0
+        cur = 0
+        for s_, e_ in sections(td, "## "):
+            keep_td += td[cur:s_]; cur = e_
+            if td[s_].startswith("## ~~"):
+                append_block("td_arch", td[s_].lstrip("# ")[:60], td[s_:e_]); moved_td += 1
+            else:
+                keep_td += td[s_:e_]
+        keep_td += td[cur:]
+        if moved_td:
+            report.append(f"tech-debt：搬走 {moved_td} 条已还")
+        after["td"] = keep_td
 
     # 守恒校验
     b = Counter(l for v in before.values() if v for l in v)

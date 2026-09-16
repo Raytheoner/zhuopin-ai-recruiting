@@ -164,3 +164,16 @@ def test_scope_plan_leaves_relay_untouched(root):
     assert "[Mac]0904G" not in txt(root, "docs/openers/OP-0820-全量编排.md")
     r = run(root, "--scope", "relay", "--apply")
     assert r.returncode == 0 and "旧事细节" not in txt(root, "docs/session接力.md")
+
+
+def test_techdebt_struck_entries_archived(root):
+    (root / "docs" / "tech-debt.md").write_text(
+        "# 技术债\n\n## TD-1 · 未还\n细节一\n\n## ~~TD-2~~ · 已还 ✅\n细节二\n\n## TD-3 · 未还\n细节三\n", encoding="utf-8")
+    before = all_lines(root)
+    r = run(root, "--scope", "techdebt", "--apply")
+    assert r.returncode == 0, r.stdout + r.stderr
+    td = txt(root, "docs/tech-debt.md")
+    assert "细节一" in td and "细节三" in td and "细节二" not in td
+    assert "细节二" in txt(root, "docs/archive/tech-debt-已还.md")
+    assert not (before - all_lines(root))
+    assert txt(root, "docs/session接力.md") == RELAY
