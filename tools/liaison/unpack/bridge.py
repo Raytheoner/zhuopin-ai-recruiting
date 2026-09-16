@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 #: 第九态的语义标记：回件已到、待人工/会话拆件、仍在途、串行闸仍锁。
@@ -42,4 +43,121 @@ def compute_ninth_state_cell(
         f"（值守服务自动标记，入信归档 `{archived_relpath}`；"
         f"仍属在途、串行闸仍锁，拆件回灌后须转闭环四态之一）"
         f" ━━━ 原状态 ━━━ {original_cell_text.strip()}"
+    )
+
+
+OUTCOME_MARKED = "marked"
+OUTCOME_SKIPPED_NO_INFLIGHT = "skipped_no_inflight"
+OUTCOME_REFUSED_SERIAL_VIOLATION = "refused_serial_violation"
+OUTCOME_SKIPPED_ALREADY_MARKED = "skipped_already_marked"
+
+
+@dataclass(frozen=True)
+class BridgeDecision:
+    """`compute_bridge_decision` 的判定结果。纯数据。"""
+
+    outcome: str
+    new_ledger_text: str | None
+    matched_letter_numbers: tuple[str, ...]
+
+
+def _strip_outer_backtick(cell: str) -> str:
+    """去掉状态列惯用的单层反引号包裹，只为**判定**用，⛔ 不用于改写输出
+    （改写时 `compute_ninth_state_cell` 保留完整原文，见该函数 docstring）。
+    """
+    text = cell.strip()
+    if len(text) >= 2 and text.startswith("`") and text.endswith("`"):
+        return text[1:-1].strip()
+    return text
+
+
+def _is_inflight_status(status_cell: str) -> bool:
+    text = _strip_outer_backtick(status_cell)
+    return text.startswith(ALREADY_PUSHED_PREFIX) or NINTH_STATE_MARKER in text
+
+
+def _is_already_marked_status(status_cell: str) -> bool:
+    return NINTH_STATE_MARKER in _strip_outer_backtick(status_cell)
+
+
+def _extract_letter_number(number_cell: str) -> str | None:
+    text = number_cell.strip()
+    if text.startswith("`") and text.endswith("`") and len(text) >= 2:
+        return text[1:-1].strip()
+    return text or None
+
+
+def compute_bridge_decision(
+    ledger_text: str,
+    *,
+    sender_name: str,
+    archived_relpath: str,
+    now_cst: datetime,
+) -> BridgeDecision:
+    """按 spec「名单内入站按串行原则定位在途信」判出四态之一。
+
+    纯函数：不读文件、不读时钟（`now_cst` 由调用方传入）、不记日志（工程铁律 2）。
+
+    判定顺序（spec 逐字）：
+    1. 按 `sender_name` 匹配"收信人"列，筛出"发送状态"以 `✅ 已推送` 起头
+       或已含第九态标记的行（在途行）。
+    2. 0 行 ⇒ `skipped_no_inflight`。
+    3. ≥2 行 ⇒ `refused_serial_violation`，`matched_letter_numbers` 列出全部命中编号。
+    4. 恰 1 行且已是第九态 ⇒ `skipped_already_marked`（幂等短路，同一消息重投
+       或第九态期间又来一条新消息都会落进这一支——两者在"台账层面"看起来
+       完全一样，`run_bridge` 用审计表的幂等键区分"是否要重复起活"）。
+    5. 恰 1 行且未是第九态 ⇒ `marked`，改写该行"发送状态"列为第九态文案，
+       台账其它行逐字节不变。
+    """
+    lines = ledger_text.splitlines(keepends=True)
+    inflight_indices: list[int] = []
+    for index, line in enumerate(lines):
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = line.split("|")
+        if len(cells) < 6:
+            continue
+        recipient = cells[3].strip()
+        if recipient != sender_name:
+            continue
+        if _is_inflight_status(cells[-2]):
+            inflight_indices.append(index)
+
+    if not inflight_indices:
+        return BridgeDecision(
+            outcome=OUTCOME_SKIPPED_NO_INFLIGHT, new_ledger_text=None, matched_letter_numbers=()
+        )
+
+    if len(inflight_indices) > 1:
+        numbers = tuple(
+            number
+            for index in inflight_indices
+            if (number := _extract_letter_number(lines[index].split("|")[1])) is not None
+        )
+        return BridgeDecision(
+            outcome=OUTCOME_REFUSED_SERIAL_VIOLATION,
+            new_ledger_text=None,
+            matched_letter_numbers=numbers,
+        )
+
+    hit_index = inflight_indices[0]
+    hit_cells = lines[hit_index].split("|")
+    letter_number = _extract_letter_number(hit_cells[1])
+    matched = (letter_number,) if letter_number is not None else ()
+
+    if _is_already_marked_status(hit_cells[-2]):
+        return BridgeDecision(
+            outcome=OUTCOME_SKIPPED_ALREADY_MARKED,
+            new_ledger_text=None,
+            matched_letter_numbers=matched,
+        )
+
+    hit_cells[-2] = (
+        f" {compute_ninth_state_cell(hit_cells[-2], archived_relpath=archived_relpath, now_cst=now_cst)} "
+    )
+    lines[hit_index] = "|".join(hit_cells)
+    return BridgeDecision(
+        outcome=OUTCOME_MARKED,
+        new_ledger_text="".join(lines),
+        matched_letter_numbers=matched,
     )
