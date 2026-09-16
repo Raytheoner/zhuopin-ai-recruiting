@@ -15,6 +15,9 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 
+from tools.liaison.archive import ArchiveOutcome, compute_archive_path
+from tools.liaison.attachments import store_attachment
+
 #: 第九态的语义标记：回件已到、待人工/会话拆件、仍在途、串行闸仍锁。
 #: ⛔ 这段文字本身就是被 spec Scenario 逐字断言的契约，改动前先读
 #: spec.md「第九态改写只动命中行且原状态原样接后」。
@@ -185,3 +188,51 @@ def write_ledger_atomic(path: pathlib.Path, text: str) -> None:
     finally:
         handle.close()
     os.replace(temp_path, path)
+
+
+#: `archive.DEFAULT_ARCHIVE_ROOT` 相对仓库根的那一段。写死成字面量而不是
+#: 从 `archive.DEFAULT_ARCHIVE_ROOT.relative_to(repo_root)` 反算——`run_bridge`
+#: 的调用方（`__main__.py`）本来就可能传一个 `tmp_path` 当 `archive_root`
+#: （测试用），那种情况下"相对仓库根"这个说法本身就不成立；design D9
+#: 要的是"仓库相对路径这个**展示形态**"，不是真的要求调用方的
+#: `archive_root` 参数必须落在仓库里，两件事分开处理。
+ARCHIVE_ROOT_RELATIVE = "data/liaison/archive"
+
+#: 无附件时，把消息正文当"归档件"落盘用的固定文件名。
+_REPLY_SNAPSHOT_FILENAME = "正文.txt"
+
+
+def resolve_reply_archive_relpath(
+    outcome: ArchiveOutcome,
+    *,
+    thread_id: str,
+    msgid: str,
+    received_at: str,
+    content: str,
+    archive_root: pathlib.Path,
+) -> str:
+    """算出（必要时落盘）"入信归档件"的仓库相对路径。
+
+    见本文件模块 docstring 引用的计划文档「与 design.md 现状偏离的实现说明·
+    偏离 1」：`outcome.attachments` 在当前系统里恒为空，本函数是让
+    「入信归档件的相对路径」这句 spec 契约在当前唯一会出现的场景（纯文本、
+    无附件）下也对应一个真实存在的文件，而不是编造的路径字符串。
+
+    有附件（`outcome.attachments` 非空）时直接用第一项的 `relative_path`，
+    ⛔ 不重复落盘——附件已经在 `archive_message()` 那一步落过了。
+    """
+    if outcome.attachments:
+        relative = outcome.attachments[0].relative_path
+    else:
+        destination = compute_archive_path(
+            thread_id=thread_id,
+            msgid=msgid,
+            received_at=received_at,
+            filename=_REPLY_SNAPSHOT_FILENAME,
+            archive_root=archive_root,
+        )
+        stored = store_attachment(
+            content.encode("utf-8"), destination, archive_root=archive_root
+        )
+        relative = stored.relative_path
+    return f"{ARCHIVE_ROOT_RELATIVE}/{relative}"

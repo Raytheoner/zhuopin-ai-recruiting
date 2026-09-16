@@ -169,3 +169,67 @@ def test_write_ledger_atomic_propagates_failure_to_the_caller(tmp_path):
     missing_parent = tmp_path / "no-such-dir" / "README-跟进信清单.md"
     with pytest.raises(OSError):
         write_ledger_atomic(missing_parent, "内容")
+
+
+def test_resolve_reply_archive_relpath_uses_the_attachment_when_present(tmp_path):
+    from tools.liaison.archive import ArchiveOutcome
+    from tools.liaison.attachments import StoredAttachment
+    from tools.liaison.unpack.bridge import resolve_reply_archive_relpath
+
+    outcome = ArchiveOutcome(
+        msgid="msg-1",
+        newly_archived=True,
+        attachments=(
+            StoredAttachment(
+                filename="简历.pdf",
+                relative_path="ShaoPeiShen/20260910/msg-1__简历.pdf",
+                byte_length=10,
+                sha256="deadbeef",
+            ),
+        ),
+    )
+    relpath = resolve_reply_archive_relpath(
+        outcome,
+        thread_id="ShaoPeiShen",
+        msgid="msg-1",
+        received_at="2026-09-10T14:03:00+08:00",
+        content="正文不重要",
+        archive_root=tmp_path,
+    )
+    assert relpath == "data/liaison/archive/ShaoPeiShen/20260910/msg-1__简历.pdf"
+    assert list(tmp_path.rglob("*")) == []  # 没有额外落盘
+
+
+def test_resolve_reply_archive_relpath_snapshots_content_when_no_attachment(tmp_path):
+    from tools.liaison.archive import ArchiveOutcome
+    from tools.liaison.unpack.bridge import resolve_reply_archive_relpath
+
+    outcome = ArchiveOutcome(msgid="msg-2", newly_archived=True, attachments=())
+    relpath = resolve_reply_archive_relpath(
+        outcome,
+        thread_id="ShaoPeiShen",
+        msgid="msg-2",
+        received_at="2026-09-16T13:55:09+08:00",
+        content="下周要两个嵌入式",
+        archive_root=tmp_path,
+    )
+    assert relpath == "data/liaison/archive/ShaoPeiShen/20260916/msg-2__正文.txt"
+    stored_file = tmp_path / "ShaoPeiShen" / "20260916" / "msg-2__正文.txt"
+    assert stored_file.read_bytes() == "下周要两个嵌入式".encode("utf-8")
+
+
+def test_resolve_reply_archive_relpath_is_idempotent_on_repeated_calls(tmp_path):
+    from tools.liaison.archive import ArchiveOutcome
+    from tools.liaison.unpack.bridge import resolve_reply_archive_relpath
+
+    outcome = ArchiveOutcome(msgid="msg-3", newly_archived=True, attachments=())
+    kwargs = dict(
+        thread_id="ShaoPeiShen",
+        msgid="msg-3",
+        received_at="2026-09-16T13:55:09+08:00",
+        content="重复调用同一条消息",
+        archive_root=tmp_path,
+    )
+    first = resolve_reply_archive_relpath(outcome, **kwargs)
+    second = resolve_reply_archive_relpath(outcome, **kwargs)
+    assert first == second
