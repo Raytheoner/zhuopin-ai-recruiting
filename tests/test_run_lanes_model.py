@@ -142,3 +142,69 @@ def test_bold_sentinel_counts_as_done(sandbox):
     assert r.returncode == 0, r.stdout + r.stderr
     results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
     assert results.read_text(encoding="utf-8").split("\t")[2] == "OK"
+
+
+
+WT_PLAN = """# 测试编排
+
+> 泳道：甲
+> 无头豁免注明
+```
+[Mac]0101C-建造
+【设置】执行环境: CC ｜ Session: 新开 ｜ 分支: wave-t ｜ worktree: ✅ 勾（写代码）｜ 工作区: .claude/worktrees/wave-t ｜ 派发: run-lanes.sh
+干活
+```
+
+> 泳道：乙
+> 无头豁免注明
+```
+[Mac]0101D-文档
+【设置】执行环境: CC ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（文档）｜ 工作区: 仓库根 ｜ 派发: run-lanes.sh
+写文档
+```
+"""
+
+
+def _real_repo(sandbox):
+    repo = sandbox["repo"]
+    import shutil
+    shutil.rmtree(repo / ".git")
+    g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    g("init", "-q", "-b", "main"); (repo / "README.md").write_text("x", encoding="utf-8")
+    g("add", "README.md"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    fake = sandbox["script"].parent / "bin" / "claude"
+    fake.write_text(fake.read_text(encoding="utf-8").replace(
+        'LANE=${HR_HEADLESS_LANE:-unset}', 'LANE=${HR_HEADLESS_LANE:-unset} PWD=$PWD ISO=${HR_LANE_ISOLATE:-unset} WT=${HR_LANE_WORKTREE:-unset}'), encoding="utf-8")
+    return repo
+
+
+def test_worktree_lane_runs_inside_script_created_worktree(sandbox):
+    repo = _real_repo(sandbox)
+    r = run(sandbox, "--yes", "--full-auto", plan_text=WT_PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+    lines = sandbox["calls"].read_text(encoding="utf-8").splitlines()
+    c = next(l for l in lines if "0101C" in l)
+    d = next(l for l in lines if "0101D" in l)
+    wt = repo / ".claude" / "worktrees" / "wave-t"
+    assert wt.is_dir()
+    assert subprocess.run(["git", "-C", str(wt), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip() == "wave-t"
+    assert f"PWD={wt}" in c and "ISO=1" in c and f"WT={wt}" in c
+    assert f"PWD={repo}" in d and "ISO=unset" in d          # 非 worktree 条目照旧在仓库根、不开隔离
+
+
+def test_existing_worktree_is_reused(sandbox):
+    repo = _real_repo(sandbox)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", ".claude/worktrees/wave-t", "-b", "wave-t", "main"], check=True, capture_output=True)
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101C", plan_text=WT_PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+    results = next((repo / ".claude" / "handoff").glob("lanes-*/results.tsv"))
+    assert results.read_text(encoding="utf-8").split("\t")[2] == "OK"
+
+
+def test_worktree_branch_mismatch_fails_lane(sandbox):
+    repo = _real_repo(sandbox)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", ".claude/worktrees/wave-t", "-b", "other", "main"], check=True, capture_output=True)
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101C", plan_text=WT_PLAN)
+    results = next((repo / ".claude" / "handoff").glob("lanes-*/results.tsv"))
+    assert results.read_text(encoding="utf-8").split("\t")[2] == "WORKTREE-FAIL"
+    assert "0101C" not in sandbox["calls"].read_text(encoding="utf-8") if sandbox["calls"].exists() else True

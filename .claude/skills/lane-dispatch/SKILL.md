@@ -96,6 +96,12 @@ ls -t docs/superpowers/plans/*.md | head -6   # 哪些单元的 plan 已就绪
 - 确实不能拆（Task 间共享进程内状态、必须一口气调通）⇒ 块内写「拆分豁免：<理由>」
 - **机器闸**：④ dry-run 之后跑 `python3 scripts/opener_split_check.py`，退出码 1 ⇒ 按提示拆或写豁免，⛔ 不许绕过
 
+**worktree 隔离由脚本强制（2026-09-16，Win 端 #596/#599 泳道跳过「先建 worktree」直接改主工作区）**：
+- 写代码的块【设置】写 `worktree: ✅ 勾` ＋ `分支: <名>` ＋ `工作区: .claude/worktrees/<名>`——`run-lanes.sh` 会先建（或复用同分支）worktree、**在 worktree 里启动 claude**，建不出或分支不符 ⇒ `WORKTREE-FAIL` 停本泳道
+- 同时导出 `HR_LANE_ISOLATE=1`，hook `scripts/hooks/worktree-guard.py` 拦该泳道对主工作区的 Edit/Write 与 git add/commit/stash/reset/checkout 等；放行主工作区的只读 git、`merge --ff-only`、`push`、`worktree`
+- 所以块正文里：⛔ 不再写「git worktree add」（脚本做）；回勾 tasks.md、登记 tech-debt **在 worktree 里改并提交在分支上**，再 `git -C <主工作区> merge --ff-only <分支>` 与 push
+- 不写代码的块（文档、提交、计划）照旧 `worktree: ❌`，在仓库根跑，hook 不生效
+
 ### ④ 核对并发车
 
 ```bash

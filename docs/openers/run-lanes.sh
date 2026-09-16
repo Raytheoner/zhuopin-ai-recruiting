@@ -582,7 +582,40 @@ run_lane() {
     fi
     echo "model=$lmodel（$lsrc）subagent=$SUBAGENT_MODEL" >> "$log"
 
-    ( cd "$REPO" && printf '%s\n%s\n' "$HEADER" "$body" | HR_HEADLESS_LANE=1 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) >> "$log" 2>&1
+    # worktree 隔离由脚本强制（2026-09-16，Win 端 #596/#599 实证：开工单写了「先建 worktree」，泳道跳过、直接改主工作区）。
+    # 【设置】写 worktree: ✅/☑ 的条目：脚本先建（或复用）worktree，在里面启动 claude，并导出
+    # HR_LANE_ISOLATE=1 / HR_LANE_MAIN / HR_LANE_WORKTREE 给 hook `scripts/hooks/worktree-guard.py`——
+    # 泳道即使 cd 回主工作区，改文件与 git add/commit 也会被拦。路径取【设置】「工作区」里的 .claude/worktrees/<名>，
+    # 分支取「分支」字段；取不到用 lane-<编号>。建不出来 ⇒ WORKTREE-FAIL，停本泳道。
+    local run_dir="$REPO" iso_env=()
+    if printf '%s\n' "$body" | grep -m1 '【设置】' | grep -qE 'worktree(:|：)[[:space:]]*(✅|☑)'; then
+      local setl wt_rel br
+      setl="$(printf '%s\n' "$body" | grep -m1 '【设置】')"
+      wt_rel="$(printf '%s\n' "$setl" | grep -oE '\.claude/worktrees/[A-Za-z0-9._-]+' | head -1)"
+      br="$(printf '%s\n' "$setl" | sed -nE 's/.*分支(:|：)[[:space:]]*([A-Za-z0-9._\/-]+).*/\2/p' | head -1)"
+      [[ -z "$wt_rel" ]] && wt_rel=".claude/worktrees/lane-$id"
+      [[ -z "$br" || "$br" == main ]] && br="lane-$id"
+      run_dir="$REPO/$wt_rel"
+      if [[ ! -d "$run_dir" ]]; then
+        if git -C "$REPO" show-ref --verify --quiet "refs/heads/$br"; then
+          git -C "$REPO" worktree add "$run_dir" "$br" >> "$log" 2>&1
+        else
+          git -C "$REPO" worktree add "$run_dir" -b "$br" main >> "$log" 2>&1
+        fi
+      fi
+      if [[ ! -d "$run_dir" ]] || [[ "$(git -C "$run_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)" != "$br" ]]; then
+        echo "worktree=FAIL path=$wt_rel branch=$br" >> "$log"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "WORKTREE-FAIL" "0" "$log" "$lmodel" >> "$LOGDIR/results.tsv"
+        echo "  ✗ [$lane/$id] worktree 建不出来或分支不符（$wt_rel / $br），停本泳道"
+        return 1
+      fi
+      iso_env=(HR_LANE_ISOLATE=1 "HR_LANE_MAIN=$REPO" "HR_LANE_WORKTREE=$run_dir")
+      echo "worktree=$wt_rel branch=$br" >> "$log"
+    fi
+
+    # -p 模式默认只等后台子任务 600 秒就强杀（2026-09-16 0916S 实证：final review 派出的修复子代理被杀、判 NO-SENTINEL）。
+    # 放宽到 60 分钟；真卡死仍有 --max-budget-usd 与这 60 分钟兜底。
+    ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) >> "$log" 2>&1
     code=$?
     t1=$(date +%s); mins=$(( (t1 - t0) / 60 ))
 
@@ -655,7 +688,7 @@ echo "━━━━━━ 泳道执行汇总 ━━━━━━"
 echo
 echo "日志目录：$LOGDIR"
 
-failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"
+failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" || $3=="WORKTREE-FAIL" {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"
 partial="$(awk -F'\t' '$3=="PARTIAL" {printf "%s ", $2}' "$LOGDIR/results.tsv")"
 
 [[ -n "$partial" ]] && {

@@ -3,6 +3,7 @@
 > 每条必须写明**触发条件**（什么时候还）与**不还的后果**。没有触发条件的条目会永远悬着。
 > 本文件是仓库级真源。变更包归档后 `openspec/changes/` 里的 tasks.md 会移走，
 > 计划文件也会变旧，但这份清单留着。
+> 新登记取号：`grep -hoE 'TD-[0-9]+' docs/tech-debt.md docs/archive/tech-debt-已还.md | sort -t- -k2 -n | tail -1` 再 +1（已还条目归档后本文件里看不到最大号，2026-09-16 0916V 撞号实证）
 
 ## TD-1 · `job_profile` 的两列时序留痕是过渡形态
 
@@ -682,9 +683,9 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 
 ---
 
-## TD-44 · `criteria` 子命令的调用引用在两处用了不存在的 `python` 二进制名
+## TD-45 · `criteria` 子命令的调用引用在两处用了不存在的 `python` 二进制名
 
-**登记时间**：2026-09-17（`[Mac]0916V`，P3 口径点台账 全分支 final review 发现，Important 级、判定超出本单元 Files 范围，不在本单元内改）
+**登记时间**：2026-09-17（`[Mac]0916V`，P3 口径点台账 全分支 final review 发现，Important 级、判定超出本单元 Files 范围，不在本单元内改；原误登记为 TD-44，与已归档的 `~~TD-44~~`（SdkLogObserver）撞号，`[Mac]0916W` 改为 TD-45）
 **触发条件**：下次任何人碰 `.claude/skills/liaison-unpack/SKILL.md` 或 `tools/liaison/unpack/dispatch.py` 的白名单/接线时顺手改掉；⛔ 在此之前不单独占泳道。
 
 **缺口**：`.claude/skills/liaison-unpack/SKILL.md`（第 46 行左右）指示无头拆件会话跑 `python -m tools.liaison criteria --id … --to …`，`tools/liaison/unpack/dispatch.py` 的 `HEADLESS_ARGV_FIXED_PART`／allowlist 同样白名单了 `Bash(python -m tools.liaison criteria:*)`——但本机（乃至目标部署环境）不存在裸 `python` 这个二进制，只有 `python3` 与两个 venv（`venv/bin/python`、`tools/liaison/.venv/bin/python`）。这条命令在无头会话里会直接 `command not found`。

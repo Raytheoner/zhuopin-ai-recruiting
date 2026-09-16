@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/check-opener-header.py\""
+            "command": "f=\"$CLAUDE_PROJECT_DIR/scripts/hooks/check-opener-header.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\""
           }
         ]
       }
@@ -28,7 +28,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/limit-output.py\""
+            "command": "f=\"$CLAUDE_PROJECT_DIR/scripts/hooks/limit-output.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/scripts/hooks/worktree-guard.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\""
           }
         ]
       }
@@ -38,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/context-guard.py\""
+            "command": "f=\"$CLAUDE_PROJECT_DIR/scripts/hooks/context-guard.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\""
           }
         ]
       }
