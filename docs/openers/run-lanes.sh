@@ -23,7 +23,8 @@
 #   --yes              跳过开跑确认
 #   --full-auto        用 --dangerously-skip-permissions（默认是 --permission-mode acceptEdits）
 #   --only  A,B,C      只跑这几条
-#   --model NAME       透传 --model
+#   --model NAME       整批强制模型（覆盖 opener【设置】里的「模型:」与默认值）
+#   --subagent-model N 泳道内子代理模型（默认 sonnet，经 CLAUDE_CODE_SUBAGENT_MODEL 传入）
 #   --max-parallel N   同时最多几条泳道（默认 3）
 #   --stagger N        泳道错峰启动间隔秒（默认 90，降编辑锁碰撞）
 #   --budget N         每条 session 的上限（默认 25.00）
@@ -108,6 +109,13 @@ CHAIN=0; ROUND=0; ROUND_CAP=5
 # ——计划文件完整落盘，只是没来得及输出哨兵。撞上限的表现和真失败一模一样，
 # 唯一区别是日志里那行 `Error: Exceeded USD budget`。run-build 比出 plan 还贵。
 BUDGET="25.00"
+# 模型分级（2026-09-16 Token 治理 Phase 2，[Mac]0916C）
+# P0 账本（docs/token治理/P0-对账.md）：无头泳道 95% 调用跑在 Opus 上——原先 MODEL="" 不传 --model，
+# 于是沿用本机默认模型。Opus 5 单价是 Sonnet 5 的 2.5 倍，而泳道＋子代理占基线成本 92%。
+# 取值优先级：命令行 --model（整批）＞ opener【设置】行的「模型: Opus|Sonnet|Haiku」＞ DEFAULT_MODEL。
+# 需要 Opus 的（openspec design、疑难状态机调试）在 opener【设置】行显式写「模型: Opus」，⛔ 不改这里的默认值。
+DEFAULT_MODEL="sonnet"
+SUBAGENT_MODEL="sonnet"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -116,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --full-auto)    FULL_AUTO=1; shift ;;
     --only)         ONLY="$2"; shift 2 ;;
     --model)        MODEL="$2"; shift 2 ;;
+    --subagent-model) SUBAGENT_MODEL="$2"; shift 2 ;;
     --max-parallel) MAX_PARALLEL="$2"; shift 2 ;;
     --stagger)      STAGGER="$2"; shift 2 ;;
     --budget)       BUDGET="$2"; shift 2 ;;
@@ -297,11 +306,26 @@ extract() {
 # 真正的 extract() 要到实跑才被调用，于是三条泳道全部 NO-BODY，整批 0 条执行。
 # 结论：**dry-run 通过 ≠ 抽取能成功**。所以这里对每条真跑一次 extract 并数行数。
 # ---------------------------------------------------------------------------
+# opener【设置】行里的「模型: X」（ASCII 或全角冒号都认），小写输出；没写输出空
+opener_model() {
+  printf '%s\n' "$1" | grep -m1 '【设置】' | grep -oE '模型(:|：)[[:space:]]*[A-Za-z0-9._-]+' | head -1 \
+    | sed -E 's/^模型(:|：)[[:space:]]*//' | tr 'A-Z' 'a-z'
+}
+# 打印「模型<TAB>来源」；opener 写了不认识的值打印「INVALID<TAB>原值」（预检据此拒跑）
+resolve_model() {
+  local om; om="$(opener_model "$1")"
+  if [[ -n "$MODEL" ]]; then printf '%s\t%s\n' "$MODEL" "命令行--model"
+  elif [[ -n "$om" ]]; then
+    case "$om" in opus|sonnet|haiku) printf '%s\t%s\n' "$om" "opener设置行" ;;
+                  *) printf 'INVALID\t%s\n' "$om" ;; esac
+  else printf '%s\t%s\n' "$DEFAULT_MODEL" "默认"; fi
+}
+
 if [[ $FULL_AUTO -eq 1 ]]; then PERM_DESC="dangerously-skip-permissions（全自动）"
 else PERM_DESC="acceptEdits（写文件免问，Bash/push 仍会问——无人值守请加 --full-auto）"; fi
 
 echo "计划文件：$PLAN"
-echo "泳道 ${#LANES[@]} 条（并行上限 ${MAX_PARALLEL}，错峰 ${STAGGER}s，单条预算上限 \$${BUDGET}）："
+echo "泳道 ${#LANES[@]} 条（并行上限 ${MAX_PARALLEL}，错峰 ${STAGGER}s，单条预算上限 \$${BUDGET}，默认模型 ${MODEL:-$DEFAULT_MODEL}，子代理 ${SUBAGENT_MODEL}）："
 
 PRECHECK_BAD=0
 EXEMPT_MISSING=""
@@ -314,6 +338,13 @@ for ln in "${LANES[@]}"; do
       PRECHECK_BAD=1
     else
       printf '      ✓ %-14s 正文 %s 行   %s\n' "$id" "$n" "$title"
+      IFS=$'\t' read -r _m _src <<< "$(resolve_model "$(extract "$id")")"
+      if [[ "$_m" == INVALID ]]; then
+        echo "      ✗ $id  【设置】行「模型: $_src」不认，只认 Opus / Sonnet / Haiku"
+        PRECHECK_BAD=1
+      else
+        echo "        模型 $_m（$_src）｜ 子代理 $SUBAGENT_MODEL"
+      fi
     fi
 
     # -----------------------------------------------------------------------
@@ -511,14 +542,14 @@ PY
 # ---------------------------------------------------------------------------
 run_lane() {
   local lane="$1"
-  local id title body log t0 t1 code mins status
+  local id title body log t0 t1 code mins status lmodel lsrc
 
   while IFS=$'\t' read -r _lane id title; do
     log="$LOGDIR/${lane}-${id}.log"
     body="$(extract "$id")"
 
     if [[ -z "$body" ]]; then
-      printf '%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "NO-BODY" "0" "$log" >> "$LOGDIR/results.tsv"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "NO-BODY" "0" "$log" "-" >> "$LOGDIR/results.tsv"
       echo "  ✗ [$lane/$id] 抽不到正文，停本泳道"
       return 1
     fi
@@ -540,9 +571,12 @@ run_lane() {
     local args=(-p -n "[Mac]$id-$title" --output-format text --max-budget-usd "$BUDGET")
     if [[ $FULL_AUTO -eq 1 ]]; then args+=(--dangerously-skip-permissions)
     else args+=(--permission-mode acceptEdits); fi
-    [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
+    IFS=$'\t' read -r lmodel lsrc <<< "$(resolve_model "$body")"
+    [[ "$lmodel" == INVALID ]] && lmodel="$DEFAULT_MODEL"   # 预检已拒跑；这里只防御
+    args+=(--model "$lmodel")
+    echo "model=$lmodel（$lsrc）subagent=$SUBAGENT_MODEL" >> "$log"
 
-    ( cd "$REPO" && printf '%s\n%s\n' "$HEADER" "$body" | claude "${args[@]}" ) >> "$log" 2>&1
+    ( cd "$REPO" && printf '%s\n%s\n' "$HEADER" "$body" | CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) >> "$log" 2>&1
     code=$?
     t1=$(date +%s); mins=$(( (t1 - t0) / 60 ))
 
@@ -559,8 +593,8 @@ run_lane() {
     elif [[ $sentinel == PARTIAL ]];            then status="PARTIAL"
     else                                             status="NO-SENTINEL"; fi
 
-    printf '%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" >> "$LOGDIR/results.tsv"
-    echo "  • [$lane/$id] $status (${mins}m)"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" "$lmodel" >> "$LOGDIR/results.tsv"
+    echo "  • [$lane/$id] $status (${mins}m, $lmodel)"
 
     # 活干完的条目自动摘掉泳道标注 —— 让「跑完即摘」成为机制，不靠人记得。
     # 只摘 OK / PARTIAL（活都干完了，PARTIAL 只是有留步项另行处理）。
@@ -662,7 +696,7 @@ if [[ $CHAIN -eq 1 ]]; then
     exec "$0" --chain --round "$ROUND" --max-rounds "$ROUND_CAP" \
       $([[ $FULL_AUTO -eq 1 ]] && echo --full-auto) --yes \
       --budget "$BUDGET" --max-parallel "$MAX_PARALLEL" --stagger "$STAGGER" \
-      ${MODEL:+--model "$MODEL"} --plan "$PLAN"
+      ${MODEL:+--model "$MODEL"} --subagent-model "$SUBAGENT_MODEL" --plan "$PLAN"
   fi
 fi
 

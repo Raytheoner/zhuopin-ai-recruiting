@@ -125,6 +125,9 @@ openspec-archive-change  →  specs 折进 openspec/specs/           ← 活文�
 
 **并发编排走 `lane-dispatch` skill**：说「开始泳道看护」即触发——扫待办 → 判触碰区分泳道 → 写 opener 进 `docs/openers/OP-0820-全量编排.md` → dry-run 核对 → 出看护 opener 与发车命令。执行器是 `docs/openers/run-lanes.sh`。
 
+**模型分级（2026-09-16 Token 治理 Phase 2，`0916C`，依据 `docs/token治理/P0-对账.md`）**：项目默认 **Sonnet**（`.claude/settings.json` 的 `model`，`run-lanes.sh` 的 `DEFAULT_MODEL`，子代理 `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`）。
+只有 openspec design／需求收敛、疑难状态机或并发调试这类**推理密集**的 opener，才在【设置】行末尾写 `｜ 模型: Opus`（无头泳道由脚本自动识别；手工贴的由 Paul 在模型选择器切换）。泳道、spec-to-plan、run-build、看护、落档提交、对账⛔ 不写 Opus。某类 opener 在 Sonnet 上因质量原因失败过（非环境原因）→ 该类以后标 `模型: Opus`，⛔ 不整体回退默认值。
+
 **规则真源在 `.claude/skills/`，不在 `.claude/commands/`。** commands 是遗留格式、只在终端生效，本项目下只留了一行入口文件。改规则改 skill。
 
 **界面分工**：需求与文档在 Cowork 或 Desktop 均可；**实现阶段（spec-to-plan / run-build / git 提交）必须在 Desktop Code tab 或 Claude Code 终端**——Cowork 的 bash 在隔离 VM 里，git 与 worktree 不可靠。

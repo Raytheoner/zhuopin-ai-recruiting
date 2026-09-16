@@ -81,6 +81,10 @@ ls -t docs/superpowers/plans/*.md | head -6   # 哪些单元的 plan 已就绪
    六批 20+ 条全部"跑成了"，机器保证却是零。插件已在 `0909AB` 改成 user 作用域、无头与 worktree 两处实测
    `LOADED`，⇒ 再出现 `Unknown skill` 就是**新的环境故障**，必须停下来让人看，不能再被预案吸收掉。
 
+**模型（2026-09-16 `0916C` 起）**：无头块默认跑 Sonnet（`run-lanes.sh` 的 `DEFAULT_MODEL`），⛔ 不要在【设置】行写 `模型: Sonnet`（多余）。
+只有推理密集的条目（openspec design、疑难并发/状态机调试）才在【设置】行末尾加 `｜ 模型: Opus`；dry-run 每条会打印「模型 X（来源）」，核对这一行。
+写了 Opus/Sonnet/Haiku 以外的值 ⇒ 预检 exit 13 拒跑。`--model` 命令行参数是整批覆盖，launchd 请求文件路不接受它（白名单外），⛔ 不要试图用它。
+
 ### ④ 核对并发车
 
 ```bash
@@ -183,6 +187,7 @@ P0 账本：看护 11 会话 837 次调用 $60，`0904Z` 峰值上下文 352k—
 
 - 看护会话模型用 **Sonnet**：【设置】行末尾加 `｜ 模型: Sonnet`（看护是判状态、跑固定核验，不是架构推理；P0 里 `0909Z` 用 Opus 跑看护花了 $9）
 - 真身核验节里的 `git log` 带 `-n`，读日志一律 `tail -50`
+- **看护报告必附 A/B 行**（2026-09-16 `0916C` 起）：`results.tsv` 第 6 列是每条实际模型；报告里给「条数／sonnet·opus 条数／失败类／其中质量类／泳道类均价」一行，并原样回填进 `docs/token治理/P2-AB基线.md`「切换后记录」表，判据按该文件执行。均价用 `python3 scripts/token_ledger.py --since <批次开始日> --compare docs/token治理/baseline-0901-0915.json --out docs/token治理/phase2-check`
 - **机器闸**：`tests/test_caretaker_openers.py` 要求新的 `*泳道批次看护*.md` 含 `wait-lanes.sh` 且无「每 N 分钟查」字样；
   看护者开跑前的 pytest 基线会跑到它，不过即不发车。⛔ 不许往该测试的 LEGACY 里加新文件绕过
 
