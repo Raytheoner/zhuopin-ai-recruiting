@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import os
+import pathlib
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -161,3 +164,24 @@ def compute_bridge_decision(
         new_ledger_text="".join(lines),
         matched_letter_numbers=matched,
     )
+
+
+def write_ledger_atomic(path: pathlib.Path, text: str) -> None:
+    """临时文件 ＋ `os.replace` 写台账（design D10 逐字）。⛔ 不用 `with`
+    （第 2 章事务扫描器会把 `with <名字>:` 判为隐式提交违规——虽然本函数不碰
+    数据库，但扫描器按语法结构扫，不区分"这段是不是真的在碰事务"）。
+
+    写失败（目录不存在、权限不足、磁盘满）原样向上抛，⛔ 不在这里吞——
+    `run_bridge` 接住它转 `bridge_failed` 审计，见 design D10「台账写失败 ⇒
+    不落信号、不起活」。
+    """
+    handle_fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".part")
+    temp_path = pathlib.Path(temp_name)
+    handle = os.fdopen(handle_fd, "w", encoding="utf-8")
+    try:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    finally:
+        handle.close()
+    os.replace(temp_path, path)

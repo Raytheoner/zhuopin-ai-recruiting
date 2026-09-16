@@ -144,3 +144,28 @@ def test_already_ninth_state_row_is_skipped_and_ledger_unchanged():
     assert decision.outcome == "skipped_already_marked"
     assert decision.new_ledger_text is None
     assert decision.matched_letter_numbers == ("人事部#1",)
+
+
+def test_write_ledger_atomic_replaces_file_content(tmp_path):
+    from tools.liaison.unpack.bridge import write_ledger_atomic
+
+    target = tmp_path / "README-跟进信清单.md"
+    target.write_text("旧内容", encoding="utf-8")
+    write_ledger_atomic(target, "新内容")
+    assert target.read_text(encoding="utf-8") == "新内容"
+
+
+def test_write_ledger_atomic_leaves_no_temp_file_behind(tmp_path):
+    from tools.liaison.unpack.bridge import write_ledger_atomic
+
+    target = tmp_path / "README-跟进信清单.md"
+    write_ledger_atomic(target, "内容")
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_write_ledger_atomic_propagates_failure_to_the_caller(tmp_path):
+    from tools.liaison.unpack.bridge import write_ledger_atomic
+
+    missing_parent = tmp_path / "no-such-dir" / "README-跟进信清单.md"
+    with pytest.raises(OSError):
+        write_ledger_atomic(missing_parent, "内容")
