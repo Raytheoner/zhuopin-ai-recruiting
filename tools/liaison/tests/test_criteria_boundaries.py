@@ -66,19 +66,36 @@ def test_criteria_module_does_not_import_the_database():
 _FORBIDDEN_OPTIONS = ("--auto", "--expire", "--before", "--older-than")
 
 
+def _forbidden_option_hits(option_strings: set[str]) -> set[str]:
+    """子串匹配：`--auto-signoff`、`--older-than-days` 这类"同类"变体
+    与精确的 `--auto` 一样都要命中——spec 说的是"这一类"选项，不是这四个
+    字面量本身。"""
+    return {
+        option
+        for option in option_strings
+        if any(forbidden in option for forbidden in _FORBIDDEN_OPTIONS)
+    }
+
+
 def test_the_argparse_scanner_would_catch_a_violation():
     import argparse
 
     bad_parser = argparse.ArgumentParser()
     bad_parser.add_argument("--auto", action="store_true")
+    bad_parser.add_argument("--auto-signoff", action="store_true")
+    bad_parser.add_argument("--older-than-days", type=int)
 
     option_strings = {
         option
         for action in bad_parser._actions
         for option in action.option_strings
     }
-    hits = option_strings & set(_FORBIDDEN_OPTIONS)
-    assert hits, "扫描器应该报告 --auto 等禁用的时间相关选项"
+    hits = _forbidden_option_hits(option_strings)
+    # 精确字面量 `--auto` 与相邻变体 `--auto-signoff`/`--older-than-days`
+    # 都必须被报告——证明子串匹配确实比精确匹配更宽。
+    assert "--auto" in hits, "扫描器应该报告精确的 --auto"
+    assert "--auto-signoff" in hits, "扫描器应该报告 --auto 的相邻变体 --auto-signoff"
+    assert "--older-than-days" in hits, "扫描器应该报告 --older-than 的相邻变体 --older-than-days"
 
 
 def test_argparse_has_no_time_based_batch_options():
@@ -89,14 +106,20 @@ def test_argparse_has_no_time_based_batch_options():
         for action in build_parser()._actions
         for option in action.option_strings
     }
-    hits = option_strings & set(_FORBIDDEN_OPTIONS)
+    hits = _forbidden_option_hits(option_strings)
     assert hits == set(), f"argparse 出现了按时间批量操作的选项：{hits}"
 
 
 # ── ③ 状态判断里不出现时间标识符 ──────────────────────────────────────────
 
 
-_FORBIDDEN_TIME_TOKENS = ("datetime", "time")
+#: ⚠️ `"today"` 是 `compute_criteria_transition` 自己的时钟参数名——2026-09-17
+#: 补：只查 "datetime"/"time" 子串抓不住 `if (today - row_date).days > 30:`
+#: 这种真实的自动超期改写形状（既不含 "datetime" 也不含 "time" 子串），
+#: 于是这道闸对着这个最现实的违规形状永远绿灯。加入字面量 "today" 堵上这个洞；
+#: 它只在**决策上下文节点**（If/Compare/BoolOp/BinOp）内部命中，`today.isoformat()`
+#: 这种写进"更新"列的合法用法是裸 `Assign`，不在扫描范围内，不受影响。
+_FORBIDDEN_TIME_TOKENS = ("datetime", "time", "today")
 
 
 def _time_based_decision_offenders(source: str, function_name: str) -> list[str]:
@@ -109,7 +132,7 @@ def _time_based_decision_offenders(source: str, function_name: str) -> list[str]
         ):
             continue
         for sub in ast.walk(node):
-            if not isinstance(sub, (ast.If, ast.Compare, ast.BoolOp)):
+            if not isinstance(sub, (ast.If, ast.Compare, ast.BoolOp, ast.BinOp)):
                 continue
             for name_node in ast.walk(sub):
                 token = None
@@ -133,6 +156,21 @@ def compute_criteria_transition(text, *, id, to, evidence, today):
 """
     offenders = _time_based_decision_offenders(bad_source, "compute_criteria_transition")
     assert offenders, "扫描器应该报告 datetime.datetime.now() 参与的判断"
+
+
+def test_the_time_decision_scanner_catches_the_today_clock_param_shape():
+    """证伪用例（补漏）：真实的自动超期改写形状不含 "datetime"/"time" 子串，
+    只用调用方注入的时钟参数 `today` 做减法比较——不加固之前的扫描器对这个
+    形状永远绿灯（见本文件顶部模块 docstring 与 `_FORBIDDEN_TIME_TOKENS`
+    旁的注释）。"""
+    bad_source = """
+def compute_criteria_transition(text, *, id, to, evidence, today):
+    if (today - row_date).days > 30:
+        to = "已签认"
+    return text, True
+"""
+    offenders = _time_based_decision_offenders(bad_source, "compute_criteria_transition")
+    assert offenders, "扫描器应该报告 (today - row_date).days > 30 这种按时钟参数超期改写的分支"
 
 
 def test_compute_criteria_transition_has_no_time_based_state_decision():

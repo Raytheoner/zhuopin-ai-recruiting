@@ -160,6 +160,30 @@ def criteria_main(
     if not args.add and not args.id:
         print("需要 --add 或 --id 之一", file=sys.stderr)
         return EXIT_BAD_ARGS
+
+    # `|` 会直接拼进 markdown 表格行——一旦用户输入里带 `|`，后面每一列全部
+    # 错位（`_table_row_cells` 只认 `|` 分隔，不认转义），轻则把状态写进
+    # 描述列的尾巴、重则拼出一行"状态=已签认、evidence=空"却从未经过
+    # `compute_criteria_transition` 的 `MissingEvidenceError` 守门——直接
+    # 击穿"已签认 缺 evidence ⇒ 退出码 3 且文件不变"这条合规底线。
+    # 纯函数（Task 2）保持纯净不做这个校验，档在 CLI 层，与既有的
+    # --add/--id 互斥、--desc 必填等坏参数校验同一纪律：不碰文件就先退。
+    _pipe_bad_options: list[str] = []
+    if args.add:
+        if args.from_letter and "|" in args.from_letter:
+            _pipe_bad_options.append("--from")
+        if args.desc and "|" in args.desc:
+            _pipe_bad_options.append("--desc")
+    if args.evidence and "|" in args.evidence:
+        _pipe_bad_options.append("--evidence")
+    if _pipe_bad_options:
+        print(
+            "、".join(_pipe_bad_options)
+            + " 的取值里含有 `|`，会打乱台账表格列结构 ⇒ 拒绝，台账不变",
+            file=sys.stderr,
+        )
+        return EXIT_BAD_ARGS
+
     if not path.is_file():
         print(f"找不到台账 {path}", file=sys.stderr)
         return EXIT_BAD_ARGS
