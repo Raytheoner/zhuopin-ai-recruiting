@@ -629,33 +629,18 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 
 ---
 
-## ~~TD-45~~ · `criteria` 子命令的调用引用在两处用了不存在的 `python` 二进制名 ✅ 已还
+## TD-47 · `unpack-dispatch --force` 起的无头 `claude` 会话未登录，P1 起活验收阻断
 
-**2026-09-17 已处置（`0917H`）**：三处一次性改掉——`.claude/skills/liaison-unpack/SKILL.md`
-第 46 行、`dispatch.py` 的 `HEADLESS_ARGV_FIXED_PART`、`test_unpack_charter_allowlist.py`
-的 `_REQUIRED_USES`——`python -m tools.liaison criteria` 统一改成
-`PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria`（与
-`unpack-signal` 同款写法）。`test_unpack_charter_allowlist.py` 全绿。
+**欠的是什么**：`liaison-reply-bridge-and-patrol` tasks.md 5.2 P1 单独验（`[Mac]0917J` 真实起活实测）当场执行 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-dispatch --force`，子进程 `claude` 立即退出，无头日志（`data/liaison/logs/unpack-headless/20260916T232918575673Z.log`）唯一一行是 `Not logged in · Please run /login`。5.2 无法通过，5.3（P0+P1 端到端）连带无法在本轮验。
 
-**登记时间**：2026-09-17（`[Mac]0916V`，P3 口径点台账 全分支 final review 发现，Important 级、判定超出本单元 Files 范围，不在本单元内改；原误登记为 TD-44，与已归档的 `~~TD-44~~`（SdkLogObserver）撞号，`[Mac]0916W` 改为 TD-45）
-**触发条件**：下次任何人碰 `.claude/skills/liaison-unpack/SKILL.md` 或 `tools/liaison/unpack/dispatch.py` 的白名单/接线时顺手改掉；⛔ 在此之前不单独占泳道。
+**根因**：`tools/liaison/unpack/dispatch.py:121` 的 `_CHILD_ENV_ALLOWLIST = (CLAUDE_BIN_ENV, "PATH", "HOME", "PYTHONPATH")` 只放行这四个键给子进程 `claude` 二进制。`claude` CLI 的登录态落在依赖交互式终端/Keychain 会话上下文的凭据存储里，`launchctl kickstart` 起的 LaunchAgent 子进程虽在 `gui/$UID` 会话但不继承调用者终端里已建立的登录态，且白名单未放行任何认证用的 env（如 `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` 一类非交互凭据），子进程因而拿不到登录态。
 
-**缺口**：`.claude/skills/liaison-unpack/SKILL.md`（第 46 行左右）指示无头拆件会话跑 `python -m tools.liaison criteria --id … --to …`，`tools/liaison/unpack/dispatch.py` 的 `HEADLESS_ARGV_FIXED_PART`／allowlist 同样白名单了 `Bash(python -m tools.liaison criteria:*)`——但本机（乃至目标部署环境）不存在裸 `python` 这个二进制，只有 `python3` 与两个 venv（`venv/bin/python`、`tools/liaison/.venv/bin/python`）。这条命令在无头会话里会直接 `command not found`。
+**触发条件**：下次要让 5.2/5.3 通过之前——即 P1 起活验收要落地为"真的能跑完一轮"而非"能起进程"时。
 
-**为什么不是本次顺手改**：这两处文件都在本单元（P3 口径点台账，Task 1–4）声明的 Files 范围之外，属于 P1（`liaison-unpack-dispatch`）泳道的触碰区；P1 曾修过同类问题（`unpack-signal` 的白名单条目已改成 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal`），`criteria` 是后于那次修复才接入 `__main__.py` 的新分支，两处引用沿用了旧写法，没人跟着改。`test_unpack_charter_allowlist.py` 只做"章程文本 vs 白名单文本"互相对照，两边一起错时测试照样绿，抓不出这类问题。
+**还债动作**：① 确认 `claude` CLI 是否支持非交互登录凭据（env token 或落盘 credentials 文件路径）；② 若支持，在 `_CHILD_ENV_ALLOWLIST` 里补上对应的键（凭据边界原则不变——仍是显式白名单，不透传整份 `os.environ`）；③ 若不支持无 TTY 场景，需要另找免登录的调用形态（如预先在该 LaunchAgent 运行身份下持久化登录态到其可读的凭据文件），方案定后回填本条。
 
-**还债动作**：三处一次性改掉——`SKILL.md` 第 46 行、`dispatch.py` 的 `HEADLESS_ARGV_FIXED_PART`、`test_unpack_charter_allowlist.py` 的 `_REQUIRED_USES`——把 `python -m tools.liaison criteria` 统一改成 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria`（与 `unpack-signal` 同款写法）。命令本身是纯标准库、`python3` 裸跑即可，只是这两处引用里的二进制名要修。
+**不还的后果**：`unpack-dispatch --force`/自动触发路径永远在"起了进程但读不到章程、拿不到规则"这一步失败，P1 拆件功能名义上部署、实际不可用；tasks.md 5.2/5.3/5.5 与归档全部卡死。
 
-**来源**：全分支 final review（opus，`[Mac]0916V`）实测确认——`which python` 在本机查无此二进制，`python3` 裸跑该命令正常。
-
----
-
-## ~~TD-46~~ · `test_run_lanes_model.py` 的 sandbox 环境会继承外层 `HR_LANE_*`，泳道自跑测试必红 ✅ 已还（0917I）
-
-**根因**：`sandbox` fixture（`tests/test_run_lanes_model.py`）用 `dict(os.environ, ...)` 把当前进程的**全部**环境变量原样带进被测脚本（`run-lanes.sh` 拷贝）的子进程。当 pytest 本身跑在一个由 `run-lanes.sh` 派发的 worktree 泳道会话里时，run-lanes.sh 已为这个 CC 会话导出了 `HR_LANE_ISOLATE=1`／`HR_LANE_MAIN`／`HR_LANE_WORKTREE`（给 `scripts/hooks/worktree-guard.py` 用，`docs/openers/run-lanes.sh:612`）——这些变量原样泄漏进被测脚本的非 worktree 条目，把 `ISO=unset` 断言污染成 `ISO=1`。**`run-lanes.sh` 本体没有问题**：它对每次 `claude` 调用只用 `env ${iso_env[@]}` 局部注入（`run-lanes.sh:618`），worktree 条目才带 `iso_env`，非 worktree 条目是空数组——泄漏纯粹是测试 fixture 没有隔离启动环境。
-
-**还债动作**：`_build_sandbox`（原 `sandbox` fixture）改为先过滤掉 `HR_LANE_` 前缀的环境变量再拷给子进程；新增回归测试 `test_ambient_hr_lane_env_not_leaked_into_child`（先设三个 `HR_LANE_*` 再建 sandbox，钉死非 worktree 条目仍是 `ISO=unset`/`WT=unset`）。改前该回归测试与原有的 `test_worktree_lane_runs_inside_script_created_worktree` 在"跑在泳道 worktree 里"时均红，改后两者在原环境与干净环境下均绿；全量 `pytest` 2454 passed, 6 skipped，两种环境一致。
-
-**登记时间**：2026-09-17（`[Mac]0917I`，`[Mac]0917H` 收工报告称此为「环境泄漏、预先存在」但未查证，本条补上根因与证据）
+**来源**：`[Mac]0917J` 真实起活实测，`unpack-dispatch --dry-run` 显示二进制路径与 argv 正常，`--force` 实跑复现，日志原文如上，非本轮个例（章程走的是占位路径，与登录态无关，见 tasks.md 5.2 判据注）。
 
 ---

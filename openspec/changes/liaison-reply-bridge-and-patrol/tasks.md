@@ -1,4 +1,5 @@
-> **进度**：28/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态 ＋ §2 P1 信号与打标即开班 ＋ §3 P2 拆件章程正本全部完成 ＋ §4 P3 口径点台账全部完成并合回 main，2026-09-17 `[Mac]0917H`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
+> **进度**：29/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态 ＋ §2 P1 信号与打标即开班 ＋ §3 P2 拆件章程正本全部完成 ＋ §4 P3 口径点台账全部完成并合回 main，2026-09-17 `[Mac]0917H`；§5.1 重启值守服务通过，2026-09-17 `[Mac]0917J`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
+> 🔴 **5.2 阻断（TD-47）**：`unpack-dispatch --force` 起的无头 `claude` 会话未登录（`Not logged in · Please run /login`），根因与还债动作见 `docs/tech-debt.md` TD-47。5.3 端到端验前提部分受此阻断，须先解决 TD-47。
 > 🔴 **§0 三条门槛全部勾完之前，§1–§5 ⛔ 不得开工**——「打标即开班」建在一条会假死且看不出来（TD-42）、且根本收不到消息（F1 接线缺失）的通道上，是在为一个不存在的入站做自动化。
 > 🔴 **验收纪律**：§5 的真实起活实测记录是本包的验收标准，⛔ 单测全绿不算（win 端同族纪律，`docs/findings/2026-09-10-win端打标即开班机制核验与HR移植方案.md` §五）。
 > 粒度：每个 `##` 章节 ＝ 一个 superpowers plan ＝ 一条 worktree 分支。每份 plan 必须含 Global Constraints 段（CLAUDE.md「工程铁律」逐字）。
@@ -56,7 +57,7 @@
 
 ## 5. 验收 · 真实起活实测（⛔ 单测不算）
 
-- [ ] 5.1 合回 main 后由 Shao Peishen 重启值守服务（`launchctl kickstart -k gui/$UID/com.zhuopin.hr.liaison`）；核 `launchd.err.log` 无新 ERROR（冷启动那两条已知噪声除外）
+- [x] 5.1 合回 main 后由 Shao Peishen 重启值守服务（`launchctl kickstart -k gui/$UID/com.zhuopin.hr.liaison`）；核 `launchd.err.log` 无新 ERROR（冷启动那两条已知噪声除外）（`[Mac]0917J` 2026-09-17：pid 44355→41080，新增 8 行日志 0 ERROR，见 findings）
 - [ ] 5.2 **P1 单独验**：`python -m tools.liaison unpack-dispatch --dry-run` 打印 argv 与解析到的 `claude` 路径；`--force` 真起一次；判据＝`data/liaison/unpack-session.lock` 有 pid 且 `ps -p <pid>` 可见、无头日志前 20 行显示会话已读到章程并输出 `[NO-SIGNAL]` 后结束。🔴 若日志显示登录态/权限问题（launchd 环境），登记为阻断项，⛔ 不改成 `--dangerously-skip-permissions` 绕过
 - [ ] 5.3 **P0+P1 端到端验**：等汤丽萍下一条真实入站（人事部#1 在途）——判据＝台账该行进第九态且原状态接后；`liaison_unpack_audit` 有 `bridge_marked` 与 `dispatch_started` 各一条；信号文件有一项；无头日志显示会话走完一轮并 `--clear --before` 清了信号；`git log` 有会话的 commit 且 ⛔ 未 push
 - [ ] 5.4 **D1 反证验**：邵培申自己发一条消息（他名下无在途信）——判据＝台账不变、`bridge_skipped_no_inflight` 一条、无起活

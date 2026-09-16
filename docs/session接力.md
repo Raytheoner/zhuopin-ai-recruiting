@@ -69,7 +69,8 @@
 | **R-1** | `[Mac]0917C` 转场落档提交 | CC | ✅ **已完成**（`73a5be2`，已推，ahead/behind 0；`tasks.md` 抬头已是 27/33） | — | — |
 | **R-2** | 3.2 章程接入生产路径 ＋ TD-45 ＋ design D4 常量名 | `[Mac]0917G`→`[Mac]0917H` | ✅ **已完成**（`59e9a78`＋`9e510d1`，已 ff 合入并推；tasks 28/33；生产代码 P2-TODO/CHARTER_RELPATH 零命中） | — | — |
 | **R-2b** | 全量 pytest 残留 1 红：`tests/test_run_lanes_model.py::test_worktree_lane_runs_inside_script_created_worktree`（疑泳道环境 `HR_LANE_*` 泄漏，未证） | `[Mac]0917I` 无头泳道 | 🚀 **2026-09-17 07:20 发车**（Shao Peishen 答 `1a`） | 全量 pytest 0 失败、run-lanes.sh 零改动、TD 登记已还 | 全量测试长期带 1 红，新失败混进来分不出 |
-| **R-3** | §5 五条真实起活实测 | `[Mac]0917J` 无头泳道（他不在 Mac 旁，Cowork·0917D 经 launchd 远程发车；5.4 需他本人手机发一条消息） | 🚀 **排在 `0917I` 收敛后发车**。5.1/5.2/5.4 本 session 可做；5.3 等汤丽萍真实入站 | 5.1–5.5 全勾，实测记录落 `docs/findings/`，当场归档 | 本包归档不了；「打标即开班」仍只在单测层面成立 |
+| **R-3** | §5 五条真实起活实测 | `[Mac]0917J` 无头泳道（他不在 Mac 旁，Cowork·0917D 经 launchd 远程发车；5.4 需他本人手机发一条消息） | ⚠️ **部分完成**（`[Mac]0917J`）：5.1 ✅ 通过（重启 pid 44355→41080，0 新增 ERROR）；5.2 ❌ **阻断于登录态**——`unpack-dispatch --force` 起的无头 `claude` 打印 `Not logged in · Please run /login` 后即退出，登记 **TD-47**（`_CHILD_ENV_ALLOWLIST` 未放行认证凭据键），按 opener「停下报」规则本轮到此结束，未跑 5.4；5.3 待汤丽萍下一条真实入站，且需先解决 TD-47 否则大概率在同一步再卡；详见 `docs/findings/2026-09-17-打标即开班真实起活实测.md` | 5.1–5.5 全勾，实测记录落 `docs/findings/`，当场归档 | 本包归档不了；TD-47 不解决，「打标即开班」的自动触发路径不可用（只能起进程、拿不到章程/规则） |
+| **R-3b** | TD-47：`unpack-dispatch --force` 子进程未登录 | 待排 | ⬜ 待排——需决定 `claude` CLI 非交互登录凭据的传递方式（env token 或落盘 credentials），方案定后回填 `_CHILD_ENV_ALLOWLIST` | TD-47 还债动作①②③全部完成，5.2/5.3 实测通过 | 5.2/5.3/5.5/归档持续卡死 |
 | **R-4** | 汤丽萍解锁 | — | ✅ **已解锁**（§0 的 0.3 已勾＝真实入站已落库一条） | — | — |
 | **R-5** | `hr-wecom-aibot-liaison` 8.6–8.9 灰度四条 | Shao Peishen 本人 | ⏸ 等本包 §5 | 四条全勾并归档 | 值守通道停在「代码齐、没真用过」 |
 
