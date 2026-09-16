@@ -9,14 +9,22 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
+import sqlite3
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from tools.liaison import alerts
+from tools.liaison.alerts import effect_emit_alert
 from tools.liaison.archive import ArchiveOutcome, compute_archive_path
 from tools.liaison.attachments import store_attachment
+from tools.liaison.storage.effects import effect_unpack_audit
+
+logger = logging.getLogger(__name__)
 
 #: 第九态的语义标记：回件已到、待人工/会话拆件、仍在途、串行闸仍锁。
 #: ⛔ 这段文字本身就是被 spec Scenario 逐字断言的契约，改动前先读
@@ -236,3 +244,176 @@ def resolve_reply_archive_relpath(
         )
         relative = stored.relative_path
     return f"{ARCHIVE_ROOT_RELATIVE}/{relative}"
+
+
+#: run_bridge 判定"不需要往下走"的两个终态，⛔ 不落信号、不起活。
+_NO_FURTHER_ACTION_OUTCOMES = frozenset(
+    {OUTCOME_SKIPPED_NO_INFLIGHT, OUTCOME_REFUSED_SERIAL_VIOLATION}
+)
+
+
+def run_bridge(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    msgid: str,
+    sender_userid: str,
+    sender_name: str | None,
+    received_at: str,
+    content: str,
+    outcome: ArchiveOutcome,
+    route_admitted: bool,
+    ledger_path: pathlib.Path,
+    archive_root: pathlib.Path,
+    now: datetime,
+    signal_path: pathlib.Path | None = None,
+    append_signal: Callable[[pathlib.Path, dict], bool] | None = None,
+    dispatch: Callable[[], object] | None = None,
+    alert_sink: alerts.AlertSink | None = None,
+) -> str:
+    """归档＋入队之后的桥编排（design D10）。整个函数体 ⛔ 永不上抛——
+    任何失败都落一条 `bridge_failed` 审计并返回同一个字符串，调用方
+    （`__main__.py::handle_message_frame`）因此**不需要**再包一层
+    `try/except` 就能安全调用，但仍然建议调用方外面再包一层保险丝——
+    见 Task 8。
+
+    `route_admitted=False`（名单外）时直接返回 `"not_admitted"`，不做
+    任何事：spec「名单外发送人 MUST NOT 触发桥」。
+
+    `sender_name` 为 `None`（whitelist 里查不到这个 userid 对应的姓名，
+    理论上不该发生，见 Task 5 的防御性设计）时，按"无法判定收信人"
+    处理成 `skipped_no_inflight` 同款效果，但审计 `detail` 里注明原因。
+    """
+    if not route_admitted:
+        return "not_admitted"
+
+    sink = alert_sink if alert_sink is not None else alerts.LoggingAlertSink()
+
+    try:
+        if sender_name is None:
+            decision_outcome = OUTCOME_SKIPPED_NO_INFLIGHT
+            matched_numbers: tuple[str, ...] = ()
+            new_ledger_text = None
+            detail = "whitelist 未提供该 userid 对应的姓名，视同无在途信"
+            archived_relpath = ""
+            logger.error(
+                "桥无法判定发送人姓名，按无在途信处理：thread_id=%s msgid=%s",
+                thread_id,
+                msgid,
+            )
+        else:
+            ledger_text = ledger_path.read_text(encoding="utf-8")
+            archived_relpath = resolve_reply_archive_relpath(
+                outcome,
+                thread_id=thread_id,
+                msgid=msgid,
+                received_at=received_at,
+                content=content,
+                archive_root=archive_root,
+            )
+            decision = compute_bridge_decision(
+                ledger_text,
+                sender_name=sender_name,
+                archived_relpath=archived_relpath,
+                now_cst=now,
+            )
+            decision_outcome = decision.outcome
+            matched_numbers = decision.matched_letter_numbers
+            new_ledger_text = decision.new_ledger_text
+            detail = ""
+
+            if decision_outcome == OUTCOME_MARKED:
+                write_ledger_atomic(ledger_path, new_ledger_text)
+            elif decision_outcome == OUTCOME_REFUSED_SERIAL_VIOLATION:
+                alert_text = (
+                    "【HR 值守通道·串行原则冲突】"
+                    f"{sender_name} 名下同时有 {', '.join(matched_numbers)} 处于在途，"
+                    "违反串行原则，桥已拒绝改写台账，请人工归属后再处理。"
+                )
+                effect_emit_alert(sink, alert_text)
+
+        letter_number = matched_numbers[0] if matched_numbers else None
+        audit_kind = f"bridge_{decision_outcome}"
+        effect_unpack_audit(
+            conn,
+            thread_id=thread_id,
+            business_key=f"{msgid}:{audit_kind}",
+            sender_userid=sender_userid,
+            letter_number=letter_number,
+            kind=audit_kind,
+            detail=detail,
+        )
+
+        if decision_outcome not in _NO_FURTHER_ACTION_OUTCOMES:
+            _emit_signal_and_dispatch(
+                signal_path=signal_path,
+                append_signal=append_signal,
+                dispatch=dispatch,
+                letter_number=letter_number,
+                msgid=msgid,
+                archived_relpath=archived_relpath,
+                now=now,
+            )
+
+        return decision_outcome
+
+    except Exception:  # noqa: BLE001 —— design D10：桥失败 ⛔ 不上抛
+        logger.error(
+            "回件桥处理失败，归档与入队已提交、不回滚。thread_id=%s msgid=%s",
+            thread_id,
+            msgid,
+            exc_info=True,
+        )
+        try:
+            effect_unpack_audit(
+                conn,
+                thread_id=thread_id,
+                business_key=f"{msgid}:bridge_failed",
+                sender_userid=sender_userid,
+                letter_number=None,
+                kind="bridge_failed",
+                detail="见运行日志 exc_info",
+            )
+        except Exception:  # noqa: BLE001 —— 连审计都写不进去，只记日志，⛔ 不再抛
+            logger.error(
+                "回件桥失败审计本身也写入失败。thread_id=%s msgid=%s",
+                thread_id,
+                msgid,
+                exc_info=True,
+            )
+        return "bridge_failed"
+
+
+def _emit_signal_and_dispatch(
+    *,
+    signal_path: pathlib.Path | None,
+    append_signal: Callable[[pathlib.Path, dict], bool] | None,
+    dispatch: Callable[[], object] | None,
+    letter_number: str | None,
+    msgid: str,
+    archived_relpath: str,
+    now: datetime,
+) -> None:
+    """P1 的注入点（见计划文档「偏离 3」）。`append_signal`/`dispatch` 为
+    `None` 时只记 WARNING，⛔ 不阻断台账与审计——与
+    `__main__.py::InboundPorts.reply` 是同一约定。
+    """
+    if append_signal is None or signal_path is None:
+        logger.warning(
+            "P1（信号与打标即开班）尚未接入，本次不追加信号：msgid=%s", msgid
+        )
+    else:
+        append_signal(
+            signal_path,
+            {
+                "letter_number": letter_number,
+                "msgid": msgid,
+                "archived_path": archived_relpath,
+                "at": now.isoformat(),
+            },
+        )
+
+    if dispatch is None:
+        logger.warning("P1（信号与打标即开班）尚未接入，本次不起活：msgid=%s", msgid)
+    else:
+        dispatch()
