@@ -1,10 +1,78 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-16 14:2x（`[Mac]0916D`：`[Mac]0910A` **全部跑完**——AT-1b（TD-43）与
-> TD-42 真实验证均已完成，`liaison-reply-bridge-and-patrol` **§0 三门槛 0.1/0.2/0.3 全勾**，
-> 本包可以开工（P0→P1→P2→P3 四条 worktree 泳道）。顺带修了新发现的 TD-44（日志泄露）。
-> `lane-launch-armed-scan` 已裁定搁置）
+> 最后更新：2026-09-17 06:0x（Cowork·HR业务线-接力0917D 转场：把 `0916E`–`0917B` 这一大段
+> **从未进过本文**的进展补齐——第十七批波次 1＋2 已基本完成、Token 治理线已结项；
+> 订正 `tasks.md` 抬头进度行失真 24/33 → 27/33）
+
+---
+
+## 🔴 新 session 先看这一节（2026-09-17 06:0x 实核真身，⛔ 下面各历史节均早于它）
+
+⚠️ **本文此前停在 2026-09-16 14:2x（`[Mac]0916D`）**，而其后 `0916E`–`0917B` 约 20 个号的进展
+**一条都没进过本文**（实核：全文对 `0916E`/`0916V`/`0916W`/`0917A`/`0917B`/`Token治理` 的命中数 ＝ **0**）。
+本节按文件系统真身补齐。⛔ 读下面那些历史节时，一律以本节为准。
+
+### 一、第十七批：`liaison-reply-bridge-and-patrol` 已 **27/33**
+
+| 章 | 单元 | 状态 | 谁跑的 |
+|---|---|---|---|
+| §0 | 三条前置门槛 | ✅ **全勾** | `[Mac]0910A`（2026-09-16 跑完 AT-1b／TD-43 与 TD-42 真实验证） |
+| §1 | **P0 · 回件桥＋第九态** | ✅ **9/9 合回 main** | 波次 2 `0916N`→`O`→`P` |
+| §2 | **P1 · 信号与打标即开班** | ✅ **9/9 合回 main** | 波次 2 `0916Q`→`R`→`S` |
+| §3 | **P2 · 拆件章程正本** | 🟡 **3/4** —— 🔴 只剩 **3.2 `unpack/charter.py`** | 波次 2 `0916T`→`U` |
+| §4 | **P3 · 口径点台账** | ✅ **3/3 合回 main**（`9724339`，顺带登记 TD-44） | 波次 2 `0916V` |
+| §5 | 验收 · 真实起活实测 | 🔴 **0/5，全部不可代** | **Shao Peishen 本人** |
+
+⇒ **「回灌自动落档、自动拆件」那条链，四个零环已经建起来三个半**（对照本文下一节那张六环表——
+那张表是 2026-09-10 的快照，⛔ 已过期，留作判据由来）。
+
+**剩下的 6 条，只有 1 条是机器能做的**：
+
+- **3.2** `tools/liaison/unpack/charter.py`：单点常量 `CHARTER_RELATIVE_PATH`、`read_charter(repo_root)`
+  （缺失抛 `CharterMissing`，由 dispatch 转 `failed(charter_missing)`）、纯函数 `compute_prompt(...)`。
+  ⚠️ 3.1／3.3／3.4 都已勾 —— 章程正本 `.claude/skills/liaison-unpack/SKILL.md` 与两组交叉核对测试都在，
+  **只差把章程读进来的那个模块**。
+- **5.1–5.5**：重启值守服务 → P1 单独验 `unpack-dispatch --dry-run` → P0+P1 端到端等汤丽萍真实入站
+  → D1 反证（邵培申自己发一条，他名下无在途信）→ 实测记录落 `docs/findings/`。
+  🔴 **⛔ 单测全绿不算验收**，本包 `tasks.md` 抬头写死。
+
+### 二、🔴 `tasks.md` 抬头进度行失真（同一族教训又一次）
+
+`openspec/changes/liaison-reply-bridge-and-patrol/tasks.md` 第 1 行写 **`24/33`**，实际勾选 **`27/33`**。
+差的正是 §4 P3 那 3 条——`9724339` 把 4.1/4.2/4.3 回勾了，**没同步抬头**。
+📌 **这和「`git log -3` 深度判据」「预占号」是同一族**：把一个会变的量抄成了常量。
+⇒ 订正动作已交 `[Mac]0917C`（见【下一步】）。
+
+### 三、另一条线：Token 治理已结项
+
+`0917A` 总验收（治理前后五项指标对比与结项判定）、`0917B` 结项登记（路线图结项段、跟踪项 T-1、
+10-01 复测）。产物在 `docs/token治理/`。⇒ **这条线已闭，⛔ 不要再当待办排**。
+机制侧顺带落地：`0916W` 给 `run-lanes.sh` 加了**脚本强制建 worktree** ＋ `worktree-guard` hook
+（⇒ 以后无头泳道不再需要执行者自己建 worktree，`0910B` 那次卡自检 1 的形态已根治）。
+
+### 四、当前工作区与号池
+
+- `git status`：**`docs/openers/OP-0820-全量编排.md` 一处未提交** —— `0917B` 的泳道标注被
+  `run-lanes.sh` 自动摘成 `> ✅ 已完成 2026-09-17（PARTIAL）· 原泳道 Token治理结项提交`。
+  另有 `?? _to_delete/`（⛔ 不 add、⛔ 不删）。与 origin ahead/behind 均 0。
+- 🔢 **号池台账已迁到 `docs/openers/号池台账.md`**（2026-09-16），历史月份在 `docs/openers/归档/号池台账-归档.md`。
+  ⛔ 不要再往 `OP-0820` 顶部那张旧表登记。已用到 **`[Mac]0917B`**；`0917C`／`0917D` 本轮派出，
+  **下一个可用号是 `[Mac]0917E`**。
+- 其余包：`hr-wecom-aibot-liaison` **63/67**（剩 8.6–8.9 灰度四条，他亲自）；
+  `m1-intake-quality-fixes` 68/69；`m1-job-profile-intake` 60/72；`lane-launch-armed-scan` 0/35（**已裁定搁置**）。
+
+### 五、【下一步】—— 四列待办
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| **R-1** | `[Mac]0917C` 转场落档提交：提交本节 ＋ 订正 `tasks.md` 抬头 24/33→27/33 ＋ 提交 `OP-0820` 那处自动摘标注 ＋ 号池登记 `0917C`/`0917D` | Shao Peishen 贴 opener → CC | ⏸ **待派发**，⛔ 必须先于任何新泳道 | `git status` 只剩 `?? _to_delete/`；`head -1 tasks.md` 含 `27/33`；号池台账有 `0917C`/`0917D` 两行；已推 origin | 本节停在未提交态，下一个 session 又从落后 20 个号的版本读起——本轮修的正是这个 |
+| **R-2** | **3.2 `unpack/charter.py`**（第十七批最后一条机器可做项） | CC worktree 泳道（`0916W` 起脚本强制建 worktree，⛔ 执行者不必自己建） | ⏸ 待派发，号从 `[Mac]0917E` 起**当天现取**，⛔ 不预占 | §3 四条全勾、`openspec validate --strict` 过、合回 main 真合判据（`rev-list` ＋ `cherry`） | §5 验收里 P1 的 `dispatch` 拿不到章程，`failed(charter_missing)` 恒真 |
+| **R-3** | §5 五条真实起活实测 | 🔴 **Shao Peishen 本人**（重启真实服务、等真实入站、请人发消息） | ⏸ 等 R-2 | 5.1–5.5 全勾，实测记录落 `docs/findings/` | 本包归档不了；「打标即开班」仍只在单测层面成立 |
+| **R-4** | 汤丽萍解锁 | — | ✅ **已解锁**（§0 的 0.3 已勾＝真实入站已落库一条） | — | — |
+| **R-5** | `hr-wecom-aibot-liaison` 8.6–8.9 灰度四条 | Shao Peishen 本人 | ⏸ 等本包 §5 | 四条全勾并归档 | 值守通道停在「代码齐、没真用过」 |
+
+---
 
 ## 🆕 第十七批 · `liaison-reply-bridge-and-patrol` 建造批（2026-09-10 14:2x，Cowork·0909AU 编排）
 
@@ -125,8 +193,8 @@ AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性�
 ## 开场词（复制即用）
 
 ```
-[Mac]0909Q-HR业务线接力
-【设置】执行环境: Cowork ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（Cowork 无 worktree，只做文档、编排与派单）｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）｜ 派发: Cowork·HR业务线-接力0903B
+[Mac]0917D-HR业务线接力
+【设置】执行环境: Cowork ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（Cowork 无 worktree，只做文档、编排与派单）｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）｜ 派发: Cowork·HR业务线-接力0909AU
 读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 恢复上下文，然后按【下一步】继续。
 ```
 
