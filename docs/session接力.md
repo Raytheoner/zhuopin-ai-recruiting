@@ -1,7 +1,30 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-16 11:4x（`[Mac]0916D`：`[Mac]0910A` 已贴引用块派发，等他本人在主工作区跑完 TD-42 真实验证 ＋ AT-1b；`lane-launch-armed-scan` 已裁定搁置）
+> 最后更新：2026-09-16 14:1x（`[Mac]0916D`：`[Mac]0910A` AT-1b **✅ 已完成**——TD-43 销账、
+> `liaison_message` 真实落库一条；顺带修了新发现的 TD-44（日志泄露）。**§0 门槛只剩 0.1**
+> （TD-42 真实验证，§四断网测试待跑）。`lane-launch-armed-scan` 已裁定搁置）
+
+## 🆕 `[Mac]0910A` AT-1b 已完成 ＋ 顺带修了 TD-44（2026-09-16 14:1x，`[Mac]0916D`）
+
+- **AT-1b ✅**：`tools/liaison/frames.py` 的 `FIELD_PATHS` 已用两条真实企微消息（群 @ ＋ 私信）
+  的帧结构填上，`thread_id` 按 `chattype` 分叉（design.md D6：私聊取 `userid`、群聊取 `chatid`，
+  私聊帧没有 `chatid` 键，单一路径表达不了，单独用 `THREAD_ID_PATHS_BY_CHATTYPE`）。轮 2 私信
+  验证：`liaison_message` 由 0 变 1（`msgid=2a376681026302c7c9343bdf78aac10f`，
+  `sender_userid=thread_id=ShaoPeiShen`，`received_at=2026-09-16T13:55:09+08:00`），`liaison_task`
+  同步 +1。`tasks.md` 0.3 已勾，`docs/tech-debt.md` TD-43 已销账。commit `fa4c17a`。
+  同一批另发一条群消息（约 13:55）10+ 分钟未落库、日志无痕迹——连接全程正常，判为企微群
+  回调侧偶发问题、非代码缺陷，已登记观察记录（TD-43 条目末尾），不升级、不阻塞。
+- **顺带发现并修了 TD-44**（合规相关）：`__main__.py` 以 `python -m tools.liaison` 启动时
+  `logging.getLogger(__name__)` 解析成字面量 `"__main__"`，脱离 `tools.liaison` 包 logger 层级，
+  ERROR/WARN（含 SDK 自带、带消息原文明文的 DEBUG 回显）全部绕开 `logsetup.py` 的脱敏与轮转，
+  直接落进未脱敏、无容量上界的 `launchd.err.log`（登记时已 2.4 MB）。已改成字面量 logger 名 ＋
+  `SdkLogObserver` 补 `delegate`，两条 AST 回归测试钉死。commit `8f6e53a`。
+  `launchd.err.log` 现存内容**按他裁定（答 `1b`）先留着、交下一个任务清理**，登记在 TD-44。
+- **§0 门槛现状**：0.2 ✅（`0913A`）、0.3 ✅（本次）、**0.1 仍 `- [ ]`**——TD-42 的真实断网验证
+  （0910A 正文【四】，9 分钟自动化断网脚本）还没跑，是本包开工前唯一剩的门槛。
+
+---
 
 ## 🆕 2026-09-16 两条裁决 ＋ `[Mac]0910A` 已派发（`[Mac]0916D`）
 
