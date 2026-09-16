@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-from tools.liaison.errors import MissingCredentialsError
+from tools.liaison.errors import GroupWebhookMissingError
 from tools.liaison.notify import guard, ratelimit, store, transport, webhook
 from tools.liaison.storage import db as liaison_db
-
-FAKE_WEBHOOK = "https://example.invalid/cgi-bin/webhook/send?key=fake-key-for-tests"
+from tools.liaison.tests.conftest import FAKE_WEBHOOK, FakeClock, RecordingSink
 
 
 class FakeTransport:
@@ -58,27 +57,6 @@ class FakeTransport:
             for c in self.json_calls
             if c["payload"]["msgtype"] == "markdown"
         ]
-
-
-class FakeClock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-        self.slept: list[float] = []
-
-    def monotonic(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-        self.now += seconds
-
-
-class RecordingSink:
-    def __init__(self) -> None:
-        self.texts: list[str] = []
-
-    def send(self, text: str) -> None:
-        self.texts.append(text)
 
 
 @pytest.fixture
@@ -438,7 +416,7 @@ def test_exhausted_notify_lands_as_pending_resend_with_an_alert(conn, bucket, cl
 def test_missing_webhook_env_refuses_to_build_a_sender():
     """6.10 端到端：环境变量未配置 → 拒发并告知缺失项，⛔ 不静默跳过后报成功。"""
     fake = FakeTransport([0])
-    with pytest.raises(MissingCredentialsError) as excinfo:
+    with pytest.raises(GroupWebhookMissingError) as excinfo:
         webhook.build_group_webhook_sender(env={}, transport=fake)
     assert "HR_LIAISON_GROUP_WEBHOOK" in str(excinfo.value)
     assert fake.json_calls == [], "⛔ 没有地址时一条消息都不许发出去"
@@ -683,7 +661,7 @@ def test_6_10_missing_env_raises_and_names_the_variable_without_reporting_succes
     """🔴 6.10 端到端：`HR_LIAISON_GROUP_WEBHOOK` 缺失 → 抛错并点名变量，⛔ 不返回成功。"""
     fake = FakeTransport([0])
     sender = None
-    with pytest.raises(MissingCredentialsError) as excinfo:
+    with pytest.raises(GroupWebhookMissingError) as excinfo:
         sender = webhook.build_group_webhook_sender(env={}, transport=fake)
     message = str(excinfo.value)
     print(
@@ -700,7 +678,7 @@ def test_6_10_missing_env_raises_and_names_the_variable_without_reporting_succes
     assert sender is None, "⛔ 没有地址时不许返回一个能用的 sender"
     assert fake.json_calls == [] and fake.multipart_calls == []
     # 空白字符串同样算"没配"——⛔ 不许被当成一个合法地址。
-    with pytest.raises(MissingCredentialsError):
+    with pytest.raises(GroupWebhookMissingError):
         webhook.build_group_webhook_sender(
             env={"HR_LIAISON_GROUP_WEBHOOK": "   "}, transport=fake
         )

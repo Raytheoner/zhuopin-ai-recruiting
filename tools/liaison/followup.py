@@ -28,7 +28,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from tools.liaison.errors import MissingCredentialsError
+from tools.liaison.errors import GroupWebhookMissingError
 from tools.liaison.config import load_group_webhook
 from tools.liaison.notify import webhook as notify_webhook
 from tools.liaison.notify.transport import UrllibTransport, WebhookTransportError
@@ -214,7 +214,7 @@ def send_followup_main(
 
     try:
         webhook_url = load_group_webhook(env)
-    except MissingCredentialsError as exc:
+    except GroupWebhookMissingError as exc:
         # 只打变量名，⛔ 不打取值。
         print(str(exc), file=sys.stderr)
         return EXIT_MISSING_CREDENTIALS

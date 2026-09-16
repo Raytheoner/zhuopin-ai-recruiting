@@ -16,6 +16,7 @@ import pytest
 from tools.liaison import alerts
 from tools.liaison.notify import guard, ratelimit, store
 from tools.liaison.storage import db as liaison_db
+from tools.liaison.tests.conftest import RecordingSink
 
 
 @pytest.fixture
@@ -24,14 +25,6 @@ def conn(tmp_path):
     liaison_db.init_schema(c)
     yield c
     c.close()
-
-
-class RecordingSink:
-    def __init__(self) -> None:
-        self.texts: list[str] = []
-
-    def send(self, text: str) -> None:
-        self.texts.append(text)
 
 
 class BoomSink:

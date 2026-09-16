@@ -15,7 +15,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from tools.liaison.errors import MissingCredentialsError
+from tools.liaison.errors import GroupWebhookMissingError, MissingCredentialsError
 
 BOT_ID_ENV = "HR_LIAISON_BOT_ID"
 BOT_SECRET_ENV = "HR_LIAISON_BOT_SECRET"
@@ -76,9 +76,11 @@ def load_group_webhook(env: Mapping[str, str] | None = None) -> str:
     本函数在**发送时**校验：6.10 逐字要求"未配置 → 拒发并报告缺失的变量名，
     ⛔ 不静默跳过后报成功"，拒发的前提是先真的走到发送这一步。
 
-    复用 `MissingCredentialsError`：它的消息里 ⛔ 只出现变量名、不出现取值。
+    抛 `GroupWebhookMissingError`（⛔ 不是 `MissingCredentialsError`）：服务本身
+    仍在正常运行，只是这一次群通知发不出去，⛔ 不能报"拒绝启动"误导运维。
+    它的消息里同样只出现变量名、不出现取值。
     """
     source: Mapping[str, str] = os.environ if env is None else env
     if _is_blank(source, GROUP_WEBHOOK_ENV):
-        raise MissingCredentialsError([GROUP_WEBHOOK_ENV])
+        raise GroupWebhookMissingError([GROUP_WEBHOOK_ENV])
     return source[GROUP_WEBHOOK_ENV].strip()

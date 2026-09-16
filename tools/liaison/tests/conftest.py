@@ -22,6 +22,34 @@ import pytest
 from tools.liaison import logsetup
 from tools.liaison.tests import netguard_support
 
+#: 群 webhook 占位地址。`.invalid` 是 RFC 2606 保留的顶级域，就算哪天真被误发
+#: 也一定解析失败——⛔ 改动中不得把这个假值换成真实域名。
+FAKE_WEBHOOK = "https://example.invalid/cgi-bin/webhook/send?key=fake-key-for-tests"
+
+
+class FakeClock:
+    """单调钟 + sleep 的假体。`sleep` 直接把钟推到未来，⛔ 不真等。"""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.slept: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        assert seconds >= 0, f"⛔ 不许睡负数：{seconds}"
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def send(self, text: str) -> None:
+        self.texts.append(text)
+
 
 @pytest.fixture(autouse=True)
 def liaison_logs_to_tmp(tmp_path, monkeypatch):

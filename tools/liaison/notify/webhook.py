@@ -327,7 +327,7 @@ def build_group_webhook_sender(
 ) -> GroupWebhookSender:
     """从环境读地址造发送器。
 
-    地址缺失 → `MissingCredentialsError`（6.10：拒发并报告缺失的变量名，
+    地址缺失 → `GroupWebhookMissingError`（6.10：拒发并报告缺失的变量名，
     ⛔ 不静默跳过后报成功）。⛔ 不要在这里 try/except 把它吞掉换成"降级到只写日志"
     ——那正是"静默跳过后报成功"。
     """

@@ -17,12 +17,11 @@ import urllib.request
 import pytest
 
 from tools.liaison import config
-from tools.liaison.errors import MissingCredentialsError
+from tools.liaison.errors import GroupWebhookMissingError
 from tools.liaison.notify import transport
+from tools.liaison.tests.conftest import FAKE_WEBHOOK
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-
-FAKE_WEBHOOK = "https://example.invalid/cgi-bin/webhook/send?key=fake-key-for-tests"
 
 
 class FakeResponse:
@@ -337,7 +336,7 @@ def test_group_webhook_is_read_from_the_environment():
 def test_missing_or_blank_webhook_is_refused_by_variable_name(value):
     """6.10 逐字：未配置 → 拒发并报告缺失的变量名，⛔ 不静默跳过后报成功。"""
     env = {} if value is None else {config.GROUP_WEBHOOK_ENV: value}
-    with pytest.raises(MissingCredentialsError) as excinfo:
+    with pytest.raises(GroupWebhookMissingError) as excinfo:
         config.load_group_webhook(env)
     assert config.GROUP_WEBHOOK_ENV in str(excinfo.value)
     assert excinfo.value.missing_names == (config.GROUP_WEBHOOK_ENV,)
@@ -354,7 +353,7 @@ def test_missing_webhook_never_returns_anything(value):
     returned = object()
     try:
         returned = config.load_group_webhook(env)
-    except MissingCredentialsError:
+    except GroupWebhookMissingError:
         pass
     assert returned is not None and not isinstance(returned, str), (
         f"缺失形态 {value!r} 竟然返回了 {returned!r}，而不是拒发"
@@ -362,7 +361,7 @@ def test_missing_webhook_never_returns_anything(value):
 
 
 def test_error_message_reports_the_name_never_the_value():
-    with pytest.raises(MissingCredentialsError) as excinfo:
+    with pytest.raises(GroupWebhookMissingError) as excinfo:
         config.load_group_webhook({config.GROUP_WEBHOOK_ENV: "   "})
     assert "   " not in str(excinfo.value).replace(config.GROUP_WEBHOOK_ENV, "")
 
