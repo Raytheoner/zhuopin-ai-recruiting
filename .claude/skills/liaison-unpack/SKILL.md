@@ -43,7 +43,7 @@ description: 拆件会话章程正本——回件打标即开班后自动起的�
      `📨 已确认闭环 <日期>` / `❌ 已作废`，按内容判定其一）。
    - **非实质回件** ⇒ 把该行**按分隔符 `━━━ 原状态 ━━━` 之后的原状态原文**整行还原，
      并在 `docs/session接力.md` 登记还原原因。
-6. 口径点台账：涉及口径点确认时，用 `python -m tools.liaison criteria --id HR-G-NN --to 已回复|已签认|已作废 [--evidence …]` 转态。
+6. 口径点台账：涉及口径点确认时，用 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria --id HR-G-NN --to 已回复|已签认|已作废 [--evidence …]` 转态。
 7. 登记接力文档：在 `docs/session接力.md` 追加一行，含【谁做：本次拆件会话（自动）】【状态：已闭环/待人】
    【判据：<本条怎样算完>】【不做会怎样：<下一条回件是否受阻>】四列。
 8. 回到 §一 步骤 5 清信号，再回步骤 1 探测下一条 pending 项。

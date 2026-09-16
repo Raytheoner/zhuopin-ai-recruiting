@@ -92,14 +92,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: `InboundPorts(ledger_path=tmp_path / ...)` 覆盖它。
 LEDGER_PATH = REPO_ROOT / "docs" / "跟进信" / "README-跟进信清单.md"
 
-#: P2-TODO（`liaison-unpack-charter` 落地后由该变更包的执行者删除，见
-#: `dispatch_wiring.py` 模块 docstring 同一条 P2-TODO）：拆件章程文件的仓库相对
-#: 路径。目前硬编码占位——`liaison-unpack-charter` 变更包（`unpack/charter.py`）
-#: 还没落地，`charter.CHARTER_RELATIVE_PATH` 尚不存在。文件此刻可能还不存在于
-#: 仓库里：`dispatch_wiring.bridge_dispatch` 读不到时会把这次起活判成
-#: `failed(reason="charter_missing")`，这是预期内的降级，不是本条要修的 bug。
-CHARTER_RELPATH = ".claude/skills/liaison-unpack/SKILL.md"
-
 #: 🔴 值守通道的 .env 在 **tools/liaison/**，⛔ 不是仓库根（2026-09-09 迁，TD-40）。
 #:
 #: 迁的理由不是整洁：`app/config.py` 的 `Settings` 是 pydantic-settings 的
@@ -304,8 +296,6 @@ def handle_message_frame(
                 msgid=fields.msgid,
                 sender_userid=fields.sender_userid,
                 letter_number=None,
-                charter_relpath=CHARTER_RELPATH,
-                charter_root=REPO_ROOT,
                 now=moment,
             )
             run_bridge(

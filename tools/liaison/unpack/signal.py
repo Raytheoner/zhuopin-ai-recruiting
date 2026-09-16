@@ -66,6 +66,15 @@ def probe_signal(path: Path) -> bool:
     return bool(pending)
 
 
+def find_pending(path: Path, msgid: str) -> dict | None:
+    """按 `msgid` 查一条待处理信号项。查不到（含文件缺失/损坏）返回 `None`。"""
+    pending, _ = _read_pending(path)
+    for entry in pending:
+        if entry.get("msgid") == msgid:
+            return entry
+    return None
+
+
 def clear_signal_before(path: Path, checkpoint: str) -> None:
     """只清 `at < checkpoint` 的项，保留 `at >= checkpoint` 的项。
 

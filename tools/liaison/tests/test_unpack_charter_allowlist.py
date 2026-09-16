@@ -36,7 +36,7 @@ def _bash_command_prefixes() -> list[str]:
 #: （见本文件对 SKILL.md 与 charter.py 前言的同步改动）。
 _REQUIRED_USES = [
     "PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal",
-    "python -m tools.liaison criteria",
+    "PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria",
     "git add",
     "git commit",
     "git status",

@@ -91,6 +91,21 @@ def test_事件驱动前言不改写章程原文() -> None:
 from tools.liaison.tests._source_scan import is_vendored  # noqa: E402
 
 
+def test_章程路径字面量单点定义() -> None:
+    """`charter.CHARTER_RELATIVE_PATH` 的字面量 ⇒ 全仓库只在 `charter.py` 本身
+    出现（tests 里出于断言目的引用不算，一并排除）——否则某处仍持有裸字符串
+    副本，改路径时会漏改（liaison-unpack-charter spec 「该路径只在一处常量
+    定义」）。"""
+    literal = charter.CHARTER_RELATIVE_PATH
+    package_root = Path(charter.__file__).resolve().parents[1]  # tools/liaison
+    charter_py = Path(charter.__file__).resolve()
+    for py in sorted(package_root.rglob("*.py")):
+        if "__pycache__" in py.parts or "tests" in py.parts or py == charter_py:
+            continue
+        source = py.read_text(encoding="utf-8")
+        assert literal not in source, f"{py} 持有章程路径字面量副本：{literal}"
+
+
 def test_代码里无章程副本() -> None:
     text = charter.read_charter(REPO_ROOT)
     red_line_sentences = [

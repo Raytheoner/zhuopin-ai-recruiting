@@ -110,7 +110,7 @@ HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
     # （见下面 `dispatch_headless_unpack` 的 `cwd=str(REPO_ROOT)`），相对路径可解析。
     # 旧的裸写法会让拆件会话在它唯一需要的自我轮询命令上被 permission-denied。
     "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal:*)",
-    "Bash(python -m tools.liaison criteria:*)",
+    "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria:*)",
 )
 
 

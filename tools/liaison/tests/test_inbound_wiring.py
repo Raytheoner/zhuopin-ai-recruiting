@@ -612,8 +612,11 @@ def test_worker_wires_bridge_dispatch_with_the_partial_bound_at_the_call_site(
     用 fake 接住 `dispatch_wiring.bridge_dispatch`（⛔ 不真的起 Claude 子进程），
     断言 `__main__.py` 里 `functools.partial` 绑的那几个在调用点真实可得的值全部
     绑对：`conn` 是值守线程独占的那条连接、`thread_id`/`msgid`/`sender_userid`
-    取自这条帧、`charter_root`/`charter_relpath` 是模块级 P2-TODO 常量、`now`
-    是事件自带的时间戳（⛔ 不是处理时才取的 `now()`）。
+    取自这条帧、`now` 是事件自带的时间戳（⛔ 不是处理时才取的 `now()`）。
+    P2（`liaison-unpack-charter`）接入生产路径后，章程路径的唯一来源改为
+    `charter.CHARTER_RELATIVE_PATH`——`functools.partial` 不再绑
+    `charter_relpath`/`charter_root` 这两个关键字（`bridge_dispatch` 的签名
+    已经不接受它们）。
     """
     from tools.liaison.unpack.dispatch import DispatchOutcome
 
@@ -653,8 +656,8 @@ def test_worker_wires_bridge_dispatch_with_the_partial_bound_at_the_call_site(
     assert kwargs["thread_id"] == "threadA"
     assert kwargs["msgid"] == "MSGID0001"
     assert kwargs["sender_userid"] == ADMITTED_USERID
-    assert kwargs["charter_root"] == liaison_main.REPO_ROOT
-    assert kwargs["charter_relpath"] == liaison_main.CHARTER_RELPATH
+    assert "charter_root" not in kwargs
+    assert "charter_relpath" not in kwargs
     assert kwargs["now"] == T0
     # 已知缺口（不在本次 7 条 finding 范围内，⛔ 不在本 wave 修）：P0 的
     # `dispatch: Callable[[], object]` 零参契约不会把 run_bridge 内部算出来的

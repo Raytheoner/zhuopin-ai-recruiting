@@ -127,7 +127,7 @@ def test_build_headless_argv_shape():
         # ⛔ 不是裸 "python -m tools.liaison unpack-signal:*"——那条匹配不上拆件
         # 会话实际会敲的命令，会让它在唯一需要的自我轮询命令上被拒绝。
         "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal:*)",
-        "Bash(python -m tools.liaison criteria:*)",
+        "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria:*)",
     ):
         assert required in argv
 

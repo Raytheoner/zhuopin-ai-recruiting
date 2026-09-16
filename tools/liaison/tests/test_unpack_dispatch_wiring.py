@@ -5,6 +5,11 @@
 ⚠️ 本文件的用例全部注入 fake `dispatch_headless_unpack`，⛔ 不真实起进程
 （起进程的行为已经在 test_unpack_dispatch.py 里覆盖过，这里只测「结果 → 审计」
 这一段转换）。
+
+P2（`liaison-unpack-charter`）接入生产路径后，章程正文与 prompt 拼接改由
+`unpack/charter.py` 负责——本文件的用例改注入 `repo_root`（章程放在
+`<repo_root>/.claude/skills/liaison-unpack/SKILL.md`），不再自己拼一份
+`charter_relpath`/`charter_root`。
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from tools.liaison.storage.effects import EFFECT_NODE_TO_TABLE
 from tools.liaison.unpack import dispatch_wiring, unpack_cli
 from tools.liaison.unpack.dispatch import DispatchOutcome
 from tools.liaison.unpack.dispatch_wiring import bridge_dispatch
+from tools.liaison.unpack.signal import append_signal
 
 NOW = datetime(2026, 9, 10, 14, 3, 0, tzinfo=timezone.utc)
 
@@ -30,6 +36,12 @@ def conn(tmp_path):
     connection.close()
 
 
+def _write_charter(repo_root, text: str = "章程全文") -> None:
+    charter_dir = repo_root / ".claude" / "skills" / "liaison-unpack"
+    charter_dir.mkdir(parents=True, exist_ok=True)
+    (charter_dir / "SKILL.md").write_text(text, encoding="utf-8")
+
+
 def _audit_rows(conn, msgid: str) -> list[tuple]:
     return conn.execute(
         "SELECT kind FROM liaison_unpack_audit WHERE msgid = ? ORDER BY id", (msgid,)
@@ -37,8 +49,7 @@ def _audit_rows(conn, msgid: str) -> list[tuple]:
 
 
 def test_started_outcome_writes_dispatch_started_audit(conn, monkeypatch, tmp_path):
-    charter_path = tmp_path / "charter.md"
-    charter_path.write_text("章程全文", encoding="utf-8")
+    _write_charter(tmp_path)
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
         lambda **kwargs: DispatchOutcome(status="started", pid=1, log_path="x.log"),
@@ -49,9 +60,8 @@ def test_started_outcome_writes_dispatch_started_audit(conn, monkeypatch, tmp_pa
         msgid="m1",
         sender_userid="u1",
         letter_number="人事部#1",
-        charter_relpath=str(charter_path.relative_to(charter_path.parents[0])),
-        charter_root=charter_path.parent,
         now=NOW,
+        repo_root=tmp_path,
     )
     assert outcome.status == "started"
     rows = _audit_rows(conn, "m1")
@@ -59,39 +69,38 @@ def test_started_outcome_writes_dispatch_started_audit(conn, monkeypatch, tmp_pa
 
 
 def test_skipped_busy_outcome_writes_dispatch_skipped_busy_audit(conn, monkeypatch, tmp_path):
-    charter_path = tmp_path / "charter.md"
-    charter_path.write_text("章程全文", encoding="utf-8")
+    _write_charter(tmp_path)
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
         lambda **kwargs: DispatchOutcome(status="skipped_busy"),
     )
     bridge_dispatch(
         conn, thread_id="t1", msgid="m2", sender_userid="u1", letter_number="人事部#1",
-        charter_relpath=charter_path.name, charter_root=charter_path.parent, now=NOW,
+        now=NOW, repo_root=tmp_path,
     )
     assert _audit_rows(conn, "m2") == [("dispatch_skipped_busy",)]
 
 
 def test_failed_outcome_writes_dispatch_failed_audit_with_reason(conn, monkeypatch, tmp_path):
-    charter_path = tmp_path / "charter.md"
-    charter_path.write_text("章程全文", encoding="utf-8")
+    _write_charter(tmp_path)
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
         lambda **kwargs: DispatchOutcome(status="failed", reason="binary_not_found"),
     )
     bridge_dispatch(
         conn, thread_id="t1", msgid="m3", sender_userid="u1", letter_number="人事部#1",
-        charter_relpath=charter_path.name, charter_root=charter_path.parent, now=NOW,
+        now=NOW, repo_root=tmp_path,
     )
     assert _audit_rows(conn, "m3") == [("dispatch_failed",)]
 
 
 def test_charter_missing_still_produces_one_audit_row(conn, monkeypatch, tmp_path):
-    """章程文件真的不存在（本 Task 自己解析，⛔ 不 import P2 的 charter.py）
-    ⇒ `dispatch_headless_unpack` 收到 `charter_text=None` ⇒ `failed`。"""
+    """`repo_root` 下没有 `.claude/skills/liaison-unpack/SKILL.md`
+    ⇒ `charter.read_charter` 抛 `CharterMissing` ⇒ `dispatch_headless_unpack`
+    收到 `charter_text=None` ⇒ `failed(charter_missing)`。"""
     outcome = bridge_dispatch(
         conn, thread_id="t1", msgid="m4", sender_userid="u1", letter_number="人事部#1",
-        charter_relpath="不存在.md", charter_root=tmp_path, now=NOW,
+        now=NOW, repo_root=tmp_path,
     )
     assert outcome.status == "failed"
     assert outcome.reason == "charter_missing"
@@ -108,8 +117,7 @@ def test_same_msgid_dispatch_twice_only_one_started_audit_row(conn, monkeypatch,
     审计表的行数（那一层的幂等短路发生在起活**之后**，挡不住第二次真的起进程，
     见 finding I2）。
     """
-    charter_path = tmp_path / "charter.md"
-    charter_path.write_text("章程全文", encoding="utf-8")
+    _write_charter(tmp_path)
     launch_calls: list[dict] = []
 
     def _counting_dispatch_headless_unpack(**kwargs):
@@ -122,7 +130,7 @@ def test_same_msgid_dispatch_twice_only_one_started_audit_row(conn, monkeypatch,
     )
     kwargs = dict(
         conn=conn, thread_id="t1", msgid="m5", sender_userid="u1", letter_number="人事部#1",
-        charter_relpath=charter_path.name, charter_root=charter_path.parent, now=NOW,
+        now=NOW, repo_root=tmp_path,
     )
     first = bridge_dispatch(**kwargs)
     second = bridge_dispatch(**kwargs)
@@ -136,8 +144,7 @@ def test_same_msgid_dispatch_twice_only_one_started_audit_row(conn, monkeypatch,
 def test_prior_launch_probe_ignores_non_started_kinds(conn, monkeypatch, tmp_path):
     """I2 的探测只认 `dispatch_started`：`skipped_busy`/`dispatch_failed` 都没有
     真的花钱起活，第二次调用允许重试（不该被误拦）。"""
-    charter_path = tmp_path / "charter.md"
-    charter_path.write_text("章程全文", encoding="utf-8")
+    _write_charter(tmp_path)
     launch_calls: list[dict] = []
 
     def _counting_dispatch_headless_unpack(**kwargs):
@@ -150,7 +157,7 @@ def test_prior_launch_probe_ignores_non_started_kinds(conn, monkeypatch, tmp_pat
     )
     kwargs = dict(
         conn=conn, thread_id="t1", msgid="m7", sender_userid="u1", letter_number="人事部#1",
-        charter_relpath=charter_path.name, charter_root=charter_path.parent, now=NOW,
+        now=NOW, repo_root=tmp_path,
     )
     bridge_dispatch(**kwargs)
     bridge_dispatch(**kwargs)
@@ -171,8 +178,7 @@ def test_signal_root_matches_unpack_cli_data_root():
 
 def test_audit_write_failure_is_swallowed_and_outcome_still_returned(conn, monkeypatch, tmp_path, caplog):
     """审计写失败本身吞掉只记日志（spec「审计写入自身失败时也 MUST 被吞掉」）。"""
-    charter_path = tmp_path / "charter.md"
-    charter_path.write_text("章程全文", encoding="utf-8")
+    _write_charter(tmp_path)
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
         lambda **kwargs: DispatchOutcome(status="started", pid=1, log_path="x.log"),
@@ -186,6 +192,82 @@ def test_audit_write_failure_is_swallowed_and_outcome_still_returned(conn, monke
     )
     outcome = bridge_dispatch(
         conn, thread_id="t1", msgid="m6", sender_userid="u1", letter_number="人事部#1",
-        charter_relpath=charter_path.name, charter_root=charter_path.parent, now=NOW,
+        now=NOW, repo_root=tmp_path,
     )
     assert outcome.status == "started"  # dispatch 本身的结果不受审计失败影响
+
+
+def test_prompt_is_built_from_charter_module_with_full_fields(conn, monkeypatch, tmp_path):
+    """P2 接入后，`bridge_dispatch` 传给 `dispatch_headless_unpack` 的 `prompt`
+    须由 `charter.compute_prompt` 产出：以「# 拆件会话起活」开头、含 msgid／
+    信号文件相对路径／检查点时刻／（从信号文件按 msgid 查到的）信件编号，
+    并以章程全文逐字结尾。"""
+    charter_text = "章程正文占位\n"
+    _write_charter(tmp_path, charter_text)
+
+    signal_path = tmp_path / "unpack-signal.json"
+    monkeypatch.setattr(unpack_cli, "DEFAULT_SIGNAL_PATH", signal_path)
+    monkeypatch.delenv(unpack_cli.SIGNAL_PATH_ENV, raising=False)
+    append_signal(
+        signal_path,
+        {
+            "letter_number": "人事部#7",
+            "msgid": "m9",
+            "archived_relpath": "x",
+            "at": "2026-09-10T14:00:00.000000+08:00",
+        },
+    )
+
+    captured: dict = {}
+
+    def _capturing(**kwargs):
+        captured.update(kwargs)
+        return DispatchOutcome(status="started", pid=1, log_path="x.log")
+
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack", _capturing
+    )
+
+    bridge_dispatch(
+        conn, thread_id="t1", msgid="m9", sender_userid="u1", letter_number=None,
+        now=NOW, repo_root=tmp_path,
+    )
+
+    prompt = captured["prompt"]
+    assert prompt.startswith("# 拆件会话起活")
+    assert "m9" in prompt
+    assert "unpack-signal.json" in prompt
+    assert NOW.isoformat() in prompt
+    assert "人事部#7" in prompt
+    assert prompt.endswith(charter_text)
+
+
+def test_prompt_letter_number_falls_back_when_signal_has_no_matching_entry(
+    conn, monkeypatch, tmp_path
+):
+    """`letter_number` 入参为 `None` 且信号文件里也查不到该 msgid ⇒ 写占位
+    「（未匹配）」，⛔ 不抛异常、⛔ 不阻断起活。"""
+    charter_text = "章程正文占位\n"
+    _write_charter(tmp_path, charter_text)
+
+    signal_path = tmp_path / "unpack-signal.json"
+    monkeypatch.setattr(unpack_cli, "DEFAULT_SIGNAL_PATH", signal_path)
+    monkeypatch.delenv(unpack_cli.SIGNAL_PATH_ENV, raising=False)
+
+    captured: dict = {}
+
+    def _capturing(**kwargs):
+        captured.update(kwargs)
+        return DispatchOutcome(status="started", pid=1, log_path="x.log")
+
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack", _capturing
+    )
+
+    outcome = bridge_dispatch(
+        conn, thread_id="t1", msgid="m10", sender_userid="u1", letter_number=None,
+        now=NOW, repo_root=tmp_path,
+    )
+
+    assert outcome.status == "started"
+    assert "（未匹配）" in captured["prompt"]

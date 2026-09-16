@@ -6,16 +6,9 @@
    约定与 `bridge_dispatch` 的签名不同，改这一个文件即可，其余 P1 模块不受影响。
 2. `effects.effect_unpack_audit` 的签名。
 
-# P2-TODO（`liaison-unpack-charter` 落地后由该变更包的执行者做）：
-本文件目前自己拼「前言 + 章程全文」这个最简 prompt、自己解析章程相对路径，
-是因为 P2 的 `unpack/charter.py`（`charter.read_charter` / `charter.compute_prompt`）
-此刻还不存在。P2 落地后：
-  - 删除本文件里的 `_read_charter_text` 与 `_build_minimal_prompt`；
-  - 改成 `from tools.liaison.unpack import charter` 并调
-    `charter.read_charter(repo_root)` / `charter.compute_prompt(...)`；
-  - `charter_relpath`/`charter_root` 两个参数可能随之被
-    `charter.CHARTER_RELATIVE_PATH` 取代，按 P2 的 design D13 实际落地情况调整。
-本文件当前的实现是**完整可运行**的最简版本，不是留空占位。
+章程正文与起活 prompt 由 `unpack/charter.py`（P2，design D13）唯一负责——本模块
+只负责把 `charter.read_charter` / `charter.compute_prompt` 需要的各个字段
+（`repo_root`、信号文件相对路径、检查点时刻、信件编号）拼出来。
 """
 
 from __future__ import annotations
@@ -26,7 +19,9 @@ from datetime import datetime
 from pathlib import Path
 
 from tools.liaison.storage import effects
+from tools.liaison.unpack import charter, unpack_cli
 from tools.liaison.unpack.dispatch import DispatchOutcome, dispatch_headless_unpack
+from tools.liaison.unpack.signal import find_pending
 
 logger = logging.getLogger("tools.liaison.unpack.dispatch_wiring")
 
@@ -51,24 +46,27 @@ DEFAULT_LOG_DIR = DEFAULT_SIGNAL_ROOT / "logs" / "unpack-headless"
 DEFAULT_LOCK_PATH = DEFAULT_SIGNAL_ROOT / "unpack-session.lock"
 
 
-def _read_charter_text(charter_root: Path, charter_relpath: str) -> str | None:
-    """# P2-TODO：本函数整体会被 `charter.read_charter` 取代，见模块 docstring。"""
-    path = charter_root / charter_relpath
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-
-def _build_minimal_prompt(*, letter_number: str, msgid: str, charter_text: str) -> str:
-    """# P2-TODO：本函数会被 `charter.compute_prompt` 取代，见模块 docstring。
-
-    最简前言（编号/msgid）＋ 章程全文——满足 spec「章程全文逐字结尾、前有非空
-    前言」的最低要求，⛔ 不含 D13 要求的完整字段集（检查点/信号相对路径等），
-    那些字段需要与 P2 `unpack-signal --probe` 的循环规则一起设计，属 P2 范围。
+def _resolve_letter_number_for_prompt(
+    signal_path: Path, *, letter_number: str | None, msgid: str
+) -> str:
+    """`letter_number` 入参为 `None`（P0 零参 `dispatch()` 契约拿不到，见
+    `__main__.py` 的绑定处）时，从信号文件里按 `msgid` 补查——`bridge.
+    _emit_signal_and_dispatch` 在调 `dispatch()` 之前已经 `append_signal` 落了
+    这一项。查不到（信号文件缺失/损坏/确实没有这条）⇒ 写占位「（未匹配）」，
+    ⛔ 不抛异常、⛔ 不阻断起活。
     """
-    preamble = f"你在处理信件 {letter_number}（msgid={msgid}）的拆件流程。以下是完整章程：\n"
-    return preamble + charter_text
+    if letter_number:
+        return letter_number
+    entry = find_pending(signal_path, msgid)
+    resolved = entry.get("letter_number") if entry else None
+    return resolved or "（未匹配）"
+
+
+def _resolve_signal_relpath(signal_path: Path, repo_root: Path) -> str:
+    try:
+        return str(signal_path.relative_to(repo_root))
+    except ValueError:
+        return str(signal_path)
 
 
 def _prior_launch_already_recorded(conn, *, thread_id: str, msgid: str) -> bool:
@@ -98,10 +96,9 @@ def bridge_dispatch(
     thread_id: str,
     msgid: str,
     sender_userid: str,
-    letter_number: str,
-    charter_relpath: str,
-    charter_root: Path,
+    letter_number: str | None,
     now: datetime,
+    repo_root: Path = REPO_ROOT,
 ) -> DispatchOutcome:
     """P0 `bridge.run_bridge` 的 `dispatch=` 注入点。**结果三态一律落一条审计**，
     审计写失败本身吞掉只记日志（spec 明写），⛔ 不让审计失败掩盖起活本身的结果。
@@ -114,12 +111,24 @@ def bridge_dispatch(
         )
         return DispatchOutcome(status="started", reason="idempotent_replay_skipped_relaunch")
 
-    charter_text = _read_charter_text(charter_root, charter_relpath)
-    prompt = (
-        _build_minimal_prompt(letter_number=letter_number, msgid=msgid, charter_text=charter_text)
-        if charter_text is not None
-        else ""
-    )
+    try:
+        charter_text = charter.read_charter(repo_root)
+    except charter.CharterMissing:
+        charter_text = None
+
+    if charter_text is None:
+        prompt = ""
+    else:
+        signal_path = unpack_cli._resolve_signal_path()
+        prompt = charter.compute_prompt(
+            letter_number=_resolve_letter_number_for_prompt(
+                signal_path, letter_number=letter_number, msgid=msgid
+            ),
+            msgid=msgid,
+            signal_relpath=_resolve_signal_relpath(signal_path, repo_root),
+            checkpoint_iso=now.isoformat(),
+            charter_text=charter_text,
+        )
     outcome = dispatch_headless_unpack(
         charter_text=charter_text,
         prompt=prompt,

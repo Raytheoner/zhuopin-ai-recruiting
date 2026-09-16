@@ -10,7 +10,12 @@ import json
 
 import pytest
 
-from tools.liaison.unpack.signal import append_signal, clear_signal_before, probe_signal
+from tools.liaison.unpack.signal import (
+    append_signal,
+    clear_signal_before,
+    find_pending,
+    probe_signal,
+)
 
 
 def _item(msgid: str, at: str = "2026-09-10T14:03:00.000000+08:00") -> dict:
@@ -74,3 +79,30 @@ def test_clear_signal_before_on_missing_file_is_noop(tmp_path):
     path = tmp_path / "unpack-signal.json"
     clear_signal_before(path, "2026-09-10T14:30:00.000000+08:00")
     assert not path.exists()
+
+
+def test_find_pending_returns_item_matching_msgid(tmp_path):
+    path = tmp_path / "unpack-signal.json"
+    append_signal(path, _item("m1"))
+    append_signal(path, _item("m2"))
+    found = find_pending(path, "m2")
+    assert found is not None
+    assert found["msgid"] == "m2"
+    assert found["letter_number"] == "人事部#1"
+
+
+def test_find_pending_returns_none_when_msgid_absent(tmp_path):
+    path = tmp_path / "unpack-signal.json"
+    append_signal(path, _item("m1"))
+    assert find_pending(path, "not-here") is None
+
+
+def test_find_pending_returns_none_when_file_missing(tmp_path):
+    path = tmp_path / "unpack-signal.json"
+    assert find_pending(path, "m1") is None
+
+
+def test_find_pending_returns_none_when_file_corrupted(tmp_path):
+    path = tmp_path / "unpack-signal.json"
+    path.write_text("{not json", encoding="utf-8")
+    assert find_pending(path, "m1") is None
