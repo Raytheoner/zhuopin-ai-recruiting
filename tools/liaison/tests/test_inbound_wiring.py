@@ -141,7 +141,10 @@ def roster(tmp_path):
 @pytest.fixture
 def ports(tmp_path, roster):
     return liaison_main.InboundPorts(
-        archive_root=tmp_path / "archive", whitelist_path=roster, reply=ReplySpy()
+        archive_root=tmp_path / "archive",
+        whitelist_path=roster,
+        reply=ReplySpy(),
+        ledger_path=tmp_path / "README-跟进信清单.md",
     )
 
 
