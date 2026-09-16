@@ -39,10 +39,10 @@
 
 ## 3. P2 · 拆件章程正本（`liaison-unpack-charter`）
 
-- [ ] 3.1 写 `.claude/skills/liaison-unpack/SKILL.md`（章程正本）：§〇 红线九项（八项照单 Q3b ＋ 第 ⑨ 候选人个人信息条，措辞逐字取 design D15）；§一 信号探测与循环（探测异常按有信号、清信号在落批之后且只清检查点前）；§二 拆件步骤（读信号 → 读归档件 → 判实质/非实质 → 回灌结论落 `docs/跟进信/回件/<信编号>-<日期>.md` → 台账转态或按后缀原状态还原 → 口径点台账转态 → 登记 `docs/session接力.md`）；§三 收口（只 add 列出路径＋commit、不 push、并行四条逐字、`git status --porcelain` 越界自检、`.git/index.lock` 不删）；§四 待人栏。⛔ 章程内不出现任何凭据、不出现绝对路径
-- [ ] 3.2 `unpack/charter.py`：单点常量 `CHARTER_RELATIVE_PATH`、`read_charter(repo_root) -> str`（缺失抛 `CharterMissing`，由 dispatch 转 `failed(charter_missing)`）、纯函数 `compute_prompt(*, letter_number, msgid, signal_relpath, checkpoint_iso, charter_text) -> str`：前言（含「走完一轮再探一次，直到 `[NO-SIGNAL]`」这条只在前言的规则）＋ 章程全文
-- [ ] 3.3 单测 `test_事件驱动前言不改写章程原文`：prompt 以章程全文逐字结尾、其前有非空前言、前言含编号/msgid/检查点；`test_代码里无章程副本`：扫 `tools/liaison/**/*.py` 不含 §〇 任一整句；`test_章程红线九项可核对`：九项关键短语各命中 ≥1；`test_章程收口三条可核对`（不 push／只 add 列出路径／不删 index.lock）
-- [ ] 3.4 章程与 `allowedTools`（D4）交叉核对测试：章程 §二 里要求会话执行的每条命令，都能被 `HEADLESS_ARGV_TEMPLATE` 的白名单放行（否则会话会卡住而不报错）；反向：白名单放行的每条命令都在章程里有用途
+- [x] 3.1 写 `.claude/skills/liaison-unpack/SKILL.md`（章程正本）：§〇 红线九项（八项照单 Q3b ＋ 第 ⑨ 候选人个人信息条，措辞逐字取 design D15）；§一 信号探测与循环（探测异常按有信号、清信号在落批之后且只清检查点前）；§二 拆件步骤（读信号 → 读归档件 → 判实质/非实质 → 回灌结论落 `docs/跟进信/回件/<信编号>-<日期>.md` → 台账转态或按后缀原状态还原 → 口径点台账转态 → 登记 `docs/session接力.md`）；§三 收口（只 add 列出路径＋commit、不 push、并行四条逐字、`git status --porcelain` 越界自检、`.git/index.lock` 不删）；§四 待人栏。⛔ 章程内不出现任何凭据、不出现绝对路径
+- [ ] 3.2 `unpack/charter.py`：单点常量 `CHARTER_RELATIVE_PATH`、`read_charter(repo_root) -> str`（缺失抛 `CharterMissing`，由 dispatch 转 `failed(charter_missing)`）、纯函数 `compute_prompt(*, letter_number, msgid, signal_relpath, checkpoint_iso, charter_text) -> str`：前言（含「走完一轮再探一次，直到 `[NO-SIGNAL]`」这条只在前言的规则）＋ 章程全文（代码本身已交付、两轮 review 通过；**不勾**——`compute_prompt` 尚未接入生产路径，`__main__.py`/`dispatch_wiring.py` 仍各持一份 `CHARTER_RELPATH`/`_build_minimal_prompt` 副本，spec「该路径只在一处常量定义」现仍为假，见 `docs/session接力.md` 待办登记）
+- [x] 3.3 单测 `test_事件驱动前言不改写章程原文`：prompt 以章程全文逐字结尾、其前有非空前言、前言含编号/msgid/检查点；`test_代码里无章程副本`：扫 `tools/liaison/**/*.py` 不含 §〇 任一整句；`test_章程红线九项可核对`：九项关键短语各命中 ≥1；`test_章程收口三条可核对`（不 push／只 add 列出路径／不删 index.lock）
+- [x] 3.4 章程与 `allowedTools`（D4）交叉核对测试：章程 §二 里要求会话执行的每条命令，都能被 `HEADLESS_ARGV_FIXED_PART`（实际常量名，design D4 文档写的 `HEADLESS_ARGV_TEMPLATE` 与代码已不一致，见 `docs/session接力.md` 待办登记）的白名单放行（否则会话会卡住而不报错）；反向：白名单放行的每条命令都在章程里有用途
 
 ## 4. P3 · 口径点台账（`liaison-criteria-ledger`）
 

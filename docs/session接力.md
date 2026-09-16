@@ -153,6 +153,21 @@ AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性�
 
 ## 二、下一步
 
+### 🆕 2026-09-16 `0916U` P2 拆件章程正本（liaison-unpack-charter）Task 4-5 建造收口
+
+全 5 Task（Task1-3 上一 session、Task4-5 本 session）+ 终审 + 修复波 全部通过，已合入 main（合并
+commit 见收工报告）。终审（Opus）放行「With fixes」，一波修复（`c5aebd4`：`compute_prompt` 前言里
+残留的裸 `unpack-signal` 命令形＋`read_charter` 收窄的异常捕获）已修并复审通过。3 条遗留待办：
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| 1 | `compute_prompt` 未接生产路径：`__main__.py`/`dispatch_wiring.py` 仍各自持有 `CHARTER_RELPATH` 字面量与 `_build_minimal_prompt`（两处都带 `P2-TODO` 注释指名本变更包收尾时删除） | 下一条 CC 泳道（建议单独起 opener，读 `docs/superpowers/plans/2026-09-10-liaison-unpack-charter.md` 与本条后追加一个 wiring task，走 TDD） | 待派发 | `grep -rn CHARTER_RELPATH tools/liaison/__main__.py tools/liaison/unpack/dispatch_wiring.py` 零命中 ＋ `bridge_dispatch` 实际调用 `charter.compute_prompt` ＋ 单测覆盖 | tasks.md 3.2 **保持不勾**，`liaison-reply-bridge-and-patrol` 不得归档——spec「该路径只在一处常量定义」持续为假 |
+| 2 | 章程 §二.6／`dispatch.py` 白名单的 `python -m tools.liaison criteria` 都是裸形式，且本机只有 `python3` 无 `python`；`criteria.py` 尚未交付（P3，`2026-09-10-liaison-criteria-ledger.md`） | P3 交付时顺带修（章程改 `PYTHONPATH=. tools/liaison/.venv/bin/python` 前缀形式 ＋ 同步改 `dispatch.py` 白名单，否则 Task5 的双向核对测试会红） | 待 P3 | P3 落地后 `test_unpack_charter_allowlist.py` 两条测试仍绿 ＋ 章程与白名单用词一致 | 沿用与 `unpack-signal` 曾经一样的静默卡死风险（会话收到权限拒绝但外部看不到报错），只是眼下 `criteria` 命令还没人真的会跑到 |
+| 3 | `design.md` D4 行 52 仍写 `HEADLESS_ARGV_TEMPLATE`，代码实际常量名是 `HEADLESS_ARGV_FIXED_PART`（P1 交付时改的名，design 文档没跟着改） | 下次碰 design.md D4 的人顺手改一个词 | 待顺手 | `grep -n HEADLESS_ARGV_TEMPLATE openspec/changes/liaison-reply-bridge-and-patrol/design.md` 零命中 | 纯文档漂移，无功能影响，只是读 design 的人会对不上代码 |
+
+SDD 台账（`.superpowers/sdd/2026-09-10-liaison-unpack-charter/progress.md`，worktree 内、gitignored）
+有完整的终审全文摘要与逐条裁决理由，worktree 删除前已转写本条要点，原台账即将随收口清除。
+
 ### ⑯ 第十五批（`0909S–W`，看护者 `0909X`）· ✅ **已跑完（5/5，3 OK ／ 2 PARTIAL，零 FAIL）**
 
 报告 `.claude/handoff/lanes-20260909-124030-第十五批看护报告.md`；摘牌提交 `21db086`。
