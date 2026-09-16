@@ -26,7 +26,7 @@ def read_charter(repo_root: Path) -> str:
     path = Path(repo_root) / CHARTER_RELATIVE_PATH
     try:
         return path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
+    except OSError as exc:
         raise CharterMissing(f"章程正本缺失：{path}") from exc
 
 
@@ -52,8 +52,9 @@ def compute_prompt(
         f"- 消息标识（msgid）：{msgid}\n"
         f"- 信号文件：{signal_relpath}\n"
         f"- 检查点时刻：{checkpoint_iso}\n\n"
-        "走完一轮拆件后，再探测一次信号（`python -m tools.liaison unpack-signal "
-        "--probe`）；仍有信号则再走一轮，直到输出 `[NO-SIGNAL]` 为止。这条规则"
+        "走完一轮拆件后，再探测一次信号（`PYTHONPATH=. tools/liaison/.venv/bin/python "
+        "-m tools.liaison unpack-signal --probe`）；仍有信号则再走一轮，直到输出 "
+        "`[NO-SIGNAL]` 为止。这条规则"
         "只在本前言里，不在下面的章程正文里。\n\n"
         "---\n\n"
     )
