@@ -291,6 +291,52 @@ def test_run_bridge_marks_and_records_all_side_effects(tmp_path, conn):
     assert len(dispatch_calls) == 1
 
 
+def test_run_bridge_signal_at_field_uses_format_instant_not_bare_isoformat(tmp_path, conn):
+    """I7：`clear_signal_before`（signal.py:76-79）按字符串字典序比较 `at`/
+    `checkpoint`，要求两者都是 `session.format_instant` 的定宽产出（固定
+    `+08:00`、微秒定宽）。`T0` 的微秒恰好是 0——`datetime.isoformat()` 在这种
+    情况下会把微秒整段省略（`timespec="auto"`），产出
+    `"...T14:03:00+08:00"` 而不是 `"...T14:03:00.000000+08:00"`，两者按字符串
+    比较不等价，会让恰好落在检查点那一刻的信号项被误清/误留。"""
+    from tools.liaison.unpack.bridge import run_bridge
+
+    assert T0.microsecond == 0, "本用例的判据依赖 T0 的微秒恰好是 0"
+
+    ledger_path = tmp_path / "README-跟进信清单.md"
+    ledger_path.write_text(
+        LEDGER_HEADER + _row("人事部#2", "汤丽萍", "`✅ 已推送 2026-09-09`"),
+        encoding="utf-8",
+    )
+    signal_calls = []
+
+    run_bridge(
+        conn,
+        thread_id="TangLiPing",
+        msgid="msg-i7",
+        sender_userid="TangLiPing",
+        sender_name="汤丽萍",
+        received_at="2026-09-10T14:03:00+08:00",
+        content="下周要两个嵌入式",
+        outcome=_archive_outcome("msg-i7"),
+        route_admitted=True,
+        ledger_path=ledger_path,
+        archive_root=tmp_path / "archive",
+        now=T0,
+        signal_path=tmp_path / "signal.json",
+        append_signal=lambda path, item: signal_calls.append(item) or True,
+        dispatch=lambda: None,
+    )
+
+    assert len(signal_calls) == 1
+    at_value = signal_calls[0]["at"]
+    assert at_value == session.format_instant(T0)
+    assert at_value == "2026-09-10T14:03:00.000000+08:00"
+    assert at_value != T0.isoformat(), (
+        "回归判据：裸 isoformat() 在微秒为 0 时会省略微秒段，与 format_instant 的"
+        "定宽产出不再逐字相等——正是 I7 要修的那个 bug"
+    )
+
+
 def test_run_bridge_never_raises_when_the_ledger_file_is_missing(tmp_path, conn):
     """design D10：桥的任何失败都只落 bridge_failed 审计，⛔ 不上抛
     ——归档与入队已经提交，本函数是"归档之后"的独立环节。"""

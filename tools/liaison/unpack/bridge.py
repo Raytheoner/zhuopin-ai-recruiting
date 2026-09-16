@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from tools.liaison import alerts
+from tools.liaison import alerts, session
 from tools.liaison.alerts import effect_emit_alert
 from tools.liaison.archive import ArchiveOutcome, compute_archive_path
 from tools.liaison.attachments import store_attachment
@@ -418,7 +418,12 @@ def _emit_signal_and_dispatch(
                 "letter_number": letter_number,
                 "msgid": msgid,
                 "archived_path": archived_relpath,
-                "at": now.isoformat(),
+                # I7（2026-09-16 修）：`clear_signal_before` 按字符串字典序比较
+                # `at`/`checkpoint`（signal.py:76-79 的契约），要求固定 `+08:00`、
+                # 微秒定宽。`now.isoformat()` 在微秒恰好为 0 时会把它们省略
+                # （`timespec="auto"`），让"整秒"落在"带微秒的同一秒"之前，
+                # 检查点恰好落在那一刻的项会被误清。
+                "at": session.format_instant(now),
             },
         )
 
