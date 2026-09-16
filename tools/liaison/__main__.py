@@ -44,6 +44,8 @@ from tools.liaison.archive import DEFAULT_ARCHIVE_ROOT
 from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
 from tools.liaison.storage import db as liaison_db
+from tools.liaison.unpack.bridge import run_bridge
+from tools.liaison.whitelist import load_whitelist_names
 
 #: ⛔ **⛔ 不写 `logging.getLogger(__name__)`**（TD-44）：本文件是 `python -m
 #: tools.liaison` 的入口模块，`-m` 启动路径下 `__name__` 是字面量 `"__main__"`
@@ -80,6 +82,11 @@ SELF_CHECK_ARG = "--self-check"
 #: tools/liaison/__main__.py → parents[0]=liaison, [1]=tools, [2]=仓库根
 LIAISON_DIR = Path(__file__).resolve().parents[0]
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: 台账真身路径（design D10 单点常量要求）。⛔ 不写死绝对路径给测试用——
+#: `InboundPorts.ledger_path` 的默认值就是这一份，测试通过构造
+#: `InboundPorts(ledger_path=tmp_path / ...)` 覆盖它。
+LEDGER_PATH = REPO_ROOT / "docs" / "跟进信" / "README-跟进信清单.md"
 
 #: 🔴 值守通道的 .env 在 **tools/liaison/**，⛔ 不是仓库根（2026-09-09 迁，TD-40）。
 #:
@@ -191,18 +198,16 @@ def apply_connection_event(svc: session.LiaisonSession, name: str, moment: datet
 
 @dataclass(frozen=True)
 class InboundPorts:
-    """入站处理要用到的三个外部落点。**默认值就是生产用的那一份。**
+    """入站处理要用到的四个外部落点。**默认值就是生产用的那一份。**
 
-    ⚠️ 它存在的理由只有一个：让用例把归档根与名单指到 `tmp_path`，⛔ 不是配置项，
-    ⛔ 不许给它加环境变量开关（口径与 `main()` 那四个接线缝关键字参数一致）。
-
-    `reply`：礼貌回复的外发端口。**现在是 `None`**——本条（8.5bis）⛔ 不发任何真实
-    消息；`handle_inbound_message` 对 `None` 有明确处置（留一条 WARNING，⛔ 不静默）。
+    `ledger_path`：回件桥（P0）改写的跟进信台账，⚠️ 与 `whitelist_path`
+    同一纪律——⛔ 不许给它加环境变量开关，测试把它顶到 `tmp_path`。
     """
 
     archive_root: Path = DEFAULT_ARCHIVE_ROOT
     whitelist_path: Path | None = None
     reply: Callable[[str, str], object] | None = None
+    ledger_path: Path = LEDGER_PATH
 
 
 def handle_message_frame(
@@ -238,7 +243,7 @@ def handle_message_frame(
         return False
 
     try:
-        inbound.handle_inbound_message(
+        result = inbound.handle_inbound_message(
             svc.conn,
             thread_id=fields.thread_id,
             msgid=fields.msgid,
@@ -262,6 +267,36 @@ def handle_message_frame(
             exc_info=True,
         )
         return False
+
+    if result.route.admitted:
+        # 8.5bis 之后新增：归档＋入队已提交，桥（P0）在此之后跑，失败
+        # ⛔ 不影响上面已经提交的归档/入队（design D10）。`run_bridge` 自身
+        # 永不上抛，这里仍然包一层 try/except 作为第二道保险丝——
+        # `run_bridge` 的实现今后若有变化，这条纪律不应该系在"相信它"上。
+        try:
+            names = load_whitelist_names(ports.whitelist_path)
+            run_bridge(
+                svc.conn,
+                thread_id=fields.thread_id,
+                msgid=fields.msgid,
+                sender_userid=fields.sender_userid,
+                sender_name=names.get(fields.sender_userid),
+                received_at=session.format_instant(moment),
+                content=fields.content,
+                outcome=result.outcome,
+                route_admitted=True,
+                ledger_path=ports.ledger_path,
+                archive_root=ports.archive_root,
+                now=moment,
+            )
+        except Exception:  # noqa: BLE001 —— 双保险，见上
+            logger.error(
+                "回件桥调用本身失败（run_bridge 理论上不应该抛到这里）。"
+                "thread_id=%s msgid=%s",
+                fields.thread_id,
+                fields.msgid,
+                exc_info=True,
+            )
     return True
 
 

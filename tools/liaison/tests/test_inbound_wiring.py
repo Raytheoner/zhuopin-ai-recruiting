@@ -505,3 +505,84 @@ def test_replaying_an_admitted_message_adds_no_second_task(svc, ports, mapped):
     assert svc.conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
     assert svc.conn.execute("SELECT COUNT(*) FROM liaison_task").fetchone()[0] == 1
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# ⑧ 回件桥：P0 标记台账条目
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_worker_marks_the_ledger_for_an_admitted_sender_with_an_inflight_letter(
+    svc, roster, mapped, tmp_path
+):
+    ledger_path = tmp_path / "README-跟进信清单.md"
+    ledger_path.write_text(
+        "| 编号 | 日期 | 收信人 | 主要事项 | 交期要点 | 发送状态 |\n"
+        "|---|---|---|---|---|---|\n"
+        "| `人事部#1` | 2026-09-09 | 汤丽萍 | 事项 | 无 | `✅ 已推送 2026-09-09` |\n",
+        encoding="utf-8",
+    )
+    ports = liaison_main.InboundPorts(
+        archive_root=tmp_path / "archive",
+        whitelist_path=roster,
+        reply=ReplySpy(),
+        ledger_path=ledger_path,
+    )
+    events: queue.Queue = queue.Queue()
+    events.put((liaison_main.EVENT_MESSAGE, T0, make_frame()))
+    liaison_main.run_session_worker(
+        svc, events, StoppingEvent(after=1), tick_interval=0.01, ports=ports
+    )
+    assert "📨 回件已到，待拆件" in ledger_path.read_text(encoding="utf-8")
+    audit_count = svc.conn.execute(
+        "SELECT COUNT(*) FROM liaison_unpack_audit WHERE kind = 'bridge_marked'"
+    ).fetchone()[0]
+    assert audit_count == 1
+
+
+def test_worker_leaves_the_ledger_untouched_for_an_outsider(svc, roster, mapped, tmp_path):
+    ledger_path = tmp_path / "README-跟进信清单.md"
+    original = (
+        "| 编号 | 日期 | 收信人 | 主要事项 | 交期要点 | 发送状态 |\n"
+        "|---|---|---|---|---|---|\n"
+        "| `人事部#1` | 2026-09-09 | 汤丽萍 | 事项 | 无 | `✅ 已推送 2026-09-09` |\n"
+    )
+    ledger_path.write_text(original, encoding="utf-8")
+    ports = liaison_main.InboundPorts(
+        archive_root=tmp_path / "archive",
+        whitelist_path=roster,
+        reply=ReplySpy(),
+        ledger_path=ledger_path,
+    )
+    events: queue.Queue = queue.Queue()
+    events.put((liaison_main.EVENT_MESSAGE, T0, make_frame(sender=OUTSIDER_USERID)))
+    liaison_main.run_session_worker(
+        svc, events, StoppingEvent(after=1), tick_interval=0.01, ports=ports
+    )
+    assert ledger_path.read_text(encoding="utf-8") == original
+    assert svc.conn.execute("SELECT COUNT(*) FROM liaison_unpack_audit").fetchone()[0] == 0
+
+
+def test_worker_survives_a_missing_ledger_file_without_killing_the_thread(
+    svc, roster, mapped, tmp_path
+):
+    """D10：台账文件缺失 ⇒ bridge_failed 审计，⛔ 值守线程不因此崩溃——
+    与「一条畸形消息不配打死值守线程」（`handle_message_frame` docstring）
+    是同一条纪律的延伸。"""
+    ports = liaison_main.InboundPorts(
+        archive_root=tmp_path / "archive",
+        whitelist_path=roster,
+        reply=ReplySpy(),
+        ledger_path=tmp_path / "不存在.md",
+    )
+    events: queue.Queue = queue.Queue()
+    events.put((liaison_main.EVENT_MESSAGE, T0, make_frame()))
+    liaison_main.run_session_worker(
+        svc, events, StoppingEvent(after=1), tick_interval=0.01, ports=ports
+    )
+    assert svc.conn.execute("SELECT COUNT(*) FROM liaison_message").fetchone()[0] == 1
+    kinds = [
+        row[0]
+        for row in svc.conn.execute("SELECT kind FROM liaison_unpack_audit").fetchall()
+    ]
+    assert kinds == ["bridge_failed"]
+
