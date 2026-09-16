@@ -1,4 +1,4 @@
-> **进度**：0/33。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
+> **进度**：12/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态全部完成并合回 main，2026-09-16 `[Mac]0916P`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
 > 🔴 **§0 三条门槛全部勾完之前，§1–§5 ⛔ 不得开工**——「打标即开班」建在一条会假死且看不出来（TD-42）、且根本收不到消息（F1 接线缺失）的通道上，是在为一个不存在的入站做自动化。
 > 🔴 **验收纪律**：§5 的真实起活实测记录是本包的验收标准，⛔ 单测全绿不算（win 端同族纪律，`docs/findings/2026-09-10-win端打标即开班机制核验与HR移植方案.md` §五）。
 > 粒度：每个 `##` 章节 ＝ 一个 superpowers plan ＝ 一条 worktree 分支。每份 plan 必须含 Global Constraints 段（CLAUDE.md「工程铁律」逐字）。
@@ -11,15 +11,19 @@
 
 ## 1. P0 · 回件桥＋第九态（`liaison-reply-bridge`）
 
-- [ ] 1.1 `tools/liaison/unpack/__init__.py` 与 `unpack/bridge.py` 骨架；纯函数 `compute_bridge_decision(ledger_text, *, sender_name, msgid, archived_relpath, now) -> BridgeDecision`：按 intent F3 判据定位在途行（收信人＝`sender_name` ∧ 状态以 `✅ 已推送` 开头或已含第九态标记）；返回 `marked / skipped_no_inflight / refused_serial_violation / skipped_already_marked` 四态之一与新台账文本。⛔ 不读文件、不读时钟、不记日志
-- [ ] 1.2 第九态文案生成 `compute_ninth_state_cell(original_cell, *, archived_relpath, now_cst)`（design D9）：CST 时刻、仓库相对路径、`━━━ 原状态 ━━━` ＋原状态列完整原文；单测逐字断言，并断言「只重写命中行、其它行逐字节相同」（复用 `followup.py` 的行定位手法，⛔ 不复制那段代码——抽成共用或直接 import）
-- [ ] 1.3 单测四态：恰一封在途 ⇒ `marked`；无在途 ⇒ `skipped_no_inflight`（D1）；≥2 封 ⇒ `refused_serial_violation` 且返回涉及编号列表（D2）；已是第九态 ⇒ `skipped_already_marked` 且台账不变（幂等）。🔴 D1/D2 两条要先红后绿
-- [ ] 1.4 台账原子写 `write_ledger_atomic(path, text)`：临时文件 ＋ `os.replace`；写失败抛出由调用方转 `bridge_failed`。⛔ 不用 `with`（AST 守卫），用 `try/finally` 关句柄
-- [ ] 1.5 `storage/schema.py` 加 `liaison_unpack_audit` 表（design D11，`kind` CHECK 九值，append-only）；`storage/effects.py` 加 `effect_unpack_audit`（`@idempotent_effect`，键 `{thread_id}:effect_unpack_audit:{msgid}:{kind}`）。**幂等策略**：同 msgid 同 kind 只落一行；`assert_effect_log_identity` 对该表按 `(msgid, kind)` 恒等并加测试
-- [ ] 1.6 `bridge.run_bridge(conn, *, inbound_result, sender_name, ledger_path, signal_path, now, dispatch)`：顺序＝决策 → 台账写 → 审计 effect →（`marked`/`skipped_already_marked` 时）信号追加 → 起活；整体 `try/except Exception` 只记 ERROR ＋ `bridge_failed` 审计，⛔ 不上抛（D10）。`refused_serial_violation` 走 `alerts.py` 发告警（内容含涉及编号）。**幂等策略**：台账按 D9 标记短路；审计按 1.5；信号按 msgid 去重
-- [ ] 1.7 `__main__.py` 值守线程接线：`handle_inbound_message` 返回且 `route.admitted` 为真后调 `run_bridge`；发送人姓名取自 `whitelist` 加载结果的 `name`；台账路径由单点常量 `LEDGER_PATH = REPO_ROOT / "docs/跟进信/README-跟进信清单.md"` 解析。⚠️ 名单外消息 ⛔ 不调桥（spec）
-- [ ] 1.8 单测：桥抛异常时归档与队列行保持已提交、链路正常返回、`bridge_failed` 一条；台账不可写 ⇒ 无信号无起活；同 msgid 重投 ⇒ 台账、信号、审计各不重复；第九态期间新 msgid ⇒ 台账不变、信号 +1、起活被调
-- [ ] 1.9 `docs/跟进信/README-跟进信清单.md`「发送状态」表加第九态一行（含义：回件已到待拆件，**仍在途、串行闸仍锁**；怎么变过来：值守服务自动写；怎么出去：拆件回灌后转闭环四态之一，或判非实质回件按后缀原状态还原）。⛔ 只加这一行与串行原则段一句「第九态视同在途」，不动清单表
+🔴 **落地偏离**：design D11 字面列表（`id, msgid, sender_userid, letter_number, kind, detail, at`）遗漏 `thread_id` 列——复用 `assert_effect_log_identity` 通用脚手架按 `thread_id` 分组比对时必须要这一列（0910G spec-to-plan 端到端提取验证发现，2026-09-16），实现计划 `docs/superpowers/plans/2026-09-10-liaison-reply-bridge.md` 已按此修正加列。⛔ 不改 `design.md`，本行即偏离记录。
+
+- [x] 1.1 `tools/liaison/unpack/__init__.py` 与 `unpack/bridge.py` 骨架；纯函数 `compute_bridge_decision(ledger_text, *, sender_name, msgid, archived_relpath, now) -> BridgeDecision`：按 intent F3 判据定位在途行（收信人＝`sender_name` ∧ 状态以 `✅ 已推送` 开头或已含第九态标记）；返回 `marked / skipped_no_inflight / refused_serial_violation / skipped_already_marked` 四态之一与新台账文本。⛔ 不读文件、不读时钟、不记日志
+- [x] 1.2 第九态文案生成 `compute_ninth_state_cell(original_cell, *, archived_relpath, now_cst)`（design D9）：CST 时刻、仓库相对路径、`━━━ 原状态 ━━━` ＋原状态列完整原文；单测逐字断言，并断言「只重写命中行、其它行逐字节相同」（复用 `followup.py` 的行定位手法，⛔ 不复制那段代码——抽成共用或直接 import）
+- [x] 1.3 单测四态：恰一封在途 ⇒ `marked`；无在途 ⇒ `skipped_no_inflight`（D1）；≥2 封 ⇒ `refused_serial_violation` 且返回涉及编号列表（D2）；已是第九态 ⇒ `skipped_already_marked` 且台账不变（幂等）。🔴 D1/D2 两条要先红后绿
+- [x] 1.4 台账原子写 `write_ledger_atomic(path, text)`：临时文件 ＋ `os.replace`；写失败抛出由调用方转 `bridge_failed`。⛔ 不用 `with`（AST 守卫），用 `try/finally` 关句柄
+- [x] 1.5 `storage/schema.py` 加 `liaison_unpack_audit` 表（design D11，`kind` CHECK 九值，append-only）；`storage/effects.py` 加 `effect_unpack_audit`（`@idempotent_effect`，键 `{thread_id}:effect_unpack_audit:{msgid}:{kind}`）。**幂等策略**：同 msgid 同 kind 只落一行；`assert_effect_log_identity` 对该表按 `(msgid, kind)` 恒等并加测试
+- [x] 1.6 `bridge.run_bridge(conn, *, inbound_result, sender_name, ledger_path, signal_path, now, dispatch)`：顺序＝决策 → 台账写 → 审计 effect →（`marked`/`skipped_already_marked` 时）信号追加 → 起活；整体 `try/except Exception` 只记 ERROR ＋ `bridge_failed` 审计，⛔ 不上抛（D10）。`refused_serial_violation` 走 `alerts.py` 发告警（内容含涉及编号）。**幂等策略**：台账按 D9 标记短路；审计按 1.5；信号按 msgid 去重（实现签名与本行字面略有出入——`inbound_result` 拆成显式关键字参数，见实现计划「run_bridge 的调用形状与 tasks.md 字面签名的差异」一节，非语义变更）
+- [x] 1.7 `__main__.py` 值守线程接线：`handle_inbound_message` 返回且 `route.admitted` 为真后调 `run_bridge`；发送人姓名取自 `whitelist` 加载结果的 `name`；台账路径由单点常量 `LEDGER_PATH = REPO_ROOT / "docs/跟进信/README-跟进信清单.md"` 解析。⚠️ 名单外消息 ⛔ 不调桥（spec）
+- [x] 1.8 单测：桥抛异常时归档与队列行保持已提交、链路正常返回、`bridge_failed` 一条；台账不可写 ⇒ 无信号无起活；同 msgid 重投 ⇒ 台账、信号、审计各不重复；第九态期间新 msgid ⇒ 台账不变、信号 +1、起活被调
+- [x] 1.9 `docs/跟进信/README-跟进信清单.md`「发送状态」表加第九态一行（含义：回件已到待拆件，**仍在途、串行闸仍锁**；怎么变过来：值守服务自动写；怎么出去：拆件回灌后转闭环四态之一，或判非实质回件按后缀原状态还原）。⛔ 只加这一行与串行原则段一句「第九态视同在途」，不动清单表
+
+**§1 收口（2026-09-16 `[Mac]0916P`）**：Task 1-9（超集覆盖 1.1-1.9）全部 review clean 并合回 main（commit `e808aa1`），全分支 final review（opus）通过，1004 测试全绿。`append_signal`/`dispatch` 目前是 P1（§2）留的空壳注入点，`None` 时只记 WARNING——生产环境尚不会真正起活，等 §2 落地后在 `__main__.py` 接线点换成真实函数即可，`run_bridge` 内部逻辑不用动。
 
 ## 2. P1 · 信号与打标即开班（`liaison-unpack-dispatch`）
 

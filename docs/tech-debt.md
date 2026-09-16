@@ -661,3 +661,23 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 带上「上游声明的长度」一并回传，与实际字节数不符即判失败并重试，⛔ 不进归档。
 
 ---
+
+## TD-43 · P0 回件桥（`run_bridge`）三条已知边角，合并时判定非阻塞
+
+**登记时间**：2026-09-16（`[Mac]0916P`，全分支 final review 发现，Minor 级、未阻塞合并）
+**优先级裁定**：随 P1（`liaison-unpack-dispatch`，`openspec/changes/liaison-reply-bridge-and-patrol/tasks.md` §2）落地时一并处理，⛔ 在此之前不单独占泳道。
+
+**缺口一：跟进信台账现在有两个并发写者，互不加锁。** `run_bridge`（值守线程，`tools/liaison/unpack/bridge.py`）与 `send-followup` CLI（独立进程，`tools/liaison/followup.py`）都是「读整份台账 → 改写 → `os.replace` 原子换入」，各自的换入动作是原子的，但两者之间没有互斥——值守线程在处理入站消息、CLI 同时在发新跟进信时，后写入者的 `os.replace` 会整体覆盖先写入者刚落的改动（不是逐行合并）。窗口很短（毫秒级）且值守线程只碰"发送状态"列，但这是本单元新引入的边缘情况（合并前只有 CLI 与人工在写这份文件）。
+**还债动作**：给台账写入加一把跨进程文件锁（`fcntl.flock` 或等价机制），或把两个写者收敛到同一个写入点排队。
+
+**缺口二：`liaison_unpack_audit.at` 用 UTC 默认值，但该表的查询语义是"按日"。** `CREATE TABLE ... at TEXT NOT NULL DEFAULT (datetime('now'))`（`tools/liaison/storage/schema.py`）与仓库里其它系统时间戳列同款约定，非本单元引入的新偏差；但这张表明确要支持"查询某日的桥审计记录"，CST 00:00–08:00 这 8 小时的消息会被按 UTC 记到前一天。`run_bridge` 手上已经有 CST-aware 的 `now` 参数，目前没有传给审计写入。
+**还债动作**：`effect_unpack_audit` 改为显式接收并记录 CST 时刻，或按日查询侧统一做 UTC→CST 换算——二选一即可，只需保证不是两边各按各的口径。
+
+**缺口三：`refused_serial_violation` 审计只落第一个冲突编号，`detail` 留空。** `tools/liaison/unpack/bridge.py` 该分支的 `effect_unpack_audit` 调用只传 `letter_number=matched_numbers[0]`；告警文本里列了全部冲突编号，但落库的审计记录（长期留痕）只留了一个，事后按审计表复核"当时具体冲突了哪几封"会缺信息（需回翻告警日志才能补全）。
+**还债动作**：该分支 `detail=", ".join(matched_numbers)`，一行改动。
+
+**关联提醒（不是缺口，是给 P1 落地时的约束）**：`run_bridge` 的 `append_signal`/`dispatch` 两个注入点在 `skipped_already_marked`（消息重投）时仍会被调用——这是本单元刻意的设计边界（见实现计划「与 design.md 现状偏离的实现说明」偏离 3），去重责任明确放在 P1 的 `append_signal` 自己身上。**P1 落地时 `append_signal` 的去重必须按 `msgid` 键**，不能按 `letter_number` 或时间戳——`msgid` 是唯一能区分"消息重投"与"第九态期间又来一条新消息"的字段（两者的 `letter_number` 与状态在台账层面完全一样）。
+
+**来源**：全分支 final review（opus，`[Mac]0916P`）逐条核实，均判 Minor、不阻塞合并。
+
+---
