@@ -2091,3 +2091,60 @@ SDK 只命名了两个字段——`body.msgtype`（`aibot/message_handler.py:34-
 **不还的后果**：服务连得上、订得到、日志干净、**`liaison_message` 仍然恒为 0 行**——与
 TD-42「连接假死」的症状**看起来一样**。⚠️ 但两者现在可分辨了：假死时日志**一条 ERROR 都
 没有**，本条则每来一条消息就打一行「帧结构」。⇒ 日志里有帧结构 = 连接是好的、只差这张表。
+
+## TD-44 · `SdkLogObserver` 无 `delegate`，SDK 与本模块的 ERROR/WARN 全部漏进未脱敏、无轮转的 `launchd.err.log` 🔴 未还，级别：合规相关
+
+**登记**：2026-09-16（`[Mac]0910A` AT-1b 轮 1 实跑时发现）
+
+**现象**：`[Mac]0910A` 轮 1 请 Shao Peishen 群 @ 一条、私信一条真实消息后，
+`data/liaison/logs/liaison.log`（`logsetup.py` 管理的、有轮转与脱敏的结构化日志）
+**mtime 停在重启那一刻，之后再没写过一行**——两条消息的 fail-closed 诊断行
+（`handle_message_frame` 里 `logger.error("入站帧未落库…")`，即 TD-43 描述的那一行）
+一条都没进去。但 `data/liaison/logs/launchd.err.log`（launchd 直接重定向的**原始 stderr**，
+**无轮转、无脱敏、无容量上界**，登记时已 **2.4 MB**）里两条都在，且带着 SDK 自己
+`Received push message` 的完整回显——**消息原文明文可见**：
+`"text": {"content": "@MAC机器人 测试短信2。"}` 与 `"content": "测试私信1！"`。
+
+**根因**：`tools/liaison/__main__.py` 构造 `session_client.SdkLogObserver` 时
+（`main()` 内，紧邻 `on_message` 定义处）**没有传 `delegate`**：
+
+```python
+sdk_logger = session_client.SdkLogObserver(
+    on_activity=on_sdk_activity, on_any_log=loop_stopper.capture
+)
+```
+
+`SdkLogObserver._forward()`（`session_client.py:1143-1151`）：`delegate is None` 时
+**直接 `print(..., file=sys.stderr)`**，SDK 的 debug/info/warn/error 全走这条路，
+**完全绕过 `logsetup.setup_logging()` 挂的 `RotatingFileHandler` 与脱敏 filter**。
+`handle_message_frame` 里那行 `logger.error(...)` 本身用的是标准 `logging` 模块
+（`logging.getLogger(__name__)`），理论上该走 `liaison.log`——但实测它也落进了
+`launchd.err.log`，需要下一手查清是 `setup_logging()` 在这条真实运行路径上没被正确
+调用/生效，还是别的传播（propagation）问题；`liaison.log` 27 行、`launchd.err.log`
+2.4 MB 且持续增长是硬证据，⛔ 单测大概率覆盖不到（要跑真实 `main()` 才会暴露）。
+
+**为什么是合规相关，不只是"日志放错文件"**：
+1. `launchd.err.log` **无轮转、无容量上界、无 `HR_LIAISON_LOG_RETENTION_DAYS` 清理**——
+   `logsetup.py` 模块 docstring 整段讲的"脱敏必须挂在 handler 上"防线，对这条路径
+   **完全不设防**。
+2. SDK 自带的 `Received push message` 调试回显**把消息正文原样打了出来**——这不是本项目
+   代码主动记录的（`handle_message_frame` 自己只打「帧结构，无取值」），是 SDK 库自己的
+   `DEBUG` 级日志经这条未脱敏管道流出去的。
+3. 登记时 `launchd.err.log` 已 2.4 MB——**服务从何时开始产生这个文件、之前是否已经
+   积累了别的真实消息内容，未查**（本条只查了本次两条消息的落点，没有逐行核旧内容）。
+
+**不还的后果**：只要值守服务在跑，**每一条真实企微消息的原文都会以明文落进一个
+不受管理、不会被清理、当前已 2.4 MB 且还在长的本地文件**——与「模型全部走境内、
+简历数据不出境」同类但更基础的一条：这条连"境内"都谈不上，是**本地磁盘上就已经
+不设防**。
+
+**还债动作（下一手，⛔ 本条只登记、不动手改）**：
+1. `SdkLogObserver` 构造时补 `delegate=logging.getLogger(...)`（挂到
+   `tools.liaison` 包级或专用子 logger），让 SDK 日志重新流回 `logsetup.py` 管的
+   handler；
+2. 查清 `handle_message_frame` 的 `logger.error` 为什么也落进了 `launchd.err.log`
+   （`setup_logging()` 调用时机／`propagate` 设置／launchd plist 是否把 stderr
+   和某个 logging handler 指向了同一描述符）；
+3. **`launchd.err.log` 现存的 2.4 MB 内容如何处置**——含真实消息原文，是否需要
+   连同这条修复一起清理／归档／限定访问，**这一步涉及已经产生的真实个人信息，
+   不由本条代办，需 Shao Peishen 本人定**。
