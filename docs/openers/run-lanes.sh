@@ -574,6 +574,12 @@ run_lane() {
     IFS=$'\t' read -r lmodel lsrc <<< "$(resolve_model "$body")"
     [[ "$lmodel" == INVALID ]] && lmodel="$DEFAULT_MODEL"   # 预检已拒跑；这里只防御
     args+=(--model "$lmodel")
+    # 无头泳道不加载 MCP（2026-09-16 Token 治理 Phase 5，[Mac]0916H）：77 份历史泳道日志里 MCP 调用 0 次
+    # （唯一命中是 set_session_title 字样，无头块本就豁免该工具）。P5 实测 MCP 定义约占首轮 1.5k token。
+    # 真有泳道要用 MCP 时，在该 opener【设置】行写「MCP: on」即不加本参数。
+    if ! printf '%s\n' "$body" | grep -m1 '【设置】' | grep -qE 'MCP(:|：)[[:space:]]*on'; then
+      args+=(--strict-mcp-config)
+    fi
     echo "model=$lmodel（$lsrc）subagent=$SUBAGENT_MODEL" >> "$log"
 
     ( cd "$REPO" && printf '%s\n%s\n' "$HEADER" "$body" | CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) >> "$log" 2>&1
