@@ -9,22 +9,7 @@ from __future__ import annotations
 import pytest
 
 from tools.liaison.notify import ratelimit
-
-
-class FakeClock:
-    """单调钟 + sleep 的假体。`sleep` 直接把钟推到未来，⛔ 不真等。"""
-
-    def __init__(self) -> None:
-        self.now = 1000.0
-        self.slept: list[float] = []
-
-    def monotonic(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        assert seconds >= 0, f"⛔ 不许睡负数：{seconds}"
-        self.slept.append(seconds)
-        self.now += seconds
+from tools.liaison.tests.conftest import FakeClock
 
 
 @pytest.fixture

@@ -1189,13 +1189,7 @@ docstring 已写明。`test_queue_status.py` 有 2 条用例守着（换 `thread
 ② `sent_at` 从微秒降到秒级（与 `created_at` 的 `datetime('now')` 对齐的必然结果），
    同一秒内多条通知在 `sent_at` 上不再可分辨，排序另有 `thread_id, digest` 兜底。
 
-## TD-29 第 6 章包边角：再导出面不对称、死代码、测试脚手架三处复制粘贴、异常文案错位 🟡 部分已还（5ca1f50）
-
-> ⏸ **剩余两条的排期已裁定（Shao Peishen 2026-09-10 答 `4a`）：下一批泳道单独派一条**
-> 「liaison 测试脚手架收编 ＋ `config.py` 文案」，独占 `tools/liaison/tests/` 与 `tools/liaison/config.py`。
-> ⛔ 不挂进 8.6 灰度前置（选项 b 未采纳）、⛔ 不留着不做（选项 c 未采纳）。
-> 判据＝`conftest` 收编完成，且 `config.py:75` 不再复用 `MissingCredentialsError`
-> （④ 原症状：服务正常运行时运维会收到一句说「拒绝启动」的告警）。⏸ 待派发。
+## TD-29 第 6 章包边角：再导出面不对称、死代码、测试脚手架三处复制粘贴、异常文案错位 ✅ 已还（`0916E`）
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **级别**：不阻塞第 6 章，全部是可读性/可维护性
@@ -1232,19 +1226,20 @@ docstring 已写明。`test_queue_status.py` 有 2 条用例守着（换 `thread
    概念的两个成员，只导一个正是本条要消灭的那种不对称。口径已写进包 docstring：
    一个概念的全部成员一起导出，⛔ 不许只导一半。
 2. ✅ `guard.py` 的 `NotifyPlan.is_send` 死代码已删（删前复查全仓零引用，含测试）。
-3. 🟡 **只还了一半**：`test_notify_store.py` 两条漏调的 `assert_group_notify_identity(conn)`
+3. ✅ `test_notify_store.py` 两条漏调的 `assert_group_notify_identity(conn)`
    已补齐（`test_effect_key_is_thread_node_digest` / `test_pending_resends_are_listable`），
-   九条写库用例现在全数自带恒等判据。
+   九条写库用例现在全数自带恒等判据。测试脚手架三处复制粘贴的收编见下方 `0916E`。
 
-**仍欠两条**（⏸ 留步，均因触碰区不在本泳道 `0909AL` 手上，⛔ 不越界改别人正在动的文件）：
-- ⏸ **③ 的 conftest 收编**：`FakeClock` / `RecordingSink` / `FAKE_WEBHOOK` 三处复制粘贴仍在。
-  `tools/liaison/tests/conftest.py` 是**全 liaison 测试共享**的文件，同批还有别的泳道在改
-  同目录的测试；本泳道的守区只到 `test_notify_*.py`。**触发条件**：下一次由单一泳道独占
-  `tools/liaison/tests/` 时顺带做。
-- ⏸ **④ `config.py:75` 的异常文案错位**：`load_group_webhook` 仍复用 `MissingCredentialsError`，
-  运维在服务正常运行、只是群通知发不出去时，仍会收到一句说"HR 值守通道**拒绝启动**"的告警。
-  `tools/liaison/config.py` 不在本泳道守区。**触发条件**：8.6 灰度真发之前——那正是这句
-  错误文案最可能被念出来的时刻。
+**仍欠两条已还**（`0916E`，Shao Peishen 2026-09-10 答 `4a`：单独派一条泳道独占
+`tools/liaison/tests/` 与 `tools/liaison/config.py`）：
+- ✅ **③ 的 conftest 收编**：`FakeClock` / `RecordingSink` / `FAKE_WEBHOOK` 三处复制粘贴收进
+  `tools/liaison/tests/conftest.py`，`test_notify_ratelimit.py` / `test_notify_store.py` /
+  `test_notify_webhook.py` / `test_notify_transport.py` 改为从 conftest 导入。
+- ✅ **④ `config.py:75` 的异常文案错位**：新增 `GroupWebhookMissingError`（`errors.py`），
+  `load_group_webhook` 改抛它而不是 `MissingCredentialsError`，消息改为准确描述
+  "群通知发送地址缺失，本次群通知跳过发送"，⛔ 不再含"拒绝启动"字样。调用方
+  `followup.py:217` 与 `notify/webhook.py` 文档同步；`test_notify_transport.py` /
+  `test_notify_webhook.py` 涉及的用例改断言新异常类型。
 
 ---
 
