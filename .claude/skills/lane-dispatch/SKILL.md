@@ -165,6 +165,27 @@ python3 /Users/paulshao/Projects/HumanResource/scripts/install_lane_launcher.py
 > 完整可整块复制的，不要让他拼接片段、更不要让他自己去文件里找。
 > **把 `[Mac]MMDDZ-泳道批次看护` 的 4 行引用块贴进回话里，正文在 `docs/openers/MMDDZ-泳道批次看护.md`。**
 
+#### 🔴 看护正文的「等待」一律交给 `wait-lanes.sh`（2026-09-16 Token 治理 Phase 1，`0916B`）
+
+P0 账本：看护 11 会话 837 次调用 $60，`0904Z` 峰值上下文 352k——根因是正文写「每 3–5 分钟查一次」，每查一次就是模型一轮，
+每轮重读全部历史。**等待不需要模型**。看护正文的盯守节一律照下面写，⛔ 不再照抄旧件的轮询节：
+
+```
+【六、盯守】循环调用（Bash 工具 timeout 设 600000）：
+  bash docs/openers/wait-lanes.sh --pid <PID> --logdir <日志目录>
+按返回处置，⛔ 两次调用之间不做任何额外查询（不 cat results.tsv、不 ls *.log、不 ps、不 git status）：
+- HEARTBEAT（退出码 3）→ 什么都不说，直接再调一次
+- CHANGE → 只对新增的那几条判：OK/PARTIAL 记一行继续调；FAIL/NO-SENTINEL/BUDGET-HIT → `tail -50 <该条日志>` 判真失败还是漏哨兵（⛔ 不读全文）
+- ROUND → 用新目录继续调（--logdir 换成打印的新目录）
+- EXITED → 进入真身核验节
+- WARN 529 → 按本批预案；WARN index.lock → 只记进报告，⛔ 不删
+```
+
+- 看护会话模型用 **Sonnet**：【设置】行末尾加 `｜ 模型: Sonnet`（看护是判状态、跑固定核验，不是架构推理；P0 里 `0909Z` 用 Opus 跑看护花了 $9）
+- 真身核验节里的 `git log` 带 `-n`，读日志一律 `tail -50`
+- **机器闸**：`tests/test_caretaker_openers.py` 要求新的 `*泳道批次看护*.md` 含 `wait-lanes.sh` 且无「每 N 分钟查」字样；
+  看护者开跑前的 pytest 基线会跑到它，不过即不发车。⛔ 不许往该测试的 LEGACY 里加新文件绕过
+
 贴出去之前，**把那块里的预期值改成本批的**——这些值是上一批的，不改就等于没核：
 
 | 要改的地方 | 改成什么 |
