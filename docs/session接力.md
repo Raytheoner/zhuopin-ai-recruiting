@@ -58,7 +58,7 @@
   另有 `?? _to_delete/`（⛔ 不 add、⛔ 不删）。与 origin ahead/behind 均 0。
 - 🔢 **号池台账已迁到 `docs/openers/号池台账.md`**（2026-09-16），历史月份在 `docs/openers/归档/号池台账-归档.md`。
   ⛔ 不要再往 `OP-0820` 顶部那张旧表登记。已用到 **`[Mac]0917B`**；`0917C`／`0917D` 本轮派出，
-  `0917E`–`0917H` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917I`**。
+  `0917E`–`0917J` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917K`**。
 - 其余包：`hr-wecom-aibot-liaison` **63/67**（剩 8.6–8.9 灰度四条，他亲自）；
   `m1-intake-quality-fixes` 68/69；`m1-job-profile-intake` 60/72；`lane-launch-armed-scan` 0/35（**已裁定搁置**）。
 
@@ -67,8 +67,9 @@
 | # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
 |---|---|---|---|---|---|
 | **R-1** | `[Mac]0917C` 转场落档提交 | CC | ✅ **已完成**（`73a5be2`，已推，ahead/behind 0；`tasks.md` 抬头已是 27/33） | — | — |
-| **R-2** | **3.2 章程接入生产路径**（`charter.py` 代码早已交付，缺的是 `__main__.py`／`dispatch_wiring.py` 仍各持副本）＋ 顺手还 TD-45 ＋ design D4 常量名 | 编排文件泳道「第十七批收尾重发」：`[Mac]0917G`（体积闸归档落档提交，main）→ `[Mac]0917H`（worktree `lane-0917h-charter-wiring`，单条 TDD）。首发 `0917E`/`0917F` 已作废（E 撞 tech-debt 体积闸未提交，F 前置正确停下零改动） | ✅ **已完成**（`59e9a78`，TDD：`dispatch_wiring.bridge_dispatch` 改用 `charter.read_charter`/`charter.compute_prompt`，`letter_number=None` 时从信号文件按 msgid 补查；顺手还 TD-45；design D4 常量名同步） | `tasks.md` 28/33 ＋ `grep P2-TODO\|CHARTER_RELPATH` 生产代码零命中 ＋ `rev-list`/`cherry` 真合 | §5 验收待 Shao Peishen 本人真实起活实测 |
-| **R-3** | §5 五条真实起活实测 | 🔴 **Shao Peishen 本人**（重启真实服务、等真实入站、请人发消息） | ⏸ 等 R-2 | 5.1–5.5 全勾，实测记录落 `docs/findings/` | 本包归档不了；「打标即开班」仍只在单测层面成立 |
+| **R-2** | 3.2 章程接入生产路径 ＋ TD-45 ＋ design D4 常量名 | `[Mac]0917G`→`[Mac]0917H` | ✅ **已完成**（`59e9a78`＋`9e510d1`，已 ff 合入并推；tasks 28/33；生产代码 P2-TODO/CHARTER_RELPATH 零命中） | — | — |
+| **R-2b** | 全量 pytest 残留 1 红：`tests/test_run_lanes_model.py::test_worktree_lane_runs_inside_script_created_worktree`（疑泳道环境 `HR_LANE_*` 泄漏，未证） | `[Mac]0917I` 无头泳道 | 🚀 **2026-09-17 07:20 发车**（Shao Peishen 答 `1a`） | 全量 pytest 0 失败、run-lanes.sh 零改动、TD 登记已还 | 全量测试长期带 1 红，新失败混进来分不出 |
+| **R-3** | §5 五条真实起活实测 | `[Mac]0917J` 无头泳道（他不在 Mac 旁，Cowork·0917D 经 launchd 远程发车；5.4 需他本人手机发一条消息） | 🚀 **排在 `0917I` 收敛后发车**。5.1/5.2/5.4 本 session 可做；5.3 等汤丽萍真实入站 | 5.1–5.5 全勾，实测记录落 `docs/findings/`，当场归档 | 本包归档不了；「打标即开班」仍只在单测层面成立 |
 | **R-4** | 汤丽萍解锁 | — | ✅ **已解锁**（§0 的 0.3 已勾＝真实入站已落库一条） | — | — |
 | **R-5** | `hr-wecom-aibot-liaison` 8.6–8.9 灰度四条 | Shao Peishen 本人 | ⏸ 等本包 §5 | 四条全勾并归档 | 值守通道停在「代码齐、没真用过」 |
 
