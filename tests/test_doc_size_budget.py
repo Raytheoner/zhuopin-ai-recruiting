@@ -11,9 +11,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 LIMITS_KB = {
-    # 0916D 两遍归档后仍超（116→65 KB，剩余大段全是真实在途工作，见路线图 Phase 3 状态行）
-    # ⇒ 按 §四.4 预案暂调至「当前 66 KB 向上取整 + 5」，⛔ 后续不得再无理由上调。
-    "docs/session接力.md": 71,
+    # 0916G 归档后 69→53 KB，剩余大段仍是真实在途工作（09-09/09-10 的悬置事项、约束清单）
+    # ⇒ 按 §四.4 预案调至「当前 53 KB 向上取整 + 5」＝ 58，见路线图 Phase 3 状态行。
+    "docs/session接力.md": 58,
     "docs/openers/OP-0820-全量编排.md": 60,
     "docs/openers/号池台账.md": 60,
 }

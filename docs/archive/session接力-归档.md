@@ -384,3 +384,161 @@ SIGINT），事后证明不是多虑——45009 在第 44 秒就到了。
 `liveness` 翻转时延，人眼算不出）。⛔ 这条**不覆盖**凭据、对外发送、CLAUDE.md 不可代项。
 
 ---
+
+
+<!-- 〔归档工具〕 2026-09-16 搬入：🆕 【已闭环】`[Mac]0910A` 全部跑完——AT-1b ＋ TD-42 真实验证 ＋ 顺带修了 TD-44（20 -->
+
+## 🆕 【已闭环】`[Mac]0910A` 全部跑完——AT-1b ＋ TD-42 真实验证 ＋ 顺带修了 TD-44（2026-09-16 14:2x，`[Mac]0916D`）
+
+- **AT-1b ✅**：`tools/liaison/frames.py` 的 `FIELD_PATHS` 已用两条真实企微消息（群 @ ＋ 私信）
+  的帧结构填上，`thread_id` 按 `chattype` 分叉（design.md D6：私聊取 `userid`、群聊取 `chatid`，
+  私聊帧没有 `chatid` 键，单一路径表达不了，单独用 `THREAD_ID_PATHS_BY_CHATTYPE`）。轮 2 私信
+  验证：`liaison_message` 由 0 变 1（`msgid=2a376681026302c7c9343bdf78aac10f`，
+  `sender_userid=thread_id=ShaoPeiShen`，`received_at=2026-09-16T13:55:09+08:00`），`liaison_task`
+  同步 +1。`tasks.md` 0.3 已勾，`docs/tech-debt.md` TD-43 已销账。commit `fa4c17a`。
+  同一批另发一条群消息（约 13:55）10+ 分钟未落库、日志无痕迹——连接全程正常，判为企微群
+  回调侧偶发问题、非代码缺陷，已登记观察记录（TD-43 条目末尾），不升级、不阻塞。
+- **顺带发现并修了 TD-44**（合规相关）：`__main__.py` 以 `python -m tools.liaison` 启动时
+  `logging.getLogger(__name__)` 解析成字面量 `"__main__"`，脱离 `tools.liaison` 包 logger 层级，
+  ERROR/WARN（含 SDK 自带、带消息原文明文的 DEBUG 回显）全部绕开 `logsetup.py` 的脱敏与轮转，
+  直接落进未脱敏、无容量上界的 `launchd.err.log`（登记时已 2.4 MB）。已改成字面量 logger 名 ＋
+  `SdkLogObserver` 补 `delegate`，两条 AST 回归测试钉死。commit `8f6e53a`。
+  `launchd.err.log` 现存内容**按他裁定（答 `1b`）先留着、交下一个任务清理**，登记在 TD-44。
+- **TD-42 真实验证 ✅（2026-09-16 14:13–14:27 CST）**：0910A 正文【四】9 分钟自动化断网脚本
+  跑完，六项判读全过（判死/看门狗判定/终止退出码5/告警行/pid 由 41272 变 44355/复网自愈），
+  `watchdog.json` `consecutive:1`。`docs/tech-debt.md` TD-42 已改「✅ 真实验证 2026-09-16 14:27 CST」，
+  `tasks.md` 0.1 已勾。
+- **§0 门槛：0.1／0.2／0.3 全勾**——`liaison-reply-bridge-and-patrol` 可以开工，
+  P0→P1→P2→P3 四条 worktree 泳道，交下一轮泳道看护编排（各条 plan 文件尚未出，
+  仍要先走 `spec-to-plan`）。
+
+---
+
+
+<!-- 〔归档工具〕 2026-09-16 搬入：🆕 【已闭环】2026-09-16 两条裁决 ＋ `[Mac]0910A` 已派发（`[Mac]0916D`） -->
+
+## 🆕 【已闭环】2026-09-16 两条裁决 ＋ `[Mac]0910A` 已派发（`[Mac]0916D`）
+
+- **`lane-launch-armed-scan` 搁置**（答 `2b`）：维持现有 launchd 请求文件路，⛔ 不投入实现。裁定已写进
+  `openspec/changes/lane-launch-armed-scan/proposal.md` 顶部——本提案前提（`AbandonProcessGroup`／`PATH`
+  缺失致请求文件路不可靠）已在 `496f55e` 修复，`[Mac]0916E` 当天实测请求文件路 6 秒内 `.started`，问题未复现。
+  若再次出现「写了但拦下 / 不触发」，回来重启本提案，⛔ 不代表设计被否定。
+- **`[Mac]0910A` 已贴引用块**（答 `1a`）：TD-42 真实验证 ＋ AT-1b 真实入站落库，主工作区、worktree ❌，
+  需他本人发两条企微消息（群 @ 一条 ＋ 私信一条）。这是解开 `liaison-reply-bridge-and-patrol` §0 门槛
+  （0.1／0.3）、进而重开后续全部泳道的唯一动作。跑完后 `docs/tech-debt.md` TD-42 应见 `✅ 已还`、
+  `openspec/changes/liaison-reply-bridge-and-patrol/tasks.md` 0.1／0.3 应勾。
+
+---
+
+
+<!-- 〔归档工具〕 2026-09-16 搬入：🆕 【已闭环】`0913A` 已跑完（门槛 0.2 ✅）＋ 🔴 `0910A` 的 AT-1b 必须改两轮（2026-0 -->
+
+## 🆕 【已闭环】`0913A` 已跑完（门槛 0.2 ✅）＋ 🔴 `0910A` 的 AT-1b 必须改两轮（2026-09-13 23:4x，Cowork·0909AU）
+
+### 二、🔴 它留下的东西会让 `0910A` 在**完全正常的第一轮**停死
+
+`tools/liaison/frames.py:72` 的 **`FIELD_PATHS` 是空的**，`compute_inbound_frame` **一律抛**
+`InboundFrameUnverifiedError` ⇒ `__main__.py:216` 走 **fail-closed：本帧不落库**，只把帧的**键结构**
+（只有键名与类型、⛔ 无取值）打进日志。**这是刻意终态，不是缺陷**，已登记 **TD-43**。
+
+*为什么这样设计*：`msgid` / 发送人 userid / 会话 id 落在帧的哪个键上，SDK 源码里一处都查不到
+（`body` 类型就是 `Any`，SDK 自己只读 `body["msgtype"]` 与 `headers["req_id"]`）。猜错 ⇒ `thread_id`／`msgid`
+落成错值 ⇒ 幂等键错 ⇒ 归档互相覆盖、或同一条消息永远重复入队，而**没有任何症状**。
+
+⇒ **门槛 0.3「一条真实入站落库」在当前代码下一轮做不到。** 而 `0910A` 原正文【三】写的是
+「30 秒后计数仍 ＝ 0 ⇒ 🔴 停下报」，【五】还写着「⛔ 不改任何产品代码」——两条合起来把唯一出路也堵死了。
+**这是同一族的第三次**（前两次：`git log -3` 深度判据、预占号）：**判据写成了会随系统状态变化的形状。**
+
+✅ **已订正 `0910A` 正文**（未提交，主工作区 session 直接可读）：AT-1b 改成**两轮**——
+轮 1 取帧结构（**必然 0 行，⛔ 不许当故障**）→ 填 `FIELD_PATHS` ＋ 先红后绿单测 ＋ 销 TD-43 ＋ 重启 → 轮 2 才验 0→1。
+【五】放开「只许改 `frames.FIELD_PATHS` 与其单测」这一处；【六】回填改成勾 **0.3**（8.5bis 与 0.2 已由 `0913A` 勾，⛔ 不重勾），
+TD-42 销账行的日期改成**实跑取当天**（原写死 09-10）。
+
+🔴 **轮 1 要他发两条：群 @ 一条 ＋ 私信一条。** 群与单聊的帧里会话标识很可能落在**不同的键**上
+（群是 chatid、单聊是 userid），只拿一种就填表，另一种会在真回灌时**静默失配**。私信那条还有独立价值：
+单聊 chatid 只有对方先私信过才存在（第 4 章附件归档链路只能在带附件的私信上验，TD-22）。
+
+### 三、值守进程现在跑的仍是旧代码
+
+`data/liaison/liveness.json` **没有 `last_event_at` 键**（`state=connected`、`since` 2026-09-13 19:19）
+⇒ 跑的是 TD-42 修复（`20a2848`）**之前**的进程，自然也没有 message 接线。
+日志里 `grep -c "帧字段映射未经真实帧确认"` ＝ **0**，与此一致。`0910A` 的【二】重启后该键必须出现。
+
+---
+
+
+<!-- 〔归档工具〕 2026-09-16 搬入：🆕 【已闭环】`0910A` 派号未落档 → 接手 session 扑空（2026-09-10 11:4x，云端 CC  -->
+
+## 🆕 【已闭环】`0910A` 派号未落档 → 接手 session 扑空（2026-09-10 11:4x，云端 CC `[Mac]0910A` 落档）
+
+> 🔴 **2026-09-10 13:5x 更新（Cowork·0909AU）：AS-1／AS-1b 均已就位，本段其余内容留作判据由来。**
+> **派发链＝ `[Mac]0910F` → `[Mac]0910B` → `[Mac]0910A`，三条串行、⛔ 不可并行。**
+>   - `0910F`（**引用式**，正文 `docs/openers/0910F-落档提交与解两把git孤儿锁.md`，worktree ❌）＝落档提交 ＋ 删 **两把** `.git` 孤儿锁（`ORIG_HEAD.lock` ＋ `index.lock`，见下方 ④）
+>     ＋ 给 CLAUDE.md「git 相关只能在 CC」那条补一句 Cowork `git status` 会埋锁。
+>     🔴 **必须排在 `0910B` 之前**：`index.lock` 挡住一切 commit、`ORIG_HEAD.lock` 挡住 merge ⇒ `0910B` 收工合回 `main` 会当场失败。
+> - **`0910F` 的 `git add` 是六条路径**（含它自己的正文文件 ＋ H-5 的 `docs/跟进信/README-跟进信清单.md`），清单以正文【三】为准，⛔ 别按聊天里早先那版四条／五条抄。
+> - ~~`0910B`（引用式，worktree ☑）＝AT-1a 接线~~ ✅ **已跑完（2026-09-10，commit `7636613`）**：七件事中 ①②③④⑥⑦ 落地并有测试守护，⑤ 帧字段映射走 fail-closed（TD-43）。⛔ **不表示入站已通**——真实入站落库一条仍归 AT-1b／`[Mac]0910A`。
+> - `0910A`（引用式，worktree ❌，主工作区）＝TD-42 真实验证 ＋ AT-1b 真实入站，**正文已重写并改名**为
+>   `docs/openers/0910A-TD42真实验证与AT1b真实入站.md`（随 `0910F` 提交）。
+>
+> 🔴 **`[Mac]0910A` 的引用块（`0910F` 提交完成后才可贴，⛔ 提交前不许贴）** —— 依据 kickoff skill
+> 「被引文件必须与派号同一次 commit 落档」：正文与号池行都还在未提交状态，此刻贴出去接手方 `git show` 不到。
+>
+> ```
+> [Mac]0910A-TD42真实验证与AT1b真实入站
+> 【设置】执行环境: CC ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（要用主工作区的 .env、tools/liaison/.venv 与真实库 data/liaison.db，还要重启真实值守服务）｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）｜ 派发: Cowork·HR业务线-接力0909AU
+> 开工第一件事：调 mcp__ccd_session_mgmt__set_session_title（session_id 传字面量 "self"），标题：[Mac]0910A-TD42真实验证与AT1b真实入站
+> 第二件事：读 docs/openers/0910A-TD42真实验证与AT1b真实入站.md 全文并逐节执行，本 session 的全部指令以该文件为准。文件不存在、或其首行编号与本块不一致 → 停下报我，⛔ 不要凭标题猜任务
+> ```
+>
+> ⚠️ **贴之前先确认 `[Mac]0910B` 已合回 `main`**（`0910A` 门槛第 2 条会自己再核一遍：`SUBSCRIBED_EVENTS` 必须含 `message`）。
+>
+> 🔴 **2026-09-10 13:4x 现场实测三条（`0910A` 的开工依据）**：
+> ① 值守进程自 09:38:26 起 `state=connected`、`stamp_at` 每 30 秒推进，但 `liveness.json`
+> **没有 `last_event_at` 键** ⇒ 跑的是 `20a2848`（TD-42 修复）**之前**的旧进程，新判据根本没上场；
+> ② `data/liaison.db`：`liaison_message` ＝ **0**、`liaison_task` ＝ **0**、`effect_log` ＝ 15；
+> ③ `.git/ORIG_HEAD.lock` **仍在**（0 字节、mtime 2026-09-10 07:54 CST），孤儿锁判据①② 已成立，③ 须在 macOS 侧现场核。
+>
+> 🔴 **④ 新查明：`.git/` 下现有 **两把** 孤儿锁，且 Cowork 一把都删不掉。**
+> `.git/ORIG_HEAD.lock`（0 字节，mtime 2026-09-10 **07:54** CST）＋ `.git/index.lock`（0 字节，mtime 2026-09-10 **13:52** CST）。
+> **成因已实证：Cowork 侧每跑一次 `git status`，git 都会新建 `.git/index.lock`，随后 `unlink` 被拒**
+> （`warning: unable to unlink …/.git/index.lock: Operation not permitted`），锁就此留下；
+> Cowork 自己 `rm` 同样 `Operation not permitted`。⇒ **这是 Cowork「对 `.git/` 只能写不能删」的直接后果，
+> 不是别的 session 在用锁**，且**全程不报错**——直到 Mac 侧下一次 commit／merge 当场失败为止（`0909AS` 撞的就是这个）。
+> ⚠️ 判据②「mtime > 10 分钟」对 `index.lock` **本次不成立**（刚生成），但**持锁方身份已确定**＝本 Cowork VM 的 `git status`，
+> ⇒ `[Mac]0910F` 按 `docs/findings/2026-08-26-index-lock-孤儿锁判据.md` §3 **三项判据**在 macOS 侧现场核一遍，核过再删。
+> 🔴 **§5 的 VM 补充判据（`PPID = 1`）本次给不出结论**——那正是 §5 末句写的「VM 活着但 VM 内 git 已死」形态，其处方是**进 VM 里查**。
+> ✅ **已查**：Cowork·0909AU 2026-09-10 13:5x 在该 VM 内实测四条——`pgrep -x git` **空（exit 1）**；`ps | grep -i git` **零命中**（连误报都没有）；
+> 扫 `/proc/*/fd/` **无任何进程持有这两把锁**；VM 内进程总数 **7 个**（`bwrap`／`bash`／`socat`×2／`bash` ＋ 采样的 `ps`/`head`）。
+> ⇒ **VM 侧那一半已闭**：`PPID ≠ 1` 在本次只说明「Cowork 会话还开着」，⛔ **不说明 VM 内有活着的 git**，⛔ 不要卡在那一步。
+> 📌 **顺带的操作纪律**：Cowork 侧**能不跑 git 就不跑**，尤其 `git status`——每跑一次就给 Mac 侧埋一把锁。
+>
+> 🔴 **⑤ `[Mac]0909AR` 的【三】已作废（Cowork·0909AU 2026-09-10 查出），⛔ 不要再跑那一节。**
+> 两条理由，各自独立成立：
+> ① **触碰区撞车**——【三】要提交 `docs/openers/OP-0820-全量编排.md` 的未提交尾巴，而 `[Mac]0910F` 正是提交它的那一条（且带内容改动）。谁后跑谁扑空。
+> ② **在 worktree 里物理上做不到**——`0909AR` 的【设置】是 worktree ☑，而【三】操作的是**主工作区**的未提交改动；
+> worktree 与主检出共用 `.git` 但**各有各的工作树**，主检出未提交的改动在 worktree 里根本看不见（`0909AJ`／`0909AH` 立过的同一条判据）。
+> ⇒ `0909AR` **只跑【一】【二】**（TD-29 剩 2 条 ＋ 名单外归档口径订正），`OP-0820` 的提交归 `0910F`。
+> 派发 `0909AR` 时**在引用块里补一句**「⛔ 跳过【三】，OP-0820 已由 `[Mac]0910F` 提交」。
+
+
+
+
+`[Mac]0909AS` 跑完 TD-42（`20a2848` 修复 ＋ `32d0cbc` 销账，两条**均已在 `origin/main`**）后，在聊天里派出 `[Mac]0910A`，
+且派的是**引用式 opener**（正文指向 `docs/openers/0910A-解锁追平与TD42真实验证.md`——⚠️ **该文件名已于 13:5x 作废改名**，见本段顶部更新块），
+但**那个文件从未创建**，号也**没登记进 `OP-0820` 号池台账** ⇒ 接手的云端 CC session 读不到正文，
+按 CLAUDE.md「文件不存在、或其首行编号与本块不一致 → 停下报我，⛔ 不要凭标题猜任务」停下，**零改动、零提交**。
+
+⚠️ **顺带查明：`0910A` 那三条 worktree 理由在云端容器一条都不成立**——
+① 无 `.git/*.lock`（全新克隆，没有孤儿锁可删）；
+② `origin/main` 早已 ＝ `32d0cbc` ＝ 接手分支 HEAD，**远端无需追平**，只有容器里没人用的本地 `main` ref 落后 5 个提交；
+③ 无 `.env`、无 `tools/liaison/.venv`、不在内网 ⇒ **真实服务起不来**。
+**TD-42 真实验证只能在 Mac 主检出做**（`0909AJ` 已立判据「必须在主工作区，worktree 里没有 `.env`」，云端容器比 worktree 还远一层）。
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| **AS-1** | `[Mac]0910A` 正文落档后重开同号 —— ✅ **正文已由 Cowork·0909AU 重写并改名**为 `docs/openers/0910A-TD42真实验证与AT1b真实入站.md`（原名含「解锁追平」，那两步已不成立：锁交 `0910F`、`main` 已追平），提交交 `[Mac]0910F` | **Mac Desktop CC**（⛔ 云端 CC 做不了，见上方三条。⚠️ 答 `1a` 的「正文现场给」已由 Cowork 代写掉，他只需贴引用块） | ✅ **正文就位**；⏸ 待 `0910F` 提交 ＋ `0910B` 合回 `main` 后派发 | ✅ 判据已随改名订正：该文件存在、首行 ＝ `[Mac]0910A-TD42真实验证与AT1b真实入站`（⛔ **不再是**旧名 `…-解锁追平与TD42真实验证`，那份已挪进 `_to_delete/`）；`liaison_message` 由 0 变 1（AT-1b）；TD-42 断网六项判读跑完并回填 `docs/tech-debt.md` 或落 `docs/findings/`。**答 `1b` 的「串行接 AT-1」已按答 `1a` 拆成：AT-1a ⇒ `0910B`、AT-1b ⇒ 本号**，worktree 矛盾**已解**，⛔ 不再是待决项 | TD-42 真实验证继续悬着 ⇒ `docs/tech-debt.md` TD-42 那条「⛔ 在它还上**并真实验证通过**之前，不得再请任何专员发消息」一直挂着，汤丽萍发的每一条继续静默落空（**截至 2026-09-10 已白发 4 条**） |
+| **AS-1b** | 主工作区两份**未跟踪**的旧稿 opener 处置：`docs/openers/0910A-解锁追平与TD42真实验证.md`（`0909AS` 出，号池 0910A 行仍写「正文未写」）＋ `docs/openers/0910B-SDK消息事件接线.md`（`0909AS` 出的旧稿，与已跟踪正本 `0910B-SDK-message事件接线.md` **同题不同名**） | ~~`[Mac]0910A` 接手时自决~~ ⇒ **Cowork·0909AU 已代办**（2026-09-10 13:5x） | ✅ **已处置**：两份旧稿均已 `mv` 进 `_to_delete/0910旧稿-20260910/`（Cowork 删不了文件，只能挪），`docs/openers/` 下 `0910*` 只剩 `0910B-SDK-message事件接线.md` 正本 ＋ `0910A` 新正文 | `0910A` 正文：要么提交它并把号池 0910A 行「正文未写」改掉，要么删掉重写；`0910B` 旧稿：**删**（正本已在 `main`）。`git status` 里这两份不再出现 | 两份同题 opener 并存，下一个人贴错一份就白跑一轮（`0910C` 撞号已演过一次） |
+| **AS-2** | **引用式 opener 的被引文件必须与派号同一次落档并提交**——`docs/openers/<MMDDX>-<主题短名>.md` ＋ `OP-0820` 号池台账两处同时写 | 所有派发方（CC／Cowork 两端同等适用） | ✅ **已写进真源**（2026-09-10 答 `1a`）：`.claude/skills/kickoff/SKILL.md`「引用式 Opener」段新增判据「被引文件必须与派号同一次 commit 落档」＋ 本次实证 | 派号的那一条 commit 里同时出现 opener 正文文件与号池台账行；接手 session 不再出现「引用式 opener 指向不存在的文件」 | 引用式 opener 退化成**死链**：接手方既读不到正文、又在台账里查不到号 ⇒ 下轮必被重派或再扑空，且**全程不报错**（08-27 撞号 5 次是同一根因的第一次发作，本次是第二次） |
+
+---
