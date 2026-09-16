@@ -820,6 +820,32 @@ def test_load_whitelist_names_does_not_break_load_whitelist_when_name_is_blank(t
     assert load_whitelist_names(path) == {}
 
 
+def test_load_whitelist_names_blank_name_error_is_covered_by_td15_dedup(tmp_path, caplog):
+    """TD-15 覆盖面回归：`load_whitelist_names()` 里"name 为空"这条 ERROR
+    此前发生在 `failures.finish()` 之后（循环在 try/finally 外面），导致
+    指纹在这条 ERROR 产生前就已经封存——每次调用都重新记一遍，去重形同虚设。
+    修复后循环挪进 try 块内，这条 ERROR 应该和其余失败一样，同一份坏内容
+    连续调用只记一组、第二次起被抑制。"""
+    from tools.liaison.whitelist import load_whitelist_names
+
+    path = write_roster(
+        tmp_path / "whitelist.yaml",
+        [{"userid": "TangLiPing", "name": "", "role": "HR"}],
+    )
+
+    with caplog.at_level(logging.ERROR):
+        assert load_whitelist_names(path) == {}
+        first = len(error_records(caplog))
+        assert first, "第一次必须照记 ERROR"
+
+        assert load_whitelist_names(path) == {}
+        assert load_whitelist_names(path) == {}
+
+    assert len(error_records(caplog)) == first, (
+        "同一份内容的第 2／3 次失败不应再记 ERROR（TD-15）：" + caplog.text
+    )
+
+
 def test_load_whitelist_names_matches_the_shipped_config():
     from tools.liaison.whitelist import load_whitelist_names
 

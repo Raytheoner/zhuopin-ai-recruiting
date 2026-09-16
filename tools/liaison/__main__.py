@@ -280,7 +280,7 @@ def handle_message_frame(
                 thread_id=fields.thread_id,
                 msgid=fields.msgid,
                 sender_userid=fields.sender_userid,
-                sender_name=names.get(fields.sender_userid),
+                sender_name=names.get(fields.sender_userid.strip()),
                 received_at=session.format_instant(moment),
                 content=fields.content,
                 outcome=result.outcome,

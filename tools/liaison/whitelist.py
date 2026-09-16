@@ -261,6 +261,18 @@ def load_whitelist_names(path: Path | None = None) -> dict[str, str]:
     failures = _FailureLog()
     try:
         members = _read_roster_members(path, failures)
+        names: dict[str, str] = {}
+        for userid, raw_name in members:
+            if isinstance(raw_name, str) and raw_name.strip():
+                names[userid] = raw_name.strip()
+            else:
+                failures.error(
+                    "准入名单里 userid=%s 的 name 为空或非字符串，该成员不会出现在姓名映射里"
+                    "（仍出现在 load_whitelist() 的 userid 集合里）：path=%s",
+                    userid,
+                    path,
+                )
+        return names
     except Exception as exc:  # noqa: BLE001
         frames = "; ".join(
             f"{frame.filename}:{frame.lineno}:{frame.name}"
@@ -280,19 +292,6 @@ def load_whitelist_names(path: Path | None = None) -> dict[str, str]:
         return {}
     finally:
         failures.finish()
-
-    names: dict[str, str] = {}
-    for userid, raw_name in members:
-        if isinstance(raw_name, str) and raw_name.strip():
-            names[userid] = raw_name.strip()
-        else:
-            failures.error(
-                "准入名单里 userid=%s 的 name 为空或非字符串，该成员不会出现在姓名映射里"
-                "（仍出现在 load_whitelist() 的 userid 集合里）：path=%s",
-                userid,
-                path,
-            )
-    return names
 
 
 def admit(sender_userid: Any, path: Path | None = None) -> bool:
