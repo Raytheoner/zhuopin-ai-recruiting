@@ -515,6 +515,20 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "send-followu
     load_dotenv_into_environ(resolve_dotenv_path())
     raise SystemExit(send_followup_main(sys.argv[2:]))
 
+# ── P1·打标即开班：unpack-signal / unpack-dispatch 子命令 ─────────────────
+# ⛔ 又一段**纯插入**：既有入口一字节未动。判据顺序同 cleanup/send-followup——
+# 两条子命令都不需要企微凭据（不建连接），必须短路在 main() 的
+# load_credentials() 之前，否则一台还没配 BOT_ID 的机器测不出这两条命令。
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "unpack-signal":
+    from tools.liaison.unpack.unpack_cli import unpack_signal_main
+
+    raise SystemExit(unpack_signal_main(sys.argv[2:]))
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "unpack-dispatch":
+    from tools.liaison.unpack.unpack_cli import unpack_dispatch_main
+
+    raise SystemExit(unpack_dispatch_main(sys.argv[2:]))
+
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == SELF_CHECK_ARG:
     raise SystemExit(main(self_check=True))
 
