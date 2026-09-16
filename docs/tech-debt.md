@@ -2092,7 +2092,7 @@ SDK 只命名了两个字段——`body.msgtype`（`aibot/message_handler.py:34-
 TD-42「连接假死」的症状**看起来一样**。⚠️ 但两者现在可分辨了：假死时日志**一条 ERROR 都
 没有**，本条则每来一条消息就打一行「帧结构」。⇒ 日志里有帧结构 = 连接是好的、只差这张表。
 
-## TD-44 · `SdkLogObserver` 无 `delegate`，SDK 与本模块的 ERROR/WARN 全部漏进未脱敏、无轮转的 `launchd.err.log` 🔴 未还，级别：合规相关
+## ~~TD-44~~ · `SdkLogObserver` 无 `delegate`，SDK 与本模块的 ERROR/WARN 全部漏进未脱敏、无轮转的 `launchd.err.log` ✅ 已还（本次 commit，级别：合规相关）
 
 **登记**：2026-09-16（`[Mac]0910A` AT-1b 轮 1 实跑时发现）
 
@@ -2138,13 +2138,31 @@ sdk_logger = session_client.SdkLogObserver(
 简历数据不出境」同类但更基础的一条：这条连"境内"都谈不上，是**本地磁盘上就已经
 不设防**。
 
-**还债动作（下一手，⛔ 本条只登记、不动手改）**：
-1. `SdkLogObserver` 构造时补 `delegate=logging.getLogger(...)`（挂到
-   `tools.liaison` 包级或专用子 logger），让 SDK 日志重新流回 `logsetup.py` 管的
-   handler；
-2. 查清 `handle_message_frame` 的 `logger.error` 为什么也落进了 `launchd.err.log`
-   （`setup_logging()` 调用时机／`propagate` 设置／launchd plist 是否把 stderr
-   和某个 logging handler 指向了同一描述符）；
+**还债动作**：
+1. ✅ **已还**：`SdkLogObserver` 构造时补 `delegate=logging.getLogger(f"{logsetup.PACKAGE_LOGGER_NAME}.sdk")`，
+   SDK 日志重新流回 `logsetup.py` 管的 handler（带轮转与脱敏）。
+2. ✅ **根因已查清，非猜测**：`handle_message_frame` 的 `logger.error` 走的是
+   `tools/liaison/__main__.py:48` 的模块级 `logger = logging.getLogger(__name__)`。
+   **`python -m tools.liaison` 是本模块的真实启动方式**，此时 Python 把
+   `__name__` 绑成字面量 `"__main__"`（与「被 import 时解析成
+   `tools.liaison.__main__`」是两回事）——`"__main__"` 与包 logger
+   `"tools.liaison"` 毫无父子关系，`propagate` 链走到 root，root 无 handler
+   ⇒ 触发 `logging.lastResort`（无格式、无脱敏、直接 print 到 stderr）。
+   与 `setup_logging()` 本身的调用时机／`propagate` 设置／launchd plist 无关。
+   已改成字面量 `logging.getLogger(f"{logsetup.PACKAGE_LOGGER_NAME}.__main__")`，
+   并补两条 AST 回归测试钉死「⛔ 不许再写 `getLogger(__name__)`」——**这正是
+   本条缺陷能活到 0910A 真实消息实跑才被发现的原因**：单测里 `import` 该模块
+   会"看着正确"地解析出包内名字，只有真走 `-m` 入口才会露出问题，常规单元测试
+   测不出来。
 3. **`launchd.err.log` 现存的 2.4 MB 内容如何处置**——含真实消息原文，是否需要
    连同这条修复一起清理／归档／限定访问，**这一步涉及已经产生的真实个人信息，
    不由本条代办，需 Shao Peishen 本人定**。
+
+**处置裁定**（Shao Peishen 2026-09-16 答 `1b`）：先不动这份文件，**登记详情，交下一个任务去清理/归档**，
+⛔ 本条／`[Mac]0910A` 都不执行清理。**登记的详情**：路径 `data/liaison/logs/launchd.err.log`，
+登记时体积 **2,481,263 字节（2.4 MB）**、快照时间 **2026-09-16T04:35:25Z**（`TZ=Asia/Shanghai` 即
+12:35:25 CST）。⚠️ **体积仅覆盖服务本次重启（`[Mac]0910A` §二 `kickstart -k`，11:42:53 CST）之后**——
+该文件本身可能在此之前已存在更久、积累了更早的真实内容，**未逐行核实**，下一手接手时应先查文件
+创建时间／launchd 是否曾经 rotate 过，⛔ 不要假设"2.4 MB 都是今天产生的"。
+清理动作本身仍按"合规相关"处置——含真实个人信息的文件，删除/归档前建议先确认是否需要留痕
+（例如按 §PIPL 说明权的思路，至少记一条"何时因何清理"），而不是直接 `rm`。

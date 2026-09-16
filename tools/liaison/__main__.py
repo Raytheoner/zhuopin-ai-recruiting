@@ -45,7 +45,14 @@ from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
 from tools.liaison.storage import db as liaison_db
 
-logger = logging.getLogger(__name__)
+#: ⛔ **⛔ 不写 `logging.getLogger(__name__)`**（TD-44）：本文件是 `python -m
+#: tools.liaison` 的入口模块，`-m` 启动路径下 `__name__` 是字面量 `"__main__"`
+#: ——与包 logger `"tools.liaison"` 毫无父子关系，`setup_logging()` 挂的
+#: `RotatingFileHandler`/`RedactionFilter` 收不到，记录落进
+#: `logging.lastResort`（无格式、无脱敏，直接 print 到 stderr）。被 import 时
+#: `__name__` 会"看着正确"地解析成 `tools.liaison.__main__`——两种加载路径
+#: 结果不同，正是本条缺陷活了这么久没被测出来的原因，⇒ 必须钉死成字面量。
+logger = logging.getLogger(f"{logsetup.PACKAGE_LOGGER_NAME}.__main__")
 
 #: 缺凭据的退出码。选 2 而不是 1：1 太容易和"脚本里随便哪一步炸了"混在一起，
 #: 2 让 launchd / 人工排障能一眼分辨出"这是配置没配好，不是程序崩了"。
@@ -350,8 +357,15 @@ def main(
     def on_message(frame) -> None:
         events.put((EVENT_MESSAGE, now(), frame))
 
+    # TD-44：⛔ 不省 delegate=——省了就是 SdkLogObserver._forward() 的
+    # `delegate is None` 分支，SDK 自己的原始日志（含 `Received push message`
+    # 这类带消息原文明文的 DEBUG 回显）直接 print 到 stderr，完全绕开
+    # RedactionFilter 与文件轮转。挂一个包级子 logger，让它照样吃到
+    # setup_logging() 装的 handler。
     sdk_logger = session_client.SdkLogObserver(
-        on_activity=on_sdk_activity, on_any_log=loop_stopper.capture
+        on_activity=on_sdk_activity,
+        on_any_log=loop_stopper.capture,
+        delegate=logging.getLogger(f"{logsetup.PACKAGE_LOGGER_NAME}.sdk"),
     )
 
     try:

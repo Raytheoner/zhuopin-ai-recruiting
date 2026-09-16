@@ -420,3 +420,83 @@ def test_notset_log_level_falls_back_to_default_instead_of_meaning_warning(tmp_p
 
     logsetup.setup_logging(log_dir=tmp_path, level="0")
     assert logger.level == default_value
+
+
+# ---------------------------------------------------------------------------
+# TD-44（2026-09-16，`[Mac]0910A` 真实消息实跑时发现）：`__main__.py` 顶层用
+# `logging.getLogger(__name__)`。这行在**被 import** 时解析成
+# `"tools.liaison.__main__"`（本文件其它用例的正常路径），但在**真实生产启动路径**
+# `python -m tools.liaison` 下 `__name__` 是字面量 `"__main__"`——与包 logger
+# `"tools.liaison"` 毫无父子关系，`logger.error(...)` 完全绕开
+# `setup_logging()` 挂的 `RotatingFileHandler`/`RedactionFilter`，落进
+# `logging.lastResort`（无格式、无脱敏，直接 print 到 stderr）。
+# 实证：2026-09-16 真实企微消息触发的 fail-closed 诊断行只出现在
+# launchd 收走的原始 stderr 里，`liaison.log` 完全没有。
+# ---------------------------------------------------------------------------
+
+
+def test_main_module_logger_is_nested_under_the_package_logger():
+    """`__main__.logger` 的名字必须以包名开头，这样才会被 `setup_logging()`
+    挂在 `tools.liaison` 上的 handler 收到（`propagate=True` 沿这条继承链走）。
+    """
+    assert liaison_main.logger.name == f"{logsetup.PACKAGE_LOGGER_NAME}.__main__"
+
+
+def test_main_module_does_not_derive_its_logger_name_from_dunder_name():
+    """真身判据（AST，不是值判据）：模块顶层不许出现
+    `logging.getLogger(__name__)`。这行在 import 期间看着人畜无害（解析对了），
+    只有在 `python -m tools.liaison` 的真实启动路径下才会解析成 `"__main__"`
+    ——两种加载方式给出不同结果，正是本条缺陷活了这么久没被测出来的原因。
+    必须钉死成字面量字符串，让它跟加载方式无关。
+    """
+    tree = _parse(MAIN_SOURCE)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "logging.getLogger"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "__name__"
+        ):
+            raise AssertionError(
+                "__main__.py 不许用 logging.getLogger(__name__)——`-m` 启动路径下"
+                "会解析成 '__main__'，脱离 tools.liaison 包 logger 层级（TD-44）"
+            )
+
+
+def test_main_module_logger_records_reach_the_package_file_handler(tmp_path):
+    """端到端：`setup_logging()` 挂好之后，从 `liaison_main.logger`（`__main__.py`
+    的模块级 logger，生产环境下真实发出 fail-closed 诊断行的那一个）打一条 ERROR，
+    必须真的落进 `liaison.log`——不是"名字看起来对"，是记录真的到了文件里。
+    """
+    status = logsetup.setup_logging(log_dir=tmp_path)
+    liaison_main.logger.error("TD-44 回归探针：这行必须落进 liaison.log")
+    for handler in logging.getLogger(logsetup.PACKAGE_LOGGER_NAME).handlers:
+        handler.flush()
+
+    assert status.log_file is not None
+    contents = pathlib.Path(status.log_file).read_text(encoding="utf-8")
+    assert "TD-44 回归探针：这行必须落进 liaison.log" in contents
+
+
+def test_sdk_log_observer_is_constructed_with_a_delegate_in_main():
+    """真身判据（AST）：`main()` 里构造 `SdkLogObserver` 必须带 `delegate=` 关键字。
+    没有它，`_forward()` 的 `delegate is None` 分支会把 SDK 自己的原始日志
+    （含 `Received push message` 这类**带消息原文明文**的 DEBUG 回显）直接
+    `print(..., file=sys.stderr)`——完全绕开 `RedactionFilter`，不是"日志放错文件"
+    这么简单，是**真实消息内容明文外泄进一个不脱敏、不轮转的文件**（TD-44）。
+    """
+    tree = _parse(MAIN_SOURCE)
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and ast.unparse(node.func) == "session_client.SdkLogObserver"
+    ]
+    assert calls, "main() 里找不到 SdkLogObserver(...) 构造调用"
+    for call in calls:
+        keyword_names = {kw.arg for kw in call.keywords}
+        assert "delegate" in keyword_names, (
+            "SdkLogObserver(...) 缺 delegate= —— SDK 原始日志（含消息原文）会"
+            "绕开脱敏与文件轮转，直接明文打到 stderr（TD-44）"
+        )
