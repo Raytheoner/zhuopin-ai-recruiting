@@ -324,17 +324,18 @@ def run_bridge(
 
             if decision_outcome == OUTCOME_MARKED:
                 write_ledger_atomic(ledger_path, new_ledger_text)
-            elif decision_outcome == OUTCOME_REFUSED_SERIAL_VIOLATION:
-                alert_text = (
-                    "【HR 值守通道·串行原则冲突】"
-                    f"{sender_name} 名下同时有 {', '.join(matched_numbers)} 处于在途，"
-                    "违反串行原则，桥已拒绝改写台账，请人工归属后再处理。"
-                )
-                effect_emit_alert(sink, alert_text)
 
         letter_number = matched_numbers[0] if matched_numbers else None
         audit_kind = f"bridge_{decision_outcome}"
-        effect_unpack_audit(
+        #: `effect_unpack_audit` 本身走 `idempotent_effect`——同一 msgid 的这一
+        #: `audit_kind` 重放（企微重投、ack 前崩溃重试）第二次起会命中
+        #: `effect_log` 短路、返回 `None`。下面的告警必须用这个返回值门控：
+        #: `refused_serial_violation` 分支若不看这个返回值、每次都无条件
+        #: `effect_emit_alert`，同一条冲突就会在每次重放时都再发一遍值守告警，
+        #: 违反铁律 1「发消息类动作必须带幂等键」——`effect_emit_alert` 本身不是
+        #: `effect_*`（不落业务表），它的幂等性只能借 `effect_unpack_audit`
+        #: 这条审计的"是否真插入新行"来判定。
+        audit_result = effect_unpack_audit(
             conn,
             thread_id=thread_id,
             business_key=f"{msgid}:{audit_kind}",
@@ -343,6 +344,14 @@ def run_bridge(
             kind=audit_kind,
             detail=detail,
         )
+
+        if decision_outcome == OUTCOME_REFUSED_SERIAL_VIOLATION and audit_result is not None:
+            alert_text = (
+                "【HR 值守通道·串行原则冲突】"
+                f"{sender_name} 名下同时有 {', '.join(matched_numbers)} 处于在途，"
+                "违反串行原则，桥已拒绝改写台账，请人工归属后再处理。"
+            )
+            effect_emit_alert(sink, alert_text)
 
         if decision_outcome not in _NO_FURTHER_ACTION_OUTCOMES:
             _emit_signal_and_dispatch(

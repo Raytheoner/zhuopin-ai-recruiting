@@ -392,6 +392,61 @@ def test_run_bridge_serial_violation_alerts_and_writes_no_signal(tmp_path, conn)
     assert sink.texts and "人事部#2" in sink.texts[0] and "人事部#3" in sink.texts[0]
 
 
+def test_run_bridge_serial_violation_replay_does_not_resend_the_alert(tmp_path, conn):
+    """回归 + 幂等：同一 msgid 的 refused_serial_violation 第一次真告警一次，
+    重放（企微重投／ack 前崩溃重试）第二次起 ⛔ 不得再发——`effect_emit_alert`
+    自身不是 `effect_*`（不落业务表），幂等性借 `effect_unpack_audit` 是否
+    真插入新行来判定：命中 `effect_log` 短路 ⇒ 不是"第一次看到这个事件" ⇒
+    不告警。台账在这条分支上从不改写，所以两次调用的判定输入完全相同，
+    `compute_bridge_decision` 两次都会重新判成 refused_serial_violation
+    ——这正是本用例要覆盖的重放场景（而不是"判定结果变了所以巧合没告警"）。
+    """
+    from tools.liaison.unpack.bridge import run_bridge
+
+    ledger_path = tmp_path / "README-跟进信清单.md"
+    ledger_path.write_text(
+        LEDGER_HEADER
+        + _row("人事部#2", "汤丽萍", "`✅ 已推送 2026-09-08`")
+        + _row("人事部#3", "汤丽萍", "`✅ 已推送 2026-09-09`"),
+        encoding="utf-8",
+    )
+    original_ledger_text = ledger_path.read_text(encoding="utf-8")
+    sink = RecordingSink()
+    kwargs = dict(
+        thread_id="TangLiPing",
+        msgid="msg-3-replay",
+        sender_userid="TangLiPing",
+        sender_name="汤丽萍",
+        received_at="2026-09-10T14:03:00+08:00",
+        content="回复",
+        outcome=_archive_outcome("msg-3-replay"),
+        route_admitted=True,
+        ledger_path=ledger_path,
+        archive_root=tmp_path / "archive",
+        now=T0,
+        alert_sink=sink,
+    )
+
+    first = run_bridge(conn, **kwargs)
+    assert first == "refused_serial_violation"
+    assert len(sink.texts) == 1  # (a) 首次出现照常告警一次
+    assert "人事部#2" in sink.texts[0] and "人事部#3" in sink.texts[0]
+
+    # 台账在这条分支上确实不变——重放场景的判定输入与第一次逐字节相同。
+    assert ledger_path.read_text(encoding="utf-8") == original_ledger_text
+
+    second = run_bridge(conn, **kwargs)
+    assert second == "refused_serial_violation"
+    assert len(sink.texts) == 1  # (b) 重放 ⛔ 不再告警，仍是同一条
+
+    # 审计行本身的幂等性不变：同一 msgid + kind 只此一行。
+    audit_rows = conn.execute(
+        "SELECT COUNT(*) FROM liaison_unpack_audit "
+        "WHERE msgid = 'msg-3-replay' AND kind = 'bridge_refused_serial_violation'"
+    ).fetchone()[0]
+    assert audit_rows == 1
+
+
 def test_run_bridge_same_msgid_replayed_does_not_duplicate_anything(tmp_path, conn):
     from tools.liaison.unpack.bridge import run_bridge
 
