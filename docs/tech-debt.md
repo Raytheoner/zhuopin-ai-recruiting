@@ -649,3 +649,13 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 **来源**：全分支 final review（opus，`[Mac]0916V`）实测确认——`which python` 在本机查无此二进制，`python3` 裸跑该命令正常。
 
 ---
+
+## ~~TD-46~~ · `test_run_lanes_model.py` 的 sandbox 环境会继承外层 `HR_LANE_*`，泳道自跑测试必红 ✅ 已还（0917I）
+
+**根因**：`sandbox` fixture（`tests/test_run_lanes_model.py`）用 `dict(os.environ, ...)` 把当前进程的**全部**环境变量原样带进被测脚本（`run-lanes.sh` 拷贝）的子进程。当 pytest 本身跑在一个由 `run-lanes.sh` 派发的 worktree 泳道会话里时，run-lanes.sh 已为这个 CC 会话导出了 `HR_LANE_ISOLATE=1`／`HR_LANE_MAIN`／`HR_LANE_WORKTREE`（给 `scripts/hooks/worktree-guard.py` 用，`docs/openers/run-lanes.sh:612`）——这些变量原样泄漏进被测脚本的非 worktree 条目，把 `ISO=unset` 断言污染成 `ISO=1`。**`run-lanes.sh` 本体没有问题**：它对每次 `claude` 调用只用 `env ${iso_env[@]}` 局部注入（`run-lanes.sh:618`），worktree 条目才带 `iso_env`，非 worktree 条目是空数组——泄漏纯粹是测试 fixture 没有隔离启动环境。
+
+**还债动作**：`_build_sandbox`（原 `sandbox` fixture）改为先过滤掉 `HR_LANE_` 前缀的环境变量再拷给子进程；新增回归测试 `test_ambient_hr_lane_env_not_leaked_into_child`（先设三个 `HR_LANE_*` 再建 sandbox，钉死非 worktree 条目仍是 `ISO=unset`/`WT=unset`）。改前该回归测试与原有的 `test_worktree_lane_runs_inside_script_created_worktree` 在"跑在泳道 worktree 里"时均红，改后两者在原环境与干净环境下均绿；全量 `pytest` 2454 passed, 6 skipped，两种环境一致。
+
+**登记时间**：2026-09-17（`[Mac]0917I`，`[Mac]0917H` 收工报告称此为「环境泄漏、预先存在」但未查证，本条补上根因与证据）
+
+---

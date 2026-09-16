@@ -46,8 +46,7 @@ PLAN = """# 测试编排
 BAD = PLAN.replace("模型: Opus", "模型: GPT9")
 
 
-@pytest.fixture
-def sandbox(tmp_path: Path):
+def _build_sandbox(tmp_path: Path):
     repo = tmp_path / "repo"
     (repo / ".claude" / "handoff").mkdir(parents=True)
     (repo / ".git").mkdir()
@@ -69,8 +68,17 @@ def sandbox(tmp_path: Path):
     )
     fake.chmod(0o755)
     plan = tmp_path / "plan.md"
-    env = dict(os.environ, RUN_LANES_COPY="1", PATH=f"{bindir}:{os.environ['PATH']}")
+    # 0917I：不能直接 dict(os.environ, ...)——pytest 自身若跑在别的泳道 worktree 里
+    # （run-lanes.sh 已为该 CC 会话导出 HR_LANE_ISOLATE/MAIN/WORKTREE 给 worktree-guard
+    # hook 用），原样带进被测脚本的子进程会污染本该是"干净启动"的非 worktree 条目。
+    base_env = {k: v for k, v in os.environ.items() if not k.startswith("HR_LANE_")}
+    env = dict(base_env, RUN_LANES_COPY="1", PATH=f"{bindir}:{os.environ['PATH']}")
     return {"repo": repo, "script": script, "plan": plan, "calls": calls, "env": env}
+
+
+@pytest.fixture
+def sandbox(tmp_path: Path):
+    return _build_sandbox(tmp_path)
 
 
 def run(sb, *args, plan_text=PLAN):
@@ -190,6 +198,22 @@ def test_worktree_lane_runs_inside_script_created_worktree(sandbox):
     assert subprocess.run(["git", "-C", str(wt), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip() == "wave-t"
     assert f"PWD={wt}" in c and "ISO=1" in c and f"WT={wt}" in c
     assert f"PWD={repo}" in d and "ISO=unset" in d          # 非 worktree 条目照旧在仓库根、不开隔离
+
+
+def test_ambient_hr_lane_env_not_leaked_into_child(monkeypatch, tmp_path):
+    # 0917I：模拟 pytest 自身跑在别的泳道 worktree 里的场景——先在环境里把
+    # HR_LANE_* 设成"外层"的值，再建 sandbox（sandbox fixture 内部会读 os.environ），
+    # 用来钉死子进程不会继承这些变量。必须先 setenv 再建 sandbox，顺序不能反。
+    monkeypatch.setenv("HR_LANE_ISOLATE", "1")
+    monkeypatch.setenv("HR_LANE_MAIN", "/somewhere/main")
+    monkeypatch.setenv("HR_LANE_WORKTREE", "/somewhere/main/.claude/worktrees/outer-lane")
+    sandbox = _build_sandbox(tmp_path)
+    repo = _real_repo(sandbox)
+    r = run(sandbox, "--yes", "--full-auto", plan_text=WT_PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+    lines = sandbox["calls"].read_text(encoding="utf-8").splitlines()
+    d = next(l for l in lines if "0101D" in l)
+    assert f"PWD={repo}" in d and "ISO=unset" in d and "WT=unset" in d
 
 
 def test_existing_worktree_is_reused(sandbox):
