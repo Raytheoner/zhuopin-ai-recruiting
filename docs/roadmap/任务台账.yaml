@@ -7003,11 +7003,12 @@ tasks:
   依赖:
   - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-17-m2-resume-parse-and-rank-unit1-data-model.md
   可见: false
+  备注: 0918 dispatcher（lanes-done-20260918-073309）核实 seg1 已合main、本条 ready；OP-0820 里已有现成 0918B（「M2U1第二三段与收口」，含 Segment B Task4-6 ＋ Segment C Task7-8）尚未发车（无对应 lanes-*/results.tsv），未新写重复 opener，经 launch-lanes --only 0918B 派发，分支 lane-m2-u1-data-model
 - id: plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg3
   场景: M2
   阶段: build
