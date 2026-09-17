@@ -277,3 +277,71 @@ def test_jsonl_audit_hook_accumulates_tokens_and_fingerprints(tmp_path):
     assert hook.calls == 2 and hook.prompt_tokens == 3 and hook.completion_tokens == 2
     assert hook.fingerprints == {"fp1"}
     assert len((tmp_path / "x" / "a.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+
+
+# ---- Task 7 tests: render_markdown / ocr_check / main / bench ----
+
+from app.eval.metrics import FieldAccuracy
+from scripts.compare_models_m2 import ModelReport, main, ocr_check, render_markdown
+
+
+def test_render_markdown_lists_response_model_and_skipped_rows():
+    ok = ModelReport(
+        name="deepseek-pro", config_model="deepseek-v4-pro", n_samples=20, response_models=["deepseek-v4-pro"], fingerprints=["fp_x"],
+        parse_ok=20, rank_ok=19, field_acc=FieldAccuracy({f: 0.9 for f in ("name", "years_of_experience", "skills", "companies", "education", "expected_city")}, 0.9, 20),
+        spearman=0.72, top_k_recall=0.9, span_traceability=0.98, parse_p50_ms=1200, parse_p95_ms=2500, rank_p50_ms=3000, rank_p95_ms=6000,
+        prompt_tokens=100000, completion_tokens=20000, cost_yuan=0.36,
+    )
+    skipped = ModelReport(name="qwen", config_model="qwen3.7-plus-241226", n_samples=20, skipped=True, skip_reason="跳过：环境变量 DASHSCOPE_API_KEY 未设置")
+    md = render_markdown([ok, skipped], n_samples=20, generated_at="2026-09-17T00:00:00Z")
+    assert "| deepseek-pro | deepseek-v4-pro | fp_x |" in md
+    assert "90.0%" in md and "0.72" in md and "0.36" in md
+    assert "| qwen |" in md and "DASHSCOPE_API_KEY" in md
+    assert "≥90%" in md and "≥0.70" in md and "≥85%" in md and "100%" in md
+    assert "| 候选 | 姓名 | 工作年限 |" in md
+
+
+def test_ocr_check_uses_injected_ocr_and_reports_similarity(tmp_path):
+    from PIL import Image
+
+    (tmp_path / "S01.txt").write_text(TEXT_A, encoding="utf-8")
+    Image.new("RGB", (300, 100), "white").save(str(tmp_path / "S01_scan.pdf"), "PDF")
+    truth = {"sample_class": "synthetic", "rubric": RUBRIC, "samples": [{"sample_id": "S01", "files": {"txt": "S01.txt", "scan": "S01_scan.pdf"}, "fields": {}, "human_rank": 1}, {"sample_id": "S02", "files": {"txt": "S01.txt", "scan": None}, "fields": {}, "human_rank": 2}]}
+    (tmp_path / "truth.json").write_text(json.dumps(truth, ensure_ascii=False), encoding="utf-8")
+    rows = ocr_check(tmp_path, ocr=lambda _: TEXT_A.replace("无锡", "无钖"))
+    assert len(rows) == 1
+    assert rows[0]["sample_id"] == "S01" and rows[0]["readable"] is True
+    assert 0.9 < rows[0]["similarity"] < 1.0
+
+
+def test_ocr_check_reports_unavailable_without_raising(tmp_path):
+    from PIL import Image
+
+    from app.parsing.extract_text import OcrUnavailable
+
+    (tmp_path / "S01.txt").write_text(TEXT_A, encoding="utf-8")
+    Image.new("RGB", (300, 100), "white").save(str(tmp_path / "S01_scan.pdf"), "PDF")
+    truth = {"sample_class": "synthetic", "rubric": RUBRIC, "samples": [{"sample_id": "S01", "files": {"txt": "S01.txt", "scan": "S01_scan.pdf"}, "fields": {}, "human_rank": 1}]}
+    (tmp_path / "truth.json").write_text(json.dumps(truth, ensure_ascii=False), encoding="utf-8")
+
+    def missing(_):
+        raise OcrUnavailable("paddle 未装")
+
+    rows = ocr_check(tmp_path, ocr=missing)
+    assert rows == [{"sample_id": "S01", "error": "OcrUnavailable: paddle 未装"}]
+
+
+def test_main_writes_markdown_and_json_with_all_candidates_skipped(tmp_path, monkeypatch):
+    for env in ("DEEPSEEK_API_KEY", "ARK_API_KEY", "DASHSCOPE_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    (tmp_path / "S01.txt").write_text(TEXT_A, encoding="utf-8")
+    truth = {"sample_class": "synthetic", "rubric": RUBRIC, "samples": [{"sample_id": "S01", "files": {"txt": "S01.txt"}, "fields": {"name": "张明远"}, "human_rank": 1}]}
+    (tmp_path / "truth.json").write_text(json.dumps(truth, ensure_ascii=False), encoding="utf-8")
+    out_md, out_json = tmp_path / "r.md", tmp_path / "r.json"
+    code = main(["--samples", str(tmp_path), "--out", str(out_md), "--json", str(out_json), "--audit-dir", str(tmp_path / "runs")])
+    assert code == 0
+    md = out_md.read_text(encoding="utf-8")
+    assert "deepseek-pro" in md and "DEEPSEEK_API_KEY" in md
+    data = json.loads(out_json.read_text(encoding="utf-8"))
+    assert {r["name"] for r in data["reports"]} == {"deepseek-pro", "deepseek-flash", "doubao", "qwen"}
+    assert all(r["skipped"] for r in data["reports"])

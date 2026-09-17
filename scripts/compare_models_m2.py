@@ -344,3 +344,113 @@ def evaluate_model(
     report.prompt_tokens, report.completion_tokens = hook.prompt_tokens, hook.completion_tokens
     report.cost_yuan = compute_cost(candidate, hook.prompt_tokens, hook.completion_tokens)
     return report
+
+
+# ---- Task 7: render_markdown / ocr_check / main ----
+
+import argparse
+import difflib
+from dataclasses import asdict
+
+from app.eval.metrics import THRESHOLDS
+from app.parsing.extract_text import OcrUnavailable, extract_text
+
+
+def _pct(v: float | None) -> str:
+    return "—" if v is None else f"{v * 100:.1f}%"
+
+
+def _num(v: float | None, digits: int = 2) -> str:
+    return "—" if v is None else f"{v:.{digits}f}"
+
+
+def render_markdown(reports: list[ModelReport], *, n_samples: int, generated_at: str) -> str:
+    lines = [
+        f"生成时间：{generated_at} ｜ 样本数：{n_samples} ｜ prompt 版本：{PARSE_PROMPT_VERSION} / {RANK_PROMPT_VERSION} ｜ temperature=0",
+        "",
+        "| 候选 | 模型标识（响应侧） | fingerprint | 解析成功 | 字段准确率 | Spearman | Top-K 召回 | evidence 可定位率 | 精排成功 | 解析 P50/P95 ms | 精排 P50/P95 ms | tokens 入/出 | 成本（元） | 备注 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        f"| 门槛（D9） | | | | ≥{THRESHOLDS['field_accuracy'] * 100:.0f}% | ≥{THRESHOLDS['spearman']:.2f} | ≥{THRESHOLDS['top_k_recall'] * 100:.0f}% | {THRESHOLDS['span_traceability'] * 100:.0f}% | | | | | | |",
+    ]
+    for r in reports:
+        if r.skipped:
+            lines.append(f"| {r.name} | （未跑） | | | | | | | | | | | | {r.skip_reason} |")
+            continue
+        note = f"{len(r.errors)} 条错误，见 {r.audit_path}" if r.errors else ""
+        lines.append(
+            f"| {r.name} | {', '.join(r.response_models) or '—'} | {', '.join(r.fingerprints) or '—'} | {r.parse_ok}/{r.n_samples} | "
+            f"{_pct(r.field_acc.overall)} | {_num(r.spearman)} | {_pct(r.top_k_recall)} | {_pct(r.span_traceability)} | {r.rank_ok}/{r.n_samples} | "
+            f"{r.parse_p50_ms:.0f}/{r.parse_p95_ms:.0f} | {r.rank_p50_ms:.0f}/{r.rank_p95_ms:.0f} | {r.prompt_tokens}/{r.completion_tokens} | "
+            f"{_num(r.cost_yuan, 4) if r.cost_yuan is not None else '未填价格'} | {note} |"
+        )
+    lines += ["", "逐字段准确率：", "", "| 候选 | " + " | ".join(FIELD_LABELS[f] for f in FIELD_NAMES) + " |", "|---|" + "---|" * len(FIELD_NAMES)]
+    for r in reports:
+        if r.skipped:
+            continue
+        lines.append(f"| {r.name} | " + " | ".join(_pct(r.field_acc.per_field[f]) for f in FIELD_NAMES) + " |")
+    lines += ["", "注：Spearman 为 — 表示可计算样本 < 10（D9：不出结论）；成本按 ModelCandidate 里抄录的定价计算，未填即 —。"]
+    return "\n".join(lines)
+
+
+def ocr_check(sample_dir: Path, *, ocr: Callable[[Path], str] | None = None) -> list[dict]:
+    """对每个有扫描件的样本跑 extract_text（走 OCR），与 txt 真值算 difflib 相似度（1.1／D14 实测用）。"""
+    sample_dir = Path(sample_dir)
+    truth = json.loads((sample_dir / "truth.json").read_text(encoding="utf-8"))
+    rows: list[dict] = []
+    for row in truth["samples"]:
+        scan = row["files"].get("scan")
+        if not scan:
+            continue
+        expected = (sample_dir / row["files"]["txt"]).read_text(encoding="utf-8")
+        try:
+            got = extract_text(sample_dir / scan, ocr=ocr)
+        except OcrUnavailable as exc:
+            rows.append({"sample_id": row["sample_id"], "error": f"OcrUnavailable: {exc}"})
+            continue
+        similarity = difflib.SequenceMatcher(None, "".join(expected.split()), "".join(got.text.split())).ratio()
+        rows.append({"sample_id": row["sample_id"], "kind": got.kind, "readable": got.readable, "effective_chars": got.effective_chars, "similarity": round(similarity, 4)})
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="M2 U0 模型对比")
+    parser.add_argument("--samples", type=Path, default=Path("data/eval/m2-pilot"))
+    parser.add_argument("--models", default=",".join(c.name for c in CANDIDATES), help="逗号分隔的候选名")
+    parser.add_argument("--out", type=Path, default=Path("data/eval/m2-pilot/compare-run.md"))
+    parser.add_argument("--json", type=Path, default=None)
+    parser.add_argument("--audit-dir", type=Path, default=Path("data/eval/m2-pilot/runs"))
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--ocr-check", action="store_true", help="只跑扫描件 OCR 核对，不调 LLM")
+    args = parser.parse_args(argv)
+
+    if args.ocr_check:
+        rows = ocr_check(args.samples)
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+
+    samples, rubric = load_samples(args.samples)
+    wanted = {name.strip() for name in args.models.split(",") if name.strip()}
+    unknown = wanted - {c.name for c in CANDIDATES}
+    if unknown:
+        parser.error(f"未知候选: {sorted(unknown)}；可选: {[c.name for c in CANDIDATES]}")
+    reports = [
+        evaluate_model(c, samples, rubric, gateway_factory=default_gateway_factory, audit_dir=args.audit_dir, top_k=args.top_k)
+        for c in CANDIDATES
+        if c.name in wanted
+    ]
+    generated_at = datetime.now(timezone.utc).isoformat()
+    md = render_markdown(reports, n_samples=len(samples), generated_at=generated_at)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(md, encoding="utf-8")
+    if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(
+            json.dumps({"generated_at": generated_at, "n_samples": len(samples), "reports": [asdict(r) for r in reports]}, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+    print(md)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
