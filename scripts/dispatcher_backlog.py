@@ -687,8 +687,8 @@ def _section(text: str, title: str) -> str:
 
 def parse_intents(repo: Path, rel_dir: str, changes: set[str]) -> list[Entry]:
     """`docs/roadmap/intents/<场景>-intent.md` ⇒ `propose:<场景>`。
-    有未答题（「## 待答题」节非空且有未勾条目）⇒ 阻塞／决策（grill 要他逐题答）；`status` 含「已确认」且
-    该场景已有 openspec 变更包 ⇒ 完成；否则待开——到不到 G1 由 apply_gates 按定夺队列判。"""
+    有未答题（「## 待答题」节非空且有未勾条目）⇒ 阻塞／决策（grill 要他逐题答）；该场景已有 openspec 变更包
+    （包存在本身就是 propose 的真身，⛔ 不等 `status` 改字）⇒ 完成；否则待开——到不到 G1 由 apply_gates 按定夺队列判。"""
     out: list[Entry] = []
     d = repo / rel_dir
     if not d.is_dir():
@@ -706,7 +706,7 @@ def parse_intents(repo: Path, rel_dir: str, changes: set[str]) -> list[Entry]:
         pending = _section(text, "待答题")
         unanswered = bool(UNANSWERED_RE.search(pending))
         has_pkg = any(scene_of_change(c) == scene for c in changes)
-        if "已确认" in fm.get("status", "") and has_pkg:
+        if has_pkg:
             status, block = "完成", "无"
         elif unanswered:
             status, block = "阻塞", "决策"

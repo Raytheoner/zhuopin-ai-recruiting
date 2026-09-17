@@ -79,8 +79,10 @@ def test_non_path_sources_declared(text):
 
 def test_output_path_and_intent_sections(text):
     assert "docs/roadmap/intents/<场景>-intent.md" in text
-    for heading in ("## 目标", "## 决策", "## 建议交付单元", "## 不做", "## 不可代项", "## 待专员"):
+    for heading in ("## 目标", "## 决策", "## 建议交付单元", "## 不做", "## 不可代项", "## 待专员", "## 待答题"):
         assert heading in text, f"intent 必备小节字样缺失：{heading}"
+    # 「## 待答题」是台账生成器判「有未答题」的唯一节名（scripts/dispatcher_backlog.py parse_intents）
+    assert "## 待答题" in text and "待答题" in (ROOT / "scripts" / "dispatcher_backlog.py").read_text(encoding="utf-8")
     # 0917AO 在环闸门：落档状态字样是「草稿·待 G1」，已确认只在 G1 放行后
     assert "status: 草稿·待 G1" in text and "已确认" in text
     assert "status: 待确认" not in text

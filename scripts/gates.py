@@ -18,8 +18,9 @@ Shao Peishen 定的硬口径：自动化只推进两个闸门之间的活；到�
 G4 是信件编号（`人事部#2`），G5 是口径点 id。同一 (闸, subject) 只入队一次（去重靠同一标记）。
 
 判定真值表（tests/test_gates.py 钉死）：
-  缺行 → 关；状态≠已答 → 关；已答但答复不含放行字（或只含被否定的「不发」「暂不定」）→ 关；
-  已答且含放行字 → 开；状态或答复含「作废」→ 关（状态名「作废」）。
+  缺行 → 关；状态≠已答 → 关；已答但答复**不是**放行字（「改：…再发」「待定」「不发」「暂不定」都不是）→ 关；
+  已答且答复为放行字（整条就是它／「」引住／末字，G4 还须含「审核通过」）→ 开；状态或答复含「作废」→ 关（状态名「作废」）。
+  答复列须由 Cowork 转写为**字面**放行字，⛔ 不填 `a`/`b`——填字母的行永远是「已答·未放行」。
 
 调度器接线：`scripts/dispatcher_backlog.py` 生成台账时把到闸未放行的条目标 `阻塞／决策` 并写 `闸门:` 字段，
 `compute_ready` 再按本模块复核一遍（台账状态被手改也放不过）；`scripts/action_request.py` 的 `send-followup`
@@ -56,7 +57,12 @@ STAGE_GATE = {"propose": "G1", "plan": "G2", "release": "G3"}
 
 STATES = ("缺行", "待答", "已答·未放行", "已放行", "作废")
 
-_NEG = re.compile(r"(?:不|别|勿|未|暂不|先不|暂缓|不要)\s*[「『\"']?([定发签])")
+# 放行字必须「独立成词」：整条答复就是它、或它被「」『』引号引住、或它是答复末字（如「审核通过·发」「已发」）。
+# 单字包含不算——「改：第二段删掉再发」「待定」「签名栏漏了」都含字但不是放行（final review 0917AO 🔴 #1）。
+_QUOTED = "[「『\"'“‘]{z}[」』\"'”’]"
+_NEG_BEFORE = re.compile(r"(?:不|别|勿|未|暂不|先不|暂缓|不要|再)\s*$")
+_HOLD_PREFIX = re.compile(r"^(?:改|待|不|别|勿|暂|先|等|未|再)")
+_TRAIL_PUNCT = re.compile(r"[\s。．.!！~～、，,;；]+$")
 _NUM = re.compile(r"^Q-(\d+)$")
 
 QUEUE = ROOT / QUEUE_REL
@@ -141,13 +147,28 @@ def find_gate_row(gate: str, subject: str, text: str) -> dict[str, str] | None:
 
 
 def reply_releases(gate: str, reply: str) -> bool:
-    """答复是否含本闸的放行字样。否定形态（不发／暂不定／别签）先剔掉再看；含「作废」「驳回」一律否。"""
-    if not reply:
+    """答复是否**为**本闸的放行字样（不是"含该字"）。
+
+    开：`定`／`发`／`签` 独立成词——整条就是它、被「」引住（「逐条改后「定」」）、或是末字（「审核通过·发」）。
+    关：含「作废」「驳回」；以 改／待／不／别／暂／先／等／未／再 开头（「改：…再发」「待定」「等窗口定了再发」）；
+        引号前紧跟否定或「再」（「不「发」」「改后再「发」」）；G4 还须同时含「审核通过」（先审核通过再发，可同条）。
+    """
+    reply = (reply or "").strip()
+    if not reply or "作废" in reply or "驳回" in reply:
         return False
-    if "作废" in reply or "驳回" in reply:
+    z = GATES[gate]["字"]
+    if gate == "G4" and "审核通过" not in reply:
         return False
-    cleaned = _NEG.sub("", reply)
-    return GATES[gate]["字"] in cleaned
+    core = _TRAIL_PUNCT.sub("", reply)
+    for m in re.finditer(_QUOTED.format(z=z), reply):
+        if not _NEG_BEFORE.search(reply[: m.start()]):
+            return True
+    if core == z:
+        return True
+    if core.endswith(z) and not _HOLD_PREFIX.match(reply):
+        before = core[:-1]
+        return not _NEG_BEFORE.search(before)
+    return False
 
 
 def gate_state(gate: str, subject: str, queue: Path | None = None, text: str | None = None) -> str:
@@ -184,24 +205,25 @@ def build_gate_row(gate: str, subject: str, *, scene: str, artifact: str, task_i
     g = GATES[gate]
     z = g["字"]
     if gate == "G4":
-        options = f"(a) 答「审核通过·发」⇒ 放行，Cowork 经动作通道 `send-followup` 发出；(b) 答「改：…」⇒ 按批注改稿再回闸；(c) 答「不发」⇒ 该信作废"
+        options = f"(a) 答「审核通过·发」⇒ 放行，Cowork 经动作通道 `send-followup` 发出；(b) 答「改：…」⇒ 按批注改稿、自检后再追加一行回闸；(c) 答「作废」⇒ 该信作废"
     else:
-        options = f"(a) 答「{z}」⇒ 放行，{g['放行后']}；(b) 逐条改后「{z}」⇒ 同 (a)；(c) 答「作废」⇒ 该 subject 的下游条目作废"
+        options = f"(a) 答「{z}」⇒ 放行，{g['放行后']}；(b) 答「改：…」⇒ 按批注改后再追加一行回闸，或逐条改后答「{z}」；(c) 答「作废」⇒ 该 subject 的下游条目作废"
     tasks = "、".join(f"`{t}`" for t in task_ids) if task_ids else "—"
     problem = f"{gate_marker(gate, subject)}：{g['到闸']} ｜ 产出 `{artifact}`"
     return (
         f"| {number} | {scene} | 决策（{gate} 闸门·{g['名']}，不可代） | {problem} | {options} "
-        f"| 无默认（闸门须本人放行，答复含「{z}」才开） | `scripts/gates.py` ｜ `{artifact}` | {tasks} | 待答 | |"
+        f"| 无默认（闸门须本人放行；答复列由 Cowork 转写为字面「{z}」，⛔ 不填字母 a/b） | `scripts/gates.py` ｜ `{artifact}` | {tasks} | 待答 | |"
     )
 
 
 def gate_request(
     gate: str, subject: str, *, scene: str, artifact: str, task_ids: list[str] | None = None, queue: Path | None = None
 ) -> bool:
-    """到闸 ⇒ 在「一、待答」表末尾追加一行；同 (闸, subject) 已有行 ⇒ 不重复，返回 False。"""
+    """到闸 ⇒ 在「一、待答」表末尾追加一行；同 (闸, subject) 已有行且状态为 待答／已放行／作废 ⇒ 不重复，返回 False。
+    最后一行是「已答·未放行」（他答了「改：…」，改稿后再回闸）⇒ 允许再追加一行，新行成为判定依据（find_gate_row 取最后一行）。"""
     q = Path(queue) if queue else QUEUE
     text = q.read_text(encoding="utf-8") if q.is_file() else "# 定夺队列（R5）\n\n## 一、待答\n\n| 编号 | 场景 | 阻塞类型 | 问题 | 选项与代价 | 推荐 | 来源 | 阻塞的任务 id | 状态 | 答复 |\n|---|---|---|---|---|---|---|---|---|---|\n"
-    if find_gate_row(gate, subject, text) is not None:
+    if find_gate_row(gate, subject, text) is not None and gate_state(gate, subject, text=text) != "已答·未放行":
         return False
     row = build_gate_row(gate, subject, scene=scene, artifact=artifact, task_ids=task_ids or [], number=_next_number(text))
     lines = text.splitlines()

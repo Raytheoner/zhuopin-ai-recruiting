@@ -158,6 +158,9 @@ U0 … → U1 … → Un …
 ## 不可代项（进 tasks 时标注）
 …
 
+## 待答题
+- [ ] Q<n> <只有他能定、本轮未答的题>（答后勾掉或删行；本节为空 ⇒ 到闸 G1。⛔ 节名逐字保留——`scripts/dispatcher_backlog.py` 只认这个标题判「有未答题」）
+
 ## 待专员（＝跟进信判例批改待办）
 | 占位 ID | 问题 | 计划取的真实案例 | 对应 D 条 |
 |---|---|---|---|
@@ -169,7 +172,7 @@ U0 … → U1 … → Un …
 | n | n（ⓐ… ⓑ… ⓒ…） | n |
 ```
 
-**落档 ⇒ 定夺队列 G1**：intent（`status: 草稿·待 G1`）与需求树草稿写好后，经**提交通道**提交（Cowork 侧不自行 commit——列文件清单 ＋ 建议 commit message；CC 侧按并发协议只 add 本条路径），**同一收工里**追加定夺队列 G1 行：`python3 scripts/gates.py request G1 <场景> --scene <场景> --artifact docs/roadmap/intents/<场景>-intent.md --tasks propose:<场景>`（已有行不重复；调度器下次唤醒 `sweep --apply` 也会补——两者幂等）。停在该场景等 Shao Peishen 在那一行答「定」（或逐条改后「定」）⇒ `status: 已确认（G1 Q-xx）` ⇒ 调度器起 propose。有未答题 ⇒ 未到闸、⛔ 不追加 G1 行，Cowork 在他回本线时重提未答题。「定稿」本身（状态字样、进下一阶段）**只在放行后发生**，⛔ 无头会话不得自改 `status`，⛔ 不越闸。
+**落档 ⇒ 定夺队列 G1**：intent（`status: 草稿·待 G1`）与需求树草稿写好后，经**提交通道**提交（Cowork 侧不自行 commit——列文件清单 ＋ 建议 commit message；CC 侧按并发协议只 add 本条路径），**同一收工里**追加定夺队列 G1 行：`python3 scripts/gates.py request G1 <场景> --scene <场景> --artifact docs/roadmap/intents/<场景>-intent.md --tasks propose:<场景>`（已有行不重复；调度器下次唤醒 `sweep --apply` 也会补——两者幂等）。停在该场景等 Shao Peishen 在那一行答「定」（或逐条改后「定」；Cowork 把答复**字面**转写进「答复」列，⛔ 不填 `a`/`b`——填字母的行机器判「已答·未放行」，闸永远不开）⇒ `status: 已确认（G1 Q-xx）` ⇒ 调度器起 propose。有未答题 ⇒ 未到闸、⛔ 不追加 G1 行，Cowork 在他回本线时重提未答题。「定稿」本身（状态字样、进下一阶段）**只在放行后发生**，⛔ 无头会话不得自改 `status`，⛔ 不越闸。
 
 ## 五、接缝 3 · 两个受众的量级边界（必须写死）
 

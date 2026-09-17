@@ -66,11 +66,24 @@ def test_missing_file_or_row_is_closed(gate: str, queue: Path) -> None:
         ("G3", "已答", "发", "已放行"),
         ("G3", "已答", "不发，等窗口", "已答·未放行"),
         ("G4", "已答", "审核通过·发", "已放行"),
+        ("G4", "已答", "审核通过，发。", "已放行"),
+        ("G4", "已答", "审核通过「发」", "已放行"),
         ("G4", "已答", "审核通过", "已答·未放行"),
-        ("G4", "已答", "改：第二段删掉再发", "已放行"),
+        ("G4", "已答", "发", "已答·未放行"),  # G4 须先「审核通过」再「发」
+        ("G4", "已答", "改：第二段删掉再发", "已答·未放行"),  # (b) 改稿答复，final review 🔴 #1
+        ("G4", "已答", "审核通过，改：第二段删掉再发", "已答·未放行"),
+        ("G4", "已答", "发现日期错了，改", "已答·未放行"),
         ("G4", "已答", "不发", "已答·未放行"),
+        ("G4", "已答", "审核通过，不「发」", "已答·未放行"),
         ("G4", "已答", "驳回，改后再发", "已答·未放行"),
+        ("G1", "已答", "待定", "已答·未放行"),
+        ("G1", "已答", "改：D3 的定义有误", "已答·未放行"),
+        ("G1", "已答", "改后再「定」", "已答·未放行"),
+        ("G1", "已答", "D3 改成 offset 区间，定。", "已放行"),
+        ("G3", "已答", "等窗口定了再发", "已答·未放行"),
+        ("G3", "已答", "已发", "已放行"),
         ("G5", "已答", "签", "已放行"),
+        ("G5", "已答", "签名栏漏了", "已答·未放行"),
         ("G5", "已答", "别签，口径有误", "已答·未放行"),
         ("G5", "已答", "定", "已答·未放行"),
     ],
@@ -83,7 +96,7 @@ def test_truth_table(gate: str, status: str, reply: str, expected: str, queue: P
 
 def test_subject_match_is_exact_backticked(queue: Path) -> None:
     """`人事部#2` 放行不能带开 `人事部#21`。"""
-    queue.write_text(HEADER + row("G4", "人事部#2", "已答", "发") + TAIL, encoding="utf-8")
+    queue.write_text(HEADER + row("G4", "人事部#2", "已答", "审核通过·发") + TAIL, encoding="utf-8")
     assert gates.gate_open("G4", "人事部#2")
     assert not gates.gate_open("G4", "人事部#21")
     assert not gates.gate_open("G4", "人事部")
@@ -122,6 +135,22 @@ def test_request_appends_once_with_next_number_inside_pending_table(queue: Path)
     assert gates.gate_state("G1", "M3") == "待答"
     # 远期表原样
     assert "| Q-F1 | M2 |" in text
+
+
+def test_request_reopens_after_a_revise_reply_but_not_after_pending_or_release(queue: Path) -> None:
+    """他答「改：…」（已答·未放行）⇒ 改稿后允许再追加一行回闸，新行成判据；待答／已放行／作废 ⇒ 去重。"""
+    queue.write_text(HEADER + row("G4", "HR#3", "已答", "改：第二段删掉再发", number="Q-05") + TAIL, encoding="utf-8")
+    assert gates.gate_state("G4", "HR#3") == "已答·未放行"
+    assert gates.gate_request("G4", "HR#3", scene="M2", artifact="docs/跟进信/HR-3.md") is True
+    text = queue.read_text(encoding="utf-8")
+    assert text.count("【G4 发信】`HR#3`") == 2 and "| Q-06 |" in text
+    assert gates.gate_state("G4", "HR#3") == "待答", "新行成为判据"
+    assert gates.gate_request("G4", "HR#3", scene="M2", artifact="docs/跟进信/HR-3.md") is False
+    queue.write_text(text.replace("| Q-06 |", "| Q-06 |").replace("| 待答 | |", "| 已答 | 审核通过·发 |"), encoding="utf-8")
+    assert gates.gate_state("G4", "HR#3") == "已放行"
+    assert gates.gate_request("G4", "HR#3", scene="M2", artifact="docs/跟进信/HR-3.md") is False
+    queue.write_text(HEADER + row("G4", "HR#3", "作废", "") + TAIL, encoding="utf-8")
+    assert gates.gate_request("G4", "HR#3", scene="M2", artifact="docs/跟进信/HR-3.md") is False
 
 
 def test_request_creates_file_and_section_when_missing(queue: Path) -> None:
@@ -182,10 +211,15 @@ def test_show_ready_excludes_propose_until_g1_released(queue: Path) -> None:
     assert "propose:M3" not in show() and "relay:H-4" in show()
     gates.gate_request("G1", "M3", scene="M3", artifact="docs/roadmap/intents/M3-intent.md", task_ids=["propose:M3"])
     assert "propose:M3" not in show()
-    queue.write_text(queue.read_text(encoding="utf-8").replace("| 待答 | |", "| 已答 | 定 |"), encoding="utf-8")
+    show_gated = lambda: subprocess.run([sys.executable, str(BACKLOG), "--repo", str(repo), "--show", "gated"], capture_output=True, text=True, check=True).stdout
+    g = show_gated()
+    assert "propose:M3" in g and "闸门=G1 `M3` 待答" in g and "# gated: 1" in g
+    queue.write_text(queue.read_text(encoding="utf-8").replace("| 待答 | |", "| 已答 | a |"), encoding="utf-8")
+    assert "propose:M3" not in show(), "答复列填字母不算放行"
+    assert "已答·未放行" in show_gated()
+    queue.write_text(queue.read_text(encoding="utf-8").replace("| 已答 | a |", "| 已答 | 定 |"), encoding="utf-8")
     assert "propose:M3" in show()
-    gated = subprocess.run([sys.executable, str(BACKLOG), "--repo", str(repo), "--show", "gated"], capture_output=True, text=True, check=True).stdout
-    assert "# gated: 0" in gated
+    assert "# gated: 0" in show_gated()
 
 
 def test_sweep_reports_and_only_appends_with_apply(queue: Path) -> None:

@@ -82,7 +82,8 @@
 | G4 发信 | 跟进信 md＋docx 起草完、自检过 | 信件编号（`人事部#2`） | 先「审核通过」再「发」（可同条答复） | Cowork 经动作通道 `send-followup`；⛔ 调度器永不调用发信动作 |
 | G5 口径签认 | 回件拆件判为口径点 | 口径点 id | 「签」 | 口径点台账转已签认 |
 
-- **放行判据只认一处**：`docs/roadmap/定夺队列.md` 对应行「状态＝已答」且答复含该闸放行字样；否定形态（不发／暂不定）、「作废」「驳回」都不算。⛔ 不认聊天记忆、⛔ 不认台账状态自改（台账手改成「待开」也进不了 ready）。函数 `scripts/gates.py::gate_open(gate, subject) -> bool`，CLI `python3 scripts/gates.py state|open G<n> <subject>`。
-- **到闸动作**（每次唤醒 ③ 里做）：`python3 scripts/gates.py sweep --apply` ——台账里依赖已齐、阶段为 propose／plan／release 的条目逐条对队列，缺行的追加（去重）；台账生成器同时把这些条目标 `阻塞／决策` 并写 `闸门:` 字段、`产出判据` 前缀 `【G<n> 闸门·<状态>】`。G4／G5 不由台账阶段触发：G4 在跟进信起草完时由起草方（Cowork 或起草泳道收工）`gates.py request G4 <编号> …`，G5 由拆件会话在判为口径点时追加。
+- **放行判据只认一处**：`docs/roadmap/定夺队列.md` 对应行「状态＝已答」且答复**为**该闸放行字样（整条就是它、「」引住、或末字；G4 还须同时含「审核通过」）；「改：…再发」「待定」、否定形态（不发／暂不定）、「作废」「驳回」都不算。**答复列由 Cowork 转写为字面放行字，⛔ 不填 `a`/`b`**（填字母永远是「已答·未放行」）。他答「改：…」⇒ 改稿后 `gates.py request` 会再追加一行回闸（只有「已答·未放行」允许重入，待答／已放行／作废去重）。⛔ 不认聊天记忆、⛔ 不认台账状态自改（台账手改成「待开」也进不了 ready）。函数 `scripts/gates.py::gate_open(gate, subject) -> bool`，CLI `python3 scripts/gates.py state|open G<n> <subject>`。
+- **到闸动作**（每次唤醒 ③ 里做）：`python3 scripts/gates.py sweep --apply` ——台账里依赖已齐、阶段为 propose／plan／release 的条目逐条对队列，缺行的追加（去重）；台账生成器同时把这些条目标 `阻塞／决策` 并写 `闸门:` 字段、`产出判据` 前缀 `【G<n> 闸门·<状态>】`。**G3 目前无自动生产者**：台账生成器暂不产 `release:*` 条目（发版真身无法机器判），§2 `merge` 完成判据「全部单元合 main」成立时由调度器手动 `gates.py request G3 <场景> --scene <场景> --artifact docs/deploy-51-server.md`（Q-F3 型行改成这个形状）。G4／G5 不由台账阶段触发：G4 在跟进信起草完时由起草方（Cowork 或起草泳道收工）`gates.py request G4 <编号> …`，G5 由拆件会话在判为口径点时追加。
+- **既有包的 G2 追溯**：`m1-*`／`hr-wecom-aibot-liaison`／`m2-resume-parse-and-rank` 在闸门机制之前已过 propose，其 `U<n>/plan` 条目现在一律停在 G2「缺行」；sweep 会为它们追加 G2 行，由 Shao Peishen 逐包答「定」或「作废」——⛔ 调度器不替他补「定」。
 - **放行后**：`decision-*` 事件唤醒 ⇒ 重跑 `scripts/dispatcher_backlog.py`（生成器读到已放行自动把条目改回 `待开／无`，不记 conflicts）⇒ 回到 §1 算 ready。G1 放行还要把 intent frontmatter `status` 改「已确认（G1 Q-xx）」——只在此刻，⛔ 闸前不改。
 - **作废**：闸门行状态或答复为「作废」⇒ 该 subject 下游条目状态改完成＋备注「作废：Q-xx」（§5 同一处理）。
