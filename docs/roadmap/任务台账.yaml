@@ -3,11 +3,11 @@ version: 1
 summary:
   条目数: 402
   按状态:
-    待开: 215
+    待开: 216
     在跑: 7
     完成: 106
-    阻塞: 74
-  阻塞·决策: 46
+    阻塞: 73
+  阻塞·决策: 45
   阻塞·外部: 27
   conflicts:
   - m1-intake-quality-fixes/8.9
@@ -27,17 +27,17 @@ summary:
   - propose:S-渠道
   - relay:H-4
   ready:
+  - propose:M3
   - channel-resume-intake/0.1
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
   闸门待放行:
-  - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（待答）
-  - interview-scheduling/U1/plan ← G2 `interview-scheduling`（待答）
-  - offer-generation/U1/plan ← G2 `offer-generation`（待答）
-  - onboarding-flow/U1/plan ← G2 `onboarding-flow`（待答）
-  - propose:M3 ← G1 `M3`（待答）
+  - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
+  - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
+  - offer-generation/U1/plan ← G2 `offer-generation`（已答·未放行）
+  - onboarding-flow/U1/plan ← G2 `onboarding-flow`（已答·未放行）
   未知依赖: []
   未归属plans:
   - 2026-08-06-m1-chapter0-demo
@@ -66,6 +66,7 @@ summary:
   - 2026-09-10-liaison-unpack-dispatch
   缺任务映射:
   - Q-27
+  - Q-38b
 tasks:
 - id: scene:M0
   场景: M0
@@ -357,7 +358,7 @@ tasks:
   - docs/superpowers/plans/*-channel-resume-intake-unit1-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit1 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/channel-resume-intake/tasks.md
   可见: false
   闸门: G2 channel-resume-intake
@@ -514,7 +515,7 @@ tasks:
   - docs/superpowers/plans/*-channel-resume-intake-unit2-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit2 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/channel-resume-intake/tasks.md
   可见: false
   闸门: G2 channel-resume-intake
@@ -612,7 +613,7 @@ tasks:
   - docs/superpowers/plans/*-channel-resume-intake-unit3-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit3 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/channel-resume-intake/tasks.md
   可见: false
   闸门: G2 channel-resume-intake
@@ -719,7 +720,7 @@ tasks:
   - docs/superpowers/plans/*-channel-resume-intake-unit4-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit4 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/channel-resume-intake/tasks.md
   可见: false
   闸门: G2 channel-resume-intake
@@ -1253,7 +1254,7 @@ tasks:
   - docs/superpowers/plans/*-interview-scheduling-unit1-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit1 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
@@ -1420,7 +1421,7 @@ tasks:
   - docs/superpowers/plans/*-interview-scheduling-unit2-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit2 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
@@ -1578,7 +1579,7 @@ tasks:
   - docs/superpowers/plans/*-interview-scheduling-unit3-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit3 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
@@ -1731,7 +1732,7 @@ tasks:
   - docs/superpowers/plans/*-interview-scheduling-unit4-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit4 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
@@ -1845,7 +1846,7 @@ tasks:
   - docs/superpowers/plans/*-interview-scheduling-unit5-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit5 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit5 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
@@ -4096,7 +4097,7 @@ tasks:
   - docs/superpowers/plans/*-offer-generation-unit1-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit1 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/offer-generation/tasks.md
   可见: false
   闸门: G2 offer-generation
@@ -4249,7 +4250,7 @@ tasks:
   - docs/superpowers/plans/*-offer-generation-unit2-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit2 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/offer-generation/tasks.md
   可见: false
   闸门: G2 offer-generation
@@ -4387,7 +4388,7 @@ tasks:
   - docs/superpowers/plans/*-offer-generation-unit3-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit3 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/offer-generation/tasks.md
   可见: false
   闸门: G2 offer-generation
@@ -4497,7 +4498,7 @@ tasks:
   - docs/superpowers/plans/*-offer-generation-unit4-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit4 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/offer-generation/tasks.md
   可见: false
   闸门: G2 offer-generation
@@ -4651,7 +4652,7 @@ tasks:
   - docs/superpowers/plans/*-offer-generation-unit5-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit5 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit5 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/offer-generation/tasks.md
   可见: false
   闸门: G2 offer-generation
@@ -4852,7 +4853,7 @@ tasks:
   - docs/superpowers/plans/*-onboarding-flow-unit1-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit1 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/onboarding-flow/tasks.md
   可见: false
   闸门: G2 onboarding-flow
@@ -4991,7 +4992,7 @@ tasks:
   - docs/superpowers/plans/*-onboarding-flow-unit2-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit2 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/onboarding-flow/tasks.md
   可见: false
   闸门: G2 onboarding-flow
@@ -5118,7 +5119,7 @@ tasks:
   - docs/superpowers/plans/*-onboarding-flow-unit3-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit3 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/onboarding-flow/tasks.md
   可见: false
   闸门: G2 onboarding-flow
@@ -5242,7 +5243,7 @@ tasks:
   - docs/superpowers/plans/*-onboarding-flow-unit4-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit4 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/onboarding-flow/tasks.md
   可见: false
   闸门: G2 onboarding-flow
@@ -5338,7 +5339,7 @@ tasks:
   - docs/superpowers/plans/*-onboarding-flow-unit5-*.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit5 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit5 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/onboarding-flow/tasks.md
   可见: false
   闸门: G2 onboarding-flow
@@ -5661,9 +5662,10 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
+  状态: 在跑
+  阻塞类型: 无
+  派发: task-dispatcher·decision-20260918-070856，opener 0918B（docs/openers/OP-0820-全量编排.md）
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 M3
@@ -5849,10 +5851,10 @@ tasks:
   - docs/m2-model-comparison.md
   状态: 阻塞
   阻塞类型: 外部
-  产出判据: 两家 API key 写入 `.env`、`docs/m2-model-comparison.md` 补齐第 3／4 家对比数据；⛔ 不阻塞 1.4 主线
+  产出判据: 【Q-38 已答 b·缺任务映射】两家 API key 写入 `.env`、`docs/m2-model-comparison.md` 补齐第 3／4 家对比数据；⛔ 不阻塞 1.4 主线
   来源: docs/roadmap/定夺队列.md:23 Q-07
   可见: false
-  队列: Q-38 待答
+  队列: Q-38 已答 b
   备注: 注册两家付费账号需本人实名办理（预算与外部采购，不可代）——调度器不可派车；是否现在办理见 Q-38。⚠️ generator（`dispatcher_answers.py` ANSWER_MAP `Q-07`）默认此任务 阻塞类型=无，重跑 `dispatcher_backlog.py` 可能把本条状态改回「待开」——下一轮调度器核
     conflicts 时须重复本条判断，直到 ANSWER_MAP 补上「决策」标记或 Q-38 已答。
 - id: answer:Q-12
