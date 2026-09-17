@@ -58,7 +58,7 @@
   另有 `?? _to_delete/`（⛔ 不 add、⛔ 不删）。与 origin ahead/behind 均 0。
 - 🔢 **号池台账已迁到 `docs/openers/号池台账.md`**（2026-09-16），历史月份在 `docs/openers/归档/号池台账-归档.md`。
   ⛔ 不要再往 `OP-0820` 顶部那张旧表登记。已用到 **`[Mac]0917B`**；`0917C`／`0917D` 本轮派出，
-  `0917E`–`0917N` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917O`**。
+  `0917E`–`0917P` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917Q`**。
 - 其余包：`hr-wecom-aibot-liaison` **63/67**（剩 8.6–8.9 灰度四条，他亲自）；
   `m1-intake-quality-fixes` 68/69；`m1-job-profile-intake` 60/72；`lane-launch-armed-scan` 0/35（**已裁定搁置**）。
 
@@ -70,7 +70,7 @@
 | **R-2** | 3.2 章程接入生产路径 ＋ TD-45 ＋ design D4 常量名 | `[Mac]0917G`→`[Mac]0917H` | ✅ **已完成**（`59e9a78`＋`9e510d1`，已 ff 合入并推；tasks 28/33；生产代码 P2-TODO/CHARTER_RELPATH 零命中） | — | — |
 | **R-2b** | 全量 pytest 残留 1 红（`test_worktree_lane_runs_inside_script_created_worktree`） | `[Mac]0917I` | ✅ **已完成**（`159dca5`）：根因＝`sandbox` fixture 用 `dict(os.environ)` 把泳道的 `HR_LANE_*` 带进被测子进程；全量 2454 passed / 0 failed；TD-46 已还；run-lanes.sh 零改动 | — | — |
 | **R-3** | §5 五条真实起活实测 | `[Mac]0917N` 无头泳道（Cowork·0917D 经 launchd 远程发车；5.4 需他本人手机发一条消息） | ✅ **5.1/5.2/5.4 通过**（`[Mac]0917N`）：5.1 重启 pid 41080→52687，0 新增 ERROR；5.2 TD-47 修复后重跑，日志无 `Not logged in`，会话正常登录并跑完一轮（按 §四止步于陈旧信号，非失败）；5.4 `liaison_message` +1、新增 `bridge_skipped_no_inflight` 一条、无 `dispatch_started`、台账文件 diff 空。5.3 仍待汤丽萍下一条真实入站（`人事部#1` 现状 `✅ 已推送`，非第九态，前提未成立）；详见 `docs/findings/2026-09-17-打标即开班真实起活实测.md`「重跑三（0917N）」 | 5.3 通过 → 5.1–5.5 全勾，当场归档 | 5.3 无真实入站前无法归档；TD-48 仍开放，每次 `--force` 起活都可能再产生一次未授权自发提交 |
-| **R-3b** | TD-47：拆件子进程未登录 | `[Mac]0917K` 已修（`8ce57b3`，补 `USER`）→ `[Mac]0917N` 只 cherry-pick 该提交合入 main | ✅ **已还**（`[Mac]0917N`，cherry-pick 后 `ca02197`，已 push）；未取 K 分支上的子会话噪声提交（`a644d45`/`f575c5e`/`fe64bc1`），已随 K worktree/分支一并清理丢弃 | — | TD-47 已划掉；下游 TD-48（无头会话自发提交）在本轮 5.2 中再次复现（`07537fe`，已 `git revert` 为 `748a323`），独立于本条 |
+| **R-3b** | TD-47 ✅ 已还（`ca02197`）；**TD-48** 拆件会话权限无路径边界 ＋ 真实信号文件挂着测试假数据 `MSGID0001` | `[Mac]0917O`（worktree，Opus）→ `[Mac]0917P`（主工作区清假信号、重启、复验 5.2） | 🚀 **08:5x 远程发车**（Shao Peishen 答 `1a`：两层都做） | TD-48 划掉、`--force` 带真章程、越界编辑/`git add -A`/`commit -a` 实测被拒、假信号清掉、5.2 复验子会话提交路径全在章程清单内 | 汤丽萍回件时起的会话可越界改文件并提交 |
 | **R-4** | 汤丽萍解锁 | — | ✅ **已解锁**（§0 的 0.3 已勾＝真实入站已落库一条） | — | — |
 | **R-5** | `hr-wecom-aibot-liaison` 8.6–8.9 灰度四条 | Shao Peishen 本人 | ⏸ 等本包 §5 | 四条全勾并归档 | 值守通道停在「代码齐、没真用过」 |
 
