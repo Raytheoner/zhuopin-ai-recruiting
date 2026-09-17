@@ -13,9 +13,9 @@
 
 > 可见薄片（第 9 章 U2.5）的 U1 **必需子集**＝2.1／2.2／2.4／2.5 的 `hr_account`／2.7／2.8；其余（2.3、2.5 的 embedding 与 eval 表、2.6）建表成本低，与必需子集同一 plan 一次做完，⛔ 不拆成两个单元（design「交付单元与顺序」）。
 
-- [ ] 2.1 `app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN synthetic/anonymized/departed/live——`synthetic` 为合成替身样本（`scripts/gen_pilot_samples.py`），薄片期与脱敏样本同等可入库、`parser_version`、`parse_confidence`）、`resume_text_span`（`resume_id, span_id, start, end, text`）；全部 `CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`
-- [ ] 2.2 新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` CHECK IN human/agent）；测试：状态不挂在 `candidate` 上
-- [ ] 2.3 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('none','requested','under_review','upheld','overturned')`、`decided_by`、`batch_id`；反证测试：直接 INSERT `ai_score` 被 CHECK 拒绝
+- [x] 2.1 `app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN synthetic/anonymized/departed/live——`synthetic` 为合成替身样本（`scripts/gen_pilot_samples.py`），薄片期与脱敏样本同等可入库、`parser_version`、`parse_confidence`）、`resume_text_span`（`resume_id, span_id, start, end, text`）；全部 `CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`
+- [x] 2.2 新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` CHECK IN human/agent）；测试：状态不挂在 `candidate` 上
+- [x] 2.3 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('none','requested','under_review','upheld','overturned')`、`decided_by`、`batch_id`；反证测试：直接 INSERT `ai_score` 被 CHECK 拒绝
 - [ ] 2.4 新增 `resume_access_log`（`accessor, resume_id, access_type, at`，无内容列）、`field_review_queue`（`resume_id, field, machine_value, confidence, status, reviewed_by, reviewed_at, human_value`）、`screening_flag`（`application_id, profile_version, rule_ref, verdict CHECK IN pass/fail/skipped, reason, evidence_ref`；`fail` 时 `evidence_ref` 非空 CHECK）
 - [ ] 2.5 新增 `resume_embedding`（`resume_id, model, dim, vector BLOB`）、`eval_sample` / `eval_annotation` / `eval_import_batch`（含「禁止训练用途」表注释，同 `analysis_run` 口径）、`hr_account`（用户名唯一、盐哈希口令）
 - [ ] 2.6 `analysis_run` 增加 `run_type` 语义约定（`parse/rank`，可空列已存在的用 `prompt_version` 前缀区分，⛔ 不加列）；`criterion_score.evidence_ref` 的 JSON 形态 `{span_id,start,end}` 定为约定并加解析工具函数 + 测试
