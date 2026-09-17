@@ -40,10 +40,23 @@ class _FieldBase(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     spans: list[SpanRef] = Field(default_factory=list)
 
+    @staticmethod
+    def _is_empty(value) -> bool:
+        """判断值是否为空：None、[]、空串、纯空白串、或全空 EducationValue。"""
+        if value is None or value == []:
+            return True
+        if isinstance(value, str):
+            return value.strip() == ""
+        if isinstance(value, EducationValue):
+            degree = value.degree.strip() if isinstance(value.degree, str) else value.degree
+            school = value.school.strip() if isinstance(value.school, str) else value.school
+            return degree is None and school is None
+        return False
+
     @model_validator(mode="after")
     def _value_matches_flag(self):
         value = getattr(self, "value")
-        empty = value is None or value == []
+        empty = self._is_empty(value)
         if self.not_mentioned and not empty:
             raise ValueError("not_mentioned=True 时 value 必须为空")
         if not self.not_mentioned and empty:

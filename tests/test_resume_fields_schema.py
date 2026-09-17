@@ -67,3 +67,25 @@ def test_wrong_type_fails_whole_object():
 def test_json_schema_has_six_top_level_fields():
     props = ResumeFields.model_json_schema()["properties"]
     assert set(props) == set(FIELD_NAMES)
+
+
+def test_empty_string_requires_not_mentioned():
+    with pytest.raises(ValidationError, match="not_mentioned"):
+        TextField(value="", confidence=0.9)
+
+
+def test_whitespace_only_string_requires_not_mentioned():
+    with pytest.raises(ValidationError, match="not_mentioned"):
+        TextField(value="   ", confidence=0.9)
+
+
+def test_all_none_education_value_requires_not_mentioned():
+    with pytest.raises(ValidationError, match="not_mentioned"):
+        EducationField(value=EducationValue(), confidence=0.9)
+
+
+def test_zero_is_valid_value():
+    """0 is a real value, not empty, so it should pass without not_mentioned."""
+    field = NumberField(value=0, confidence=0.9)
+    assert field.value == 0
+    assert not field.not_mentioned
