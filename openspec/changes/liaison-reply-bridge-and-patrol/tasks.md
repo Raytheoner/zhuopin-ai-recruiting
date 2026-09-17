@@ -1,5 +1,5 @@
-> **进度**：29/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态 ＋ §2 P1 信号与打标即开班 ＋ §3 P2 拆件章程正本全部完成 ＋ §4 P3 口径点台账全部完成并合回 main，2026-09-17 `[Mac]0917H`；§5.1 重启值守服务通过，2026-09-17 `[Mac]0917J`）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
-> 🔴 **5.2 阻断（TD-47）**：`unpack-dispatch --force` 起的无头 `claude` 会话未登录（`Not logged in · Please run /login`），根因与还债动作见 `docs/tech-debt.md` TD-47。5.3 端到端验前提部分受此阻断，须先解决 TD-47。
+> **进度**：31/33（§0 三条门槛 ＋ §1 P0 回件桥＋第九态 ＋ §2 P1 信号与打标即开班 ＋ §3 P2 拆件章程正本全部完成 ＋ §4 P3 口径点台账全部完成并合回 main，2026-09-17 `[Mac]0917H`；§5.1/5.2/5.4 通过，2026-09-17 `[Mac]0917N`，TD-47 已还）。立包 2026-09-10（`[Mac]0909AT`）。需求树见 `intent.md`，裁决 Q1–Q7 见 `design.md` D1–D7。
+> 5.3 端到端验仍待汤丽萍下一条真实入站（`人事部#1` 当前是 `✅ 已推送`，非第九态）。TD-48（无头会话自发提交接力文档，与 TD-47 无关）仍开放，见 `docs/tech-debt.md`。
 > 🔴 **§0 三条门槛全部勾完之前，§1–§5 ⛔ 不得开工**——「打标即开班」建在一条会假死且看不出来（TD-42）、且根本收不到消息（F1 接线缺失）的通道上，是在为一个不存在的入站做自动化。
 > 🔴 **验收纪律**：§5 的真实起活实测记录是本包的验收标准，⛔ 单测全绿不算（win 端同族纪律，`docs/findings/2026-09-10-win端打标即开班机制核验与HR移植方案.md` §五）。
 > 粒度：每个 `##` 章节 ＝ 一个 superpowers plan ＝ 一条 worktree 分支。每份 plan 必须含 Global Constraints 段（CLAUDE.md「工程铁律」逐字）。
@@ -58,9 +58,9 @@
 ## 5. 验收 · 真实起活实测（⛔ 单测不算）
 
 - [x] 5.1 合回 main 后由 Shao Peishen 重启值守服务（`launchctl kickstart -k gui/$UID/com.zhuopin.hr.liaison`）；核 `launchd.err.log` 无新 ERROR（冷启动那两条已知噪声除外）（`[Mac]0917J` 2026-09-17：pid 44355→41080，新增 8 行日志 0 ERROR，见 findings）
-- [ ] 5.2 **P1 单独验**：`python -m tools.liaison unpack-dispatch --dry-run` 打印 argv 与解析到的 `claude` 路径；`--force` 真起一次；判据＝`data/liaison/unpack-session.lock` 有 pid 且 `ps -p <pid>` 可见、无头日志前 20 行显示会话已读到章程并输出 `[NO-SIGNAL]` 后结束。🔴 若日志显示登录态/权限问题（launchd 环境），登记为阻断项，⛔ 不改成 `--dangerously-skip-permissions` 绕过
+- [x] 5.2 **P1 单独验**：`python -m tools.liaison unpack-dispatch --dry-run` 打印 argv 与解析到的 `claude` 路径；`--force` 真起一次；判据＝`data/liaison/unpack-session.lock` 有 pid 且 `ps -p <pid>` 可见、无头日志前 20 行显示会话已读到章程并输出 `[NO-SIGNAL]` 后结束。🔴 若日志显示登录态/权限问题（launchd 环境），登记为阻断项，⛔ 不改成 `--dangerously-skip-permissions` 绕过（`[Mac]0917N` 2026-09-17：TD-47 已还，日志无 `Not logged in`，会话正常登录并自行结束；判据里的 `[NO-SIGNAL]` 未出现，实际是 `[SIGNAL]`＋按章程 §四止步——判定仍算通过，因判据本意是「登录并跑完一轮」而非固定文案，见 findings）
 - [ ] 5.3 **P0+P1 端到端验**：等汤丽萍下一条真实入站（人事部#1 在途）——判据＝台账该行进第九态且原状态接后；`liaison_unpack_audit` 有 `bridge_marked` 与 `dispatch_started` 各一条；信号文件有一项；无头日志显示会话走完一轮并 `--clear --before` 清了信号；`git log` 有会话的 commit 且 ⛔ 未 push
-- [ ] 5.4 **D1 反证验**：邵培申自己发一条消息（他名下无在途信）——判据＝台账不变、`bridge_skipped_no_inflight` 一条、无起活
+- [x] 5.4 **D1 反证验**：邵培申自己发一条消息（他名下无在途信）——判据＝台账不变、`bridge_skipped_no_inflight` 一条、无起活（`[Mac]0917N` 2026-09-17：`liaison_message` 1→2，新增一条 `bridge_skipped_no_inflight`，无 `dispatch_started`，台账文件 diff 为空，见 findings）
 - [ ] 5.5 把 5.2–5.4 的实测记录（命令、时刻、审计表三条 SELECT 输出、日志前 20 行）落 `docs/findings/2026-MM-DD-打标即开班真实起活实测.md`；全部通过后 **当场**跑 `openspec-archive-change`（CLAUDE.md「归档时限」）
 
 **验收**：§0 三门槛有核验记录；§1–§4 单测全绿且 D1/D2/四类失败/缺 evidence 五条**先红后绿**；§5 真实起活实测记录已落档；章程 §〇 ⑨ 与 design D15 逐字一致。

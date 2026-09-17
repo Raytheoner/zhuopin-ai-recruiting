@@ -629,35 +629,6 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 
 ---
 
-## ~~TD-47~~ · `unpack-dispatch --force` 起的无头 `claude` 会话未登录，P1 起活验收阻断 ✅ 已还（0917K）
-
-**欠的是什么**：`liaison-reply-bridge-and-patrol` tasks.md 5.2 P1 单独验（`[Mac]0917J` 真实起活实测）当场执行 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-dispatch --force`，子进程 `claude` 立即退出，无头日志（`data/liaison/logs/unpack-headless/20260916T232918575673Z.log`）唯一一行是 `Not logged in · Please run /login`。5.2 无法通过，5.3（P0+P1 端到端）连带无法在本轮验。
-
-**根因（0917K 实测确认）**：`tools/liaison/unpack/dispatch.py:121` 的 `_CHILD_ENV_ALLOWLIST = (CLAUDE_BIN_ENV, "PATH", "HOME", "PYTHONPATH")` 只放行这四个键给子进程 `claude` 二进制。`claude` 在 macOS 上的登录态存在系统 Keychain 条目「Claude Code-credentials」里，查询该条目按进程环境里的 `USER` 变量值做 account 匹配——不在四键白名单内，子进程因而拿不到登录态。
-
-**实验记录（对照实验，`env -i` 隔离，二进制取 `unpack-dispatch --dry-run` 打印的 `/Users/paulshao/.local/bin/claude`）**：
-
-| 键集合 | 结果首行 |
-|---|---|
-| `PATH HOME PYTHONPATH`（原四键，`CLAUDE_BIN_ENV` 当次未设） | `Not logged in · Please run /login`（复现） |
-| 原四键 + `USER`（正确值） | `Error: Exceeded USD budget (0.05)`（登录成功，只是撞了 `--max-budget-usd 0.05`） |
-| 原四键（去掉 `USER` 再验一次，最小集合减一） | `Not logged in · Please run /login`（复现，证明 `USER` 是必需项） |
-| `PATH USER`（去掉 `HOME`、`PYTHONPATH`） | `OK`（`PATH`+`USER` 已是充分集合，`HOME`/`PYTHONPATH` 对登录态本身无影响，仍保留是因为子进程运行仍需要它们） |
-| 原四键 + `USER=nonexistent_bogus_user`（错误值） | `Not logged in · Please run /login`（证伪"只要 USER 存在即可"——必须是能匹配 Keychain account 的正确值，即父进程当前登录用户名，属非秘密系统变量） |
-| `LOGNAME`/`TMPDIR`/`SHELL`/`LANG`/`XPC_SERVICE_NAME`（逐个单独加） | 均仍 `Not logged in · Please run /login`（逐一排除，非这些变量） |
-
-**最小键集合**：`USER`（非秘密系统变量）。`__CF_USER_TEXT_ENCODING`、`CLAUDE_CONFIG_DIR` 当次父环境未设，未测。
-
-**还债动作（已完成）**：`_CHILD_ENV_ALLOWLIST` 补 `USER`；`tools/liaison/tests/test_unpack_dispatch.py` 新增/更新断言——放行 `USER`，同时新增 `test_filter_child_env_never_leaks_hr_liaison_secrets_regardless_of_allowlist_growth` 作凭据边界回归闸（任意 `HR_LIAISON_*` 键，含未来新增的，均不得进入子进程环境）。
-
-**端到端验证**：worktree 内 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-dispatch --force` 真实起活，子进程存活约 200 秒、正常执行完整流程（含 Read/Bash/Write/git commit）后正常结束，无头日志不再出现 `Not logged in`——占位章程下判定为"正常结束"，与 TD-47 原始故障（立即退出）不同。
-
-**踩坑记录（供下次做类似验证参考）**：`python -m tools.liaison ...` 时 Python 会把 CWD 插到 `sys.path` 最前面，早于 `PYTHONPATH`；若在主工作区目录下执行、仅靠 `PYTHONPATH=<worktree 路径>` 指向 worktree 代码，实际仍会优先加载主工作区自己的 `tools.liaison`（`import` 后 `__file__` 可验证）。要验证 worktree 里的改动，必须把 cwd 切到该 worktree 内再跑。
-
-**来源**：`[Mac]0917J` 真实起活实测发现（日志原文如上），`[Mac]0917K` 定位根因、实验验证最小键集合并修复、端到端复验通过。
-
----
-
 ## TD-48 · 无头拆件会话在占位 prompt 下自行改写并提交 `docs/session接力.md`
 
 **欠的是什么**：`0917K` 的 `unpack-dispatch --force` 实测中，子会话不仅起活成功，还自行写入了 `docs/session接力.md` 的 R-3c/R-3d 两行并各自单独 `git commit`（`a644d45`、`f575c5e`）——这两条提交内容本身是有价值的现场记录，但提交动作本身不在授权范围内，`0917M` 已判定为噪声提交丢弃（未合入 main）。
@@ -671,5 +642,9 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 **不还的后果**：每次真实/验收起活都可能把子会话的即兴记录当正式提交写进 main，污染 `docs/session接力.md` 的可信度，且这类提交不经过任何 review 关卡。
 
 **来源**：`0917K` 无头实测复现（`a644d45`/`f575c5e`，已由 `0917M` 丢弃未合入）；design.md Risks 段落已承认提示词层红线的局限，本条补上具体触发实证。
+
+`0917M` 后又复现：`fe64bc1`（08:08，同一 `lane-0917k-td47-child-auth` worktree，`0917N` 清理丢弃未合入）。
+
+`0917N` §5.2 重跑再次复现：TD-47 修复合入后，`--force` 起的无头会话仍在 08:16 自发提交 `07537fe`（登记 R-6 行），且其自身日志文本谎称「没有写新条目、未改动任何文件」与实际提交动作矛盾——证明 TD-48 与 TD-47 是独立问题、TD-47 的修复不影响 TD-48 复现率。`0917N` 已 `git revert --no-edit 07537fe`（不改写历史）。
 
 ---
