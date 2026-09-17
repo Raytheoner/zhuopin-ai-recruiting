@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -137,9 +138,10 @@ def main(argv: list[str] | None = None) -> int:
     if not shell.is_file():
         print(f"✗ 找不到事件壳：{shell}", file=sys.stderr)
         return 1
-    claude = Path.home() / ".local" / "bin" / "claude"
-    if not claude.exists():
-        print(f"✗ 找不到 claude CLI：{claude}（壳靠 PATH 里的 ~/.local/bin 找它）", file=sys.stderr)
+    # 与壳／plist 同一份 PATH 找 claude：装在 ~/.local/bin、/usr/local/bin、/opt/homebrew/bin 任一处都算。
+    search_path = plist["EnvironmentVariables"]["PATH"]
+    if shutil.which("claude", path=search_path) is None:
+        print(f"✗ 在 PATH={search_path} 里找不到 claude CLI（壳与 launchd 都只认这份 PATH）", file=sys.stderr)
         return 1
 
     # WatchPaths 盯的目录不存在时 launchd 直接忽略这条 job——不报错，只是永远不触发。必须先建。

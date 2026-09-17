@@ -8,19 +8,22 @@
 #
 # 本壳只做五件事，逻辑全在 skill `.claude/skills/task-dispatcher/SKILL.md`：
 #   ① cd 仓库根、PATH 补 ~/.local/bin（claude 装在那儿；launchd 不继承登录 shell 的 PATH）
-#   ② 单实例锁 .claude/handoff/dispatcher.lock（pid 存活即退出；死 pid 视为孤儿锁覆盖）
+#   ② 单实例锁 .claude/handoff/dispatcher.lock（壳 pid ＋ claude 子进程 pid 各一行；任一存活即退出；
+#      全部已死视为孤儿锁覆盖。壳收 TERM/INT 时先杀子进程再删锁——launchd bootout/kickstart -k 只 TERM 壳，
+#      AbandonProcessGroup 又不连坐子进程，不这样做会留下一个孤儿 claude 会话与新会话双跑）
 #   ③ 判「该不该起会话」：有未处理事件文件、或当日兜底戳不存在 ⇒ 起；否则静默退出
 #      —— skill 把事件搬进 events/processed/ 会再触发 WatchPaths，没有这条判据就是死循环
 #   ④ printf | claude -p 以 Sonnet 执行 skill，预算上限 $10，日志 .claude/handoff/dispatcher/<ts>.log
 #   ⑤ 会话 rc=0 ⇒ 把本轮列给它的事件里仍留在 events/ 的搬进 processed/（skill ⑨ 应已做，这里兜底防重复处理）；
-#      rc≠0 ⇒ 事件原地留着，等下次唤醒／每日兜底。同一次调用最多跑 3 轮，吃掉会话期间新到的事件。
+#      rc≠0 ⇒ 事件原地留着，等下次唤醒／每日兜底，并写失败戳：30 分钟内不再由事件起会话（防预算打满后
+#      被自己写的事件反复唤醒、按次烧 $10）。同一次调用最多跑 3 轮，吃掉会话期间新到的事件。
 #
 # ⛔ 本壳不 source .env、不读密钥、不把事件文件内容当命令（事件文件只用文件名）。
 # 单测注入口（生产由 launchd 直接调用、不设）：
 #   DISPATCHER_REPO    仓库根（默认 /Users/paulshao/Projects/HumanResource）
 #   DISPATCHER_CLAUDE  claude 可执行文件（默认 PATH 里的 claude；测试指到假脚本）
 #   DISPATCHER_MODEL   模型（默认 sonnet）    DISPATCHER_BUDGET  预算美元（默认 10）
-#   DISPATCHER_MAX_ROUNDS 同次调用最多轮数（默认 3）
+#   DISPATCHER_MAX_ROUNDS 同次调用最多轮数（默认 3）    DISPATCHER_BACKOFF_MIN 失败退避分钟（默认 30）
 # ===========================================================================
 set -uo pipefail
 
@@ -33,6 +36,7 @@ CLAUDE_BIN="${DISPATCHER_CLAUDE:-claude}"
 MODEL="${DISPATCHER_MODEL:-sonnet}"
 BUDGET="${DISPATCHER_BUDGET:-10}"
 MAX_ROUNDS="${DISPATCHER_MAX_ROUNDS:-3}"
+BACKOFF_MIN="${DISPATCHER_BACKOFF_MIN:-30}"
 
 # ⛔ 不许留字面量 ~：这里是 shell，$HOME 会展开；plist 里那份由安装器渲染成绝对路径。
 export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
@@ -56,14 +60,28 @@ log() { echo "[$(date +%Y-%m-%dT%H:%M:%S)] $*" | tee -a "$LOG"; }
 #    bash 没有 flock 命令，而 pid 判据在两台机器上行为一致且可测。
 # ---------------------------------------------------------------------------
 if [[ -f "$LOCK" ]]; then
-  holder="$(head -1 "$LOCK" 2>/dev/null | tr -cd '0-9')"
-  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
-    echo "[$(date +%Y-%m-%dT%H:%M:%S)] 另一个调度器实例 pid=$holder 在跑，退出" >> "$LOGDIR/launchd.log"
-    exit 0
-  fi
+  while IFS= read -r holder; do
+    holder="$(printf '%s' "$holder" | tr -cd '0-9')"
+    if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+      echo "[$(date +%Y-%m-%dT%H:%M:%S)] 另一个调度器实例 pid=$holder 在跑，退出" >> "$LOGDIR/launchd.log"
+      exit 0
+    fi
+  done < "$LOCK"
 fi
 echo "$$" > "$LOCK"
-trap 'rm -f "$LOCK"' EXIT
+child=""
+cleanup() {
+  # 子进程（claude）还在 ⇒ 先 TERM 它：锁一旦释放，新实例就会起；留一个孤儿会话等于双跑。
+  if [[ -n "$child" ]] && kill -0 "$child" 2>/dev/null; then
+    kill -TERM "$child" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
+    kill -0 "$child" 2>/dev/null && kill -KILL "$child" 2>/dev/null
+  fi
+  rm -f "$LOCK"
+}
+trap 'cleanup' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 # ---------------------------------------------------------------------------
 # ③ 该不该起会话。
@@ -81,6 +99,13 @@ find "$LOGDIR" -maxdepth 1 -name 'daily-*' -mtime +7 -delete 2>/dev/null
 events="$(pending_events)"
 if [[ -z "$events" && -f "$DAILY" ]]; then
   echo "[$(date +%Y-%m-%dT%H:%M:%S)] 无未处理事件且当日兜底已跑，静默退出" >> "$LOGDIR/launchd.log"
+  exit 0
+fi
+
+# 失败退避：最近一次会话 rc≠0 距今不足 BACKOFF_MIN 分钟 ⇒ 不再由事件起会话（事件留着，09:00 兜底或退避期后的下一事件带上）。
+FAILED_STAMP="$LOGDIR/last-failure"
+if [[ -f "$FAILED_STAMP" ]] && [[ -n "$(find "$LOGDIR" -maxdepth 1 -name last-failure -mmin "-$BACKOFF_MIN" 2>/dev/null)" ]]; then
+  echo "[$(date +%Y-%m-%dT%H:%M:%S)] 上次会话失败距今不足 ${BACKOFF_MIN} 分钟，退避中，退出（事件保留）" >> "$LOGDIR/launchd.log"
   exit 0
 fi
 
@@ -120,25 +145,35 @@ while :; do
   events="$(pending_events)"
   ev_names=""
   if [[ -n "$events" ]]; then
-    ev_names="$(printf '%s\n' "$events" | xargs -n1 basename)"
+    ev_names=""
+    while IFS= read -r ev; do [[ -n "$ev" ]] && ev_names="${ev_names}${ev_names:+$'\n'}${ev##*/}"; done <<< "$events"
     trigger="事件（$(printf '%s\n' "$ev_names" | wc -l | tr -d ' ') 个）"
+    # 事件触发的这一轮也算当日兜底：起前就写戳，防 processed/ 搬动触发的下一次空转
+    : > "$DAILY"
   else
     trigger="每日兜底（无事件文件）"
   fi
-  : > "$DAILY"
   log "▶ 第 $round 轮：$trigger model=$MODEL budget=\$$BUDGET"
   [[ -n "$ev_names" ]] && printf '%s\n' "$ev_names" | sed 's/^/    事件: /' | tee -a "$LOG"
 
   # -p 模式默认只等后台子任务 600 秒；调度器不派子代理，但与 run-lanes 同口径放宽无害。
+  # 后台起、记 pid 进锁、再 wait：壳被 TERM 时 trap 能拿到子进程杀掉；锁里第二行让别的实例也能看见它。
   build_prompt "$ev_names" "$trigger" | env DISPATCHER_LOCK_HELD=1 HR_HEADLESS_LANE=1 \
       CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$MODEL" \
       "$CLAUDE_BIN" -p -n "[Mac]dispatcher-$STAMP" --output-format text \
       --model "$MODEL" --max-budget-usd "$BUDGET" --dangerously-skip-permissions --strict-mcp-config \
-      >> "$LOG" 2>&1
+      >> "$LOG" 2>&1 &
+  child=$!
+  printf '%s\n%s\n' "$$" "$child" > "$LOCK"
+  wait "$child"
   rc=$?
+  child=""
+  echo "$$" > "$LOCK"
   log "■ 第 $round 轮结束 rc=$rc"
 
   if [[ $rc -eq 0 ]]; then
+    : > "$DAILY"
+    rm -f "$FAILED_STAMP"
     # ⑤ 兜底归档：skill ⑨ 应已搬走；仍留着的（skill 漏搬）这里搬，防下次唤醒重复处理。
     while IFS= read -r ev; do
       [[ -n "$ev" && -f "$ev" ]] || continue
@@ -146,7 +181,8 @@ while :; do
     done <<< "$events"
   else
     overall_rc=$rc
-    log "  ✗ 会话非 0 退出，事件原地留着等下次唤醒／每日兜底"
+    : > "$FAILED_STAMP"
+    log "  ✗ 会话非 0 退出，事件原地留着等下次唤醒／每日兜底；${BACKOFF_MIN} 分钟内不再由事件起会话"
     break
   fi
 

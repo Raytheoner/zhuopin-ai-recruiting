@@ -32,7 +32,7 @@ description: 任务驱动 workflow 的调度器（R2）。由事件（泳道批�
 ### ① 单实例锁 `.claude/handoff/dispatcher.lock`
 
 - 锁文件内容 = 持锁进程 pid（一行）。`scripts/dispatcher_event.sh` 起本会话前已取锁并导出 `DISPATCHER_LOCK_HELD=1`；见到该环境变量 ⇒ 锁归壳管，本步只核 `cat .claude/handoff/dispatcher.lock` 有 pid 即过。
-- 手工起的会话（没有该环境变量）：锁存在且 `kill -0 <pid>` 成功 ⇒ **pid 存活即退出**——输出一行「另一个调度器实例 <pid> 在跑，本会话退出」＋ `OPENER_DONE`，⛔ 不做任何事、⛔ 不删锁；锁不存在或 pid 已死 ⇒ `echo $PPID > .claude/handoff/dispatcher.lock`，收工前删掉。
+- 手工起的会话（没有该环境变量）：锁存在且 `kill -0 <pid>` 成功 ⇒ **pid 存活即退出**——输出一行「另一个调度器实例 <pid> 在跑，本会话退出」＋ `OPENER_DONE`，⛔ 不做任何事、⛔ 不删锁；锁不存在或 pid 已死 ⇒ `echo $PPID > .claude/handoff/dispatcher.lock`，收工前删掉（会话被打断留下的死 pid 锁会被壳判孤儿自动覆盖，不需人清）。
 
 ### ② 刷新台账
 
@@ -48,7 +48,8 @@ python3 scripts/dispatcher_backlog.py --show conflicts
 ```bash
 python3 scripts/dispatcher_backlog.py --show ready
 python3 scripts/dispatcher_backlog.py --show running
-ls .claude/handoff/lanes-*/results.tsv 2>/dev/null   # 缺 results.tsv 的批次 = 未收敛，其块的触碰区算「在跑」
+pgrep -f 'run-lanes.*\.sh' >/dev/null && ls -d .claude/handoff/lanes-*/ | while read -r d; do [ -f "$d/summary.txt" ] || echo "未收敛批次：$d"; done
+# ⛔ 不用 results.tsv 判收敛（发车前就建好、逐条 append）；summary.txt 只在全部泳道 wait 完才写，缺它＝在跑，其块的触碰区算「在跑」
 ```
 
 对 `--show ready` 的每条再过 `rules.md` §1 四判据（尤其 ③ 触碰区不与在跑重叠、④ 不属不可代项）与 §3 上限（在跑 ≤ 3、单批 ≤ 6 条），得到本批发车集；聚合条目（`<change>/U<n>`、`change:*`、`scene:*`）永不发车。
@@ -94,11 +95,11 @@ ls .claude/handoff/lanes-*/results.tsv 2>/dev/null   # 缺 results.tsv 的批次
 本会话改的只能是文档：`docs/roadmap/任务台账.yaml`、`docs/roadmap/定夺队列.md`、`docs/openers/OP-0820-全量编排.md`、`docs/openers/号池台账.md`（＋ `archive_docs.py` 搬出的 `docs/openers/归档/*`）。用 Write 工具写 `.claude/handoff/commit/<YYYYMMDD-HHMMSS>-dispatcher.request`：
 
 ```json
-{"message": "chore(dispatcher): <事件文件名> 台账刷新＋派 <编号列表>（task-dispatcher）", "paths": ["docs/roadmap/任务台账.yaml", "docs/roadmap/定夺队列.md", "docs/openers/OP-0820-全量编排.md", "docs/openers/号池台账.md"], "push": true}
+{"message": "chore(dispatcher): <事件文件名> 台账刷新＋派 <编号列表>（task-dispatcher）", "paths": ["docs/roadmap/任务台账.yaml", "docs/roadmap/定夺队列.md", "docs/openers/OP-0820-全量编排.md", "docs/openers/号池台账.md"], "push": true, "emit_event": false}
 ```
 
 `paths` 只列**真有改动**的文件（`git status --porcelain -- <路径>` 非空的），列了没改的会被整条拒绝。⛔ 本会话不自己 `git add`／`git commit`／`git push`——提交通道会在 `index.lock` 时推迟、被拒时写原因，比会话里硬提安全。回 `.deferred` ⇒ 改动留在工作区，登记「⏸ 留步：提交被推迟」，下次唤醒会带上（提交通道核的是工作区 diff）。
-⚠️ 含 `docs/roadmap/定夺队列.md` 的提交完成后，提交通道会写 `events/decision-<ts>` 再唤醒一次调度器——这是设计内的回环（答复落档 ⇒ 解阻塞）；本会话只追加待答行、没有新答复时，下一次唤醒会在 ③ 得到空 ready 集并快速收工，⛔ 不要为避免回环而绕开提交通道。
+`"emit_event": false` 必带：提交通道对含 `docs/roadmap/定夺队列.md` 的提交默认写 `events/decision-<ts>` 再唤醒调度器（那是给 Cowork 落**答复**用的回环）；本会话只追加待答行、没有新答复，带上它就不会自己唤醒自己。⛔ 不要为避免回环而绕开提交通道。
 
 ### ⑧ 处理 `lanes-done-*` 事件时先调 `launch-queue-drain`
 
@@ -108,7 +109,7 @@ ls .claude/handoff/lanes-*/results.tsv 2>/dev/null   # 缺 results.tsv 的批次
 venv/bin/python scripts/action_request.py launch-queue-drain    # 无 run-lanes 在跑 ⇒ queue/ 最早一条移回 launch/，WatchPaths 由此发车
 ```
 
-输出 `"drained": null` 且队列非空 ⇒ run-lanes 仍在跑（`--chain` 续跑或另一批），留队等下个事件，⛔ 不重试轰炸。然后按该批 `.claude/handoff/lanes-<STAMP>/results.tsv` 逐条核真身（`rules.md` §2：`git cherry -v main <分支>` 无 `+` ＋ checkbox 已勾才算「完成」；`OPENER_DONE` 不算），更新台账状态。
+输出 `"drained": null` 且 `ls .claude/handoff/launch/queue/*.request` 非空 ⇒ run-lanes 仍在跑（`--chain` 续跑或另一批），留队等下个事件，⛔ 不重试轰炸。然后按该批 `.claude/handoff/lanes-<STAMP>/results.tsv` 逐条核真身（`rules.md` §2：`git cherry -v main <分支>` 无 `+` ＋ checkbox 已勾才算「完成」；`OPENER_DONE` 不算），更新台账状态。
 
 ### ⑨ 事件文件处理完移到 `events/processed/`
 
@@ -117,7 +118,7 @@ mkdir -p .claude/handoff/events/processed
 mv .claude/handoff/events/<事件文件> .claude/handoff/events/processed/
 ```
 
-只移**本会话真处理完**的事件文件（壳启动时列在 prompt 里的那些）；处理到一半失败的留在原地，由每日 09:00 兜底或下一事件带上。`events/` 目录变化会再触发一次壳，壳见锁在、或没有未处理事件与当日兜底戳 ⇒ 静默退出，不会空转。
+壳在本会话 rc=0 后会把 prompt 里列出的事件**全部**归档（含本会话输出 `OPENER_PARTIAL` 的情况——`claude -p` 退出码仍是 0），所以事件文件⛔ 不承担「留步记忆」：留步事项一律写进台账备注或定夺队列，⛔ 不靠把事件留在原地等人接。只有壳看到 rc≠0（预算打满、进程被杀）事件才留原地，由每日 09:00 兜底或下一事件带上（壳对失败有 30 分钟退避，⛔ 不会连着烧预算）。`events/` 目录变化会再触发一次壳，壳见锁在、或没有未处理事件与当日兜底戳 ⇒ 静默退出，不会空转。
 
 ## 3. 收工报告（写进会话输出，壳会存进日志）
 

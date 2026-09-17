@@ -19,6 +19,8 @@
     ① 用 Write 工具写 `.claude/handoff/commit/<时间戳>.request`，内容是一个 JSON 对象：
          {"message": "docs(x): …", "paths": ["docs/…", "openspec/changes/<名>/tasks.md"], "push": true}
        `paths` 只能是**文件**（不是目录、不带通配），相对仓库根；`push` 省略即 false。
+       `emit_event` 省略即 true：提交含 `docs/roadmap/定夺队列.md` 时写 `.claude/handoff/events/decision-<ts>`
+       唤醒调度器（0917AM）；调度器自己的提交带 `"emit_event": false`，免得自己唤醒自己。
     ② 等 `<同名>.done`（含 commit hash）／`.rejected`（含原因）／`.deferred`（index.lock 在用）。
        `.deferred` **不会自动重试**：要重发就写一个新的 `.request`。
 
@@ -134,13 +136,16 @@ def parse_request(text: str) -> tuple[dict | None, str | None]:
     push = data.get("push", False)
     if not isinstance(push, bool):
         return None, f"push 必须是布尔值，收到 {push!r}"
+    emit_event = data.get("emit_event", True)
+    if not isinstance(emit_event, bool):
+        return None, f"emit_event 必须是布尔值，收到 {emit_event!r}"
     for p in paths:
         reason = validate_path(p)
         if reason:
             return None, reason
     if len(set(paths)) != len(paths):
         return None, "paths 里有重复项"
-    return {"message": message, "paths": list(paths), "push": push}, None
+    return {"message": message, "paths": list(paths), "push": push, "emit_event": emit_event}, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -388,7 +393,7 @@ def main() -> int:
     if request["push"] and not pushed:
         # 本地 commit 已经在了，这不是失败；但 push 没成要让 Cowork 看见
         payload["warning"] = "本地已提交但 push 未成功，等下一条泳道推或人工 push"
-    event = write_decision_event(repo, request["paths"], commit_hash)
+    event = write_decision_event(repo, request["paths"], commit_hash) if request["emit_event"] else None
     if event is not None:
         payload["decision_event"] = str(event.relative_to(repo))
     return outcome.done(**payload)

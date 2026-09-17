@@ -16,8 +16,10 @@ import json
 import os
 import plistlib
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -28,7 +30,7 @@ SKILL = ROOT / ".claude" / "skills" / "task-dispatcher" / "SKILL.md"
 RULES = ROOT / ".claude" / "skills" / "task-dispatcher" / "rules.md"
 
 from scripts import install_task_dispatcher  # noqa: E402
-from scripts.commit_request import write_decision_event  # noqa: E402
+from scripts.commit_request import parse_request, write_decision_event  # noqa: E402
 from scripts.install_task_dispatcher import LABEL, build_plist  # noqa: E402
 
 
@@ -149,8 +151,71 @@ def test_lock_is_held_for_the_whole_session(repo: Path) -> None:
     proc = run_shell(repo, script)
     assert proc.returncode == 0, proc.stderr
     seen = probe.read_text(encoding="utf-8").splitlines()
-    assert seen[0].strip().isdigit(), f"会话期间锁文件应含 pid：{seen}"
-    assert seen[1] == "env=1", "壳必须导出 DISPATCHER_LOCK_HELD=1 让 skill ① 知道锁归壳管"
+    pids = [l for l in seen if l.strip().isdigit()]
+    assert len(pids) == 2, f"会话期间锁文件应含壳 pid 与 claude 子进程 pid 两行：{seen}"
+    assert seen[-1] == "env=1", "壳必须导出 DISPATCHER_LOCK_HELD=1 让 skill ① 知道锁归壳管"
+
+
+def test_sigterm_to_the_shell_kills_the_claude_child_and_releases_the_lock(repo: Path) -> None:
+    """launchd bootout / kickstart -k 只 TERM 壳；不杀子进程就会留下孤儿会话与新实例双跑。"""
+    (events_dir(repo) / "lanes-done-x").touch()
+    started = repo / "child-started"
+    script = repo / "fake-claude.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\ncat >/dev/null\n"
+        f"echo $$ > '{started}'\nsleep 30\necho OPENER_DONE\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    env = {**os.environ, "DISPATCHER_REPO": str(repo), "DISPATCHER_CLAUDE": str(script)}
+    shell = subprocess.Popen(["bash", str(SHELL)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 10
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert started.exists(), "假 claude 没起来"
+        child_pid = int(started.read_text().strip())
+        lock = repo / ".claude" / "handoff" / "dispatcher.lock"
+        assert str(child_pid) in lock.read_text(encoding="utf-8").split(), "锁里应记子进程 pid"
+        shell.send_signal(signal.SIGTERM)
+        shell.wait(timeout=15)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and subprocess.run(["kill", "-0", str(child_pid)], capture_output=True).returncode == 0:
+            time.sleep(0.2)
+        assert subprocess.run(["kill", "-0", str(child_pid)], capture_output=True).returncode != 0, "子进程应随壳一起被终止"
+        assert not lock.exists(), "锁应在退出时释放"
+        assert (events_dir(repo) / "lanes-done-x").is_file(), "被打断的事件应原地保留"
+    finally:
+        if shell.poll() is None:
+            shell.kill()
+
+
+def test_failed_session_triggers_backoff_for_event_wakeups(repo: Path) -> None:
+    """rc≠0 后 30 分钟内的事件触发不再起会话（否则自己写的事件会按次烧满预算）；退避期过或人工清戳即恢复。"""
+    (events_dir(repo) / "lanes-done-1").touch()
+    bad = fake_claude(repo, rc=1)
+    assert run_shell(repo, bad).returncode == 1
+    assert len(calls(repo)) == 1
+    (events_dir(repo) / "lanes-done-2").touch()
+    again = run_shell(repo, fake_claude(repo))
+    assert again.returncode == 0 and len(calls(repo)) == 1, "退避期内⛔ 不得再起会话"
+    launchd_log = (repo / ".claude" / "handoff" / "dispatcher" / "launchd.log").read_text(encoding="utf-8")
+    assert "退避" in launchd_log
+    # 退避戳过期 ⇒ 恢复，且成功后清掉戳
+    stamp = repo / ".claude" / "handoff" / "dispatcher" / "last-failure"
+    old = time.time() - 3600
+    os.utime(stamp, (old, old))
+    ok = run_shell(repo, fake_claude(repo))
+    assert ok.returncode == 0 and len(calls(repo)) == 2
+    assert not stamp.exists()
+
+
+def test_event_filenames_with_spaces_survive(repo: Path) -> None:
+    (events_dir(repo) / "lanes-done-with space").touch()
+    proc = run_shell(repo, fake_claude(repo))
+    assert proc.returncode == 0, proc.stderr
+    assert "lanes-done-with space" in calls(repo)[0]
+    assert (events_dir(repo) / "processed" / "lanes-done-with space").is_file()
 
 
 def test_no_events_runs_the_daily_fallback_once_then_stays_silent(repo: Path) -> None:
@@ -276,6 +341,16 @@ def test_commit_with_decision_queue_writes_a_decision_event(tmp_path: Path) -> N
     assert ev.read_text(encoding="utf-8") == "commit=deadbeef\n"
 
 
+def test_emit_event_false_suppresses_the_decision_event(tmp_path: Path) -> None:
+    """调度器自己的 ⑦ 提交带 emit_event:false，⛔ 不得自己唤醒自己。"""
+    req, err = parse_request(json.dumps({"message": "m", "paths": ["docs/roadmap/定夺队列.md"], "emit_event": False}))
+    assert err is None and req["emit_event"] is False
+    req, err = parse_request(json.dumps({"message": "m", "paths": ["docs/roadmap/定夺队列.md"]}))
+    assert err is None and req["emit_event"] is True, "省略即 true（向后兼容 Cowork 现有请求）"
+    _, err = parse_request(json.dumps({"message": "m", "paths": ["docs/a.md"], "emit_event": "no"}))
+    assert err and "emit_event" in err
+
+
 def test_commit_without_decision_queue_writes_no_event(tmp_path: Path) -> None:
     assert write_decision_event(tmp_path, ["docs/a.md", "docs/roadmap/任务台账.yaml"], "deadbeef") is None
     assert not (tmp_path / ".claude" / "handoff" / "events").exists()
@@ -302,8 +377,8 @@ def test_end_to_end_commit_request_emits_event_only_for_decision_queue(tmp_path:
     handoff.mkdir(parents=True)
     env = {**os.environ, "COMMIT_LAUNCHER_REPO": str(r), "COMMIT_LAUNCHER_LOCK_WAIT_SECONDS": "0.01"}
 
-    def submit(name: str, paths: list[str]) -> dict:
-        (handoff / f"{name}.request").write_text(json.dumps({"message": name, "paths": paths}), encoding="utf-8")
+    def submit(name: str, paths: list[str], **extra: object) -> dict:
+        (handoff / f"{name}.request").write_text(json.dumps({"message": name, "paths": paths, **extra}), encoding="utf-8")
         proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "commit_request.py")], env=env, cwd=str(r), capture_output=True, text=True, timeout=120)
         assert proc.returncode == 0, proc.stdout + proc.stderr
         return json.loads((handoff / f"{name}.done").read_text(encoding="utf-8"))
@@ -317,6 +392,11 @@ def test_end_to_end_commit_request_emits_event_only_for_decision_queue(tmp_path:
     d2 = submit("20260917-000002", ["docs/roadmap/定夺队列.md"])
     assert d2["decision_event"].startswith(".claude/handoff/events/decision-")
     assert (r / d2["decision_event"]).read_text(encoding="utf-8") == f"commit={d2['commit']}\n"
+
+    (r / "docs" / "roadmap" / "定夺队列.md").write_text("q | 已答 | 追加待答\n", encoding="utf-8")
+    d3 = submit("20260917-000003", ["docs/roadmap/定夺队列.md"], emit_event=False)
+    assert "decision_event" not in d3
+    assert len(list((r / ".claude" / "handoff" / "events").glob("decision-*"))) == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,6 +452,8 @@ def test_skill_contains_every_red_line(skill_text: str, red_line: str) -> None:
         "launch-queue-drain",
         "lanes-done-",
         "events/processed/",
+        "summary.txt",
+        '"emit_event": false',
     ],
 )
 def test_skill_names_every_step(skill_text: str, step_marker: str) -> None:
@@ -404,3 +486,13 @@ def test_skill_refers_only_to_existing_repo_paths(skill_text: str) -> None:
     for p in referenced:
         assert p in skill_text, f"SKILL.md 应引用 {p}"
         assert (ROOT / p).exists(), f"SKILL.md 引用的路径不存在：{p}"
+
+
+def test_run_lanes_writes_summary_only_after_all_lanes_and_results_before_launch() -> None:
+    """rules.md §1 ③ 与 SKILL.md ③ 用「summary.txt 缺失」判在跑批次——钉住 run-lanes 的真身：
+    results.tsv 在发车前就 `: >` 建好（不能当收敛判据），summary.txt 只在汇总段 tee 出来。"""
+    text = (ROOT / "docs" / "openers" / "run-lanes.sh").read_text(encoding="utf-8")
+    assert ': > "$LOGDIR/results.tsv"' in text
+    assert 'tee "$LOGDIR/summary.txt"' in text
+    assert text.index(': > "$LOGDIR/results.tsv"') < text.index('tee "$LOGDIR/summary.txt"')
+    assert "results.tsv` 缺失" not in RULES.read_text(encoding="utf-8")
