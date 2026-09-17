@@ -1,13 +1,13 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 205
+  条目数: 214
   按状态:
     待开: 71
     在跑: 6
     完成: 90
-    阻塞: 38
-  阻塞·决策: 20
+    阻塞: 47
+  阻塞·决策: 29
   阻塞·外部: 17
   conflicts:
   - m1-intake-quality-fixes/8.9
@@ -23,6 +23,10 @@ summary:
   - m1-job-profile-intake/U6
   - m2-resume-parse-and-rank/1.4
   - m2-resume-parse-and-rank/6.2
+  - propose:S-Offer Offer 生成
+  - propose:S-入职 入职流程
+  - propose:S-排期 面试排期
+  - propose:S-渠道 渠道对接与简历自动汇总
   - relay:H-4
   ready: []
   闸门待放行:
@@ -2861,7 +2865,7 @@ tasks:
 - id: propose:M3
   场景: M3
   阶段: propose
-  标题: openspec-propose：S-M3 实时语音结构化面试（intent 定稿后）
+  标题: openspec-propose：S-M3（intent 定稿后）
   依赖: []
   触碰区:
   - openspec/changes/
@@ -2871,6 +2875,71 @@ tasks:
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 M3
+- id: propose:S-Offer
+  场景: S-Offer
+  阶段: propose
+  标题: openspec-propose：S-Offer（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-Offer-intent.md:1
+  可见: false
+  闸门: G1 S-Offer
+- id: propose:S-入职
+  场景: S-入职
+  阶段: propose
+  标题: openspec-propose：S-入职（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-入职-intent.md:1
+  可见: false
+  闸门: G1 S-入职
+- id: propose:S-排期
+  场景: S-排期
+  阶段: propose
+  标题: openspec-propose：S-排期（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-排期-intent.md:1
+  可见: false
+  闸门: G1 S-排期
+- id: propose:S-渠道
+  场景: S-渠道
+  阶段: propose
+  标题: openspec-propose：S-渠道（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-渠道-intent.md:1
+  可见: false
+  闸门: G1 S-渠道
+- id: propose:波次0-grill首轮汇总
+  场景: 波次0-grill首轮汇总
+  阶段: propose
+  标题: openspec-propose：波次0-grill首轮汇总（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/波次0-grill首轮汇总.md:1
+  可见: false
+  闸门: G1 波次0-grill首轮汇总
 - id: relay:R-6
   场景: M0
   阶段: build
@@ -3213,6 +3282,74 @@ tasks:
   阻塞类型: 无
   产出判据: 已完成（lanes-20260917-182834，OK，2 分钟）；合入 commit 05fd82c
   来源: docs/openers/号池台账.md:230
+- id: propose:S-Offer Offer 生成
+  场景: S-Offer Offer 生成
+  阶段: propose
+  标题: openspec-propose：S-Offer Offer 生成（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-Offer-intent.md:1
+  可见: false
+  闸门: G1 S-Offer Offer 生成
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 来源已消失或已勾选
+- id: propose:S-入职 入职流程
+  场景: S-入职 入职流程
+  阶段: propose
+  标题: openspec-propose：S-入职 入职流程（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-入职-intent.md:1
+  可见: false
+  闸门: G1 S-入职 入职流程
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 来源已消失或已勾选
+- id: propose:S-排期 面试排期
+  场景: S-排期 面试排期
+  阶段: propose
+  标题: openspec-propose：S-排期 面试排期（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-排期-intent.md:1
+  可见: false
+  闸门: G1 S-排期 面试排期
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 来源已消失或已勾选
+- id: propose:S-渠道 渠道对接与简历自动汇总
+  场景: S-渠道 渠道对接与简历自动汇总
+  阶段: propose
+  标题: openspec-propose：S-渠道 渠道对接与简历自动汇总（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/S-渠道-intent.md:1
+  可见: false
+  闸门: G1 S-渠道 渠道对接与简历自动汇总
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 来源已消失或已勾选
 - id: relay:H-1
   场景: M0
   阶段: build
