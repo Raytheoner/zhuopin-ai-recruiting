@@ -1,0 +1,2618 @@
+version: 1
+说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
+summary:
+  条目数: 185
+  按状态:
+    待开: 89
+    在跑: 5
+    完成: 64
+    阻塞: 27
+  阻塞·决策: 17
+  阻塞·外部: 10
+  conflicts: []
+  ready:
+  - hr-wecom-aibot-liaison/8.9
+  - opener:[Mac]0917AN
+  - m1-intake-quality-fixes/U8/plan
+  - m1-job-profile-intake/9.2
+  - m1-job-profile-intake/U1/plan
+  - relay:H-4
+  未知依赖:
+  - opener:[Mac]0917AJ
+  未归属plans:
+  - 2026-08-06-m1-chapter0-demo
+  - 2026-08-13-fix-sqlite-transaction-ownership-chapter1
+  - 2026-08-19-m1-intake-quality-fixes-unitA-storage-and-structured-questions
+  - 2026-08-19-m1-intake-quality-fixes-unitB-fallback-options-and-budget
+  - 2026-08-19-m1-intake-quality-fixes-unitC-frontend-selectable-options
+  - 2026-08-19-server-runtime-logging
+  - 2026-08-25-m1-intake-quality-fixes-unitD-unspecified-fields-and-gap-warning
+  - 2026-08-25-m1-intake-quality-fixes-unitF-field-grounding
+  - 2026-08-26-ai-audit-trail-unitU1-schema-and-config
+  - 2026-08-26-ai-audit-trail-unitU2-audit-module
+  - 2026-08-26-m1-intake-quality-fixes-unitE-question-tracking-and-honest-reask
+  - 2026-08-28-ai-audit-trail-unitU2-plan-reconciliation
+  - 2026-08-28-ai-audit-trail-unitU3-recorder-wiring
+  - 2026-08-28-ai-audit-trail-unitU4-outbound-gate-pure-functions
+  - 2026-08-28-ai-audit-trail-unitU5-queue-and-wiring
+  - 2026-09-03-ai-audit-trail-unitU6-assertions-and-ci
+  - 2026-09-03-ai-audit-trail-unitU7-boundary-ci
+  - 2026-09-03-outbound-retry-audit-trace
+  - 2026-09-04-m1-job-profile-intake-unit-hard-requirement
+  - 2026-09-08-idempotent-effect-unique-race-short-circuit
+  - 2026-09-10-liaison-criteria-ledger
+  - 2026-09-10-liaison-reply-bridge
+  - 2026-09-10-liaison-unpack-charter
+  - 2026-09-10-liaison-unpack-dispatch
+tasks:
+- id: scene:M0
+  场景: M0
+  阶段: build
+  标题: 通信底座
+  依赖: []
+  触碰区: []
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: 核证＋开窗
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:18
+- id: scene:M0′
+  场景: M0′
+  阶段: build
+  标题: 回件自动化
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 已归档
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:19
+- id: scene:M1
+  场景: M1
+  阶段: build
+  标题: 需求解析与岗位画像
+  依赖: []
+  触碰区: []
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: ① 9.1 画像质量验收（10 个历史岗位重跑，技术栈字段 ≥80%）需 HR 出岗位与双方评估；② 5.6/6.8 挂起提醒卡 TD-11（无调度器）；③ 企微回调/卡片那 6 条已移出到阶段二
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:20
+- id: scene:M2
+  场景: M2
+  阶段: build
+  标题: 简历解析与评分排序（护城河）
+  依赖: []
+  触碰区: []
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: '三个硬前置：① 需求 grill → openspec propose ✅ 已立包，下一步 spec-to-plan 从 U0 起；② 200 份评测集要 HR 出人标注；③ PIA／合规验收 #1 阻塞真实简历入库'
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:21
+- id: scene:M3
+  场景: M3
+  阶段: intent
+  标题: 实时语音面试
+  依赖:
+  - scene:M2
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 设计上依赖 M2 真实数据校准题库
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:22
+- id: gap:G1
+  场景: 构建自动化
+  阶段: gap
+  标题: 私信附件不进归档：`ArchiveOutcome.attachments` 在生产里恒为空（`bridge.py` 偏离 1），拆件会话只读正文
+  依赖: []
+  触碰区: []
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: 实测真实文件帧字段（fail-closed，同 TD-19/43 处置）→ 接 `store_attachment` → 章程已允许读归档件
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:60
+- id: gap:G2
+  场景: 构建自动化
+  阶段: gap
+  标题: Cowork 改的文档要等下一条泳道顺带提交：Cowork 碰 `.git/` 会留锁，只能写文件
+  依赖: []
+  触碰区: []
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: 仿发车请求文件：新增「提交请求」通道（`.claude/handoff/commit/<ts>.request` 列路径＋提交信息 → launchd 触发 → 白名单路径校验 → add/commit/push），⛔ 不改 `run-lanes.sh`／`lane-launcher.sh`
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:61
+- id: gap:G3
+  场景: 构建自动化
+  阶段: gap
+  标题: 泳道结束无主动通知，靠 Cowork 定时回查
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: run-lanes 收敛后经值守通道私信你本人一条摘要（不进群）
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:62
+- id: gap:G4
+  场景: 构建自动化
+  阶段: gap
+  标题: 无调度基础设施（TD-11）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 带幂等键的 `effect_*` 提醒节点＋外部调度器；M1 在 `.51`（Windows 计划任务）、值守在 Mac（launchd）——落点不同
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:63
+- id: gap:G5
+  场景: 构建自动化
+  阶段: gap
+  标题: 拆件结论不会自动变成新任务
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 章程 §四 已登记待人；下一步是「待人行 → Cowork 编排」的机器可读前缀，先观察一周真实回件再定（避免空转设计）
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:64
+- id: gap:G6
+  场景: 构建自动化
+  阶段: gap
+  标题: TD-43 三条边角（台账双写者无锁、审计 UTC、串行冲突 detail 空）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 一条小泳道
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:65
+- id: gap:G7
+  场景: 构建自动化
+  阶段: gap
+  标题: '`lane-launch-armed-scan` 0/35 搁置包悬挂'
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 撤包或正式延后
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:66
+- id: hr-wecom-aibot-liaison/U1/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：1. 通道可行性与服务骨架
+  单元: 通道可行性与服务骨架
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit1-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U1
+  场景: M0
+  阶段: build
+  标题: 1. 通道可行性与服务骨架
+  单元: 通道可行性与服务骨架
+  依赖:
+  - hr-wecom-aibot-liaison/U1/plan
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
+  触碰区:
+  - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
+  - tools/liaison/README.md
+  - tools/liaison/requirements.txt
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U2/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：2. 存储基座与幂等不变式
+  单元: 存储基座与幂等不变式
+  依赖:
+  - hr-wecom-aibot-liaison/U1
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit2-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U2
+  场景: M0
+  阶段: build
+  标题: 2. 存储基座与幂等不变式
+  单元: 存储基座与幂等不变式
+  依赖:
+  - hr-wecom-aibot-liaison/U1
+  - hr-wecom-aibot-liaison/U2/plan
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
+  触碰区:
+  - app/storage/db.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U3/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：3. 准入名单
+  单元: 准入名单
+  依赖:
+  - hr-wecom-aibot-liaison/U2
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit3-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U3
+  场景: M0
+  阶段: build
+  标题: 3. 准入名单
+  单元: 准入名单
+  依赖:
+  - hr-wecom-aibot-liaison/U2
+  - hr-wecom-aibot-liaison/U3/plan
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
+  触碰区:
+  - tools/liaison/config/whitelist.yaml
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U4/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：4. 消息归档
+  单元: 消息归档
+  依赖:
+  - hr-wecom-aibot-liaison/U3
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit4-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit4 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U4
+  场景: M0
+  阶段: build
+  标题: 4. 消息归档
+  单元: 消息归档
+  依赖:
+  - hr-wecom-aibot-liaison/U3
+  - hr-wecom-aibot-liaison/U4/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U5/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：5. 值守任务队列
+  单元: 值守任务队列
+  依赖:
+  - hr-wecom-aibot-liaison/U4
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit5-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U5
+  场景: M0
+  阶段: build
+  标题: 5. 值守任务队列
+  单元: 值守任务队列
+  依赖:
+  - hr-wecom-aibot-liaison/U4
+  - hr-wecom-aibot-liaison/U5/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U6/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：6. 群通知外发
+  单元: 群通知外发
+  依赖:
+  - hr-wecom-aibot-liaison/U5
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit6-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit6 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U6
+  场景: M0
+  阶段: build
+  标题: 6. 群通知外发
+  单元: 群通知外发
+  依赖:
+  - hr-wecom-aibot-liaison/U5
+  - hr-wecom-aibot-liaison/U6/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U7/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：7. 连接生命周期与中断告警
+  单元: 连接生命周期与中断告警
+  依赖:
+  - hr-wecom-aibot-liaison/U6
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit7-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit7 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U7
+  场景: M0
+  阶段: build
+  标题: 7. 连接生命周期与中断告警
+  单元: 连接生命周期与中断告警
+  依赖:
+  - hr-wecom-aibot-liaison/U6
+  - hr-wecom-aibot-liaison/U7/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
+  触碰区:
+  - docs/findings/2026-09-09-aibot-wsclient-表面实测.md
+  - docs/tech-debt.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 7 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/8.6
+  场景: M0
+  阶段: build
+  标题: 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/8.6
+  - hr-wecom-aibot-liaison/U7
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  触碰区:
+  - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人——aibot
+    的单聊 chatid 要专员先私信才存在；⛔ 少这一步，带附件的归档链路根本验不到（
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:238
+- id: hr-wecom-aibot-liaison/8.8
+  场景: M0
+  阶段: build
+  标题: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/U7
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:242
+- id: hr-wecom-aibot-liaison/8.9
+  场景: M0
+  阶段: build
+  标题: 全部章节勾完后当场跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/U7
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 全部章节勾完后当场跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:244
+- id: hr-wecom-aibot-liaison/U8/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：8. 留存清理、进程守护与灰度验收
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/U7
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit8-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: hr-wecom-aibot-liaison/U8
+  场景: M0
+  阶段: build
+  标题: 8. 留存清理、进程守护与灰度验收
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/8.6
+  - hr-wecom-aibot-liaison/8.8
+  - hr-wecom-aibot-liaison/8.9
+  - hr-wecom-aibot-liaison/U7
+  - hr-wecom-aibot-liaison/U8/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  触碰区:
+  - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
+  - tools/liaison/launchd/com.zhuopin.hr.liaison.plist
+  - tools/liaison/scripts/install_launchd.py
+  - tools/liaison/tests/test_liaison_boundaries.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 8 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: change:hr-wecom-aibot-liaison
+  场景: M0
+  阶段: archive
+  标题: 变更包 hr-wecom-aibot-liaison
+  依赖:
+  - hr-wecom-aibot-liaison/U1
+  - hr-wecom-aibot-liaison/U2
+  - hr-wecom-aibot-liaison/U3
+  - hr-wecom-aibot-liaison/U4
+  - hr-wecom-aibot-liaison/U5
+  - hr-wecom-aibot-liaison/U6
+  - hr-wecom-aibot-liaison/U7
+  - hr-wecom-aibot-liaison/U8
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+- id: m1-intake-quality-fixes/U1/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：1. 存储地基与逐轮时序留痕
+  单元: 存储地基与逐轮时序留痕
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit1-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U1
+  场景: M1
+  阶段: build
+  标题: 1. 存储地基与逐轮时序留痕
+  单元: 存储地基与逐轮时序留痕
+  依赖:
+  - m1-intake-quality-fixes/U1/plan
+  触碰区:
+  - app/llm/gateway.py
+  - app/storage/db.py
+  - app/web/server.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U2/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：2. 结构化追问对象端到端透传
+  单元: 结构化追问对象端到端透传
+  依赖:
+  - m1-intake-quality-fixes/U1
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit2-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U2
+  场景: M1
+  阶段: build
+  标题: 2. 结构化追问对象端到端透传
+  单元: 结构化追问对象端到端透传
+  依赖:
+  - m1-intake-quality-fixes/U1
+  - m1-intake-quality-fixes/U2/plan
+  触碰区:
+  - app/llm/gateway.py
+  - app/web/server.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U3/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：3. 模糊回复兜底与领域选项库
+  单元: 模糊回复兜底与领域选项库
+  依赖:
+  - m1-intake-quality-fixes/U2
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit3-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U3
+  场景: M1
+  阶段: build
+  标题: 3. 模糊回复兜底与领域选项库
+  单元: 模糊回复兜底与领域选项库
+  依赖:
+  - m1-intake-quality-fixes/U2
+  - m1-intake-quality-fixes/U3/plan
+  触碰区:
+  - app/agents/ecu_knowledge.py
+  - app/agents/intake_agent.py
+  - app/web/server.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U4/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：4. 前端可点选选项
+  单元: 前端可点选选项
+  依赖:
+  - m1-intake-quality-fixes/U3
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit4-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit4 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U4
+  场景: M1
+  阶段: build
+  标题: 4. 前端可点选选项
+  单元: 前端可点选选项
+  依赖:
+  - m1-intake-quality-fixes/U3
+  - m1-intake-quality-fixes/U4/plan
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U5/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：5. 已问未答追踪与诚实重问
+  单元: 已问未答追踪与诚实重问
+  依赖:
+  - m1-intake-quality-fixes/U4
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit5-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U5
+  场景: M1
+  阶段: build
+  标题: 5. 已问未答追踪与诚实重问
+  单元: 已问未答追踪与诚实重问
+  依赖:
+  - m1-intake-quality-fixes/U4
+  - m1-intake-quality-fixes/U5/plan
+  触碰区:
+  - app/graph/state.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U6/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：6. 未指定字段推导与确认前警示
+  单元: 未指定字段推导与确认前警示
+  依赖:
+  - m1-intake-quality-fixes/U5
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit6-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit6 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U6
+  场景: M1
+  阶段: build
+  标题: 6. 未指定字段推导与确认前警示
+  单元: 未指定字段推导与确认前警示
+  依赖:
+  - m1-intake-quality-fixes/U5
+  - m1-intake-quality-fixes/U6/plan
+  触碰区:
+  - app/agents/intake_agent.py
+  - app/schemas/job_profile.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U7/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：7. 字段溯源与编造率度量（只观测不拦截）
+  单元: 字段溯源与编造率度量（只观测不拦截）
+  依赖:
+  - m1-intake-quality-fixes/U6
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit7-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit7 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U7
+  场景: M1
+  阶段: build
+  标题: 7. 字段溯源与编造率度量（只观测不拦截）
+  单元: 字段溯源与编造率度量（只观测不拦截）
+  依赖:
+  - m1-intake-quality-fixes/U6
+  - m1-intake-quality-fixes/U7/plan
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 7 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/8.9
+  场景: M1
+  阶段: build
+  标题: 归档顺序提醒：`m1-job-profile-intake` 必须先归档，本变更后归档；归档时人工核对「多轮追问补全 / 追问达到上限」两处，确保活文档里不留"5 轮"与"5 个有产出轮"两种矛盾表述（design.md「与 m1-job-
+  单元: 真实会话回放验证与上线
+  依赖:
+  - m1-intake-quality-fixes/U7
+  - m1-intake-quality-fixes/U8/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 归档顺序提醒：`m1-job-profile-intake` 必须先归档，本变更后归档；归档时人工核对「多轮追问补全 / 追问达到上限」两处，确保活文档里不留"5 轮"与"5 个有产出轮"两种矛盾表述（design.md「与 m1-job-profile-intake 的关系」）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md:172
+- id: m1-intake-quality-fixes/U8/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：8. 真实会话回放验证与上线
+  单元: 真实会话回放验证与上线
+  依赖:
+  - m1-intake-quality-fixes/U7
+  触碰区:
+  - docs/superpowers/plans/*-m1-intake-quality-fixes-unit8-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-intake-quality-fixes/U8
+  场景: M1
+  阶段: build
+  标题: 8. 真实会话回放验证与上线
+  单元: 真实会话回放验证与上线
+  依赖:
+  - m1-intake-quality-fixes/8.9
+  - m1-intake-quality-fixes/U7
+  - m1-intake-quality-fixes/U8/plan
+  触碰区:
+  - docs/m1-demo-manager-guide.md
+  - docs/m1-demo-pilot-feedback.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 8 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: change:m1-intake-quality-fixes
+  场景: M1
+  阶段: archive
+  标题: 变更包 m1-intake-quality-fixes
+  依赖:
+  - m1-intake-quality-fixes/U1
+  - m1-intake-quality-fixes/U2
+  - m1-intake-quality-fixes/U3
+  - m1-intake-quality-fixes/U4
+  - m1-intake-quality-fixes/U5
+  - m1-intake-quality-fixes/U6
+  - m1-intake-quality-fixes/U7
+  - m1-intake-quality-fixes/U8
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/m1-intake-quality-fixes/tasks.md
+- id: m1-job-profile-intake/1.5b
+  场景: M1
+  阶段: build
+  标题: 建表 `wecom_callback`（回调落库）（2026-08-20 从原 1.5 拆出）
+  单元: 地基：数据层
+  依赖:
+  - m1-job-profile-intake/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 建表 `wecom_callback`（回调落库）（2026-08-20 从原 1.5 拆出）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:105
+- id: m1-job-profile-intake/1.7
+  场景: M1
+  阶段: build
+  标题: 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
+  单元: 地基：数据层
+  依赖:
+  - m1-job-profile-intake/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:111
+- id: m1-job-profile-intake/U1/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：1. 地基：数据层
+  单元: 地基：数据层
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit1-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U1
+  场景: M1
+  阶段: build
+  标题: 1. 地基：数据层
+  单元: 地基：数据层
+  依赖:
+  - m1-job-profile-intake/1.5b
+  - m1-job-profile-intake/1.7
+  - m1-job-profile-intake/U1/plan
+  触碰区:
+  - app/graph/build.py
+  - app/storage/db.py
+  - docs/findings/2026-08-13-sqlite-事务归属冲突.md
+  - tests/test_db.py
+  - tests/test_db_migration.py
+  - tests/test_graph_idempotency.py
+  - tests/test_human_review_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U2/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：2. 地基：LLM 网关
+  单元: 地基：LLM 网关
+  依赖:
+  - m1-job-profile-intake/U1
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit2-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U2
+  场景: M1
+  阶段: build
+  标题: 2. 地基：LLM 网关
+  单元: 地基：LLM 网关
+  依赖:
+  - m1-job-profile-intake/U1
+  - m1-job-profile-intake/U2/plan
+  - plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg1
+  触碰区:
+  - app/llm/gateway.py
+  - docs/m1-model-comparison.md
+  - tests/test_llm_gateway.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U3/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：3. 地基：企业微信通道
+  单元: 地基：企业微信通道
+  依赖:
+  - m1-job-profile-intake/U2
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit3-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U3
+  场景: M1
+  阶段: build
+  标题: 3. 地基：企业微信通道
+  单元: 地基：企业微信通道
+  依赖:
+  - m1-job-profile-intake/U2
+  - m1-job-profile-intake/U3/plan
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U4/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：4. 地基：编排骨架与幂等约定
+  单元: 地基：编排骨架与幂等约定
+  依赖:
+  - m1-job-profile-intake/U3
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit4-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit4 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U4
+  场景: M1
+  阶段: build
+  标题: 4. 地基：编排骨架与幂等约定
+  单元: 地基：编排骨架与幂等约定
+  依赖:
+  - m1-job-profile-intake/U3
+  - m1-job-profile-intake/U4/plan
+  - plan:2026-09-08-m1-job-profile-intake-unit4-4-idempotency-suite/seg1
+  触碰区:
+  - app/graph/build.py
+  - app/graph/nodes.py
+  - app/storage/idempotency.py
+  - tests/test_effect_idempotency_suite.py
+  - tests/test_graph_idempotency.py
+  - tests/test_idempotency.py
+  - tests/test_transaction_ownership.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/5.6
+  场景: M1
+  阶段: build
+  标题: 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
+  单元: '需求解析 Agent（capability: job-profile-intake）'
+  依赖:
+  - m1-job-profile-intake/U4
+  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:214
+- id: m1-job-profile-intake/U5/plan
+  场景: M1
+  阶段: plan
+  标题: 'spec-to-plan：5. 需求解析 Agent（capability: job-profile-intake）'
+  单元: '需求解析 Agent（capability: job-profile-intake）'
+  依赖:
+  - m1-job-profile-intake/U4
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit5-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U5
+  场景: M1
+  阶段: build
+  标题: '5. 需求解析 Agent（capability: job-profile-intake）'
+  单元: '需求解析 Agent（capability: job-profile-intake）'
+  依赖:
+  - m1-job-profile-intake/5.6
+  - m1-job-profile-intake/U4
+  - m1-job-profile-intake/U5/plan
+  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
+  触碰区:
+  - app/agents/ecu_knowledge.py
+  - app/agents/intake_agent.py
+  - app/graph/build.py
+  - app/schemas/job_profile.py
+  - app/web/server.py
+  - tests/test_ecu_knowledge.py
+  - tests/test_intake_agent.py
+  - tests/test_job_profile_schema.py
+  - tests/test_web_api.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/6.8
+  场景: M1
+  阶段: build
+  标题: 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
+  单元: '确认断点（capability: job-profile-approval）'
+  依赖:
+  - m1-job-profile-intake/U5
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:272
+- id: m1-job-profile-intake/U6/plan
+  场景: M1
+  阶段: plan
+  标题: 'spec-to-plan：6. 确认断点（capability: job-profile-approval）'
+  单元: '确认断点（capability: job-profile-approval）'
+  依赖:
+  - m1-job-profile-intake/U5
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit6-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit6 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U6
+  场景: M1
+  阶段: build
+  标题: '6. 确认断点（capability: job-profile-approval）'
+  单元: '确认断点（capability: job-profile-approval）'
+  依赖:
+  - m1-job-profile-intake/6.8
+  - m1-job-profile-intake/U5
+  - m1-job-profile-intake/U6/plan
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
+  触碰区:
+  - app/graph/build.py
+  - app/schemas/job_profile.py
+  - app/web/static/index.html
+  - tests/test_approval_branches.py
+  - tests/test_profile_summary.py
+  - tests/test_suspend_recovery.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U7/plan
+  场景: M1
+  阶段: plan
+  标题: 'spec-to-plan：7. JD 生成（capability: job-description）'
+  单元: 'JD 生成（capability: job-description）'
+  依赖:
+  - m1-job-profile-intake/U6
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit7-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit7 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U7
+  场景: M1
+  阶段: build
+  标题: '7. JD 生成（capability: job-description）'
+  单元: 'JD 生成（capability: job-description）'
+  依赖:
+  - m1-job-profile-intake/U6
+  - m1-job-profile-intake/U7/plan
+  - plan:2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export/seg1
+  触碰区:
+  - app/agents/jd_agent.py
+  - app/web/server.py
+  - tests/test_jd_agent.py
+  - tests/test_web_api.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 7 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U8/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：8. 最小 Web 界面
+  单元: 最小 Web 界面
+  依赖:
+  - m1-job-profile-intake/U7
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit8-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U8
+  场景: M1
+  阶段: build
+  标题: 8. 最小 Web 界面
+  单元: 最小 Web 界面
+  依赖:
+  - m1-job-profile-intake/U7
+  - m1-job-profile-intake/U8/plan
+  - plan:2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 8 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/9.1
+  场景: M1
+  阶段: build
+  标题: 画像质量验收：10 个真实历史岗位重跑，HR 与业务经理双方评估技术栈字段准确率，目标 ≥80%
+  单元: 验收与交付
+  依赖:
+  - m1-job-profile-intake/U8
+  - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 画像质量验收：10 个真实历史岗位重跑，HR 与业务经理双方评估技术栈字段准确率，目标 ≥80%
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:396
+- id: m1-job-profile-intake/9.2
+  场景: M1
+  阶段: build
+  标题: 端到端测试：从企微发起到 JD 产出的完整链路
+  单元: 验收与交付
+  依赖:
+  - m1-job-profile-intake/U8
+  - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 端到端测试：从企微发起到 JD 产出的完整链路
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:398
+- id: m1-job-profile-intake/U9/plan
+  场景: M1
+  阶段: plan
+  标题: spec-to-plan：9. 验收与交付
+  单元: 验收与交付
+  依赖:
+  - m1-job-profile-intake/U8
+  触碰区:
+  - docs/superpowers/plans/*-m1-job-profile-intake-unit9-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit9 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m1-job-profile-intake/U9
+  场景: M1
+  阶段: build
+  标题: 9. 验收与交付
+  单元: 验收与交付
+  依赖:
+  - m1-job-profile-intake/9.1
+  - m1-job-profile-intake/9.2
+  - m1-job-profile-intake/U8
+  - m1-job-profile-intake/U9/plan
+  - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
+  触碰区:
+  - app/audit/assertions.py
+  - docs/deploy-51-server.md
+  - docs/m1-demo-pilot-feedback.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 9 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: change:m1-job-profile-intake
+  场景: M1
+  阶段: archive
+  标题: 变更包 m1-job-profile-intake
+  依赖:
+  - m1-job-profile-intake/U1
+  - m1-job-profile-intake/U2
+  - m1-job-profile-intake/U3
+  - m1-job-profile-intake/U4
+  - m1-job-profile-intake/U5
+  - m1-job-profile-intake/U6
+  - m1-job-profile-intake/U7
+  - m1-job-profile-intake/U8
+  - m1-job-profile-intake/U9
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md
+- id: m2-resume-parse-and-rank/0.1
+  场景: M2
+  阶段: gate
+  标题: G1 私信附件真实帧确认（TD-51）（Shao Peishen 或汤丽萍私信机器人一个测试文件 → 按日志键结构填 `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` → 重启值守）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区:
+  - docs/tech-debt.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`docs/tech-debt.md` TD-51 销账'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:5
+- id: m2-resume-parse-and-rank/0.2
+  场景: M2
+  阶段: gate
+  标题: '合规验收 #1 启动（Shao Peishen 发起；PIA 报告 ＋ 候选人同意条款单列 AI 评估 ＋ 留存与删除策略；法务结论）'
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 三份文档落 `docs/compliance/` 并由本人签认
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:6
+- id: m2-resume-parse-and-rank/0.3
+  场景: M2
+  阶段: gate
+  标题: 试运行岗位选定（Shao Peishen 从 供应链总监／底层软件工程师／非标产品采购员 中选 1 个仍在招的）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`intent.md` 末尾补一行「试运行岗位：<岗位> job_id=<…> profile_version=<n>」'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:7
+- id: m2-resume-parse-and-rank/0.4
+  场景: M2
+  阶段: gate
+  标题: 评测集标注安排（汤丽萍牵头；按 0.3 岗位分批 ≤20 份，脱敏或历史离职样本；模板由 6.1 提供）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`人事部#2` 跟进信里有排期回复'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:8
+- id: m2-resume-parse-and-rank/1.1
+  场景: M2
+  阶段: build
+  标题: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence
+  单元: U0 模型对比定型
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  - plan:2026-09-17-m2-unit0-model-comparison/seg3
+  触碰区:
+  - docs/m2-model-comparison.md
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence-transformers` 二选一按可装性定）；记录可装性与体积到
+    `docs/m2-model-comparison.md`「环境」节 ⏸ 留步：.51 W
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:14
+- id: m2-resume-parse-and-rank/1.2
+  场景: M2
+  阶段: build
+  标题: 准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore` 登记）留步：合成替身已到位（scri
+  单元: U0 模型对比定型
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  - plan:2026-09-17-m2-unit0-model-comparison/seg3
+  触碰区:
+  - scripts/gen_pilot_samples.py
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore` 登记）⏸ 留步：合成替身已到位（scripts/gen_pilot_samples.py，20 份 ×4
+    形态），真实脱敏样本待 U0 计划待裁决 #2'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:15
+- id: m2-resume-parse-and-rank/1.4
+  场景: M2
+  阶段: build
+  标题: 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量 留步：仅 DeepSee
+  单元: U0 模型对比定型
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  - plan:2026-09-17-m2-unit0-model-comparison/seg3
+  触碰区:
+  - docs/m2-model-comparison.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek 两款有 key 实跑（20/20，数据见 docs/m2-model-comparison.md）；doubao/qwen
+    缺 ARK_API_KEY/
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:17
+- id: m2-resume-parse-and-rank/1.6
+  场景: M2
+  阶段: build
+  标题: 写 `docs/m2-model-comparison.md`「决策」节：抽取模型、精排模型、embedding 方案、置信度阈值起步值（Q3）、扫描件路径；判据：每项都有数据支撑，模型标识非别名 留步：决策节已建、抽取/精排/阈值三行待真
+  单元: U0 模型对比定型
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  - plan:2026-09-17-m2-unit0-model-comparison/seg3
+  触碰区:
+  - docs/m2-model-comparison.md
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 每项都有数据支撑，模型标识非别名 ⏸ 留步：决策节已建、抽取/精排/阈值三行待真实脱敏样本数据
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:19
+- id: m2-resume-parse-and-rank/1.7
+  场景: M2
+  阶段: build
+  标题: 定型确认（Shao Peishen 签认 1.6 的决策节）
+  单元: U0 模型对比定型
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  - plan:2026-09-17-m2-unit0-model-comparison/seg3
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 文档末尾有「已确认 <日期>」
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:20
+- id: m2-resume-parse-and-rank/U0/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：1. U0 模型对比定型
+  单元: U0 模型对比定型
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit0-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit0 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U0
+  场景: M2
+  阶段: build
+  标题: 1. U0 模型对比定型
+  单元: U0 模型对比定型
+  依赖:
+  - m2-resume-parse-and-rank/1.1
+  - m2-resume-parse-and-rank/1.2
+  - m2-resume-parse-and-rank/1.4
+  - m2-resume-parse-and-rank/1.6
+  - m2-resume-parse-and-rank/1.7
+  - m2-resume-parse-and-rank/U0/plan
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  - plan:2026-09-17-m2-unit0-model-comparison/seg3
+  触碰区:
+  - docs/m2-model-comparison.md
+  - scripts/compare_models.py
+  - scripts/compare_models_m2.py
+  - scripts/gen_pilot_samples.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/2.1
+  场景: M2
+  阶段: build
+  标题: '`app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN anonymized/departed/live、`parser_version'
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区:
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN anonymized/departed/live、`parser_version`、`parse_confidence`）、`resume_text_span`（`resume_id,
+    span_id, start, end, text`）'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:24
+- id: m2-resume-parse-and-rank/2.2
+  场景: M2
+  阶段: build
+  标题: '新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` '
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` CHECK IN human/agent）；测试：状态不挂在 `candidate`
+    上
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:25
+- id: m2-resume-parse-and-rank/2.3
+  场景: M2
+  阶段: build
+  标题: 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('non
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('none','requested','under_review','upheld','overturned')`、`decided_by`、`batch_id`；反证
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:26
+- id: m2-resume-parse-and-rank/2.4
+  场景: M2
+  阶段: build
+  标题: 新增 `resume_access_log`（`accessor, resume_id, access_type, at`，无内容列）、`field_review_queue`（`resume_id, field, machine_valu
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `resume_access_log`（`accessor, resume_id, access_type, at`，无内容列）、`field_review_queue`（`resume_id, field, machine_value, confidence, status, reviewed_by,
+    reviewed_at, human_value`）、`screening_flag`（
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:27
+- id: m2-resume-parse-and-rank/2.5
+  场景: M2
+  阶段: build
+  标题: 新增 `resume_embedding`（`resume_id, model, dim, vector BLOB`）、`eval_sample` / `eval_annotation` / `eval_import_batch`（含「禁止
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `resume_embedding`（`resume_id, model, dim, vector BLOB`）、`eval_sample` / `eval_annotation` / `eval_import_batch`（含「禁止训练用途」表注释，同 `analysis_run` 口径）、`hr_account`（用户名唯一、盐哈希口令）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:28
+- id: m2-resume-parse-and-rank/2.6
+  场景: M2
+  阶段: build
+  标题: '`analysis_run` 增加 `run_type` 语义约定（`parse/rank`，可空列已存在的用 `prompt_version` 前缀区分，⛔ 不加列）；`criterion_score.evidence_ref` 的 JS'
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`analysis_run` 增加 `run_type` 语义约定（`parse/rank`，可空列已存在的用 `prompt_version` 前缀区分，⛔ 不加列）；`criterion_score.evidence_ref` 的 JSON 形态 `{span_id,start,end}` 定为约定并加解析工具函数
+    + 测试'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:29
+- id: m2-resume-parse-and-rank/2.7
+  场景: M2
+  阶段: build
+  标题: '`tests/test_db_m2_schema.py`：新库建表齐全、老库（复制 `.51` 的 demo.db 结构）升级后既有表一行不改、全部 CHECK 反证'
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区:
+  - tests/test_db_m2_schema.py
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: '`tests/test_db_m2_schema.py`：新库建表齐全、老库（复制 `.51` 的 demo.db 结构）升级后既有表一行不改、全部 CHECK 反证'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:30
+- id: m2-resume-parse-and-rank/2.8
+  场景: M2
+  阶段: build
+  标题: '`scripts/create_hr_account.py`（建账号，幂等：同用户名重复运行只更新口令并提示）'
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区:
+  - scripts/create_hr_account.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`scripts/create_hr_account.py`（建账号，幂等：同用户名重复运行只更新口令并提示）'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:31
+- id: m2-resume-parse-and-rank/U1/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：2. U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit1-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U1
+  场景: M2
+  阶段: build
+  标题: 2. U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - m2-resume-parse-and-rank/2.1
+  - m2-resume-parse-and-rank/2.2
+  - m2-resume-parse-and-rank/2.3
+  - m2-resume-parse-and-rank/2.4
+  - m2-resume-parse-and-rank/2.5
+  - m2-resume-parse-and-rank/2.6
+  - m2-resume-parse-and-rank/2.7
+  - m2-resume-parse-and-rank/2.8
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1/plan
+  触碰区:
+  - app/storage/db.py
+  - scripts/create_hr_account.py
+  - tests/test_db_m2_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/3.1
+  场景: M2
+  阶段: build
+  标题: '`Settings.live_resume_intake_enabled` 默认 False；`is_live_resume_intake_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 鉴权可识别 AND 访问留痕探'
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`Settings.live_resume_intake_enabled` 默认 False；`is_live_resume_intake_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 鉴权可识别 AND 访问留痕探针；测试覆盖 spec 四个 Scenario（含"配置开但身份未知
+    ⇒ 关"）'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:35
+- id: m2-resume-parse-and-rank/3.2
+  场景: M2
+  阶段: build
+  标题: '`AuthMiddleware.dispatch` 换成会话 cookie → `hr_account` 校验；`AuthContext` / `reviewer_of()` 签名不变；`/candidates* /resumes* /ap'
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`AuthMiddleware.dispatch` 换成会话 cookie → `hr_account` 校验；`AuthContext` / `reviewer_of()` 签名不变；`/candidates* /resumes* /applications*` 未登录 401；登录页与登出接口；测试：`reviewer_of()`
+    返回真实用户名而非 `unknown:*`'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:36
+- id: m2-resume-parse-and-rank/3.3
+  场景: M2
+  阶段: build
+  标题: 上传接口 `POST /resumes/upload`（多文件、`job_id`、`sample_class` 必填；类型白名单 pdf/docx；逐文件结果；`live` 且闸关 ⇒ 整批拒 + 留痕尝试不存内容）；幂等：文件内容 SHA
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 上传接口 `POST /resumes/upload`（多文件、`job_id`、`sample_class` 必填；类型白名单 pdf/docx；逐文件结果；`live` 且闸关 ⇒ 整批拒 + 留痕尝试不存内容）；幂等：文件内容 SHA-256 + `job_id` 唯一，重复返回既有 `resume_id`
+    不重解析
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:37
+- id: m2-resume-parse-and-rank/3.4
+  场景: M2
+  阶段: build
+  标题: '文件 → 文本：文本型 PDF 直抽、Word 走 `python-docx`、扫描件走 PaddleOCR（design D14）；有效字符 < 阈值 ⇒ `resume.status=''unreadable''` 进人工队列；分片器产出 '
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 文件 → 文本：文本型 PDF 直抽、Word 走 `python-docx`、扫描件走 PaddleOCR（design D14）；有效字符 < 阈值 ⇒ `resume.status='unreadable'` 进人工队列；分片器产出 `resume_text_span`（按段落，带 offset）；测试三种文件各一
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:38
+- id: m2-resume-parse-and-rank/3.5
+  场景: M2
+  阶段: build
+  标题: '`ResumeFields` Pydantic schema（六字段 × `{value, confidence, spans[]}`，缺失 = `not_mentioned`）；`app/agents/resume_parser.py::'
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区:
+  - app/agents/resume_parser.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`ResumeFields` Pydantic schema（六字段 × `{value, confidence, spans[]}`，缺失 = `not_mentioned`）；`app/agents/resume_parser.py::compute_parse(text_spans) -> ResumeFields`
+    纯函数，走 LLM 网关 json_schema 路径，走 `AuditH'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:39
+- id: m2-resume-parse-and-rank/3.6
+  场景: M2
+  阶段: build
+  标题: 置信度合成：模型自报 × span 可定位性（`quote` 反查校正偏移，反查失败 ⇒ 无 span ⇒ 低置信度）；阈值读 `job.parse_confidence_threshold`（默认 Q3 值）
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 置信度合成：模型自报 × span 可定位性（`quote` 反查校正偏移，反查失败 ⇒ 无 span ⇒ 低置信度）；阈值读 `job.parse_confidence_threshold`（默认 Q3 值）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:40
+- id: m2-resume-parse-and-rank/3.7
+  场景: M2
+  阶段: build
+  标题: LangGraph 节点 `effect_persist_parse`：写 `resume.parsed_json` ＋ `field_review_queue` 低置信度行；幂等键 `{application_id}:effect_per
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: LangGraph 节点 `effect_persist_parse`：写 `resume.parsed_json` ＋ `field_review_queue` 低置信度行；幂等键 `{application_id}:effect_persist_parse:{parser_version}`，`effect_log`
+    与业务写同事务；测试：节点重跑不产生第二份解析版本
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:41
+- id: m2-resume-parse-and-rank/3.8
+  场景: M2
+  阶段: build
+  标题: 重解析：新 `parser_version` ⇒ 新版本并存、旧版保留、工作台默认最新；测试
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 重解析：新 `parser_version` ⇒ 新版本并存、旧版保留、工作台默认最新；测试
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:42
+- id: m2-resume-parse-and-rank/3.9
+  场景: M2
+  阶段: build
+  标题: 简历访问留痕：读取原文／分片／解析结果／下载的接口统一经 `record_resume_access()`，留痕失败 ⇒ 读取失败不返回内容；测试覆盖四种 access_type 与失败路径
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 简历访问留痕：读取原文／分片／解析结果／下载的接口统一经 `record_resume_access()`，留痕失败 ⇒ 读取失败不返回内容；测试覆盖四种 access_type 与失败路径
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:43
+- id: m2-resume-parse-and-rank/3.10
+  场景: M2
+  阶段: build
+  标题: 校对接口 `POST /resumes/{id}/fields/{field}/review`：写 `field_review_queue.human_value/reviewed_by/at`、关闭队列行、触发该投递重判（发一个内部事件，
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 校对接口 `POST /resumes/{id}/fields/{field}/review`：写 `field_review_queue.human_value/reviewed_by/at`、关闭队列行、触发该投递重判（发一个内部事件，⛔ 不在接口里同步跑判定）；幂等：同字段同值重复提交不产生第二行
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:44
+- id: m2-resume-parse-and-rank/U2/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：3. U2 上传与解析管线（含置信度与校对队列）
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/U1
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit2-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U2
+  场景: M2
+  阶段: build
+  标题: 3. U2 上传与解析管线（含置信度与校对队列）
+  单元: U2 上传与解析管线（含置信度与校对队列）
+  依赖:
+  - m2-resume-parse-and-rank/3.1
+  - m2-resume-parse-and-rank/3.10
+  - m2-resume-parse-and-rank/3.2
+  - m2-resume-parse-and-rank/3.3
+  - m2-resume-parse-and-rank/3.4
+  - m2-resume-parse-and-rank/3.5
+  - m2-resume-parse-and-rank/3.6
+  - m2-resume-parse-and-rank/3.7
+  - m2-resume-parse-and-rank/3.8
+  - m2-resume-parse-and-rank/3.9
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2/plan
+  触碰区:
+  - app/agents/resume_parser.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/4.1
+  场景: M2
+  阶段: build
+  标题: '`app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现'
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3/plan
+  触碰区:
+  - app/agents/hard_requirement_screening.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现；依赖字段在队列 ⇒ `skipped(待校对)`、`not_mentioned`
+    ⇒ `skipped(未提及)`；`fail` 必带 `evidence_r'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:48
+- id: m2-resume-parse-and-rank/4.2
+  场景: M2
+  阶段: build
+  标题: 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-rank
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-ranking` spec「主观描述不入硬门槛」）；空规则集 ⇒ 全 pass
+    并注明
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:49
+- id: m2-resume-parse-and-rank/4.3
+  场景: M2
+  阶段: build
+  标题: 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version}`，同事务；重判（校对完成／画像升版）产生新一组 flags，旧组保留带版本；测试：重跑不重复、三种触发点各一
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:50
+- id: m2-resume-parse-and-rank/4.4
+  场景: M2
+  阶段: build
+  标题: 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_ru
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3/plan
+  触碰区:
+  - app/storage/rejection.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_rule` 必带 `rule_ref`；测试：传 `ai_score`
+    在应用层被拒，绕过应用层在 CHECK 被拒
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:51
+- id: m2-resume-parse-and-rank/4.5
+  场景: M2
+  阶段: build
+  标题: 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_hi
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_history(actor_type=human)`；幂等：同记录同目标状态重复提交无第二条流转；原拒绝记录不删
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:52
+- id: m2-resume-parse-and-rank/4.6
+  场景: M2
+  阶段: build
+  标题: 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 已裁决 2026-09-17：HR 代候选人登记
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 ✅ 已裁决 2026-09-17：HR 代候选人登记，本期不开候选人自助入口
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:53
+- id: m2-resume-parse-and-rank/U3/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：4. U3 硬门槛引擎（标记＋依据＋申诉）
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit3-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U3
+  场景: M2
+  阶段: build
+  标题: 4. U3 硬门槛引擎（标记＋依据＋申诉）
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/4.1
+  - m2-resume-parse-and-rank/4.2
+  - m2-resume-parse-and-rank/4.3
+  - m2-resume-parse-and-rank/4.4
+  - m2-resume-parse-and-rank/4.5
+  - m2-resume-parse-and-rank/4.6
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3/plan
+  触碰区:
+  - app/agents/hard_requirement_screening.py
+  - app/storage/rejection.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/5.1
+  场景: M2
+  阶段: build
+  标题: embedding 适配器（本地 CPU BGE-M3，Q1 已裁决；具体装包按 1.6 定型），接口 `embed(texts) -> vectors`；写 `resume_embedding`，幂等键 `{resume_id}:embe
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: embedding 适配器（本地 CPU BGE-M3，Q1 已裁决；具体装包按 1.6 定型），接口 `embed(texts) -> vectors`；写 `resume_embedding`，幂等键 `{resume_id}:embed:{model}`；上传后离线批算，不在页面请求路径
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:57
+- id: m2-resume-parse-and-rank/5.2
+  场景: M2
+  阶段: build
+  标题: 召回：岗位画像文本向量 vs 该岗全部通过／待决投递的简历向量，numpy cosine 取 top-K（`job.recall_top_k` 默认 30）；未召回投递标 `not_recalled`；测试：K 边界、空集、全量 100 份
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 召回：岗位画像文本向量 vs 该岗全部通过／待决投递的简历向量，numpy cosine 取 top-K（`job.recall_top_k` 默认 30）；未召回投递标 `not_recalled`；测试：K 边界、空集、全量 100 份耗时 < 1s
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:58
+- id: m2-resume-parse-and-rank/5.3
+  场景: M2
+  阶段: build
+  标题: rubric 派生：从冻结画像生成 `scoring_criterion` 快照（维度 key 必在 `CRITERION_KEY_WHITELIST`）；软技能只进 rubric 不进规则；测试：白名单外 key 拒绝
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: rubric 派生：从冻结画像生成 `scoring_criterion` 快照（维度 key 必在 `CRITERION_KEY_WHITELIST`）；软技能只进 rubric 不进规则；测试：白名单外 key 拒绝
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:59
+- id: m2-resume-parse-and-rank/5.4
+  场景: M2
+  阶段: build
+  标题: '`app/agents/ranker.py::compute_rank(fields, spans, rubric) -> RankResult` 纯函数：输出 schema 每维 `{score, evidence:{span_id,st'
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区:
+  - app/agents/ranker.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/agents/ranker.py::compute_rank(fields, spans, rubric) -> RankResult` 纯函数：输出 schema 每维 `{score, evidence:{span_id,start,end,quote}}` 强制；`quote` 反查校正偏移；任一维缺证据
+    ⇒ 整次不可用；走 `AuditHook`（`prompt_version='
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:60
+- id: m2-resume-parse-and-rank/5.5
+  场景: M2
+  阶段: build
+  标题: 节点 `compute_recall_rank` → `effect_persist_scores`：写 `analysis_run` 关联 + N 条 `criterion_score`；幂等键 `{application_id}:eff
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `compute_recall_rank` → `effect_persist_scores`：写 `analysis_run` 关联 + N 条 `criterion_score`；幂等键 `{application_id}:effect_persist_scores:{analysis_run_id}`，同事务；评分失败
+    ⇒ 投递标 `rank_failed` 可重试，不落分；测试：重跑
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:61
+- id: m2-resume-parse-and-rank/5.6
+  场景: M2
+  阶段: build
+  标题: 手动加入精排接口 `POST /applications/{id}/rank`：留痕"人工加入"；幂等：已有当前版本评分则返回既有
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 手动加入精排接口 `POST /applications/{id}/rank`：留痕"人工加入"；幂等：已有当前版本评分则返回既有
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:62
+- id: m2-resume-parse-and-rank/5.7
+  场景: M2
+  阶段: build
+  标题: 总分与排名只入列表查询（`app/storage/candidate_queries.py`），⛔ 不写任何阶段流转；测试：排名末位投递状态不变、无拒绝记录
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区:
+  - app/storage/candidate_queries.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 总分与排名只入列表查询（`app/storage/candidate_queries.py`），⛔ 不写任何阶段流转；测试：排名末位投递状态不变、无拒绝记录
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:63
+- id: m2-resume-parse-and-rank/U4/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：5. U4 召回＋rubric 精排＋evidence span
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/U3
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit4-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit4 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U4
+  场景: M2
+  阶段: build
+  标题: 5. U4 召回＋rubric 精排＋evidence span
+  单元: U4 召回＋rubric 精排＋evidence span
+  依赖:
+  - m2-resume-parse-and-rank/5.1
+  - m2-resume-parse-and-rank/5.2
+  - m2-resume-parse-and-rank/5.3
+  - m2-resume-parse-and-rank/5.4
+  - m2-resume-parse-and-rank/5.5
+  - m2-resume-parse-and-rank/5.6
+  - m2-resume-parse-and-rank/5.7
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区:
+  - app/agents/ranker.py
+  - app/storage/candidate_queries.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/6.1
+  场景: M2
+  阶段: build
+  标题: 候选人列表页 + `GET /jobs/{id}/applications`：按总分降序、未评分排末并注明原因；筛选（阶段／硬门槛状态／待校对）；AI 标识与"仅供参考"说明；相对路径（部署约束 1，测试在非根前缀下可用）
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 候选人列表页 + `GET /jobs/{id}/applications`：按总分降序、未评分排末并注明原因；筛选（阶段／硬门槛状态／待校对）；AI 标识与"仅供参考"说明；相对路径（部署约束 1，测试在非根前缀下可用）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:67
+- id: m2-resume-parse-and-rank/6.2
+  场景: M2
+  阶段: build
+  标题: 字段校对页：左原文右六字段，置信度与来源高亮（按 span offset 切字符串）；队列字段醒目；提交走 3.10
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 字段校对页：左原文右六字段，置信度与来源高亮（按 span offset 切字符串）；队列字段醒目；提交走 3.10
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:68
+- id: m2-resume-parse-and-rank/6.3
+  场景: M2
+  阶段: build
+  标题: 逐份复核页：硬门槛逐条（依据高亮）、逐维评分（证据摘录高亮）、原文；动作：进入下一阶段／标记淘汰（待确认）／加入精排／登记申诉，每个动作写 `human_review`
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 逐份复核页：硬门槛逐条（依据高亮）、逐维评分（证据摘录高亮）、原文；动作：进入下一阶段／标记淘汰（待确认）／加入精排／登记申诉，每个动作写 `human_review`
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:69
+- id: m2-resume-parse-and-rank/6.4
+  场景: M2
+  阶段: build
+  标题: '"标记淘汰"接口：投递进入待确认清单（`application.kanban_state=''pending_reject''` + 理由类型），⛔ 不产生拒绝记录、阶段不变；幂等：重复标记无第二条'
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '"标记淘汰"接口：投递进入待确认清单（`application.kanban_state=''pending_reject''` + 理由类型），⛔ 不产生拒绝记录、阶段不变；幂等：重复标记无第二条'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:70
+- id: m2-resume-parse-and-rank/6.5
+  场景: M2
+  阶段: build
+  标题: 批量确认页 + `POST /rejections/batch-confirm`：服务端按勾选集合哈希生成 `batch_id`；先写 `human_review(batch_id)`，再逐 thread 唤醒 `effect_apply_
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 批量确认页 + `POST /rejections/batch-confirm`：服务端按勾选集合哈希生成 `batch_id`；先写 `human_review(batch_id)`，再逐 thread 唤醒 `effect_apply_batch_decision`；无理由条目拒绝并提示其余照常；⛔ 不提供任何按分数线的批量动作（测试：接口不接受
+    score 参数）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:71
+- id: m2-resume-parse-and-rank/6.6
+  场景: M2
+  阶段: build
+  标题: 节点 `effect_apply_batch_decision`：写 `rejection_record` + `application_stage_history` + 阶段更新，幂等键 `{application_id}:effect_
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_apply_batch_decision`：写 `rejection_record` + `application_stage_history` + 阶段更新，幂等键 `{application_id}:effect_apply_batch_decision:{batch_id}`，同事务；测试：同批重复提交无重复、节点重跑无重复、`human_review`
+    条数与 `re
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:72
+- id: m2-resume-parse-and-rank/6.7
+  场景: M2
+  阶段: build
+  标题: 流程挂起：`effect_persist_scores` 后 `interrupt()`，SqliteSaver 持久化；测试：进程重启后从挂起点恢复、三天后仍可继续
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 流程挂起：`effect_persist_scores` 后 `interrupt()`，SqliteSaver 持久化；测试：进程重启后从挂起点恢复、三天后仍可继续
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:73
+- id: m2-resume-parse-and-rank/6.8
+  场景: M2
+  阶段: build
+  标题: 页面 e2e（Playwright 或 httpx+HTML 断言）：上传 → 校对 → 复核 → 批量确认 全链路在子路径前缀下跑通
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 页面 e2e（Playwright 或 httpx+HTML 断言）：上传 → 校对 → 复核 → 批量确认 全链路在子路径前缀下跑通
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:74
+- id: m2-resume-parse-and-rank/U5/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：6. U5 工作台页面（列表／校对／复核／批量确认）
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/U4
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit5-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U5
+  场景: M2
+  阶段: build
+  标题: 6. U5 工作台页面（列表／校对／复核／批量确认）
+  单元: U5 工作台页面（列表／校对／复核／批量确认）
+  依赖:
+  - m2-resume-parse-and-rank/6.1
+  - m2-resume-parse-and-rank/6.2
+  - m2-resume-parse-and-rank/6.3
+  - m2-resume-parse-and-rank/6.4
+  - m2-resume-parse-and-rank/6.5
+  - m2-resume-parse-and-rank/6.6
+  - m2-resume-parse-and-rank/6.7
+  - m2-resume-parse-and-rank/6.8
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/7.1
+  场景: M2
+  阶段: build
+  标题: 「判例批改表」xlsx 模板（固定列：样本标识、岗位、六字段人工值、人工排序名次、标注人、标注时刻）与填写说明，存 `docs/templates/m2-判例批改表.xlsx` + `.md`；给 0.4 用
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 「判例批改表」xlsx 模板（固定列：样本标识、岗位、六字段人工值、人工排序名次、标注人、标注时刻）与填写说明，存 `docs/templates/m2-判例批改表.xlsx` + `.md`；给 0.4 用
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:78
+- id: m2-resume-parse-and-rank/7.2
+  场景: M2
+  阶段: build
+  标题: '`scripts/eval_m2.py import <file> --job <id> --source <archive_path|local>`：逐行校验（必填列、类型、样本存在、类别非 live、≤20 行），任一失败整批拒并列出行'
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区:
+  - scripts/eval_m2.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`scripts/eval_m2.py import <file> --job <id> --source <archive_path|local>`：逐行校验（必填列、类型、样本存在、类别非 live、≤20 行），任一失败整批拒并列出行；幂等：同批次重复导入不重复，值变化以最新为准保留历史；记录归档件路径
+    ↔ 批次'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:79
+- id: m2-resume-parse-and-rank/7.3
+  场景: M2
+  阶段: build
+  标题: 指标计算 `scripts/eval_m2.py report --job <id>`：字段准确率（design D9 归一化口径）、Spearman、Top-10 召回、span 可回溯率；门槛与通过/不通过；样本 < 10 ⇒ "不足"
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区:
+  - scripts/eval_m2.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 指标计算 `scripts/eval_m2.py report --job <id>`：字段准确率（design D9 归一化口径）、Spearman、Top-10 召回、span 可回溯率；门槛与通过/不通过；样本 < 10 ⇒ "不足"；记录模型／prompt／解析器版本；只读（测试：跑前后业务表哈希一致）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:80
+- id: m2-resume-parse-and-rank/7.4
+  场景: M2
+  阶段: build
+  标题: 本地路径导入兜底（不依赖 G1 链路）：`--source local` 直接读文件；测试用 3 份合成样本跑通 import → report
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 本地路径导入兜底（不依赖 G1 链路）：`--source local` 直接读文件；测试用 3 份合成样本跑通 import → report
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:81
+- id: m2-resume-parse-and-rank/7.5
+  场景: M2
+  阶段: build
+  标题: 评测集目录 `data/eval/` 加 `.gitignore` 与 README（访问控制、留存期 90 天——Q7 已裁决、禁止训练用途）；`tests/test_eval_no_training_use.py`：grep 训练／微调
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区:
+  - scripts/eval_m2.py
+  - tests/test_eval_no_training_use.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 评测集目录 `data/eval/` 加 `.gitignore` 与 README（访问控制、留存期 90 天——Q7 已裁决、禁止训练用途）；`tests/test_eval_no_training_use.py`：grep 训练／微调相关 import 不得出现在 `scripts/eval_m2.py`
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:82
+- id: m2-resume-parse-and-rank/7.6
+  场景: M2
+  阶段: build
+  标题: 首批标注回件并导入（汤丽萍标注；Shao Peishen 确认导入结果）
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`report` 输出非"样本不足"'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:83
+- id: m2-resume-parse-and-rank/7.7
+  场景: M2
+  阶段: build
+  标题: 用全部已标注样本跑 `report`，结果落 `docs/m2-eval-report.md`；未达标项回到对应单元返工并登记
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区:
+  - docs/m2-eval-report.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 用全部已标注样本跑 `report`，结果落 `docs/m2-eval-report.md`；未达标项回到对应单元返工并登记
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:84
+- id: m2-resume-parse-and-rank/U6/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：7. U6 评测集导入与指标脚本
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit6-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit6 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U6
+  场景: M2
+  阶段: build
+  标题: 7. U6 评测集导入与指标脚本
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/0.1
+  - m2-resume-parse-and-rank/0.3
+  - m2-resume-parse-and-rank/7.1
+  - m2-resume-parse-and-rank/7.2
+  - m2-resume-parse-and-rank/7.3
+  - m2-resume-parse-and-rank/7.4
+  - m2-resume-parse-and-rank/7.5
+  - m2-resume-parse-and-rank/7.6
+  - m2-resume-parse-and-rank/7.7
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区:
+  - docs/m2-eval-report.md
+  - scripts/eval_m2.py
+  - tests/test_eval_no_training_use.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 7 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/8.1
+  场景: M2
+  阶段: build
+  标题: '`app/audit/assertions.py`：`REJECTION_TABLE` 缺表分支从"M1 现状放行"改为判失败；反证测试同步改；⚠️ 与 U1 建表在同一交付单元合并，不跨 session'
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区:
+  - app/audit/assertions.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/audit/assertions.py`：`REJECTION_TABLE` 缺表分支从"M1 现状放行"改为判失败；反证测试同步改；⚠️ 与 U1 建表在同一交付单元合并，不跨 session'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:88
+- id: m2-resume-parse-and-rank/8.2
+  场景: M2
+  阶段: build
+  标题: 新增断言「评分 100% 可回溯」：`criterion_score.evidence_ref` 解析后分片存在且偏移不越界；反证：造一条越界记录
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增断言「评分 100% 可回溯」：`criterion_score.evidence_ref` 解析后分片存在且偏移不越界；反证：造一条越界记录
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:89
+- id: m2-resume-parse-and-rank/8.3
+  场景: M2
+  阶段: build
+  标题: 新增断言「真实简历入库闸默认关闭」：无配置环境下 `is_live_resume_intake_enabled()` 为 False；反证：临时改默认值
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增断言「真实简历入库闸默认关闭」：无配置环境下 `is_live_resume_intake_enabled()` 为 False；反证：临时改默认值
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:90
+- id: m2-resume-parse-and-rank/8.4
+  场景: M2
+  阶段: build
+  标题: 新增断言「简历访问留痕不可缺」：表缺失判失败；被读取过的简历至少一条留痕；反证
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增断言「简历访问留痕不可缺」：表缺失判失败；被读取过的简历至少一条留痕；反证
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:91
+- id: m2-resume-parse-and-rank/8.5
+  场景: M2
+  阶段: build
+  标题: '`-m compliance` 标记覆盖 8.1–8.4，CI 接入；`tests/test_audit_assertion_effectiveness.py` 扩展四条反证'
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区:
+  - tests/test_audit_assertion_effectiveness.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`-m compliance` 标记覆盖 8.1–8.4，CI 接入；`tests/test_audit_assertion_effectiveness.py` 扩展四条反证'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:92
+- id: m2-resume-parse-and-rank/8.6
+  场景: M2
+  阶段: build
+  标题: 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:93
+- id: m2-resume-parse-and-rank/8.8
+  场景: M2
+  阶段: build
+  标题: 真实简历入库闸开启（Shao Peishen 亲自改配置；前置：0.2 通过 + 3.2 上线 + 8.4 绿）
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/0.2
+  - m2-resume-parse-and-rank/3.2
+  - m2-resume-parse-and-rank/8.4
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`.51` 上 `live` 上传被接收且访问留痕可查'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:95
+- id: m2-resume-parse-and-rank/8.9
+  场景: M2
+  阶段: build
+  标题: '`.51` 发版决定（Shao Peishen；含 U0 冒烟通过的新依赖、`sync-to-server.sh` 白名单更新）'
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区:
+  - docs/deploy-51-server.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`docs/deploy-51-server.md` 记录本次发版与依赖'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:96
+- id: m2-resume-parse-and-rank/8.10
+  场景: M2
+  阶段: build
+  标题: 试运行：0.3 选定岗位在闸开启后跑一批真实简历，用真实样本复算一次四项指标落 `docs/m2-eval-report.md`「真实样本」节；试运行期间的任何淘汰确认由 HR 执行、Shao Peishen 抽查留痕
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区:
+  - docs/m2-eval-report.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 试运行：0.3 选定岗位在闸开启后跑一批真实简历，用真实样本复算一次四项指标落 `docs/m2-eval-report.md`「真实样本」节；🔴 试运行期间的任何淘汰确认由 HR 执行、Shao Peishen 抽查留痕
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:97
+- id: m2-resume-parse-and-rank/U7/plan
+  场景: M2
+  阶段: plan
+  标题: spec-to-plan：8. U7 合规断言与真实简历入库闸
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit7-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit7 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: m2-resume-parse-and-rank/U7
+  场景: M2
+  阶段: build
+  标题: 8. U7 合规断言与真实简历入库闸
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/0.2
+  - m2-resume-parse-and-rank/8.1
+  - m2-resume-parse-and-rank/8.10
+  - m2-resume-parse-and-rank/8.2
+  - m2-resume-parse-and-rank/8.3
+  - m2-resume-parse-and-rank/8.4
+  - m2-resume-parse-and-rank/8.5
+  - m2-resume-parse-and-rank/8.6
+  - m2-resume-parse-and-rank/8.8
+  - m2-resume-parse-and-rank/8.9
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区:
+  - app/audit/assertions.py
+  - docs/deploy-51-server.md
+  - docs/m2-eval-report.md
+  - tests/test_audit_assertion_effectiveness.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 8 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: change:m2-resume-parse-and-rank
+  场景: M2
+  阶段: archive
+  标题: 变更包 m2-resume-parse-and-rank
+  依赖:
+  - m2-resume-parse-and-rank/U0
+  - m2-resume-parse-and-rank/U1
+  - m2-resume-parse-and-rank/U2
+  - m2-resume-parse-and-rank/U3
+  - m2-resume-parse-and-rank/U4
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+- id: plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit6-approval-checkpoint Task 1–9
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint.md
+  备注: 合 main：be6322a feat(m1-intake) 交付单元 6；剩 6.8 归 TD-11
+- id: plan:2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export/seg1
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit7-jd-grounding-and-export Task 1–5
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export.md
+- id: plan:2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue/seg1
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit8-web-list-detail-queue Task 1–5
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue.md
+- id: plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit9-6-human-review-exemption-line Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line.md
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 1–7
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency.md
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 1–5
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist.md
+- id: plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg1
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit2-gateway-fallback-and-retry Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry.md
+- id: plan:2026-09-08-m1-job-profile-intake-unit4-4-idempotency-suite/seg1
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit4-4-idempotency-suite Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit4-4-idempotency-suite.md
+- id: plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit5-3-intent-recognition Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition.md
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive.md
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue.md
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify.md
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle.md
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 1–5
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention.md
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 1–4
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–4 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging.md
+- id: plan:2026-09-17-m2-unit0-model-comparison/seg1
+  场景: M2
+  阶段: build
+  标题: m2-unit0-model-comparison Task 1–3
+  依赖: []
+  触碰区:
+  - app/eval/__init__.py
+  - app/eval/metrics.py
+  - app/eval/recall.py
+  - app/parsing/__init__.py
+  - app/parsing/extract_text.py
+  - app/parsing/spans.py
+  - app/schemas/rank_result.py
+  - app/schemas/resume_fields.py
+  - docs/eval/m2-pilot-README.md
+  - docs/m2-model-comparison.md
+  - scripts/bench_bge_m3.py
+  - scripts/compare_models_m2.py
+  - scripts/gen_pilot_samples.py
+  - scripts/smoke_m2_deps.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-17-m2-unit0-model-comparison.md
+  备注: 合 main：git log --grep m2-u0 14 commits，Task 1–8 已 final review（cb4767d）
+- id: plan:2026-09-17-m2-unit0-model-comparison/seg2
+  场景: M2
+  阶段: build
+  标题: m2-unit0-model-comparison Task 4–6
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  触碰区:
+  - app/eval/__init__.py
+  - app/eval/metrics.py
+  - app/eval/recall.py
+  - app/parsing/__init__.py
+  - app/parsing/extract_text.py
+  - app/parsing/spans.py
+  - app/schemas/rank_result.py
+  - app/schemas/resume_fields.py
+  - docs/eval/m2-pilot-README.md
+  - docs/m2-model-comparison.md
+  - scripts/bench_bge_m3.py
+  - scripts/compare_models_m2.py
+  - scripts/gen_pilot_samples.py
+  - scripts/smoke_m2_deps.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-17-m2-unit0-model-comparison.md
+  备注: 同上
+- id: plan:2026-09-17-m2-unit0-model-comparison/seg3
+  场景: M2
+  阶段: build
+  标题: m2-unit0-model-comparison Task 7–8
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  触碰区:
+  - app/eval/__init__.py
+  - app/eval/metrics.py
+  - app/eval/recall.py
+  - app/parsing/__init__.py
+  - app/parsing/extract_text.py
+  - app/parsing/spans.py
+  - app/schemas/rank_result.py
+  - app/schemas/resume_fields.py
+  - docs/eval/m2-pilot-README.md
+  - docs/m2-model-comparison.md
+  - scripts/bench_bge_m3.py
+  - scripts/compare_models_m2.py
+  - scripts/gen_pilot_samples.py
+  - scripts/smoke_m2_deps.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 7–8 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-17-m2-unit0-model-comparison.md
+  备注: 同上（0917AJ）
+- id: relay:R-6
+  场景: M0
+  阶段: build
+  标题: 8.8 观察窗 09-24 到期 → 收观察结论 → 勾 8.8 → 当场归档 `hr-wecom-aibot-liaison`
+  依赖: []
+  触碰区:
+  - docs/findings/2026-09-17-值守通道一周观察窗.md
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: '`docs/findings/2026-09-17-值守通道一周观察窗.md` 三项观察结论落档、无异常或异常已处置 ⇒ 8.8 勾选 → `tasks.md` 全勾（8.6/8.9 视当时状态另计）→ 跑 `openspec-archive-change`'
+  来源: docs/session接力.md:77
+- id: relay:H-1
+  场景: M0
+  阶段: build
+  标题: '`.51` 现网 `liaison_group_notify` 重建表补上跨字段 CHECK（答 `1a`）'
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 灰度真发前，`.51` 上该表建表语句含 `5ca1f50` 那两条 CHECK；当前 0 行则直接重建，有行则先导出再灌回
+  来源: docs/session接力.md:97
+- id: relay:H-4
+  场景: 构建自动化
+  阶段: build
+  标题: TD-29 剩两条：下一批单独派一条「测试脚手架收编 ＋ `config.py` 文案」（答 `4a`）
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`conftest` 收编完成；`config.py:75` 不再复用 `MissingCredentialsError`'
+  来源: docs/session接力.md:100
+- id: relay:AT-4
+  场景: 构建自动化
+  阶段: build
+  标题: 本包开工顺序：§0 三门槛（TD-42 已还＋AT-1 接通＋真实入站一条）全勾 → P0→P1→P2→P3 各一条 worktree 泳道 → §5 真实起活实测（他重启服务＋等汤丽萍下一条入站）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: tasks §5 实测记录落 `docs/findings/` 后归档
+  来源: docs/session接力.md:116
+- id: relay:tag#1297fb1e
+  场景: M0
+  阶段: build
+  标题: 拆件子会话（上条 `d703cd3`）运行期间在 `docs/跟进信/` 下新建了两份章程外文件—— `人事部-汤丽萍-答复单-2026-09-17-人事部#1决策点a.md`／`.docx`（拟发给汤丽萍的答复单草稿， 子会话最终自述完全
+  依赖: []
+  触碰区:
+  - docs/findings/2026-09-17-打标即开班真实起活实测.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 拆件子会话（上条 `d703cd3`）运行期间在 `docs/跟进信/` 下新建了两份章程外文件—— `人事部-汤丽萍-答复单-2026-09-17-人事部#1决策点a.md`／`.docx`（拟发给汤丽萍的答复单草稿， 子会话最终自述完全未提及此事）；`--dry-run` 已确认 `allowedTools`
+    无任何 `Write(...)` 路径约束， 是一次真实的越界写入（非 dry-ru
+  来源: docs/session接力.md:326
+- id: opener:[Mac]0903A
+  场景: 构建自动化
+  阶段: build
+  标题: '`.51` §5-3 四步验证重跑结果'
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: ⏸ 仍未闭合：路径订正有效（`.venv` 确认存在），但真因是 `.51` 部署代码落后于功能开发进度——`app\config.py` 停在 08-19（34 行），功能 08-27 才落地（`4890fab`/`eb338b0`/`49c5e4c`），`app\audit\` 整包缺失。产线开关已独立确认为
+    `false`（安全）。U5 接线前需 Shao Peishen 决定是否执行 `.
+  来源: docs/openers/号池台账.md:31
+- id: opener:[Mac]0917AK
+  场景: 构建自动化
+  阶段: build
+  标题: R1 发车排队＋动作通道 TDD 固化＋私信口径测试
+  依赖:
+  - opener:[Mac]0917AJ
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 编排文件无头块（泳道「发车排队与动作通道」，Opus），待 0917AJ 收敛后发车
+  来源: docs/openers/号池台账.md:225
+- id: opener:[Mac]0917AL
+  场景: 构建自动化
+  阶段: build
+  标题: R3 任务台账＋R5 定夺队列＋R4 阶段规则
+  依赖:
+  - opener:[Mac]0917AJ
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 编排文件无头块（泳道「任务驱动调度器」第 1 段，Opus），待 0917AJ 收敛后发车
+  来源: docs/openers/号池台账.md:226
+- id: opener:[Mac]0917AM
+  场景: 构建自动化
+  阶段: build
+  标题: R2 调度器 skill＋事件唤醒安装器＋合 main
+  依赖:
+  - opener:[Mac]0917AJ
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 编排文件无头块（同泳道第 2 段，Opus），待 0917AJ 收敛后发车
+  来源: docs/openers/号池台账.md:227
+- id: opener:[Mac]0917AN
+  场景: M0
+  阶段: build
+  标题: 移植 Win 端需求收敛 grill（＋跟进信判例批改接缝）为 HR `requirement-grill` skill
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 编排文件无头块（泳道「需求收敛skill移植」，Opus），与 AK/AL 同批待 AJ 收敛后发车
+  来源: docs/openers/号池台账.md:228
