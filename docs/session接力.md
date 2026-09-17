@@ -58,7 +58,7 @@
   另有 `?? _to_delete/`（⛔ 不 add、⛔ 不删）。与 origin ahead/behind 均 0。
 - 🔢 **号池台账已迁到 `docs/openers/号池台账.md`**（2026-09-16），历史月份在 `docs/openers/归档/号池台账-归档.md`。
   ⛔ 不要再往 `OP-0820` 顶部那张旧表登记。已用到 **`[Mac]0917B`**；`0917C`／`0917D` 本轮派出，
-  `0917E`–`0917AD` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917AE`**（`Z` 留看护者）。
+  `0917E`–`0917AE` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917AF`**（`Z` 留看护者）。
 - 其余包：`hr-wecom-aibot-liaison` **63/67**（剩 8.6–8.9 灰度四条，他亲自）；
   `m1-intake-quality-fixes` 68/69；`m1-job-profile-intake` 60/72；`lane-launch-armed-scan` **已撤包 2026-09-17**（`0917AC`，移至 `openspec/changes/archive/2026-09-17-lane-launch-armed-scan-withdrawn/`，未走 archive 流程）。
 
