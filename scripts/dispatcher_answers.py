@@ -34,7 +34,7 @@ QUEUE_REL = gates.QUEUE_REL
 UNMAPPED_TAG = "【答复→任务映射缺失】"
 NO_ACTION_REPLY = "无新动作"
 
-_KEY_RE = re.compile(r"^\s*(作废|[a-z]|[①②③④⑤⑥⑦⑧⑨]|定|发|签)(?=\s*[：:，,、。（(\s]|$)")
+_KEY_RE = re.compile(r"^\s*[（(]?\s*(作废|[a-zA-Z]|[①②③④⑤⑥⑦⑧⑨]|定|发|签|是|否)\s*[)）]?(?=\s*[：:，,、。（(\s]|$)")
 _ID_RE = re.compile(r"`([^`]+)`")
 
 
@@ -96,6 +96,7 @@ ANSWER_MAP: dict[str, Mapping] = {
             )
         ],
         前置于=[f"{M2}/0.2"],
+        保持阻塞={f"{M2}/0.2": ("决策", "三份草稿（answer:Q-02）产出后进 G5 待本人签认；签认后由 Cowork 勾 tasks.md 0.2，⛔ 不派泳道")},
     ),
     "Q-03b": Mapping(
         说明="试运行岗位＝底层软件工程师；0.3 已落档（05fd82c）。8.10 仍受真实简历入库闸（Q-F2）阻塞",
@@ -228,8 +229,9 @@ def all_mapped_tasks(answer_map: dict[str, Mapping] | None = None) -> list[Task]
 
 
 def reply_key(reply: str) -> str:
+    """答复首个选项字：`a`／`(a)`／`A：`／`①`／`作废`／`定`／`是`…；取不到 ⇒ ""（连编号一起查表必然无映射 ⇒ 登记）。"""
     m = _KEY_RE.match(reply or "")
-    return m.group(1) if m else ""
+    return m.group(1).lower() if m else ""
 
 
 def map_key(row: dict[str, str]) -> str:
@@ -292,6 +294,11 @@ def apply_answers(entries: list, queue_text: str, *, new_entry, answer_map: dict
     rep = Report()
     byid = {e.id: e for e in entries}
     no_action = _no_action_numbers(queue_text)
+    keep: dict[str, tuple[str, str, str]] = {}  # id -> (阻塞类型, 原因, tag)：跨行粘性——任一已答行要求保持阻塞，别的已答行解不开
+
+    def prefix(e, head: str) -> None:
+        if not e.产出判据.startswith(head):
+            e.产出判据 = head + e.产出判据
 
     def touchable(tid: str):
         e = byid.get(tid)
@@ -309,7 +316,7 @@ def apply_answers(entries: list, queue_text: str, *, new_entry, answer_map: dict
                 if e is None:
                     continue
                 e.状态, e.阻塞类型, e.队列 = "完成", "无", f"{no} 作废"
-                e.产出判据 = f"【作废：{no}】" + e.产出判据
+                prefix(e, f"【作废：{no}】")
                 rep.作废.append(tid)
             continue
         if st != "已答":
@@ -326,7 +333,7 @@ def apply_answers(entries: list, queue_text: str, *, new_entry, answer_map: dict
                 if e is None:
                     continue
                 e.状态, e.阻塞类型, e.队列 = "阻塞", block_type(row), tag
-                e.产出判据 = f"【{tag}·缺任务映射】" + e.产出判据
+                prefix(e, f"【{tag}·缺任务映射】")
             continue
         new_ids: list[str] = []
         for t in mapping.任务:
@@ -356,14 +363,21 @@ def apply_answers(entries: list, queue_text: str, *, new_entry, answer_map: dict
                 continue
             if tid in mapping.保持阻塞:
                 btype, why = mapping.保持阻塞[tid]
-                e.状态, e.阻塞类型, e.队列 = "阻塞", btype, tag
-                e.产出判据 = f"【{tag}·仍阻塞：{why}】" + e.产出判据
-                rep.保持阻塞.append(tid)
+                keep.setdefault(tid, (btype, why, tag))
             else:
                 e.状态, e.阻塞类型, e.队列 = "待开", "无", tag
                 rep.解阻塞.append(tid)
             if tid in mapping.前置于:
                 e.依赖 = sorted(set(e.依赖) | set(new_ids))
+    for tid, (btype, why, tag) in keep.items():
+        e = touchable(tid)
+        if e is None:
+            continue
+        e.状态, e.阻塞类型, e.队列 = "阻塞", btype, tag
+        prefix(e, f"【{tag}·仍阻塞：{why}】")
+        rep.保持阻塞.append(tid)
+        if tid in rep.解阻塞:
+            rep.解阻塞.remove(tid)
 
     # 1：待答／远期行压阻塞（最后做 ⇒ 压过已答）
     for row in queue_rows(queue_text):
@@ -404,7 +418,7 @@ def register_unmapped(queue: Path, missing: list[tuple[str, str, str]]) -> list[
     scenes = {r.get("编号", ""): r.get("场景", "") for r in gates.parse_queue(text)}
     added: list[str] = []
     for no, key, reply in missing:
-        if f"{UNMAPPED_TAG}{no}" in text:
+        if re.search(re.escape(f"{UNMAPPED_TAG}{no}") + r"(?!\d)", text):
             continue
         number = gates._next_number(text)
         text = gates.append_pending_row(text, build_unmapped_row(number, scenes.get(no, ""), no, key, reply))

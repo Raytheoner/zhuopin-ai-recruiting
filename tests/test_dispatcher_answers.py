@@ -53,6 +53,10 @@ def ent(id: str, 状态: str = "待开", 阻塞类型: str = "无", 阶段: str 
         ("①：评分 prompt 只返回 offset", "①"),
         ("作废：两份答复单为 Cowork 所写", "作废"),
         ("定", "定"),
+        ("(a) 补映射", "a"),
+        ("A：大写也认", "a"),
+        ("是，照推荐", "是"),
+        ("ab：两个字母不是选项", ""),
         ("", ""),
     ],
 )
@@ -91,6 +95,19 @@ def test_keep_blocked_override_switches_type_and_writes_reason():
     assert (e.状态, e.阻塞类型) == ("阻塞", "外部")
     assert e.产出判据.startswith("【Q-93 已答 a·仍阻塞：等本人写 .env】")
     assert rep.保持阻塞 == ["m2/1.4"] and rep.解阻塞 == []
+
+
+def test_keep_blocked_is_sticky_across_rows_so_a_later_answer_cannot_unblock_it():
+    e = ent("m2/8.10", 状态="阻塞", 阻塞类型="决策")
+    q = queue_md([
+        row("Q-03", "M2", "决策", "`m2/8.10`", "已答", "b：选它"),
+        row("Q-30", "M2", "决策", "`m2/8.10`", "已答", "a：ok"),
+    ])
+    amap = {"Q-03b": A.Mapping(说明="x", 保持阻塞={"m2/8.10": ("决策", "入库闸未开")}), "Q-30a": A.Mapping(说明="只解阻塞")}
+    rep = A.apply_answers([e], q, new_entry=Entry, answer_map=amap)
+    assert (e.状态, e.阻塞类型) == ("阻塞", "决策")
+    assert rep.保持阻塞 == ["m2/8.10"] and rep.解阻塞 == []
+    assert e.产出判据.count("仍阻塞") == 1  # 前缀不叠加
 
 
 def test_voided_row_completes_listed_tasks_with_void_note():
@@ -184,11 +201,12 @@ def test_register_unmapped_appends_dedup_row_and_no_action_reply_unblocks(tmp_pa
     q.write_text(queue_md([row("Q-99", "M2", "外部输入（本人）", "`m2/0.1`", "已答", "a：发了")]), encoding="utf-8")
     assert A.register_unmapped(q, [("Q-99", "Q-99a", "a：发了")]) == ["Q-100"]
     assert A.register_unmapped(q, [("Q-99", "Q-99a", "a：发了")]) == []  # 去重
+    assert A.register_unmapped(q, [("Q-9", "Q-9a", "a：前缀相同的另一题")]) == ["Q-101"]  # Q-9 ≠ Q-99
     text = q.read_text(encoding="utf-8")
     assert text.count("【答复→任务映射缺失】Q-99") == 1
     assert "| Q-100 | M2 | 决策（答复→任务映射缺失）" in text
     # 该登记行答「无新动作」⇒ Q-99 视作「只解阻塞」
-    text = text.replace("| — | 待答 | |", "| — | 已答 | b：无新动作 |")
+    text = text.replace("| — | 待答 | |", "| — | 已答 | b：无新动作 |", 1)
     e = ent("m2/0.1", 状态="阻塞", 阻塞类型="决策")
     rep = A.apply_answers([e], text, new_entry=Entry, answer_map={})
     assert (e.状态, e.阻塞类型) == ("待开", "无") and rep.缺映射 == []
@@ -201,10 +219,22 @@ REAL_QUEUE = Path(__file__).resolve().parent.parent / "docs/roadmap/定夺队列
 RULES = Path(__file__).resolve().parent.parent / ".claude/skills/task-dispatcher/rules.md"
 
 
-def test_first_version_map_covers_every_answered_row_in_real_queue():
+ANSWERED_20260917 = ["Q-02a", "Q-03b", "Q-05b", "Q-06a", "Q-07a", "Q-09a", "Q-12a", "Q-13b", "Q-14a", "Q-15a", "Q-17a", "Q-18b", "Q-19①", "Q-20a", "Q-21a"]
+
+
+def test_first_version_map_covers_the_15_rows_answered_on_20260917():
+    # ⛔ 不对活队列断言「全部已答行都有映射」：新答复缺映射是设计内路径（登记进队列），不能让全量 pytest 红掉挡住发车
+    missing = [k for k in ANSWERED_20260917 if k not in A.ANSWER_MAP]
+    assert missing == [], f"首版映射缺：{missing}"
+
+
+def test_real_queue_answered_rows_all_parse_to_a_key_and_first_version_rows_are_still_mapped():
     text = REAL_QUEUE.read_text(encoding="utf-8")
-    missing = [(r["编号"], A.reply_key(r.get("答复", ""))) for r in A.answered_rows(text) if A.map_key(r) not in A.ANSWER_MAP]
-    assert missing == [], f"已答行缺映射（补 ANSWER_MAP 与 rules.md §7）：{missing}"
+    rows = {r["编号"]: r for r in A.answered_rows(text)}
+    for key in ANSWERED_20260917:
+        no = key[:4]
+        if no in rows:  # 行可能已被归档到「三、已答」，那就不在本模块范围内
+            assert A.map_key(rows[no]) == key, f"{no} 的答复键变了：{A.map_key(rows[no])}（若改了答复，须同步 ANSWER_MAP）"
 
 
 def test_every_map_key_is_documented_in_rules_section_7():
@@ -255,7 +285,10 @@ def test_generator_q02_no_longer_rejudged_and_answer_task_is_ready(tmp_path):
     first = run(repo).stdout
     doc = load(repo)
     t = by_id(doc)
-    assert (t["m2-resume-parse-and-rank/0.2"]["状态"], t["m2-resume-parse-and-rank/0.2"]["阻塞类型"]) == ("待开", "无")
+    # 0.2 本身要本人签认（G5 类）⇒ 仍阻塞·决策，但不再是文本启发式的「永久重判」：队列字段写明缘由、依赖草稿任务、不记 conflicts
+    assert (t["m2-resume-parse-and-rank/0.2"]["状态"], t["m2-resume-parse-and-rank/0.2"]["阻塞类型"]) == ("阻塞", "决策")
+    assert t["m2-resume-parse-and-rank/0.2"]["队列"] == "Q-02 已答 a"
+    assert t["m2-resume-parse-and-rank/0.2"]["产出判据"].startswith("【Q-02 已答 a·仍阻塞：")
     assert t["m2-resume-parse-and-rank/0.2"]["依赖"] == ["answer:Q-02"]
     assert "conflicts" not in t["m2-resume-parse-and-rank/0.2"]
     assert t["answer:Q-02"]["状态"] == "待开" and "answer:Q-02" in doc["summary"]["ready"]
@@ -282,7 +315,7 @@ def test_generator_ledger_status_of_answer_task_wins_silently(tmp_path):
     run(repo)
     t = by_id(load(repo))
     assert t["answer:Q-02"]["状态"] == "完成" and "conflicts" not in t["answer:Q-02"]
-    assert "m2-resume-parse-and-rank/0.2" in load(repo)["summary"]["ready"]  # 草稿完成 ⇒ 0.2 才 ready
+    assert "m2-resume-parse-and-rank/0.2" not in load(repo)["summary"]["ready"]  # 草稿完成也不派 0.2：签认是人闸
 
 
 def test_generator_unmapped_answer_lands_in_summary_and_register_flag_appends_queue_row(tmp_path):

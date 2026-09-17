@@ -3,11 +3,11 @@ version: 1
 summary:
   条目数: 195
   按状态:
-    待开: 77
+    待开: 76
     在跑: 5
     完成: 73
-    阻塞: 40
-  阻塞·决策: 21
+    阻塞: 41
+  阻塞·决策: 22
   阻塞·外部: 18
   conflicts:
   - m1-job-profile-intake/9.2
@@ -1151,9 +1151,9 @@ tasks:
   依赖:
   - answer:Q-02
   触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 三份文档落 `docs/compliance/` 并由本人签认
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【Q-02 已答 a·仍阻塞：三份草稿（answer:Q-02）产出后进 G5 待本人签认；签认后由 Cowork 勾 tasks.md 0.2，⛔ 不派泳道】三份文档落 `docs/compliance/` 并由本人签认
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:6
   队列: Q-02 已答 a
   备注: Q-02 已答 a（现在启动，法务对接人＝谷雨，2026-09-17）：Cowork 起草 PIA／同意条款／留存策略草稿进 docs/compliance/，待本人签认

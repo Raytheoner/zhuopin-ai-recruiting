@@ -965,7 +965,8 @@ def main(argv: list[str] | None = None) -> int:
     repo = args.repo.resolve()
     out = args.out or (repo / REL["out"])
     generated = generate(repo)
-    tasks = merge(load_existing(out), generated, resolve=args.resolve_conflicts)
+    existing = load_existing(out)
+    tasks = merge(existing, generated, resolve=args.resolve_conflicts)
     text = render(tasks)
     s = summarize(tasks)
     if not args.dry_run:
@@ -978,9 +979,10 @@ def main(argv: list[str] | None = None) -> int:
     if s["未知依赖"]:
         print(f"  未知依赖: {', '.join(s['未知依赖'])}")
     r = ANSWER_REPORT
-    print(f"定夺队列⇒台账: 生成={len(r.生成)} 解阻塞={len(r.解阻塞)} 保持阻塞={len(r.保持阻塞)} 作废={len(r.作废)} 待答压阻塞={len(r.待答阻塞)} 缺映射={len(r.缺映射)}")
+    fresh = [tid for tid in r.生成 if tid not in existing]
+    print(f"定夺队列⇒台账: 映射任务={len(r.生成)}（本次新入台账={len(fresh)}） 解阻塞={len(r.解阻塞)} 保持阻塞={len(r.保持阻塞)} 作废={len(r.作废)} 待答压阻塞={len(r.待答阻塞)} 缺映射={len(r.缺映射)}")
     for tid in r.生成:
-        print(f"  生成: {tid}")
+        print(f"  映射任务: {tid}{'' if tid in existing else '（新）'}")
     for no, key, reply in r.缺映射:
         print(f"  缺任务映射: {key}（{reply[:40]}）")
     if args.register_unmapped and r.缺映射 and not args.dry_run:
