@@ -68,7 +68,7 @@ S-M3：Q1a，Q2a，Q3a，Q4a，Q5a ｜ S-排期：Q1b，Q2b，Q3a，Q4a，Q5a �
 1. 把答复字面转写进各 intent「决策」节（D 条编号续接），从「待答题」勾掉或删行；超时默认生效的题按 SKILL §二 固定措辞落档。
 2. 某场景待答题清零 ⇒ `python3 scripts/gates.py request G1 <场景> --scene <场景> --artifact docs/roadmap/intents/<场景>-intent.md --tasks propose:<场景>`（去重；调度器 `sweep --apply` 也会补）。⛔ 不改 `status`——G1 放行后才改「已确认」。
 3. 答复若牵出新分叉（如 S-M3 Q1a ⇒ 候选机规格／预算题；S-排期 Q1c ⇒ 对外通道题），Cowork 重算前沿出第 2 轮，树落 `docs/roadmap/<场景>-需求树草稿.md`。
-4. 20 条待专员条目：待 `人事部#2` 闭环（串行闸）后，按 SKILL §三 判例批改链起草 `人事部#3`（≤10 行真实案例表、`决策点:` 字段、`criteria --add` 登口径点台账）；对外发送＝不可代，Shao Peishen 拍板。
+4. 20 条待专员条目：待 `人事部#3` 闭环（串行闸；`人事部#2` 已作废并入 #3）后，按 SKILL §三 判例批改链起草下一封（≤10 行真实案例表、`决策点:` 字段、`criteria --add` 登口径点台账）；对外发送＝不可代，Shao Peishen 拍板。
 5. 五场景全部到闸后，删除或迁出本汇总文件（`git rm`／移入 `docs/roadmap/归档/`），避免生成器长期留一条 `propose:波次0-grill首轮汇总` 阻塞条目。
 
 ## 技术探针（不进待答题）
