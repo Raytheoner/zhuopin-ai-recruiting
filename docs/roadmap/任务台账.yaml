@@ -2893,12 +2893,13 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-Offer-intent.md:1
   可见: false
   闸门: G1 S-Offer
+  备注: 0917BF（四场景立包，与 S-排期/S-入职/S-渠道 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
 - id: propose:S-入职
   场景: S-入职
   阶段: propose
@@ -2906,12 +2907,13 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-入职-intent.md:1
   可见: false
   闸门: G1 S-入职
+  备注: 0917BF（四场景立包，与 S-排期/S-Offer/S-渠道 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
 - id: propose:S-排期
   场景: S-排期
   阶段: propose
@@ -2919,12 +2921,13 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-排期-intent.md:1
   可见: false
   闸门: G1 S-排期
+  备注: 0917BF（四场景立包，与 S-Offer/S-入职/S-渠道 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
 - id: propose:S-渠道
   场景: S-渠道
   阶段: propose
@@ -2932,12 +2935,13 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-渠道-intent.md:1
   可见: false
   闸门: G1 S-渠道
+  备注: 0917BF（四场景立包，与 S-排期/S-Offer/S-入职 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
 - id: relay:R-6
   场景: M0
   阶段: build
