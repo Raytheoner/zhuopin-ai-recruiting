@@ -7,6 +7,14 @@ from app.schemas.resume_fields import FIELD_NAMES
 from scripts.gen_pilot_samples import RUBRIC, SEED, build_profiles, render_text, truth_fields, write_all
 
 
+def test_write_all_records_actual_seed_not_module_constant(tmp_path):
+    # M4：--seed 传入非默认值时，truth.json 里的 seed 必须是实际用的那个，⛔ 不是模块常量 SEED。
+    custom_seed = SEED + 1
+    profiles = build_profiles(3, seed=custom_seed)
+    truth = write_all(tmp_path, profiles, font=None, seed=custom_seed)
+    assert truth["seed"] == custom_seed
+
+
 def test_build_profiles_is_deterministic_and_unique():
     a = build_profiles(20, seed=SEED)
     b = build_profiles(20, seed=SEED)
@@ -58,6 +66,7 @@ def test_write_all_produces_files_and_truth_json(tmp_path):
     data = json.loads((tmp_path / "truth.json").read_text(encoding="utf-8"))
     assert data == truth
     assert data["sample_class"] == "synthetic"
+    assert data["seed"] == SEED
     assert len(data["samples"]) == 3
     for row in data["samples"]:
         assert (tmp_path / row["files"]["txt"]).exists()

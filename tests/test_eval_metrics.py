@@ -72,6 +72,20 @@ def test_spearman_perfect_and_reversed():
     assert math.isclose(spearman(reversed_rank, human), -1.0)
 
 
+def test_spearman_dense_reranks_subset_when_system_rank_covers_fewer_ids():
+    # 20 人工名次 1..20；系统只对其中 10 份给出排名（compare_models_m2.evaluate_model 的 rank_ok 子集）。
+    # F1：闭式公式必须先对交集做稠密重排，⛔ 不能直接套用原始（跨全量的）名次，否则完美一致也会算出负值。
+    ids = [f"S{i}" for i in range(20)]
+    human = {sid: i + 1 for i, sid in enumerate(ids)}
+    subset = ids[1::2]  # 10 个 id，人工名次 2,4,...,20，与人工顺序一致
+
+    perfect_system = {sid: rank for rank, sid in enumerate(subset, start=1)}
+    assert spearman(perfect_system, human) == 1.0
+
+    reversed_system = {sid: len(subset) - idx for idx, sid in enumerate(subset)}
+    assert math.isclose(spearman(reversed_system, human), -1.0)
+
+
 def test_spearman_none_below_min_samples():
     ids = [f"S{i}" for i in range(9)]
     human = {s: i + 1 for i, s in enumerate(ids)}

@@ -1,4 +1,4 @@
-**进度：5/68**（2026-09-17 `0917AD` 立包；同日 `0917AF` 回填六问裁决：0.5／0.6 已定，8.7 移出本包留墓碑。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决，对应 `design.md` Open Questions（当前 0 条）；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支。涉及副作用的任务已逐条写幂等策略。）
+**进度：4/68**（2026-09-17 `0917AD` 立包；同日 `0917AF` 回填六问裁决：0.5／0.6 已定，8.7 移出本包留墓碑。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决，对应 `design.md` Open Questions（当前 0 条）；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支。涉及副作用的任务已逐条写幂等策略。）
 
 ## 0. 前置门槛（不写代码；任一未过则对应下游单元不得发车）
 
@@ -12,7 +12,7 @@
 ## 1. U0 模型对比定型
 
 - [ ] 1.1 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence-transformers` 二选一按可装性定）；记录可装性与体积到 `docs/m2-model-comparison.md`「环境」节 ⏸ 留步：.51 Windows venv 冒烟未跑（Mac 冒烟见 docs/m2-model-comparison.md「环境」；paddlepaddle cp314 无 wheel）
-- [x] 1.2 准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore` 登记）（合成替身，真实脱敏样本到位后重跑，见 U0 计划待裁决 #2）
+- [ ] 1.2 准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore` 登记）⏸ 留步：合成替身已到位（scripts/gen_pilot_samples.py，20 份 ×4 形态），真实脱敏样本待 U0 计划待裁决 #2
 - [x] 1.3 扩展 `scripts/compare_models.py` 方法为 `scripts/compare_models_m2.py`：对每个候选模型跑「抽取 → 精排」，输出字段准确率、Spearman、Top-10 召回、span 可回溯率、P50/P95 延迟、每份成本
 - [ ] 1.4 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek 两款有 key 实跑（20/20，数据见 docs/m2-model-comparison.md）；doubao/qwen 缺 ARK_API_KEY/DASHSCOPE_API_KEY（外部采购，Shao Peishen）
 - [x] 1.5 对本地 CPU BGE-M3 测召回：以人工排序前 10 为真值，测 top-30 召回率与单份耗时（Mac CPU 合成样本：单份 ~58 ms、recall@10=40%、n=20 故 top-30 无意义；.51 Windows CPU 与真实样本复算见留步）

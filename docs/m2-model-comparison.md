@@ -8,6 +8,7 @@
 
 ```bash
 set -a; [ -f .env ] && source .env; set +a          # DEEPSEEK_API_KEY / ARK_API_KEY / DASHSCOPE_API_KEY
+[ "$LLM_PROVIDER" = deepseek ] && export DEEPSEEK_API_KEY="$LLM_API_KEY"   # 本仓库 .env 只有 LLM_* 键；⛔ 不打印、不落盘
 venv/bin/python -m scripts.gen_pilot_samples --out data/eval/m2-pilot          # 合成样本（真实脱敏样本到位后替换同目录）
 venv/bin/python -m scripts.smoke_m2_deps --json data/eval/m2-pilot/smoke-$(uname).json
 venv/bin/python -m scripts.compare_models_m2 --samples data/eval/m2-pilot --out data/eval/m2-pilot/compare-run.md --json data/eval/m2-pilot/compare-run.json
@@ -15,7 +16,7 @@ venv/bin/python -m scripts.compare_models_m2 --ocr-check                       #
 HF_ENDPOINT=https://hf-mirror.com venv/bin/python -m scripts.bench_bge_m3 --json data/eval/m2-pilot/bench-bge-m3.json
 ```
 
-注（Mac，2026-09-17 实跑）：macOS 无 `timeout` 命令，本机改用后台 nohup 脚本跑长任务（`data/eval/m2-pilot/run-compare.sh`、`run-bench.sh`，已 `.gitignore`）；上面命令按计划原样保留，在 macOS 上跑时去掉 `timeout` 前缀或换等价包装即可。
+注（Mac，2026-09-17 实跑）：macOS 无 `timeout` 命令，`compare_models_m2` 与 `bench_bge_m3` 这两个长任务本机改用后台 nohup 包装脚本跑（`data/eval/m2-pilot/run-compare.sh`、`run-bench.sh`，已 `.gitignore`）；上面命令按计划原样保留，供 `.51`／有 `timeout` 的环境直接用。
 
 ## 环境（tasks 1.1）
 
@@ -96,7 +97,7 @@ doubao／qwen 本机跳过：`ARK_API_KEY` / `DASHSCOPE_API_KEY` 均未设置。
 
 模型：`BAAI/bge-m3`（backend=`flag`，FlagEmbedding 1.4.2 + torch 2.14.0 CPU）｜ 平台：`macOS-27.0-arm64-arm-64bit-Mach-O`
 
-样本 20 份 ｜ 维度 1024 ｜ 画像向量 ~205 ms（207.7 / 202.5 ms 两次实跑）｜ 单份简历 ~58 ms（59.3 / 57.6 ms）
+样本 20 份 ｜ 维度 1024 ｜ 画像向量 ~205 ms（207.7 / 202.5 ms 两次实跑）｜ 单份简历（批量摊薄，batch_size=4）~58 ms（59.3 / 57.6 ms）
 
 - top-10（真值 = 人工排序前 10）：recall@10 = 40.0%
 - top-20（真值 = 人工排序前 20，即全部 20 份）：recall@20 = 100%——n=20 时该数字必然平凡（真值集合等于全体样本），**计划 1.5 要求的 top-30 召回率在本合成样本上无意义**（样本总数仅 20 份，top-30 恒为 100%），需在真实脱敏样本（≥20 份且候选池更大）上重算。

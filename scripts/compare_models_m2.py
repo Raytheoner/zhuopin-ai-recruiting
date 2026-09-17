@@ -5,21 +5,24 @@ M2 U0 模型对比（tasks 1.3／1.4；spec「模型对比定型的输入输出�
 不同点：留痕走 JsonlAuditHook（铁律 3，⛔ 不用 NoopAuditHook），指标走 app/eval/metrics（D9），
 模型标识只认响应侧 `LLMCallMeta.response_model`（铁律 5）。
 
-用法（Task 7 加 CLI）：python -m scripts.compare_models_m2 --samples data/eval/m2-pilot --out docs/m2-model-comparison-run.md
+用法（Task 7 加 CLI）：python -m scripts.compare_models_m2 --samples data/eval/m2-pilot --out data/eval/m2-pilot/compare-run.md
 """
 from __future__ import annotations
 
+import argparse
+import difflib
 import json
 import math
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.eval.metrics import FieldAccuracy, field_accuracy, spearman, span_traceability, top_k_recall
+from app.eval.metrics import THRESHOLDS, FieldAccuracy, field_accuracy, spearman, span_traceability, top_k_recall
 from app.llm.gateway import LLMCallMeta, LLMGateway
+from app.parsing.extract_text import OcrUnavailable, extract_text
 from app.parsing.spans import TextSpan, render_for_prompt, resolve_span_ref, split_into_spans
 from app.schemas.rank_result import RankResult
 from app.schemas.resume_fields import FIELD_LABELS, FIELD_NAMES, ResumeFields
@@ -105,11 +108,18 @@ class Sample:
     human_rank: int
 
 
+ALLOWED_SAMPLE_CLASSES = frozenset({"synthetic", "anonymized", "departed"})
+
+
 def load_samples(sample_dir: Path) -> tuple[list[Sample], dict[str, Any]]:
     sample_dir = Path(sample_dir)
     truth = json.loads((sample_dir / "truth.json").read_text(encoding="utf-8"))
-    if truth.get("sample_class") == "live":
-        raise ValueError("评测样本类别为 live，拒绝（spec：评测集 MUST NOT 含真实在招简历）")
+    cls = truth.get("sample_class")
+    if cls not in ALLOWED_SAMPLE_CLASSES:
+        raise ValueError(
+            f"truth.json sample_class 必须是 {sorted(ALLOWED_SAMPLE_CLASSES)}，收到 {cls!r}"
+            "（live／缺失一律拒收，spec「评测集样本来源与访问控制」）"
+        )
     samples = [
         Sample(
             sample_id=row["sample_id"],
@@ -253,6 +263,7 @@ class ModelReport:
     rank_ok: int = 0
     field_acc: FieldAccuracy = field(default_factory=lambda: FieldAccuracy({f: 0.0 for f in FIELD_NAMES}, 0.0, 0))
     spearman: float | None = None
+    spearman_n: int = 0
     top_k_recall: float | None = None
     span_traceability: float = 0.0
     parse_p50_ms: float = 0.0
@@ -333,6 +344,7 @@ def evaluate_model(
     human_order = [s.sample_id for s in sorted(samples, key=lambda s: s.human_rank)]
     human_rank = {s.sample_id: s.human_rank for s in samples}
     report.spearman = spearman(system_rank, human_rank)
+    report.spearman_n = len(system_rank)
     report.top_k_recall = top_k_recall(system_order, human_order, k=top_k) if scored else None
     traces = [o.traceability for o in outcomes if o.traceability is not None]
     report.span_traceability = sum(traces) / len(traces) if traces else 0.0
@@ -347,13 +359,6 @@ def evaluate_model(
 
 
 # ---- Task 7: render_markdown / ocr_check / main ----
-
-import argparse
-import difflib
-from dataclasses import asdict
-
-from app.eval.metrics import THRESHOLDS
-from app.parsing.extract_text import OcrUnavailable, extract_text
 
 
 def _pct(v: float | None) -> str:
@@ -377,9 +382,12 @@ def render_markdown(reports: list[ModelReport], *, n_samples: int, generated_at:
             lines.append(f"| {r.name} | （未跑） | | | | | | | | | | | | {r.skip_reason} |")
             continue
         note = f"{len(r.errors)} 条错误，见 {r.audit_path}" if r.errors else ""
+        spearman_cell = (
+            f"{_num(r.spearman)}（n={r.spearman_n}）" if 0 < r.spearman_n < r.n_samples else _num(r.spearman)
+        )
         lines.append(
             f"| {r.name} | {', '.join(r.response_models) or '—'} | {', '.join(r.fingerprints) or '—'} | {r.parse_ok}/{r.n_samples} | "
-            f"{_pct(r.field_acc.overall)} | {_num(r.spearman)} | {_pct(r.top_k_recall)} | {_pct(r.span_traceability)} | {r.rank_ok}/{r.n_samples} | "
+            f"{_pct(r.field_acc.overall)} | {spearman_cell} | {_pct(r.top_k_recall)} | {_pct(r.span_traceability)} | {r.rank_ok}/{r.n_samples} | "
             f"{r.parse_p50_ms:.0f}/{r.parse_p95_ms:.0f} | {r.rank_p50_ms:.0f}/{r.rank_p95_ms:.0f} | {r.prompt_tokens}/{r.completion_tokens} | "
             f"{_num(r.cost_yuan, 4) if r.cost_yuan is not None else '未填价格'} | {note} |"
         )

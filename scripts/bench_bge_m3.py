@@ -72,7 +72,7 @@ def render_markdown(result: dict) -> str:
     return "\n".join(
         [
             f"模型：`{result['model']}`（backend={result.get('backend', '—')}）｜ 平台：`{result['platform']}`",
-            f"样本 {result['n']} 份 ｜ 维度 {result['dim']} ｜ 画像向量 {result['query_ms']} ms ｜ 单份简历 {result['per_doc_ms']} ms（合计 {result['docs_total_ms']} ms）",
+            f"样本 {result['n']} 份 ｜ 维度 {result['dim']} ｜ 画像向量 {result['query_ms']} ms ｜ 单份简历（批量摊薄） {result['per_doc_ms']} ms（合计 {result['docs_total_ms']} ms）",
             f"recall@{result['top_k']}（以人工排序前 {result['top_k']} 为真值）＝ {result['recall_at_k'] * 100:.1f}%",
             "",
             "| 名次 | 样本 | cosine |",

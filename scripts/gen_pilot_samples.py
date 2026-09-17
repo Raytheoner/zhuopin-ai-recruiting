@@ -241,7 +241,7 @@ def _write_scan_pdf(text: str, path: Path, font: Path) -> None:
     image.save(str(path), "PDF", resolution=150)
 
 
-def write_all(out_dir: Path, profiles: list[Profile], *, font: Path | None) -> dict:
+def write_all(out_dir: Path, profiles: list[Profile], *, font: Path | None, seed: int = SEED) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for p in profiles:
@@ -264,7 +264,7 @@ def write_all(out_dir: Path, profiles: list[Profile], *, font: Path | None) -> d
         )
     truth = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "seed": SEED,
+        "seed": seed,
         "sample_class": "synthetic",
         "rubric": RUBRIC,
         "samples": rows,
@@ -280,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=SEED)
     args = parser.parse_args(argv)
     font = find_cjk_font()
-    truth = write_all(args.out, build_profiles(args.n, seed=args.seed), font=font)
+    truth = write_all(args.out, build_profiles(args.n, seed=args.seed), font=font, seed=args.seed)
     print(f"写入 {len(truth['samples'])} 份样本到 {args.out}；扫描件：{'已生成' if font else '未生成（未找到中文字体）'}")
     return 0
 

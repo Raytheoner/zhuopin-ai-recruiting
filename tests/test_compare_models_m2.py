@@ -249,6 +249,15 @@ def test_load_samples_rejects_live_class(tmp_path):
         load_samples(tmp_path)
 
 
+def test_load_samples_rejects_missing_sample_class(tmp_path):
+    # F3：白名单制，缺失字段与 live 同等拒收（spec「评测集样本来源与访问控制」）。
+    (tmp_path / "truth.json").write_text(json.dumps({"rubric": RUBRIC, "samples": []}), encoding="utf-8")
+    import pytest
+
+    with pytest.raises(ValueError, match="live／缺失一律拒收"):
+        load_samples(tmp_path)
+
+
 def test_load_samples_reads_txt_and_rubric(tmp_path):
     (tmp_path / "S01.txt").write_text(TEXT_A, encoding="utf-8")
     truth = {"sample_class": "synthetic", "rubric": RUBRIC, "samples": [{"sample_id": "S01", "files": {"txt": "S01.txt"}, "fields": {"name": "张明远"}, "human_rank": 1}]}
@@ -256,6 +265,26 @@ def test_load_samples_reads_txt_and_rubric(tmp_path):
     samples, rubric = load_samples(tmp_path)
     assert samples[0].sample_id == "S01" and samples[0].text == TEXT_A and samples[0].human_rank == 1
     assert rubric == RUBRIC
+
+
+def test_ground_fields_zeroes_confidence_when_quote_unresolvable():
+    # T1（D5）：证据 quote 反查不到任何 span 时，该字段 confidence 必须归 0——断在真实对象上，不能用 plain()（会把 confidence 抹掉）。
+    from app.parsing.spans import split_into_spans
+    from app.schemas.resume_fields import EducationField, EducationValue, ListField, NumberField, ResumeFields, SpanRef, TextField
+    from scripts.compare_models_m2 import ground_fields
+
+    spans = split_into_spans(TEXT_A)
+    fields = ResumeFields(
+        name=TextField(value="张明远", confidence=0.9, spans=[SpanRef(span_id=1, quote="这句原文里压根不存在")]),
+        years_of_experience=NumberField(value=5, confidence=0.9, spans=[SpanRef(span_id=3, quote="5 年")]),
+        skills=ListField(value=["C"], confidence=0.9, spans=[SpanRef(span_id=9, quote="C")]),
+        companies=ListField(value=["无锡华芯车控科技有限公司"], confidence=0.9, spans=[SpanRef(span_id=7, quote="无锡华芯车控科技有限公司")]),
+        education=EducationField(value=EducationValue(degree="本科", school="江南大学"), confidence=0.9, spans=[SpanRef(span_id=5, quote="江南大学")]),
+        expected_city=TextField(not_mentioned=True, confidence=1.0, value=None, spans=[]),
+    )
+    grounded = ground_fields(fields, spans)
+    assert grounded.name.confidence == 0.0
+    assert grounded.name.spans[0].start is None and grounded.name.spans[0].end is None
 
 
 def test_compute_cost_none_when_price_missing():

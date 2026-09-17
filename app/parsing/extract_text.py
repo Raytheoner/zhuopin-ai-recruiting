@@ -77,6 +77,8 @@ def _paddle_lines(result: object) -> list[str]:
 
 
 def ocr_pdf(path: Path, *, lang: str = "ch") -> str:
+    """每次调用都新建一个 PaddleOCR 引擎（初始化耗时不小）。U2 的常驻消费方（tasks 3.4）应缓存该引擎实例，
+    ⛔ 不要沿用这里"每次新建"的写法——本函数只服务离线一次性核对场景（M9）。"""
     try:
         import numpy as np
         from paddleocr import PaddleOCR

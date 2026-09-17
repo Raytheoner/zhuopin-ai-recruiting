@@ -87,11 +87,17 @@ def field_accuracy(predictions: dict[str, dict], truths: dict[str, dict]) -> Fie
 def spearman(
     system_rank: dict[str, int], human_rank: dict[str, int], *, min_samples: int = MIN_SAMPLES_FOR_RANK_METRICS
 ) -> float | None:
+    """闭式公式要求两侧都是 1..n 的稠密名次；调用方常只对交集打分（如 evaluate_model 的 rank_ok 子集），
+    所以先对交集分别按 (原始名次, sample_id) 重排成 1..n，再套公式（F1，2026-09-17 review 裁决）。"""
     ids = sorted(set(system_rank) & set(human_rank))
     n = len(ids)
     if n < min_samples:
         return None
-    d2 = sum((system_rank[i] - human_rank[i]) ** 2 for i in ids)
+    human_order = sorted(ids, key=lambda i: (human_rank[i], i))
+    system_order = sorted(ids, key=lambda i: (system_rank[i], i))
+    human_dense = {sid: rank for rank, sid in enumerate(human_order, start=1)}
+    system_dense = {sid: rank for rank, sid in enumerate(system_order, start=1)}
+    d2 = sum((system_dense[i] - human_dense[i]) ** 2 for i in ids)
     return 1.0 - 6.0 * d2 / (n * (n * n - 1))
 
 
