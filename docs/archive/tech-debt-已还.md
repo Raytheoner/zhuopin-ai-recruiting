@@ -637,6 +637,7 @@ docstring 已写明。`test_queue_status.py` 有 2 条用例守着（换 `thread
 > ⛔ 不接受「只有新库守得住」（选项 c 未采纳）。
 > 判据＝灰度真发前，`.51` 上 `liaison_group_notify` 的建表语句含 `5ca1f50` 那两条跨字段 CHECK。
 > **谁做**：另起 session（触碰 `.51`，属发版决定），⏸ 待派发。⛔ 本条在现网做完前，TD-28 只算「新库已还」。
+> ✅ **现网已做 2026-09-17（`[Mac]0917AX`）**：「现网」实为 **Mac 本机 `data/liaison.db`**（liaison 永不上 `.51`，`0917AW` 核实此前「`.51` 现网」是误标）。0 行直接重建，`sqlite_master` 含两条跨字段 CHECK，负向插入实证被拒；备份 `data/liaison.db.bak-20260917-2135`。TD-28 自此**全部已还**。
 
 **登记时间**：2026-09-09（第 6 章 run-build 收口，[Mac]0909I）
 **位置**：`tools/liaison/storage/schema.py` `GROUP_NOTIFY_SCHEMA`

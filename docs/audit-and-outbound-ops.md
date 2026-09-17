@@ -786,6 +786,36 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
    §五 第 1 项（`data\` 备份任务）状态不变，仍 ⏸。
 
+   **2026-09-17 七次发版记录（`[Mac]0917AX`，无头）——✅ 成功**
+
+   执行：`[Mac]0917AX`（run-lanes 无头，Opus）｜ 依据：定夺队列 **Q-24 答复「发」**（Shao Peishen
+   2026-09-17 21:1x CST），开工闸 `gates.gate_state('G3','.51')` = `已放行`。本次**首次由无头会话直跑
+   `sync-to-server.sh`**（未被 Auto Mode 拦截），授权留痕以 Q-24 答复替代「人点 Run」。
+   备料与回滚预案：`docs/releases/2026-09-发版清单-51.md`；逐步命令／退出码：`docs/releases/2026-09-17-发版一执行记录.md`。
+
+   | 项 | 值 |
+   |---|---|
+   | 发版 HEAD | **`f81cc9d`**（= `origin/main`；白名单路径 porcelain 为空） |
+   | 上线范围（发车前现算） | `git diff --stat 0aa1af4..main -- app/ scripts/ requirements.txt pyproject.toml .env.example deploy-server.ps1 sync-to-server.sh` ＝ **32 文件 / +5923 −1**，与清单（按 `b44c2a4` 算）逐文件一致。运行时改动只有 `app/web/server.py` 13 行（TD-13 方案 C）；其余为 M2-U0 新模块 8 文件（不在 `app.main` import 链）＋ `scripts/` 22 文件（Windows 上惰性）＋ `requirements.txt` +numpy |
+   | 快照目录 | `C:\apps\backups\20260917-2118`（`app\` ＋ `requirements.txt`） |
+   | 闸 G-a…G-d | 全过（同步 ✅／numpy cp314 wheel ✅／新顶层 import 仅 `logging` ✅／ssh `WIN-5CPUJV008C7` ＋ 基线 200 ✅）；本机回归 `51 passed` |
+   | 🔴 步 2 先装依赖 | `pip install numpy==2.5.3` ⇒ `Successfully installed numpy-2.5.3`，复核 `import numpy` = `2.5.3`（09-08 顺序铁律执行到位） |
+   | `sync-to-server.sh` | 21:19 CST，scp 7 项 → 计划任务重启 → `HTTP 200` → `发版完成` |
+   | 闸 G-e 三条 | `LastTaskResult=267009`（运行中，LastRun 21:19:19）／`:8095 Listen`=1／`app.log` `21:19:18 Application startup complete`，无 `Traceback` ✅ |
+   | 冒烟 ①：首页 | **200** |
+   | 冒烟 ②：`GET /api/jobs` | **200 + JSON**，20 个岗位（非 405） |
+   | 🔴 冒烟 ③（目标验收） | `Select-String app\web\server.py -Pattern 'discard_thread_checkpoints 失败'` = **1** ⇒ TD-13 方案 C 已在现网 |
+   | 冒烟 ④：巡检裸跑 | `python -m app.audit.assertions --db data\demo.db --mirror data\audit\decisions.jsonl` ⇒ **`EXIT=0`**，6 条 `[OK]` |
+
+   冒烟 ①–④ 与 G-e **全部达标**，未触发回滚。`.51` 现网自此为 **`f81cc9d`** 一线代码。
+
+   顺带项（同次）：tasks 1.1 `.51` 隔离 venv 冒烟已跑（轻依赖六项 ✅；paddle 两项 ❌；torch 装得上但
+   `c10.dll` 初始化失败——`.51` VC++ 运行库 v14.27 过旧，⏸ 需装 VC++ 2015–2022 x64 Redistributable 后重跑，
+   见 `docs/m2-model-comparison.md`「.51 同款 Windows」）；Q-12 在 **Mac 侧** `data/liaison.db` 重建
+   `liaison_group_notify` 补两条 CHECK（备份 `liaison.db.bak-20260917-2135`，值守中断 < 1 分钟，pid 89987 回来）。
+
+   §五 第 1 项（`data\` 备份任务）状态不变，仍 ⏸——Q-14 快照脚本由 `0917AY` 泳道写，随发版 ② 上。
+
 
 ---
 
