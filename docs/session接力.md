@@ -58,7 +58,7 @@
   另有 `?? _to_delete/`（⛔ 不 add、⛔ 不删）。与 origin ahead/behind 均 0。
 - 🔢 **号池台账已迁到 `docs/openers/号池台账.md`**（2026-09-16），历史月份在 `docs/openers/归档/号池台账-归档.md`。
   ⛔ 不要再往 `OP-0820` 顶部那张旧表登记。已用到 **`[Mac]0917B`**；`0917C`／`0917D` 本轮派出，
-  `0917E`–`0917L` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917M`**。
+  `0917E`–`0917M` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917N`**。
 - 其余包：`hr-wecom-aibot-liaison` **63/67**（剩 8.6–8.9 灰度四条，他亲自）；
   `m1-intake-quality-fixes` 68/69；`m1-job-profile-intake` 60/72；`lane-launch-armed-scan` 0/35（**已裁定搁置**）。
 
@@ -70,7 +70,7 @@
 | **R-2** | 3.2 章程接入生产路径 ＋ TD-45 ＋ design D4 常量名 | `[Mac]0917G`→`[Mac]0917H` | ✅ **已完成**（`59e9a78`＋`9e510d1`，已 ff 合入并推；tasks 28/33；生产代码 P2-TODO/CHARTER_RELPATH 零命中） | — | — |
 | **R-2b** | 全量 pytest 残留 1 红（`test_worktree_lane_runs_inside_script_created_worktree`） | `[Mac]0917I` | ✅ **已完成**（`159dca5`）：根因＝`sandbox` fixture 用 `dict(os.environ)` 把泳道的 `HR_LANE_*` 带进被测子进程；全量 2454 passed / 0 failed；TD-46 已还；run-lanes.sh 零改动 | — | — |
 | **R-3** | §5 五条真实起活实测 | `[Mac]0917J` 无头泳道（他不在 Mac 旁，Cowork·0917D 经 launchd 远程发车；5.4 需他本人手机发一条消息） | ⚠️ **部分完成**（`[Mac]0917J`）：5.1 ✅ 通过（重启 pid 44355→41080，0 新增 ERROR）；5.2 ❌ **阻断于登录态**——`unpack-dispatch --force` 起的无头 `claude` 打印 `Not logged in · Please run /login` 后即退出，登记 **TD-47**（`_CHILD_ENV_ALLOWLIST` 未放行认证凭据键），按 opener「停下报」规则本轮到此结束，未跑 5.4；5.3 待汤丽萍下一条真实入站，且需先解决 TD-47 否则大概率在同一步再卡；详见 `docs/findings/2026-09-17-打标即开班真实起活实测.md` | 5.1–5.5 全勾，实测记录落 `docs/findings/`，当场归档 | 本包归档不了；TD-47 不解决，「打标即开班」的自动触发路径不可用（只能起进程、拿不到章程/规则） |
-| **R-3b** | TD-47：拆件子进程未登录 | `[Mac]0917K`（worktree 对照实验＋TDD，已完成但**未合入 main**）→ 待合并 → 重派「§5 重跑」 | ⚠️ **`0917K` 已修复完成**（worktree `lane-0917k-td47-child-auth` HEAD `8ce57b3`，TD-47 已划掉、端到端验证通过），**但分支未合入 main**；`[Mac]0917L` 前置检查（main 上 `TD-47` 未划掉 ＋ `git log` 无 0917K 提交）未过，按 opener 预案止步于此，未跑 5.1/5.2/5.4，详见 `docs/findings/2026-09-17-打标即开班真实起活实测.md`「重跑（0917L）」 | 先把 `lane-0917k-td47-child-auth` 合入 main（`finishing-a-development-branch`），main 上 TD-47 划掉后重派一次「§5 重跑」 | 5.2/5.3/5.5/归档持续卡死；`0917K` 的成果留在未合并分支里，越久不合越容易和其他泳道冲突 |
+| **R-3b** | TD-47：拆件子进程未登录 | `[Mac]0917K` 已修（`8ce57b3`，补 `USER`，已验证）→ `[Mac]0917M` cherry-pick 合入并重跑 5.1/5.2/5.4 | 🚀 **08:1x 远程发车**。K 的 ff 被 Cowork 未提交文档挡、L 前置停；另发现占位 prompt 子会话自行提交接力噪声 ⇒ TD-48 | TD-47 在 main 上划掉、5.2 日志无 `Not logged in`、5.4 通过 | 5.2/5.3/5.5/归档持续卡死 |
 | **R-4** | 汤丽萍解锁 | — | ✅ **已解锁**（§0 的 0.3 已勾＝真实入站已落库一条） | — | — |
 | **R-5** | `hr-wecom-aibot-liaison` 8.6–8.9 灰度四条 | Shao Peishen 本人 | ⏸ 等本包 §5 | 四条全勾并归档 | 值守通道停在「代码齐、没真用过」 |
 
