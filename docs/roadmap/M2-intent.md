@@ -35,5 +35,7 @@ U0 模型对比定型 → U1 数据模型（ATS 域＋评分审计域 schema）�
 - Q6 评测集回件归档件留存 90 天，以合规验收 #1 留存策略为准
 - U0 计划「待裁决」#6（paddlepaddle 无 cp314 wheel）：Shao Peishen 2026-09-17 14:1x 答 **1a**——一期扫描件进「不可读」队列＋登记技术债，待 paddlepaddle 出 cp314 wheel 再接；⛔ 不在 `.51` 另建 3.13 sidecar
 - U0 计划「待裁决」#2（真实脱敏样本来源）：Shao Peishen 2026-09-17 答 **2a**——用**历史离职候选人简历脱敏**；与人事部#2 决策点 c 选项 1 同向，汤丽萍回件以该选项为推荐；⛔ 在招候选人简历仍受合规验收 #1 闸
-- U0 计划「待裁决」#3（第 3／4 家 LLM key）：Shao Peishen 2026-09-17 答 **3a**——注册火山方舟（`ARK_API_KEY`）＋阿里百炼（`DASHSCOPE_API_KEY`）；注册与充值属不可代项由本人办，key 写 `.env` 后 1.4 补跑 doubao／qwen
+- U0 计划「待裁决」#3（第 3／4 家 LLM key）：Shao Peishen 2026-09-17 答 **3a**——注册火山方舟（`ARK_API_KEY`）＋阿里百炼（`DASHSCOPE_API_KEY`）；注册与充值属不可代项由本人办，key 写 `.env` 后 1.4 补跑 doubao／qwen ⇒ **改**（Shao Peishen 2026-09-17 21:3x）：近期只用 DeepSeek，两家以后再补，不阻塞主航道
 - 1.7 定型：Shao Peishen 2026-09-17 答 **1b**——先定抽取模型＝deepseek-flash，其余待真实样本
+
+- 优先级（Shao Peishen 2026-09-17 21:3x）：人事部可见优先——M2 提前切「上传＋解析＋校对展示」薄片（U1→U2→U5 子集，脱敏样本、入库闸关），U3/U4 随后；薄片重排过 G2
