@@ -3,8 +3,8 @@ version: 1
 summary:
   条目数: 195
   按状态:
-    待开: 76
-    在跑: 5
+    待开: 72
+    在跑: 9
     完成: 73
     阻塞: 41
   阻塞·决策: 22
@@ -12,16 +12,12 @@ summary:
   conflicts:
   - m1-job-profile-intake/9.2
   - relay:H-4
-  ready:
-  - answer:Q-17
-  - answer:Q-20
-  - answer:Q-02
-  - answer:Q-21
+  ready: []
   闸门待放行:
   - m1-intake-quality-fixes/U8/plan ← G2 `m1-intake-quality-fixes`（待答）
   - m1-job-profile-intake/U1/plan ← G2 `m1-job-profile-intake`（待答）
-  - answer:Q-12 ← G3 `.51`（缺行）
-  - answer:Q-14 ← G3 `.51`（缺行）
+  - answer:Q-12 ← G3 `.51`（待答）
+  - answer:Q-14 ← G3 `.51`（待答）
   未知依赖: []
   未归属plans:
   - 2026-08-06-m1-chapter0-demo
@@ -2670,7 +2666,7 @@ tasks:
   - docs/deploy-51-server.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G3 闸门·缺行】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 上该表建表语句含跨字段 CHECK，发版记录落 `docs/deploy-51-server.md`
+  产出判据: 【G3 闸门·待答】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 上该表建表语句含跨字段 CHECK，发版记录落 `docs/deploy-51-server.md`
   来源: docs/roadmap/定夺队列.md:28 Q-12a
   闸门: G3 .51
   队列: Q-12 已答 a
@@ -2684,7 +2680,7 @@ tasks:
   - docs/deploy-51-server.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G3 闸门·缺行】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
+  产出判据: 【G3 闸门·待答】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
   来源: docs/roadmap/定夺队列.md:30 Q-14a
   闸门: G3 .51
   队列: Q-14 已答 a
