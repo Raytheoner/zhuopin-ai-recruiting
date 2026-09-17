@@ -1,24 +1,27 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 187
+  条目数: 195
   按状态:
-    待开: 74
+    待开: 77
     在跑: 5
     完成: 73
-    阻塞: 35
-  阻塞·决策: 23
-  阻塞·外部: 10
+    阻塞: 40
+  阻塞·决策: 21
+  阻塞·外部: 18
   conflicts:
-  - hr-wecom-aibot-liaison/8.9
   - m1-job-profile-intake/9.2
-  - m2-resume-parse-and-rank/0.2
   - relay:H-4
-  - relay:tag#1297fb1e
-  ready: []
+  ready:
+  - answer:Q-17
+  - answer:Q-20
+  - answer:Q-02
+  - answer:Q-21
   闸门待放行:
   - m1-intake-quality-fixes/U8/plan ← G2 `m1-intake-quality-fixes`（待答）
   - m1-job-profile-intake/U1/plan ← G2 `m1-job-profile-intake`（待答）
+  - answer:Q-12 ← G3 `.51`（缺行）
+  - answer:Q-14 ← G3 `.51`（缺行）
   未知依赖: []
   未归属plans:
   - 2026-08-06-m1-chapter0-demo
@@ -45,6 +48,7 @@ summary:
   - 2026-09-10-liaison-reply-bridge
   - 2026-09-10-liaison-unpack-charter
   - 2026-09-10-liaison-unpack-dispatch
+  缺任务映射: []
 tasks:
 - id: scene:M0
   场景: M0
@@ -93,10 +97,11 @@ tasks:
   依赖:
   - scene:M2
   触碰区: []
-  状态: 待开
-  阻塞类型: 无
+  状态: 阻塞
+  阻塞类型: 决策
   产出判据: 设计上依赖 M2 真实数据校准题库
   来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:22
+  队列: Q-F4 待答
 - id: gap:G1
   场景: 构建自动化
   阶段: gap
@@ -381,10 +386,11 @@ tasks:
   触碰区:
   - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
   状态: 阻塞
-  阻塞类型: 决策
+  阻塞类型: 外部
   产出判据: 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人——aibot
     的单聊 chatid 要专员先私信才存在；⛔ 少这一步，带附件的归档链路根本验不到（
   来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:238
+  队列: Q-10 待答
 - id: hr-wecom-aibot-liaison/8.8
   场景: M0
   阶段: build
@@ -399,6 +405,7 @@ tasks:
   阻塞类型: 外部
   产出判据: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
   来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:242
+  队列: Q-F5 待答
 - id: hr-wecom-aibot-liaison/8.9
   场景: M0
   阶段: build
@@ -410,13 +417,10 @@ tasks:
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
   触碰区: []
   状态: 阻塞
-  阻塞类型: 无
+  阻塞类型: 外部
   产出判据: 全部章节勾完后当场跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
   来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:244
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 待开
+  队列: Q-10 待答
   备注: 0917 dispatcher 核实：生成器依赖图漏列同章节未完成的 8.6（阻塞/决策，待本人私信机器人）/8.8（阻塞/外部，一周观察窗口未到），archive 判据「全部章节勾完」不成立；依赖字段每次生成会被覆盖、加依赖不持久，故直接标状态=阻塞防止误判 ready，此条会持续显示 conflicts（真身待开），下次核对时先查
     8.6/8.8 是否已完成，完成后再放行
 - id: hr-wecom-aibot-liaison/U8/plan
@@ -1135,24 +1139,23 @@ tasks:
   触碰区:
   - docs/tech-debt.md
   状态: 阻塞
-  阻塞类型: 决策
+  阻塞类型: 外部
   产出判据: '`docs/tech-debt.md` TD-51 销账'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:5
+  队列: Q-01 待答
 - id: m2-resume-parse-and-rank/0.2
   场景: M2
   阶段: gate
   标题: '合规验收 #1 启动（Shao Peishen 发起；PIA 报告 ＋ 候选人同意条款单列 AI 评估 ＋ 留存与删除策略；法务结论）'
   单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
-  依赖: []
+  依赖:
+  - answer:Q-02
   触碰区: []
   状态: 待开
-  阻塞类型: 决策
+  阻塞类型: 无
   产出判据: 三份文档落 `docs/compliance/` 并由本人签认
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:6
-  conflicts:
-    状态:
-      台账: 待开
-      真身: 阻塞
+  队列: Q-02 已答 a
   备注: Q-02 已答 a（现在启动，法务对接人＝谷雨，2026-09-17）：Cowork 起草 PIA／同意条款／留存策略草稿进 docs/compliance/，待本人签认
 - id: m2-resume-parse-and-rank/0.4
   场景: M2
@@ -1162,9 +1165,10 @@ tasks:
   依赖: []
   触碰区: []
   状态: 阻塞
-  阻塞类型: 决策
+  阻塞类型: 外部
   产出判据: '`人事部#2` 跟进信里有排期回复'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:8
+  队列: Q-04 待答
 - id: m2-resume-parse-and-rank/1.1
   场景: M2
   阶段: build
@@ -1181,6 +1185,7 @@ tasks:
   产出判据: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence-transformers` 二选一按可装性定）；记录可装性与体积到
     `docs/m2-model-comparison.md`「环境」节 ⏸ 留步：.51 W
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:14
+  队列: Q-08 待答
 - id: m2-resume-parse-and-rank/1.2
   场景: M2
   阶段: build
@@ -1193,10 +1198,11 @@ tasks:
   触碰区:
   - scripts/gen_pilot_samples.py
   状态: 阻塞
-  阻塞类型: 决策
-  产出判据: '准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore` 登记）⏸ 留步：合成替身已到位（scripts/gen_pilot_samples.py，20 份 ×4
-    形态），真实脱敏样本待 U0 计划待裁决 #2'
+  阻塞类型: 外部
+  产出判据: '【Q-06 已答 a·仍阻塞：等 HR 提供历史离职候选人简历＋脱敏脚本先过本人审；M2 门槛（登录＋访问留痕）就位前不得入库】准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore`
+    登记）⏸ 留步：合成替身已到位（scripts/gen_pilot_samples.py，20 份 ×4 形态），真实脱敏样本待 U0 计划待裁决 #2'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:15
+  队列: Q-06 已答 a
   备注: Q-06 已答 a：来源＝历史离职候选人简历脱敏；样本未到位，且需 M2 门槛（登录＋访问留痕）就位后才可入库处理
 - id: m2-resume-parse-and-rank/1.4
   场景: M2
@@ -1210,10 +1216,11 @@ tasks:
   触碰区:
   - docs/m2-model-comparison.md
   状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek 两款有 key 实跑（20/20，数据见 docs/m2-model-comparison.md）；doubao/qwen
-    缺 ARK_API_KEY/
+  阻塞类型: 外部
+  产出判据: 【Q-07 已答 a·仍阻塞：等本人注册火山方舟（ARK_API_KEY）＋阿里百炼（DASHSCOPE_API_KEY）并写入 .env】对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object
+    支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek 两款有 key 实跑（20/20，数据见 docs/m2-model-comparison.md）；doubao/qwen 缺 ARK_API_KEY/
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:17
+  队列: Q-07 已答 a
   备注: Q-07 已答 a：注册火山方舟＋阿里百炼由本人亲自办理并写 .env；key 到位前不可派车
 - id: m2-resume-parse-and-rank/1.6
   场景: M2
@@ -1228,8 +1235,9 @@ tasks:
   - docs/m2-model-comparison.md
   状态: 阻塞
   阻塞类型: 外部
-  产出判据: 每项都有数据支撑，模型标识非别名 ⏸ 留步：决策节已建、抽取/精排/阈值三行待真实脱敏样本数据
+  产出判据: 【Q-06 已答 a·仍阻塞：「决策」节余下各行待 1.2 真实样本复算】每项都有数据支撑，模型标识非别名 ⏸ 留步：决策节已建、抽取/精排/阈值三行待真实脱敏样本数据
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:19
+  队列: Q-06 已答 a
 - id: m2-resume-parse-and-rank/1.7
   场景: M2
   阶段: build
@@ -1242,8 +1250,9 @@ tasks:
   触碰区: []
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 文档末尾有「已确认 <日期>」 ⏸ 2026-09-17 部分确认：抽取模型＝deepseek-flash（1.7b）；其余行待真实脱敏样本复算后签
+  产出判据: 【Q-05 已答 b·仍阻塞：抽取模型已定，精排／阈值等行待真实脱敏样本到位后复算并二次签认】文档末尾有「已确认 <日期>」 ⏸ 2026-09-17 部分确认：抽取模型＝deepseek-flash（1.7b）；其余行待真实脱敏样本复算后签
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:20
+  队列: Q-05 已答 b
   备注: Q-05 已答 a：抽取模型＝deepseek-flash 部分确认；其余行待真实脱敏样本到位后复算签认
 - id: m2-resume-parse-and-rank/U0/plan
   场景: M2
@@ -1282,6 +1291,7 @@ tasks:
   阻塞类型: 无
   产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+  队列: Q-05 已答 b
 - id: m2-resume-parse-and-rank/2.1
   场景: M2
   阶段: build
@@ -1407,6 +1417,7 @@ tasks:
   产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   闸门: G2 m2-resume-parse-and-rank
+  队列: Q-18 已答 b
 - id: m2-resume-parse-and-rank/U1
   场景: M2
   阶段: build
@@ -1605,6 +1616,7 @@ tasks:
   阻塞类型: 无
   产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+  队列: Q-09 已答 a
 - id: m2-resume-parse-and-rank/4.1
   场景: M2
   阶段: build
@@ -1832,6 +1844,7 @@ tasks:
   产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   闸门: G2 m2-resume-parse-and-rank
+  队列: Q-19 已答 ①
 - id: m2-resume-parse-and-rank/U4
   场景: M2
   阶段: build
@@ -2078,6 +2091,7 @@ tasks:
   阻塞类型: 决策
   产出判据: '`report` 输出非"样本不足"'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:83
+  队列: Q-F1 待答
 - id: m2-resume-parse-and-rank/7.7
   场景: M2
   阶段: build
@@ -2126,10 +2140,11 @@ tasks:
   - docs/m2-eval-report.md
   - scripts/eval_m2.py
   - tests/test_eval_no_training_use.py
-  状态: 待开
-  阻塞类型: 无
+  状态: 阻塞
+  阻塞类型: 外部
   产出判据: 章节 7 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+  队列: Q-01 待答
 - id: m2-resume-parse-and-rank/8.1
   场景: M2
   阶段: build
@@ -2226,6 +2241,7 @@ tasks:
   阻塞类型: 决策
   产出判据: '`.51` 上 `live` 上传被接收且访问留痕可查'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:95
+  队列: Q-F2 待答
 - id: m2-resume-parse-and-rank/8.9
   场景: M2
   阶段: build
@@ -2240,6 +2256,7 @@ tasks:
   阻塞类型: 决策
   产出判据: '`docs/deploy-51-server.md` 记录本次发版与依赖'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:96
+  队列: Q-F3 待答
 - id: m2-resume-parse-and-rank/8.10
   场景: M2
   阶段: build
@@ -2252,8 +2269,9 @@ tasks:
   - docs/m2-eval-report.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 试运行：0.3 选定岗位在闸开启后跑一批真实简历，用真实样本复算一次四项指标落 `docs/m2-eval-report.md`「真实样本」节；🔴 试运行期间的任何淘汰确认由 HR 执行、Shao Peishen 抽查留痕
+  产出判据: 【Q-03 已答 b·仍阻塞：真实简历入库闸未开（Q-F2，8.8 由本人亲自改配置）】试运行：0.3 选定岗位在闸开启后跑一批真实简历，用真实样本复算一次四项指标落 `docs/m2-eval-report.md`「真实样本」节；🔴 试运行期间的任何淘汰确认由 HR 执行、Shao Peishen 抽查留痕
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:97
+  队列: Q-03 已答 b
   备注: Q-03 已答 b 已解岗位选定，仍受 M2 真实简历门槛（登录＋访问留痕未就位）阻塞，⛔ 不解禁
 - id: m2-resume-parse-and-rank/U7/plan
   场景: M2
@@ -2296,6 +2314,7 @@ tasks:
   阻塞类型: 无
   产出判据: 章节 8 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
+  队列: Q-02 已答 a
 - id: change:m2-resume-parse-and-rank
   场景: M2
   阶段: archive
@@ -2563,16 +2582,19 @@ tasks:
   阻塞类型: 外部
   产出判据: '`docs/findings/2026-09-17-值守通道一周观察窗.md` 三项观察结论落档、无异常或异常已处置 ⇒ 8.8 勾选 → `tasks.md` 全勾（8.6/8.9 视当时状态另计）→ 跑 `openspec-archive-change`'
   来源: docs/session接力.md:77
+  队列: Q-F5 待答
 - id: relay:H-1
   场景: M0
   阶段: build
   标题: '`.51` 现网 `liaison_group_notify` 重建表补上跨字段 CHECK（答 `1a`）'
-  依赖: []
+  依赖:
+  - answer:Q-12
   触碰区: []
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 灰度真发前，`.51` 上该表建表语句含 `5ca1f50` 那两条 CHECK；当前 0 行则直接重建，有行则先导出再灌回
+  产出判据: 【Q-12 已答 a·仍阻塞：随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）】灰度真发前，`.51` 上该表建表语句含 `5ca1f50` 那两条 CHECK；当前 0 行则直接重建，有行则先导出再灌回
   来源: docs/session接力.md:97
+  队列: Q-12 已答 a
   备注: Q-12 已答 a：随下次 .51 发版一并执行；等发版窗口，⛔ 不单独派车（触碰 .51 属红线①，调度器不可代）
 - id: relay:H-4
   场景: 构建自动化
@@ -2608,14 +2630,11 @@ tasks:
   触碰区:
   - docs/findings/2026-09-17-打标即开班真实起活实测.md
   状态: 完成
-  阻塞类型: 决策
-  产出判据: 拆件子会话（上条 `d703cd3`）运行期间在 `docs/跟进信/` 下新建了两份章程外文件—— `人事部-汤丽萍-答复单-2026-09-17-人事部#1决策点a.md`／`.docx`（拟发给汤丽萍的答复单草稿， 子会话最终自述完全未提及此事）；`--dry-run` 已确认 `allowedTools`
+  阻塞类型: 无
+  产出判据: 【作废：Q-11】拆件子会话（上条 `d703cd3`）运行期间在 `docs/跟进信/` 下新建了两份章程外文件—— `人事部-汤丽萍-答复单-2026-09-17-人事部#1决策点a.md`／`.docx`（拟发给汤丽萍的答复单草稿， 子会话最终自述完全未提及此事）；`--dry-run` 已确认 `allowedTools`
     无任何 `Write(...)` 路径约束， 是一次真实的越界写入（非 dry-ru
   来源: docs/session接力.md:326
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 阻塞
+  队列: Q-11 作废
   备注: 作废：Q-11（0917R findings 已更正——两份答复单为 Cowork 所写并经本人审核，非拆件越界；人事部#1 已闭环）
 - id: opener:[Mac]0903A
   场景: 构建自动化
@@ -2628,6 +2647,110 @@ tasks:
   产出判据: ⏸ 仍未闭合：路径订正有效（`.venv` 确认存在），但真因是 `.51` 部署代码落后于功能开发进度——`app\config.py` 停在 08-19（34 行），功能 08-27 才落地（`4890fab`/`eb338b0`/`49c5e4c`），`app\audit\` 整包缺失。产线开关已独立确认为
     `false`（安全）。U5 接线前需 Shao Peishen 决定是否执行 `.
   来源: docs/openers/号池台账.md:31
+- id: answer:Q-02
+  场景: M2
+  阶段: build
+  标题: 起草 PIA 报告／候选人同意条款（单列 AI 评估）／留存与删除策略三份草稿进 docs/compliance/（对接人谷雨）
+  依赖: []
+  触碰区:
+  - docs/compliance/
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`docs/compliance/` 下三份草稿（PIA／候选人同意条款单列 AI 评估／留存与删除策略）落档、标注「草稿·待签认」；定夺队列追加 G5 类签认行（`gates.py request G5 合规验收#1 …`，阻塞的任务 id＝`m2-resume-parse-and-rank/0.2`）；⛔
+    不代签、不对外发送'
+  来源: docs/roadmap/定夺队列.md:18 Q-02a
+  队列: Q-02 已答 a
+- id: answer:Q-12
+  场景: '.51'
+  阶段: release
+  标题: 下次 .51 发版清单：`liaison_group_notify` 重建表补跨字段 CHECK（H-1／TD-28）
+  依赖: []
+  触碰区:
+  - docs/deploy-51-server.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G3 闸门·缺行】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 上该表建表语句含跨字段 CHECK，发版记录落 `docs/deploy-51-server.md`
+  来源: docs/roadmap/定夺队列.md:28 Q-12a
+  闸门: G3 .51
+  队列: Q-12 已答 a
+- id: answer:Q-14
+  场景: '.51'
+  阶段: release
+  标题: 下次 .51 发版清单：每日快照 Windows 计划任务（脚本由发版泳道写，装到 `C:\apps\backups\`）
+  依赖: []
+  触碰区:
+  - docs/audit-and-outbound-ops.md
+  - docs/deploy-51-server.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G3 闸门·缺行】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
+  来源: docs/roadmap/定夺队列.md:30 Q-14a
+  闸门: G3 .51
+  队列: Q-14 已答 a
+- id: answer:Q-15
+  场景: '.51'
+  阶段: build
+  标题: '`.51` 整机重启（窗口 2026-09-20 周日 22:00–23:00，opener＝编排文件 `[Mac] 0820-9R`）'
+  依赖: []
+  触碰区:
+  - docs/deploy-51-server.md
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 外部输入：须在内网执行，且执行前经本线再确认一次（⛔ 调度器不发车）；重启后 7 个服务全部回来、`CBS RebootPending=False`，结论落 `docs/deploy-51-server.md`
+  来源: docs/roadmap/定夺队列.md:31 Q-15a
+  队列: Q-15 已答 a
+- id: answer:Q-17
+  场景: M1
+  阶段: build
+  标题: 06 清单 §3.3／§9.1–9.3 标作废（沟通线并入 `人事部#2` 之后的跟进信）
+  依赖: []
+  触碰区:
+  - 06-企业AI转型资产借鉴清单.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`06-企业AI转型资产借鉴清单.md` 的 3.3、9.1、9.2、9.3 标题与末尾清单对应项标「⚰️ 作废（Q-17a）」并写去向，⛔ 不删原文'
+  来源: docs/roadmap/定夺队列.md:33 Q-17a
+  队列: Q-17 已答 a
+- id: answer:Q-19
+  场景: M2
+  阶段: build
+  标题: 把 TD-5 答复①写进 M2 U4 plan 的 Global Constraints（评分 prompt 只返回 offset 区间，不返回引文）
+  依赖:
+  - m2-resume-parse-and-rank/U4/plan
+  触碰区:
+  - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit4-*.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U4 plan 的 Global Constraints 段含「评分 prompt 只返回 offset 区间不返回引文，`evidence_ref` 承担定位（Q-19①）」一条
+  来源: docs/roadmap/定夺队列.md:35 Q-19①
+  队列: Q-19 已答 ①
+- id: answer:Q-20
+  场景: M1
+  阶段: build
+  标题: TD-13 方案 C：`app/web/server.py` 调用点 catch `discard_thread_checkpoints` 异常、ERROR 日志、照常返回引导语（TDD）
+  依赖: []
+  触碰区:
+  - app/web/server.py
+  - docs/tech-debt.md
+  - tests/test_web_api.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`tests/test_web_api.py` 新增用例：checkpointer 删除抛异常时接口仍返回引导语且日志含 ERROR；`docs/tech-debt.md` TD-13 销账'
+  来源: docs/roadmap/定夺队列.md:36 Q-20a
+  队列: Q-20 已答 a
+- id: answer:Q-21
+  场景: 构建自动化
+  阶段: build
+  标题: requirement-grill SKILL.md 移植「答复模板发出 15 分钟无答复 ⇒ 按推荐生效」默认＋补测试
+  依赖: []
+  触碰区:
+  - .claude/skills/requirement-grill/SKILL.md
+  - tests/test_requirement_grill_skill.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: SKILL.md 含「⏸️ 默认项」行与 15 分钟规则、落档措辞「超时按默认项生效（未获明确答复，<会话> <时刻>）」，并保留 G1 intent 定稿人闸与「判据／口径／阈值类永不默认生效」；`tests/test_requirement_grill_skill.py` 覆盖
+  来源: docs/roadmap/定夺队列.md:37 Q-21a
+  队列: Q-21 已答 a
 - id: m2-resume-parse-and-rank/0.3
   场景: M2
   阶段: gate

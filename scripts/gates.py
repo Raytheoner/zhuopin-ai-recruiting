@@ -226,11 +226,20 @@ def gate_request(
     if find_gate_row(gate, subject, text) is not None and gate_state(gate, subject, text=text) != "已答·未放行":
         return False
     row = build_gate_row(gate, subject, scene=scene, artifact=artifact, task_ids=task_ids or [], number=_next_number(text))
+    q.parent.mkdir(parents=True, exist_ok=True)
+    q.write_text(append_pending_row(text, row), encoding="utf-8")
+    return True
+
+
+_PENDING_HEADER = ["| 编号 | 场景 | 阻塞类型 | 问题 | 选项与代价 | 推荐 | 来源 | 阻塞的任务 id | 状态 | 答复 |", "|---|---|---|---|---|---|---|---|---|---|"]
+
+
+def append_pending_row(text: str, row: str) -> str:
+    """把一行追加到「一、待答」表末（节或表缺失则补建），返回新全文。dispatcher_answers 登记缺映射行也用它。"""
     lines = text.splitlines()
-    # 定位「一、待答」节里最后一条表行
     start = next((i for i, l in enumerate(lines) if l.startswith("## ") and "待答" in l), None)
     if start is None:
-        lines += ["", "## 一、待答", "", "| 编号 | 场景 | 阻塞类型 | 问题 | 选项与代价 | 推荐 | 来源 | 阻塞的任务 id | 状态 | 答复 |", "|---|---|---|---|---|---|---|---|---|---|", row]
+        lines += ["", "## 一、待答", "", *_PENDING_HEADER, row]
     else:
         end = len(lines)
         for j in range(start + 1, len(lines)):
@@ -239,12 +248,10 @@ def gate_request(
                 break
         last = max((j for j in range(start, end) if lines[j].lstrip().startswith("|")), default=None)
         if last is None:
-            lines[end:end] = ["| 编号 | 场景 | 阻塞类型 | 问题 | 选项与代价 | 推荐 | 来源 | 阻塞的任务 id | 状态 | 答复 |", "|---|---|---|---|---|---|---|---|---|---|", row]
+            lines[end:end] = [*_PENDING_HEADER, row]
         else:
             lines.insert(last + 1, row)
-    q.parent.mkdir(parents=True, exist_ok=True)
-    q.write_text("\n".join(lines) + ("\n" if text.endswith("\n") or not text else ""), encoding="utf-8")
-    return True
+    return "\n".join(lines) + ("\n" if text.endswith("\n") or not text else "")
 
 
 # ── 台账接线 ─────────────────────────────────────────────────────────────────

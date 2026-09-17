@@ -16,6 +16,9 @@
      对应闸门行未「已答＋放行字样」前一律 `阻塞／决策` 并带 `闸门:` 字段；`compute_ready` 再按定夺队列复核一遍，
      台账状态被手改成「待开」也放不过（口径：放行只认定夺队列，⛔ 不认台账状态自改）。
      intent 落档（`docs/roadmap/intents/<场景>-intent.md`）⇒ 生成 `propose:<场景>` 条目；有未答题 ⇒ 阻塞／决策（先清题）。
+  5. **定夺队列覆盖文本启发式（0917AQ，`scripts/dispatcher_answers.py`）**：待答／远期行所列任务 ⇒ 阻塞（类型取队列列）；
+     已答行按 `ANSWER_MAP`（＋rules.md §7）解阻塞并生成 `answer:Q-xx` 任务；无映射 ⇒ 保持阻塞并入 `summary.缺任务映射`
+     （`--register-unmapped` 登记进队列）；作废 ⇒ 完成。队列决定的 待开↔阻塞 轴写 `队列:` 字段，merge 不记 conflicts。
 
 条目字段（设计 §四 R3）：id／场景／阶段／依赖／触碰区／状态／阻塞类型／产出判据／来源（＋标题、单元）。
   阶段 ∈ {intent, grill, propose, plan, build, merge, release, acceptance, archive, gate, gap}
@@ -39,12 +42,15 @@ from pathlib import Path
 import yaml
 
 try:
+    from scripts import dispatcher_answers as answers
     from scripts import gates
 except ImportError:  # `python3 scripts/dispatcher_backlog.py` 直跑时 scripts/ 自己在 sys.path
+    import dispatcher_answers as answers  # type: ignore[no-redef]
     import gates  # type: ignore[no-redef]
 
 ROOT = Path(__file__).resolve().parent.parent
 UNMATCHED_PLANS: list[str] = []  # 本次运行未归属任何单元的 plan（只进摘要，不进台账）
+ANSWER_REPORT = answers.Report()  # 本次运行定夺队列 ⇒ 台账的结果（生成／解阻塞／缺映射…，只进摘要）
 
 REL = {
     "roadmap": "docs/roadmap/HR项目实施路线图与构建自动化流程.md",
@@ -87,6 +93,7 @@ class Entry:
     产出判据: str = ""
     truth_known: bool = True  # 真身能否独立判定状态；False ⇒ 台账状态无条件优先、不记 conflicts
     闸门: str = ""  # "G2 <subject>"：到闸条目；状态的 待开↔阻塞 轴由定夺队列决定（gates.py），台账不记冲突
+    队列: str = ""  # "Q-02 已答 a"／"Q-01 待答"／"Q-11 作废"：定夺队列决定了本条的 待开↔阻塞 轴（dispatcher_answers），台账不记冲突
 
     def to_dict(self) -> dict:
         d = {
@@ -109,6 +116,8 @@ class Entry:
         )
         if self.闸门:
             d["闸门"] = self.闸门
+        if self.队列:
+            d["队列"] = self.队列
         return d
 
 
@@ -790,8 +799,12 @@ def generate(repo: Path) -> list[Entry]:
                 o.状态, o.阻塞类型 = e.状态, e.阻塞类型
         else:
             byid[e.id] = e
-    apply_gates(list(byid.values()), _queue_text(repo))
-    return list(byid.values())
+    merged = list(byid.values())
+    queue_text = _queue_text(repo)
+    global ANSWER_REPORT
+    ANSWER_REPORT = answers.apply_answers(merged, queue_text, new_entry=Entry)  # 先按队列定 待开↔阻塞，再过闸门
+    apply_gates(merged, queue_text)
+    return merged
 
 
 def _queue_text(repo: Path) -> str:
@@ -816,8 +829,8 @@ def merge(existing: dict[str, dict], generated: list[Entry], resolve: str = "led
         if old:
             truth_status = d["状态"]
             ledger_status = old.get("状态", truth_status)
-            if ledger_status != truth_status and e.闸门 and {ledger_status, truth_status} <= {"待开", "阻塞"}:
-                pass  # 到闸条目的 待开↔阻塞 由定夺队列决定（gates.py），台账手改不算数、不记冲突
+            if ledger_status != truth_status and (e.闸门 or e.队列) and {ledger_status, truth_status} <= {"待开", "阻塞"}:
+                pass  # 到闸／在队列里的条目，其 待开↔阻塞 由定夺队列决定（gates.py／dispatcher_answers），台账手改不算数、不记冲突
             elif ledger_status != truth_status and not e.truth_known:
                 d["状态"] = ledger_status  # 真身判不了（如拆段是否已跑），台账说了算，不记冲突
             elif ledger_status != truth_status:
@@ -894,6 +907,7 @@ def summarize(tasks: list[dict]) -> dict:
         "闸门待放行": [f"{tid} ← {g} `{sub}`（{st}）" for tid, g, sub, st in gates.at_gate(tasks, _QUEUE_TEXT if _QUEUE_TEXT is not None else _queue_text(ROOT)) if st != "已放行"],
         "未知依赖": unknown,
         "未归属plans": list(UNMATCHED_PLANS),
+        "缺任务映射": [key for _no, key, _reply in ANSWER_REPORT.缺映射],
     }
 
 
@@ -942,6 +956,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--resolve-conflicts", choices=("ledger", "truth"), default="ledger")
     ap.add_argument("--show", choices=("ready", "blocked", "running", "conflicts", "gated"), default=None,
                     help="只读：按类打印现有台账里的条目（一行一条），不生成、不写盘；台账 > 40 KB，⛔ 不要整读")
+    ap.add_argument("--register-unmapped", action="store_true",
+                    help="已答行无 ANSWER_MAP 映射 ⇒ 追加定夺队列「【答复→任务映射缺失】Q-xx」行（去重），不静默")
     args = ap.parse_args(argv)
     set_queue_repo(args.repo.resolve())
     if args.show:
@@ -961,6 +977,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ready: {r}")
     if s["未知依赖"]:
         print(f"  未知依赖: {', '.join(s['未知依赖'])}")
+    r = ANSWER_REPORT
+    print(f"定夺队列⇒台账: 生成={len(r.生成)} 解阻塞={len(r.解阻塞)} 保持阻塞={len(r.保持阻塞)} 作废={len(r.作废)} 待答压阻塞={len(r.待答阻塞)} 缺映射={len(r.缺映射)}")
+    for tid in r.生成:
+        print(f"  生成: {tid}")
+    for no, key, reply in r.缺映射:
+        print(f"  缺任务映射: {key}（{reply[:40]}）")
+    if args.register_unmapped and r.缺映射 and not args.dry_run:
+        for number in answers.register_unmapped(repo / REL["queue"], r.缺映射):
+            print(f"  已登记定夺队列: {number}")
     print(f"{'(dry-run) ' if args.dry_run else ''}→ {out.relative_to(repo) if out.is_relative_to(repo) else out}")
     return 0
 

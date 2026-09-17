@@ -97,7 +97,7 @@ python3 scripts/dispatcher_backlog.py --show gated   # 停在闸前的条目清�
 - 追加前 **先 grep**：`grep -n "<任务 id>" docs/roadmap/定夺队列.md`，已有 ⇒ 不重复入队（远期的移入待答即可）
 - 按 `rules.md` §5 契约写：编号 `Q-<两位递增>`（取现有最大 +1）／场景／阻塞类型／问题／`(a)/(b)` 各带代价／推荐或「无默认」／来源／阻塞的任务 id／状态＝待答／答复留空
 - 台账对应条目 `状态＝阻塞`、`阻塞类型＝决策|外部`
-- 处理 `decision-*` 事件时反向：定夺队列里状态「已答」且答复非空的行，把「阻塞的任务 id」对应台账条目 `阻塞类型` 改 `无`、`状态` 改 `待开`（答复为「作废」⇒ 状态改完成＋备注「作废：Q-xx」），再回到 ③ 重算 ready。**闸门行**（问题列 `【G<n> …】`）⛔ 不手改台账：重跑 `python3 scripts/dispatcher_backlog.py` 即按 `gates.py` 判定改回；G1 放行还要把该 intent 的 frontmatter `status` 改「已确认（G1 Q-xx）」（只在此刻）
+- 处理 `decision-*` 事件时反向（2026-09-17 `0917AQ` 起**机器做**，⛔ 不手改台账）：重跑 `python3 scripts/dispatcher_backlog.py --register-unmapped`——生成器按 `rules.md` §7 把已答行所列条目解阻塞（或按映射保持阻塞并写原因）、生成 `answer:Q-xx` 任务、作废行改完成；答复键无映射的行登记进定夺队列「`【答复→任务映射缺失】Q-xx`」（去重）并保持阻塞。收工报告写 `定夺队列⇒台账:` 那行的数字。**闸门行**（问题列 `【G<n> …】`）⛔ 不手改台账：重跑 `python3 scripts/dispatcher_backlog.py` 即按 `gates.py` 判定改回；G1 放行还要把该 intent 的 frontmatter `status` 改「已确认（G1 Q-xx）」（只在此刻）
 
 ### ⑦ 文档改动经提交请求通道提交
 
