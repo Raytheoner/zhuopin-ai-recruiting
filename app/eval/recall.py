@@ -12,6 +12,14 @@ def cosine_top_k(query: np.ndarray, docs: np.ndarray, ids: list[str], k: int) ->
         return []
     q = np.asarray(query, dtype=np.float64)
     d = np.asarray(docs, dtype=np.float64)
+    if q.ndim != 1:
+        raise ValueError(f"query 期望 1D 数组，收到 shape {q.shape}")
+    if d.ndim != 2:
+        raise ValueError(f"docs 期望 2D 数组，收到 shape {d.shape}")
+    if d.shape[1] != q.shape[0]:
+        raise ValueError(f"docs 嵌入维度 {d.shape[1]} 与 query {q.shape[0]} 不匹配")
+    if d.shape[0] != len(ids):
+        raise ValueError(f"docs 行数 {d.shape[0]} 与 ids 长度 {len(ids)} 不匹配")
     qn = np.linalg.norm(q)
     dn = np.linalg.norm(d, axis=1)
     with np.errstate(divide="ignore", invalid="ignore"):

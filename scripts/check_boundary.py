@@ -86,7 +86,7 @@ REGISTERED_DEPENDENCIES: dict[str, str] = {
     ),
     "pytest": "测试",
     "httpx": "测试用 HTTP 客户端（FastAPI TestClient 依赖）",
-    "numpy": "D9 评估指标：cosine 相似度向量计算（M2·U0 对比 + M6 生产）",
+    "numpy": "D9 评估指标与召回：numpy 余弦相似度（M2·U0 对比 ＋ U4 生产召回）",
 }
 
 # `uvicorn[standard]==0.34.0` → `uvicorn`；`pytest>=8` → `pytest`。

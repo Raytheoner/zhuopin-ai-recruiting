@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from app.eval.metrics import (
     MIN_SAMPLES_FOR_RANK_METRICS,
     THRESHOLDS,
@@ -95,3 +97,19 @@ def test_span_traceability_requires_existing_span_and_in_bounds():
     assert span_traceability([(1, None, None)], spans) == 0.0  # 未反查到
     assert span_traceability([(9, 0, 1)], spans) == 0.0  # 分片不存在
     assert span_traceability([], spans) == 0.0
+
+
+def test_top_k_recall_raises_on_k_less_than_one():
+    human = ["a", "b", "c"]
+    with pytest.raises(ValueError, match="k 必须 ≥ 1"):
+        top_k_recall(["a"], human, k=0)
+
+
+def test_field_correct_raises_on_str_skills():
+    with pytest.raises(TypeError, match="skills 期望 list"):
+        field_correct("skills", "CAN", ["CAN"])
+
+
+def test_field_correct_raises_on_str_companies():
+    with pytest.raises(TypeError, match="companies 期望 list"):
+        field_correct("companies", ["A"], "A")

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from app.eval.recall import cosine_top_k, recall_at_k
 
@@ -24,3 +25,24 @@ def test_recall_at_k_against_human_top():
     recalled = ["h0", "h1", "h2", "h3", "h4", "z"]
     assert recall_at_k(recalled, human) == 0.5  # 人工前 10 中 5 个被召回
     assert recall_at_k([], human) == 0.0
+
+
+def test_cosine_top_k_raises_on_1d_docs():
+    query = np.array([1.0, 0.0])
+    docs = np.array([1.0, 0.0])
+    with pytest.raises(ValueError, match="docs 期望 2D"):
+        cosine_top_k(query, docs, ["a"], k=1)
+
+
+def test_cosine_top_k_raises_on_ids_length_mismatch():
+    query = np.array([1.0, 0.0])
+    docs = np.array([[1.0, 0.0], [0.0, 1.0]])
+    with pytest.raises(ValueError, match="docs 行数.*ids 长度.*不匹配"):
+        cosine_top_k(query, docs, ["a"], k=2)
+
+
+def test_cosine_top_k_raises_on_dimension_mismatch():
+    query = np.array([1.0, 0.0])
+    docs = np.array([[1.0, 0.0, 0.5]])
+    with pytest.raises(ValueError, match="嵌入维度.*不匹配"):
+        cosine_top_k(query, docs, ["a"], k=1)

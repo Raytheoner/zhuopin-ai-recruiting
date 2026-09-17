@@ -51,8 +51,12 @@ def field_correct(field: str, predicted: object, truth: object) -> bool:
     if field == "years_of_experience":
         return round(float(predicted)) == round(float(truth))
     if field == "skills":
+        if isinstance(predicted, str) or isinstance(truth, str):
+            raise TypeError(f"skills 期望 list[str]，收到 {type(predicted).__name__ if isinstance(predicted, str) else type(truth).__name__}")
         return jaccard({normalize_text(x) for x in predicted}, {normalize_text(x) for x in truth}) >= 0.8
     if field == "companies":
+        if isinstance(predicted, str) or isinstance(truth, str):
+            raise TypeError(f"companies 期望 list[str]，收到 {type(predicted).__name__ if isinstance(predicted, str) else type(truth).__name__}")
         return {normalize_company(x) for x in predicted} == {normalize_company(x) for x in truth}
     if field == "education":
         p, t = dict(predicted), dict(truth)
@@ -92,6 +96,8 @@ def spearman(
 
 
 def top_k_recall(system_order: list[str], human_order: list[str], *, k: int = 10) -> float:
+    if k < 1:
+        raise ValueError(f"k 必须 ≥ 1，收到 {k}")
     n = len(human_order)
     if n == 0:
         return 0.0
