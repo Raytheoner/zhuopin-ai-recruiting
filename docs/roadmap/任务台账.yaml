@@ -53,6 +53,7 @@ summary:
   - 2026-09-10-liaison-unpack-dispatch
   缺任务映射:
   - Q-07
+  - Q-27
 tasks:
 - id: scene:M0
   场景: M0
@@ -63,7 +64,7 @@ tasks:
   状态: 在跑
   阻塞类型: 无
   产出判据: 核证＋开窗
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:18
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:20
 - id: scene:M0′
   场景: M0′
   阶段: build
@@ -73,7 +74,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 已归档
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:19
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:21
 - id: scene:M1
   场景: M1
   阶段: build
@@ -83,7 +84,7 @@ tasks:
   状态: 在跑
   阻塞类型: 无
   产出判据: ① 9.1 画像质量验收（10 个历史岗位重跑，技术栈字段 ≥80%）需 HR 出岗位与双方评估；② 5.6/6.8 挂起提醒卡 TD-11（无调度器）；③ 企微回调/卡片那 6 条已移出到阶段二
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:20
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:22
 - id: scene:M2
   场景: M2
   阶段: build
@@ -93,7 +94,7 @@ tasks:
   状态: 在跑
   阻塞类型: 无
   产出判据: '三个硬前置：① 需求 grill → openspec propose ✅ 已立包，下一步 spec-to-plan 从 U0 起；② 200 份评测集要 HR 出人标注；③ PIA／合规验收 #1 阻塞真实简历入库'
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:21
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:23
 - id: scene:M3
   场景: M3
   阶段: intent
@@ -104,7 +105,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: 设计上依赖 M2 真实数据校准题库
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:22
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:24
   队列: Q-F4 待答
 - id: gap:G1
   场景: 构建自动化
@@ -115,7 +116,7 @@ tasks:
   状态: 在跑
   阻塞类型: 无
   产出判据: 实测真实文件帧字段（fail-closed，同 TD-19/43 处置）→ 接 `store_attachment` → 章程已允许读归档件
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:60
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:62
 - id: gap:G2
   场景: 构建自动化
   阶段: gap
@@ -125,7 +126,7 @@ tasks:
   状态: 在跑
   阻塞类型: 无
   产出判据: 仿发车请求文件：新增「提交请求」通道（`.claude/handoff/commit/<ts>.request` 列路径＋提交信息 → launchd 触发 → 白名单路径校验 → add/commit/push），⛔ 不改 `run-lanes.sh`／`lane-launcher.sh`
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:61
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:63
 - id: gap:G3
   场景: 构建自动化
   阶段: gap
@@ -135,7 +136,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: run-lanes 收敛后经值守通道私信你本人一条摘要（不进群）
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:62
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:64
 - id: gap:G4
   场景: 构建自动化
   阶段: gap
@@ -145,7 +146,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: 带幂等键的 `effect_*` 提醒节点＋外部调度器；M1 在 `.51`（Windows 计划任务）、值守在 Mac（launchd）——落点不同
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:63
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:65
 - id: gap:G5
   场景: 构建自动化
   阶段: gap
@@ -155,7 +156,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 外部
   产出判据: 章程 §四 已登记待人；下一步是「待人行 → Cowork 编排」的机器可读前缀，先观察一周真实回件再定（避免空转设计）
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:64
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:66
 - id: gap:G6
   场景: 构建自动化
   阶段: gap
@@ -165,7 +166,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 外部
   产出判据: 一条小泳道
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:65
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:67
 - id: gap:G7
   场景: 构建自动化
   阶段: gap
@@ -175,7 +176,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 撤包或正式延后
-  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:66
+  来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:68
 - id: hr-wecom-aibot-liaison/U1/plan
   场景: M0
   阶段: plan
@@ -2629,9 +2630,9 @@ tasks:
   - docs/m2-model-comparison.md
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: '`.51` 隔离 venv `C:\apps\m2-smoke` 里 `import torch` 成功、探针 torch/FlagEmbedding 行 ✅'
+  产出判据: 【Q-27 已答·缺任务映射】`.51` 隔离 venv `C:\apps\m2-smoke` 里 `import torch` 成功、探针 torch/FlagEmbedding 行 ✅
   来源: docs/session接力.md:79
-  队列: Q-27 待答
+  队列: Q-27 已答
   备注: 源行自带「环境操作·代理人未设 ⇒ 等本人放行」（改 .51 系统组件），调度器不可代，2026-09-17 task-dispatcher 登记 Q-27
 - id: relay:R-10
   场景: 构建自动化
@@ -2729,9 +2730,10 @@ tasks:
   触碰区:
   - docs/audit-and-outbound-ops.md
   - docs/deploy-51-server.md
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
+  备注: 已由 Cowork 登记 opener `[Mac]0917BB`（G3 Q-28 已答「发」，Q-27 已放行），⛔ 调度器不重复发车；本条待 0917BB 执行完（收口时按同一判据核）
   来源: docs/roadmap/定夺队列.md:30 Q-14a
   闸门: G3 .51
   队列: Q-14 已答 a
