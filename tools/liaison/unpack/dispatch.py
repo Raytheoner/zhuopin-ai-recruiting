@@ -117,12 +117,24 @@ HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
 #: I6（2026-09-16 修）：子进程持有 `Write` + `Bash(git commit:*)` 权限，⛔ 不把父
 #: 进程整份 `os.environ`（含 `HR_LIAISON_BOT_SECRET`/`HR_LIAISON_GROUP_WEBHOOK`）
 #: 透传下去——凭据边界应当由这份显式白名单可审计地保证，而不是靠"权限模式凑巧
-#: 没用上"这种偶然性撑着。只放行子进程真正需要的四个键。
-_CHILD_ENV_ALLOWLIST: tuple[str, ...] = (CLAUDE_BIN_ENV, "PATH", "HOME", "PYTHONPATH")
+#: 没用上"这种偶然性撑着。
+#: TD-47（2026-09-17 修）：补 `USER`——macOS 上 `claude` 的登录态存在系统 Keychain
+#: 条目「Claude Code-credentials」里，查询该条目按 `USER` 环境变量的值做 account
+#: 匹配（实测：`env -i PATH HOME PYTHONPATH` 复现 `Not logged in`；同样四键
+#: 再加正确的 `USER` 值即可登录成功且只需 `PATH`+`USER` 两键；`USER` 给错值
+#: 仍报未登录——证实是 account 匹配而非巧合）。`USER` 是非秘密系统变量，放行
+#: 不影响凭据边界。
+_CHILD_ENV_ALLOWLIST: tuple[str, ...] = (
+    CLAUDE_BIN_ENV,
+    "PATH",
+    "HOME",
+    "PYTHONPATH",
+    "USER",
+)
 
 
 def _filter_child_env(env: Mapping[str, str]) -> dict[str, str]:
-    """把父进程环境收窄成子进程需要的四个键，只保留源环境里实际存在的——
+    """把父进程环境收窄成子进程需要的白名单键，只保留源环境里实际存在的——
     ⛔ 不为不存在的键编造值。"""
     return {key: env[key] for key in _CHILD_ENV_ALLOWLIST if key in env}
 

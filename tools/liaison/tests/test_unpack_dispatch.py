@@ -409,7 +409,9 @@ def test_dispatch_kills_the_child_process_when_lock_write_fails(tmp_path, monkey
 def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
     """I6：子进程持有 Write + Bash(git commit:*)，⛔ 不能把父进程整份环境
     （含 HR_LIAISON_BOT_SECRET / HR_LIAISON_GROUP_WEBHOOK）透传下去——只放行
-    子进程真正需要的四个键。"""
+    子进程真正需要的键。TD-47：`USER` 是 macOS 上 `claude` 读取 Keychain
+    登录态所需的非秘密系统变量（实验记录见 docs/tech-debt.md TD-47），
+    同样只放行不编造。"""
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
     )
@@ -422,6 +424,7 @@ def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
         "PATH": "/usr/bin:/bin",
         "HOME": "/home/x",
         "PYTHONPATH": ".",
+        "USER": "paulshao",
         "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
         "HR_LIAISON_BOT_SECRET": "top-secret",
         "HR_LIAISON_GROUP_WEBHOOK": "https://example.invalid/webhook",
@@ -447,6 +450,7 @@ def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
         "PATH": "/usr/bin:/bin",
         "HOME": "/home/x",
         "PYTHONPATH": ".",
+        "USER": "paulshao",
         "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
     }
 
@@ -457,3 +461,28 @@ def test_filter_child_env_omits_keys_absent_from_the_source_env():
 
     assert _filter_child_env({"PATH": "/usr/bin"}) == {"PATH": "/usr/bin"}
     assert _filter_child_env({}) == {}
+
+
+def test_filter_child_env_never_leaks_hr_liaison_secrets_regardless_of_allowlist_growth():
+    """凭据边界回归闸（TD-47）：无论白名单以后为登录态再补多少非秘密系统变量，
+    任意 `HR_LIAISON_*`（除 `HR_LIAISON_CLAUDE_BIN` 这个二进制路径覆盖键外）
+    都不得进入子进程环境。"""
+    from tools.liaison.unpack.dispatch import _filter_child_env
+
+    source_env = {
+        "PATH": "/usr/bin",
+        "USER": "paulshao",
+        "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
+        "HR_LIAISON_BOT_SECRET": "top-secret",
+        "HR_LIAISON_GROUP_WEBHOOK": "https://example.invalid/webhook",
+        "HR_LIAISON_FUTURE_UNKNOWN_SECRET": "should-never-leak",
+    }
+
+    result = _filter_child_env(source_env)
+
+    leaked_secrets = {
+        key
+        for key in result
+        if key.startswith("HR_LIAISON_") and key != "HR_LIAISON_CLAUDE_BIN"
+    }
+    assert leaked_secrets == set()

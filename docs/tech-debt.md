@@ -629,19 +629,32 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 
 ---
 
-## TD-47 · `unpack-dispatch --force` 起的无头 `claude` 会话未登录，P1 起活验收阻断
+## ~~TD-47~~ · `unpack-dispatch --force` 起的无头 `claude` 会话未登录，P1 起活验收阻断 ✅ 已还（0917K）
 
 **欠的是什么**：`liaison-reply-bridge-and-patrol` tasks.md 5.2 P1 单独验（`[Mac]0917J` 真实起活实测）当场执行 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-dispatch --force`，子进程 `claude` 立即退出，无头日志（`data/liaison/logs/unpack-headless/20260916T232918575673Z.log`）唯一一行是 `Not logged in · Please run /login`。5.2 无法通过，5.3（P0+P1 端到端）连带无法在本轮验。
 
-**根因**：`tools/liaison/unpack/dispatch.py:121` 的 `_CHILD_ENV_ALLOWLIST = (CLAUDE_BIN_ENV, "PATH", "HOME", "PYTHONPATH")` 只放行这四个键给子进程 `claude` 二进制。`claude` CLI 的登录态落在依赖交互式终端/Keychain 会话上下文的凭据存储里，`launchctl kickstart` 起的 LaunchAgent 子进程虽在 `gui/$UID` 会话但不继承调用者终端里已建立的登录态，且白名单未放行任何认证用的 env（如 `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` 一类非交互凭据），子进程因而拿不到登录态。
+**根因（0917K 实测确认）**：`tools/liaison/unpack/dispatch.py:121` 的 `_CHILD_ENV_ALLOWLIST = (CLAUDE_BIN_ENV, "PATH", "HOME", "PYTHONPATH")` 只放行这四个键给子进程 `claude` 二进制。`claude` 在 macOS 上的登录态存在系统 Keychain 条目「Claude Code-credentials」里，查询该条目按进程环境里的 `USER` 变量值做 account 匹配——不在四键白名单内，子进程因而拿不到登录态。
 
-**触发条件**：下次要让 5.2/5.3 通过之前——即 P1 起活验收要落地为"真的能跑完一轮"而非"能起进程"时。
+**实验记录（对照实验，`env -i` 隔离，二进制取 `unpack-dispatch --dry-run` 打印的 `/Users/paulshao/.local/bin/claude`）**：
 
-**还债动作**：① 确认 `claude` CLI 是否支持非交互登录凭据（env token 或落盘 credentials 文件路径）；② 若支持，在 `_CHILD_ENV_ALLOWLIST` 里补上对应的键（凭据边界原则不变——仍是显式白名单，不透传整份 `os.environ`）；③ 若不支持无 TTY 场景，需要另找免登录的调用形态（如预先在该 LaunchAgent 运行身份下持久化登录态到其可读的凭据文件），方案定后回填本条。
+| 键集合 | 结果首行 |
+|---|---|
+| `PATH HOME PYTHONPATH`（原四键，`CLAUDE_BIN_ENV` 当次未设） | `Not logged in · Please run /login`（复现） |
+| 原四键 + `USER`（正确值） | `Error: Exceeded USD budget (0.05)`（登录成功，只是撞了 `--max-budget-usd 0.05`） |
+| 原四键（去掉 `USER` 再验一次，最小集合减一） | `Not logged in · Please run /login`（复现，证明 `USER` 是必需项） |
+| `PATH USER`（去掉 `HOME`、`PYTHONPATH`） | `OK`（`PATH`+`USER` 已是充分集合，`HOME`/`PYTHONPATH` 对登录态本身无影响，仍保留是因为子进程运行仍需要它们） |
+| 原四键 + `USER=nonexistent_bogus_user`（错误值） | `Not logged in · Please run /login`（证伪"只要 USER 存在即可"——必须是能匹配 Keychain account 的正确值，即父进程当前登录用户名，属非秘密系统变量） |
+| `LOGNAME`/`TMPDIR`/`SHELL`/`LANG`/`XPC_SERVICE_NAME`（逐个单独加） | 均仍 `Not logged in · Please run /login`（逐一排除，非这些变量） |
 
-**不还的后果**：`unpack-dispatch --force`/自动触发路径永远在"起了进程但读不到章程、拿不到规则"这一步失败，P1 拆件功能名义上部署、实际不可用；tasks.md 5.2/5.3/5.5 与归档全部卡死。
+**最小键集合**：`USER`（非秘密系统变量）。`__CF_USER_TEXT_ENCODING`、`CLAUDE_CONFIG_DIR` 当次父环境未设，未测。
 
-**来源**：`[Mac]0917J` 真实起活实测，`unpack-dispatch --dry-run` 显示二进制路径与 argv 正常，`--force` 实跑复现，日志原文如上，非本轮个例（章程走的是占位路径，与登录态无关，见 tasks.md 5.2 判据注）。
+**还债动作（已完成）**：`_CHILD_ENV_ALLOWLIST` 补 `USER`；`tools/liaison/tests/test_unpack_dispatch.py` 新增/更新断言——放行 `USER`，同时新增 `test_filter_child_env_never_leaks_hr_liaison_secrets_regardless_of_allowlist_growth` 作凭据边界回归闸（任意 `HR_LIAISON_*` 键，含未来新增的，均不得进入子进程环境）。
+
+**端到端验证**：worktree 内 `PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-dispatch --force` 真实起活，子进程存活约 200 秒、正常执行完整流程（含 Read/Bash/Write/git commit）后正常结束，无头日志不再出现 `Not logged in`——占位章程下判定为"正常结束"，与 TD-47 原始故障（立即退出）不同。
+
+**踩坑记录（供下次做类似验证参考）**：`python -m tools.liaison ...` 时 Python 会把 CWD 插到 `sys.path` 最前面，早于 `PYTHONPATH`；若在主工作区目录下执行、仅靠 `PYTHONPATH=<worktree 路径>` 指向 worktree 代码，实际仍会优先加载主工作区自己的 `tools.liaison`（`import` 后 `__file__` 可验证）。要验证 worktree 里的改动，必须把 cwd 切到该 worktree 内再跑。
+
+**来源**：`[Mac]0917J` 真实起活实测发现（日志原文如上），`[Mac]0917K` 定位根因、实验验证最小键集合并修复、端到端复验通过。
 
 ---
 
