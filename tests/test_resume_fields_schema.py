@@ -89,3 +89,21 @@ def test_zero_is_valid_value():
     field = NumberField(value=0, confidence=0.9)
     assert field.value == 0
     assert not field.not_mentioned
+
+
+def test_education_with_one_blank_field_requires_not_mentioned():
+    with pytest.raises(ValidationError, match="not_mentioned"):
+        EducationField(value=EducationValue(degree="", school=None), confidence=0.9)
+
+
+def test_education_with_both_whitespace_requires_not_mentioned():
+    with pytest.raises(ValidationError, match="not_mentioned"):
+        EducationField(value=EducationValue(degree="   ", school="   "), confidence=0.9)
+
+
+def test_education_with_partial_data_is_valid():
+    """Partially known education (one field blank, one present) is real data."""
+    field = EducationField(value=EducationValue(degree="本科", school=""), confidence=0.9)
+    assert field.value.degree == "本科"
+    assert field.value.school == ""
+    assert not field.not_mentioned

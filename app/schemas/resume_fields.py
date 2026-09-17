@@ -50,7 +50,7 @@ class _FieldBase(BaseModel):
         if isinstance(value, EducationValue):
             degree = value.degree.strip() if isinstance(value.degree, str) else value.degree
             school = value.school.strip() if isinstance(value.school, str) else value.school
-            return degree is None and school is None
+            return degree in (None, "") and school in (None, "")
         return False
 
     @model_validator(mode="after")
