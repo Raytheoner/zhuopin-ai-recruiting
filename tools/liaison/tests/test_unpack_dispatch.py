@@ -127,7 +127,7 @@ def test_build_headless_argv_shape():
     assert "Bash(git push:*)" in disallowed
     for required in (
         "Read", "Glob", "Grep",
-        # TD-48：Edit/Write/git add 按章程 §三 路径收窄（清单见 test_unpack_path_guard.py），
+        # TD-48/TD-50：Edit（覆盖 Write）/git add 按章程 §三 路径收窄（清单与规则写法见 test_unpack_path_guard.py），
         # 这里只守形状：`git commit` 只放行 `-m` 形式。
         "Bash(git commit -m:*)", "Bash(git status:*)",
         "Bash(git diff:*)", "Bash(git log:*)",

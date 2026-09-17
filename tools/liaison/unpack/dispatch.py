@@ -102,9 +102,13 @@ CHARTER_WRITABLE_PATHS: tuple[str, ...] = (
 )
 
 #: 红线 ②④⑤⑧ 涉及的目录与文件，外加 opener 目录与 `data/`（信号只经 CLI）。
-#: 对 `Edit` 与 `Write` 一律显式 deny——`acceptEdits` 会自动接受项目内任何编辑，
-#: 只收窄 allow 拦不住（2026-09-17 一次性仓实验：写法 甲 下改 `tools/x.py` 仍放行；
-#: 加 deny 后报「File is in a directory that is denied by your permission settings」）。
+#: 对 `Edit` 显式 deny——`acceptEdits` 会自动接受项目内任何编辑，只收窄 allow 拦不住
+#: （2026-09-17 一次性仓实验：写法 甲 下改 `tools/x.py` 仍放行；加 deny 后报
+#: 「File is in a directory that is denied by your permission settings」）。
+#: TD-50（0917Q）：⛔ 不再写 `Write(...)` 规则——CLI 逐条告警「Permission … rule:
+#: Write(…) is not matched by file permission checks — only Edit(path) rules are.
+#: … (Edit rules cover all file-editing tools)」，一次性仓实测无 Write 规则时
+#: `Write` 越界文件同样被 `Edit(<dir>/**)` deny 拦下。
 HEADLESS_DENY_EDIT_PATTERNS: tuple[str, ...] = (
     "tools/**", "app/**", "scripts/**", "tests/**", "openspec/**", ".claude/**",
     "CLAUDE.md", "data/**", ".env*", "docs/openers/**",
@@ -117,6 +121,15 @@ HEADLESS_DENY_BASH_PREFIXES: tuple[str, ...] = (
     "git add -A", "git add .", "git commit -a", "git stash", "git push",
 )
 
+#: TD-50：`git add` 命令行里**任何位置**出现红线目录都 deny（通配 `*` 匹配含空格的
+#: 任意串，见 `_git_add_deny_rules`）。放行规则只认打头的路径（`Bash(X:*)` 与
+#: `Bash(<dir>*)` 都允许尾随参数），`git add docs/session接力.md tools/x.py` 会把并行
+#: 泳道在 `tools/` 下的未提交改动一起卷走——这一条堵的是尾随越界。
+HEADLESS_DENY_GIT_ADD_SUBSTRINGS: tuple[str, ...] = (
+    "tools/", "app/", "scripts/", "tests/", "openspec/", ".claude/",
+    "CLAUDE.md", "data/", ".env", "docs/openers/",
+)
+
 
 def _path_rule(tool: str, path: str) -> str:
     """章程路径 → 权限规则：目录 `docs/x/` ⇒ `Edit(docs/x/**)`，文件 ⇒ `Edit(docs/x.md)`。
@@ -125,7 +138,30 @@ def _path_rule(tool: str, path: str) -> str:
     return f"{tool}({path}**)" if path.endswith("/") else f"{tool}({path})"
 
 
-#: 受限权限 argv 模板（design D4，TD-48 后为写法 乙）。⛔ **唯一真源**——白名单是否
+def _git_add_allow_rules(path: str) -> tuple[str, ...]:
+    """章程路径 → `git add` 放行规则（TD-50，2026-09-17 一次性仓实测 claude 2.1.263）。
+
+    `Bash(X:*)` 是**词边界**前缀——只命中 `X` 本身或 `X ` ＋任意后续，`X` 后面紧跟
+    非空格字符不算：`Bash(git add docs/跟进信/回件/:*)` 命中不了
+    `git add docs/跟进信/回件/a.md`（TD-48 的目录规则从未生效过，首次真实回件即卡
+    「This command requires approval」）。目录改用通配 `Bash(git add <dir>*)`
+    （`*` 匹配任意串、含空格，故两个路径的写法也放行）；文件保留 `:*` 前缀。
+    引号不做归一化、`--` 是另一个前缀，各自要一条变体——会话实测三种写法都会写。
+    """
+    if path.endswith("/"):
+        heads = (f"{path}", f'"{path}', f"-- {path}", f'-- "{path}')
+        return tuple(f"Bash(git add {h}*)" for h in heads)
+    heads = (f"{path}", f'"{path}"', f"-- {path}", f'-- "{path}"')
+    return tuple(f"Bash(git add {h}:*)" for h in heads)
+
+
+def _git_add_deny_rules(fragment: str) -> tuple[str, ...]:
+    """红线目录片段 → `git add` deny 通配规则：`Bash(git add *tools/*)` 命中
+    `git add tools/x.py`、`git add docs/x.md tools/x.py`、`git add docs/x.md "tools/x.py"`。"""
+    return (f"Bash(git add *{fragment}*)",)
+
+
+#: 受限权限 argv 模板（design D4，TD-48 后为写法 乙，TD-50 修 `git add` 规则写法）。⛔ **唯一真源**——白名单是否
 #: 放行某条命令、预算参数是否存在，全部由 `subagent-driven-development` 的 reviewer
 #: 对着*这个常量*核对，⛔ 不许在别处再拼一份 argv 字面量。
 HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
@@ -134,12 +170,12 @@ HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
     "--permission-mode", "acceptEdits",
     "--allowedTools",
     "Read", "Glob", "Grep",
-    # TD-48：`Edit`/`Write` 不再裸放行，只放行章程 §三 列出的路径。
+    # TD-48：`Edit` 不再裸放行，只放行章程 §三 列出的路径（`Edit(path)` 规则覆盖
+    # 全部编辑工具，含 Write；TD-50 起不再另写 `Write(...)`）。
     *(_path_rule("Edit", path) for path in CHARTER_WRITABLE_PATHS),
-    *(_path_rule("Write", path) for path in CHARTER_WRITABLE_PATHS),
-    # TD-48：`git add` 逐路径前缀放行（`Bash(git add docs/x/:*)` 匹配
-    # `git add docs/x/任意文件`）；`git commit` 只放行 `-m` 开头的形式。
-    *(f"Bash(git add {path}:*)" for path in CHARTER_WRITABLE_PATHS),
+    # TD-48/TD-50：`git add` 逐路径放行（目录通配、文件词边界前缀、各带引号与 `--`
+    # 变体，见 `_git_add_allow_rules`）；`git commit` 只放行 `-m` 开头的形式。
+    *(rule for path in CHARTER_WRITABLE_PATHS for rule in _git_add_allow_rules(path)),
     "Bash(git commit -m:*)", "Bash(git status:*)",
     "Bash(git diff:*)", "Bash(git log:*)",
     # I4（2026-09-16 修）：⛔ 裸 "python -m tools.liaison unpack-signal:*" 匹配不上
@@ -154,8 +190,8 @@ HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
     "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria:*)",
     "--disallowedTools",
     *(f"Edit({pattern})" for pattern in HEADLESS_DENY_EDIT_PATTERNS),
-    *(f"Write({pattern})" for pattern in HEADLESS_DENY_EDIT_PATTERNS),
     *(f"Bash({prefix}:*)" for prefix in HEADLESS_DENY_BASH_PREFIXES),
+    *(rule for fragment in HEADLESS_DENY_GIT_ADD_SUBSTRINGS for rule in _git_add_deny_rules(fragment)),
 )
 
 

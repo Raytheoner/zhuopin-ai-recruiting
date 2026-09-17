@@ -1805,3 +1805,41 @@ sdk_logger = session_client.SdkLogObserver(
 **来源**：`0917O` 做 TD-48 【三】E 时复现。
 
 ---
+
+
+<!-- 〔归档工具〕 2026-09-17 搬入：~~TD-50~~ · 拆件会话 `git add` 章程路径被判需审批 ✅ 已还（0917Q） -->
+
+## ~~TD-50~~ · 拆件会话 `git add` 章程路径被判需审批 ✅ 已还（0917Q）
+
+**欠的是什么**：TD-48（`0917O`）把拆件会话的 `git add` 收窄成逐路径前缀 `Bash(git add <章程路径>:*)`，但**首次真实回件**（2026-09-17 09:45 CST，人事部#1，日志 `data/liaison/logs/unpack-headless/20260917T014544528242Z.log`）会话在收口时三次 `git add` 全被拦——它写出的最终请求是 `git add "docs/跟进信/README-跟进信清单.md" "docs/跟进信/回件/人事部#1-20260917.md" "docs/session接力.md"`，日志原文：「`git add` 三处改动路径时，工具返回「This command requires approval」，重试三次（合并/分别加引号/单文件）均同样被拦」。结果：回件判断已做、三个文件已写、但未 commit、未清信号、未进第二轮，会话停在「需你定夺」等一个不存在的人。同一日志开头还有 14 行 CLI 告警：「Permission allow rule (--allowed-tools): Write(docs/跟进信/回件/**) is not matched by file permission checks — only Edit(path) rules are. Use Edit(docs/跟进信/回件/**) instead (Edit rules cover all file-editing tools).」（allow 4 条、deny 10 条同款）——`Write(...)` 规则从未生效过。
+
+**根因（一次性 git 仓实测，claude 2.1.263，`env -i PATH HOME USER`，`--max-budget-usd 0.5`，argv 取自 `build_headless_argv`、仅把 `text` 换成 `stream-json --verbose` 以抓工具原文）**：
+
+| 轮 | 命令 | 规则 | 结果 |
+|---|---|---|---|
+| g1 | `git add docs/跟进信/README-跟进信清单.md` | 旧 `Bash(git add docs/跟进信/README-跟进信清单.md:*)` | 放行 |
+| g2 | `git add "docs/跟进信/README-跟进信清单.md"` | 同上 | **This command requires approval** |
+| g3 | `git add docs/跟进信/回件/a.md docs/session接力.md` | 旧 `Bash(git add docs/跟进信/回件/:*)` | **This command requires approval** |
+| g4 | `git add -- docs/session接力.md` | 旧 `Bash(git add docs/session接力.md:*)` | **This command requires approval** |
+| g5 | `git add docs/session接力.md` | 同上 | 放行 |
+| n1 | `git add notes/x.md`（纯 ASCII 对照） | 临时 `Bash(git add notes/:*)` | **This command requires approval** |
+| n2–n4 | 引号／两路径／`--` 的 ASCII 版 | 同上 | 全部 requires approval |
+| h1 | `git add docs/跟进信/回件/a.md` | 临时 `Bash(git add docs/跟进信/回件/*)` | 放行 |
+| h2 | `git add docs/跟进信/README-跟进信清单.md docs/session接力.md` | 旧文件前缀规则 | 放行 |
+| h3 | `git add notes/x.md` | 临时 `Bash(git add notes/*)` | 放行 |
+| h4 | `git add docs/跟进信/回件/a.md docs/session接力.md` | 临时 `Bash(git add docs/跟进信/回件/*)` | 放行 |
+| h5 | `git add "docs/session接力.md"` | 临时 `Bash(git add "docs/session接力.md":*)` | 放行 |
+
+定因：**与非 ASCII 无关**（n1 纯 ASCII 目录同样被拦，g1 非 ASCII 文件放行）。① `Bash(X:*)` 是**词边界**前缀——命中 `X` 本身或 `X ` ＋任意后续，`X` 后紧跟非空格字符不算，所以 `Bash(git add <dir>/:*)` **从未**命中过 `git add <dir>/<文件>`（TD-48 的目录规则一天都没生效，`0917O` 实验只测过文件路径 `docs/session接力.md` 所以没露）；② 引号不做归一化，`git add "…"` 是另一条命令；③ `--` 同理是另一个前缀；④ `Bash(<含 * 的模式>)` 是通配，`*` 匹配任意串**含空格**（h4）；⑤ 多路径本身不是问题——首个路径命中即放行（h2）。真实会话被拦三次＝ g2（三路径全带引号）＋ 引号分别加 ＋ 单文件（落在 `回件/` 目录下，即 g3/h1 形态）。
+
+**选中写法（甲 的通配变体；乙 未取——`Bash(git add:*)` ＋ deny 枚举同样受词边界限制，`Bash(git add tools:*)` 命中不了 `git add tools/x.py`；丙 未加，红线已在权限层）**：`dispatch._git_add_allow_rules`——目录 `Bash(git add <dir>*)`、文件 `Bash(git add <file>:*)`，各配 `"<path>`／`-- <path>`／`-- "<path>` 三种变体（4 路径 × 4 = 16 条）；deny 段新增 `dispatch._git_add_deny_rules` 通配 `Bash(git add *tools/*)` 等 10 条，堵「章程路径打头、红线目录尾随」（`git add docs/session接力.md tools/x.py` 会卷走并行泳道在 `tools/` 下的未提交改动）；`Write(...)` allow/deny 共 14 条整段删除（`Edit(path)` 覆盖全部编辑工具）。
+
+**复验（新 argv ＋ `compute_prompt` 真章程 prompt，同一一次性仓）**：g1/g2/g3/g4 放行；g6 `git add "docs/跟进信/README-跟进信清单.md" "docs/跟进信/回件/人事部#1-20260917.md" "docs/session接力.md"`（真实会话原命令）放行；x1 `git add -A`／x2 `git add .`／x3 `git add tools/x.py`／x4 `git add docs/openers/x.md`／x5 `git add docs/session接力.md tools/x.py` 全部「Permission to use Bash with command … has been denied.」；x6 `Write` 新建 `tools/y.py` 「File is in a directory that is denied by your permission settings.」；日志 0 条 `not matched by file permission checks`；`git diff --cached --name-only` 只含四个章程路径。
+
+**测试**：`tests/_argv_rules.py` 新增按实测语义写的规则匹配器（`bash_rule_matches`／`bash_command_verdict`：词边界前缀、`*` 含空格、deny 优先）；`test_unpack_path_guard.py` 新增 4 条（argv 无 `Write(`；目录不用 `:*` 写法；章程路径四种写法＋多路径全放行；越界与尾随越界全不放行）、改 1 条（Edit＋git add 用裁决器）；`test_unpack_charter_allowlist.py` 关键词剥掉 `"…"`／`-- ` 外壳再对章程；`tools/liaison/tests` 1115 passed，全量 pytest 2466 passed／6 skipped／0 failed。
+
+**残余风险（已写进 design Risks ④⑤）**：尾随的 `docs/` 下清单外路径（`git add docs/session接力.md docs/tech-debt.md`）不在 deny 枚举里，靠章程 §三 `git diff --cached` 自查兜底；规则语义是对 claude 2.1.263 的实测，CLI 升级可能变，只能靠真实起活日志发现。
+
+**首次真实回件的三个文件（`README-跟进信清单.md` 还原、`回件/人事部#1-20260917.md`、`session接力.md` 追加）在主工作区处于未提交状态**，本条不碰（⛔ 本 opener 不改 `docs/session接力.md`、`docs/跟进信/**`），待人核对后决定提交或丢弃；第二条信号（msgid `a932acca…`）仍 pending，修复合入后下一次起活会按新规则收口。
+
+---

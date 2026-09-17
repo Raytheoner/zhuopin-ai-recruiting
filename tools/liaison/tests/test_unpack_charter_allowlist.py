@@ -16,7 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 #: TD-48（0917O）之后 argv 同时带 `--disallowedTools`，⛔ 只扫 allow 段——deny 段
 #: 里的 `git push` 是期望存在的，不是"放行"。放行前缀可能带路径
-#: （`git add docs/跟进信/回件/`）或选项（`git commit -m`），见 `_charter_keywords`。
+#: （`git add docs/跟进信/回件/`，TD-50 起另有 `git add "docs/…`／`git add -- docs/…`
+#: 变体）或选项（`git commit -m`），见 `_charter_keywords`。
 _bash_command_prefixes = allowed_bash_prefixes
 
 
@@ -30,7 +31,10 @@ def _charter_keywords(prefix: str) -> list[str]:
     if "tools.liaison" in prefix:
         return [prefix.split(" ")[-1]]
     if prefix.startswith("git add "):
-        return ["git add", prefix[len("git add "):]]
+        # TD-50：放行前缀带 `"…"`／`-- ` 写法变体（`_git_add_allow_rules`），章程里只写
+        # 一次裸路径——剥掉变体外壳后再核对路径本身。
+        path = prefix[len("git add "):].removeprefix("-- ").strip('"')
+        return ["git add", path]
     if prefix == "git commit -m":
         return ["git commit"]
     return [prefix]
