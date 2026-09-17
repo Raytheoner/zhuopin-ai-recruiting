@@ -385,6 +385,11 @@ def _read_body(args) -> str | None:
         if not results.is_file():
             print(f"日志目录里没有 results.tsv：{logdir}", file=sys.stderr)
             return None
+        # 2026-09-17 Shao Peishen：泳道批次「全部 OK」不私信，只在有 PARTIAL/FAIL 等异常时提醒。
+        rows = [l.split("\t") for l in results.read_text(encoding="utf-8").splitlines() if l.strip()]
+        if rows and all(len(r) > 2 and r[2].strip() == "OK" for r in rows):
+            print("批次全部 OK，按口径不私信", file=sys.stderr)
+            return None
         summary = logdir / "summary.txt"
         body = compute_lane_digest(
             results.read_text(encoding="utf-8"),

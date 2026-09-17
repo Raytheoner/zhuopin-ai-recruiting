@@ -698,6 +698,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   ( cd "$REPO" && python3 -m tools.liaison owner-notify \
       --dedupe-key "lanes-$STAMP" --lane-logdir "$LOGDIR" ) \
     || echo "  ⚠️ 本人通知入队失败（不影响泳道结果；查 data/liaison/logs 与 owner_notify_outbox）"
+  mkdir -p "$REPO/.claude/handoff/events" && : > "$REPO/.claude/handoff/events/lanes-done-$STAMP"
 fi
 
 failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" || $3=="WORKTREE-FAIL" {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"

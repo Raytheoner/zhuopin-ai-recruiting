@@ -499,22 +499,95 @@ def test_owner_notify_cli_refuses_empty_body_and_missing_file(tmp_path, monkeypa
     )
 
 
-def test_owner_notify_cli_can_build_the_body_from_a_lane_logdir(tmp_path, monkeypatch):
-    """run-lanes.sh 收敛后直接指 LOGDIR：正文由 compute_lane_digest 生成。"""
-    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+def _lane_logdir(tmp_path, results_text: str) -> pathlib.Path:
     logdir = tmp_path / "lanes-20260917-101500"
     logdir.mkdir()
-    (logdir / "results.tsv").write_text(
-        "G3\t0917Y\tOK\t12\t/x/0917Y.log\tsonnet\n", encoding="utf-8"
-    )
+    (logdir / "results.tsv").write_text(results_text, encoding="utf-8")
     (logdir / "summary.txt").write_text("泳道 编号 状态 分钟\n", encoding="utf-8")
+    return logdir
+
+
+def _outbox_bodies(tmp_path) -> list[str]:
+    db = tmp_path / "liaison.db"
+    if not db.exists():
+        return []
+    conn = liaison_db.get_connection(db)
+    try:
+        return [r[0] for r in conn.execute("SELECT body FROM owner_notify_outbox").fetchall()]
+    finally:
+        conn.close()
+
+
+def test_owner_notify_cli_can_build_the_body_from_a_lane_logdir(tmp_path, monkeypatch):
+    """run-lanes.sh 收敛后直接指 LOGDIR：正文由 compute_lane_digest 生成。
+
+    夹具故意含一条 PARTIAL——2026-09-17 口径起「全部 OK 不私信」，全 OK 的批次
+    走不到入队这一步（见下面三条口径用例）。
+    """
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    logdir = _lane_logdir(
+        tmp_path,
+        "G3\t0917Y\tOK\t12\t/x/0917Y.log\tsonnet\n"
+        "G4\t0917Z\tPARTIAL\t8\t/x/0917Z.log\tsonnet\n",
+    )
     assert owner_notify.owner_notify_main(
         ["--dedupe-key", "lanes-20260917-101500", "--lane-logdir", str(logdir)]
     ) == 0
-    conn = liaison_db.get_connection(tmp_path / "liaison.db")
-    body = conn.execute("SELECT body FROM owner_notify_outbox").fetchone()[0]
-    conn.close()
+    (body,) = _outbox_bodies(tmp_path)
     assert "0917Y" in body and "OK" in body and "/x/0917Y.log" not in body
+    assert "0917Z" in body and "PARTIAL" in body
+
+
+# ── 私信口径（2026-09-17 Shao Peishen 15:4x 定：全部 OK 不私信，有 PARTIAL/FAIL 才提醒）──
+# 这三条钉的是 `_read_body` 里那道「全 OK ⇒ None」的闸。它是 Cowork 直改进来的，
+# 删掉那五行，第一条当场红（入队了一条不该发的私信）。
+
+
+def test_all_ok_batch_is_not_enqueued(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    logdir = _lane_logdir(
+        tmp_path,
+        "G1\t0917A\tOK\t12\t/x/a.log\tsonnet\n"
+        "G2\t0917B\tOK\t9\t/x/b.log\tsonnet\n",
+    )
+    assert owner_notify.owner_notify_main(
+        ["--dedupe-key", "lanes-all-ok", "--lane-logdir", str(logdir)]
+    ) == owner_notify.EXIT_BAD_ARGS
+    assert "全部 OK" in capsys.readouterr().err
+    assert _outbox_bodies(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "bad_status",
+    ["PARTIAL", "FAIL(1)", "NO-SENTINEL", "NO-BODY", "WORKTREE-FAIL"],
+)
+def test_batch_with_any_abnormal_row_is_enqueued(tmp_path, monkeypatch, bad_status):
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    logdir = _lane_logdir(
+        tmp_path,
+        "G1\t0917A\tOK\t12\t/x/a.log\tsonnet\n"
+        f"G2\t0917B\t{bad_status}\t9\t/x/b.log\tsonnet\n",
+    )
+    assert owner_notify.owner_notify_main(
+        ["--dedupe-key", f"lanes-{bad_status}", "--lane-logdir", str(logdir)]
+    ) == 0
+    (body,) = _outbox_bodies(tmp_path)
+    assert "0917B" in body
+
+
+def test_empty_results_tsv_behaviour_is_unchanged(tmp_path, monkeypatch):
+    """results.tsv 存在但一行都没有 ⇒ 仍入队一条「共 0 条」的摘要（口径改动前就是这样）。
+
+    这是「results.tsv 被建了、泳道一条都没跑起来」的形态，值得提醒本人；
+    ⛔ 不要把它归到「全 OK」里静默掉——`all([])` 为真正是这里要防的坑。
+    """
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "liaison.db")
+    logdir = _lane_logdir(tmp_path, "")
+    assert owner_notify.owner_notify_main(
+        ["--dedupe-key", "lanes-empty", "--lane-logdir", str(logdir)]
+    ) == 0
+    (body,) = _outbox_bodies(tmp_path)
+    assert "共 0 条" in body
 
 
 def test_main_dispatches_owner_notify_before_credentials_are_loaded():

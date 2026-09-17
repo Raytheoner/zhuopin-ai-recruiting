@@ -38,4 +38,6 @@ done
 [[ -n "$PY" ]] || { echo "✗ 找不到 python3（launchd 的 PATH 见 install_commit_launcher.py）" >&2; exit 10; }
 
 cd "$REPO" || { echo "✗ 无法 cd 到 $REPO" >&2; exit 1; }
+# 2026-09-17 动作请求（.action）：先处理，失败不影响提交请求。见 scripts/action_request.py
+[[ -f "$SELF_DIR/../../scripts/action_request.py" ]] && "$PY" "$SELF_DIR/../../scripts/action_request.py" || true
 exec "$PY" "$SCRIPT"

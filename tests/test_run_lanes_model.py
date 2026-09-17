@@ -232,3 +232,27 @@ def test_worktree_branch_mismatch_fails_lane(sandbox):
     results = next((repo / ".claude" / "handoff").glob("lanes-*/results.tsv"))
     assert results.read_text(encoding="utf-8").split("\t")[2] == "WORKTREE-FAIL"
     assert "0101C" not in sandbox["calls"].read_text(encoding="utf-8") if sandbox["calls"].exists() else True
+
+
+# ── R1 事件（2026-09-17，0917AK）：收敛末尾写 events/lanes-done-<STAMP>，供调度器出队 ──
+
+
+def test_real_run_writes_lanes_done_event(sandbox):
+    """实跑收敛 ⇒ `.claude/handoff/events/lanes-done-<STAMP>` 存在，STAMP 与 LOGDIR 同批。
+
+    这是 run-lanes.sh 对「任务驱动 workflow」唯一的接口（设计 §四 R1 只允许加这一行）：
+    launcher 排进 queue/ 的请求，靠这个文件被调度器看见并出队。写在 owner-notify 之后、
+    与它同在 DRY_RUN=0 的块里——dry-run 不写事件，否则一次核对就会把队里的真跑放出来。
+    """
+    r = run(sandbox, "--yes", "--full-auto")
+    assert r.returncode == 0, r.stdout + r.stderr
+    logdir = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*"))
+    stamp = logdir.name.removeprefix("lanes-")
+    event = sandbox["repo"] / ".claude" / "handoff" / "events" / f"lanes-done-{stamp}"
+    assert event.is_file(), sorted((sandbox["repo"] / ".claude" / "handoff").rglob("*"))
+
+
+def test_dry_run_writes_no_lanes_done_event(sandbox):
+    r = run(sandbox, "--dry-run")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (sandbox["repo"] / ".claude" / "handoff" / "events").exists()

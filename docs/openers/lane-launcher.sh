@@ -21,7 +21,10 @@
 # 协议（看护者侧）：
 #   ① 写 .claude/handoff/launch/<批次时间戳>.request，**内容一行**＝run-lanes.sh 的参数
 #   ② 等 <同名>.started 出现（最多 60 秒），从中读 PID 与 boot.log 路径
-#   ③ 看到 <同名>.rejected / .deferred 即发车未成，读文件里的原因
+#   ③ 看到 <同名>.rejected 即发车未成，读文件里的原因
+#   ④ 看到 <同名>.queued 即已排队（2026-09-17 R1）：请求原样躺在 launch/queue/ 里，
+#      run-lanes 收敛写出 events/lanes-done-* 后由 `scripts/action_request.py
+#      launch-queue-drain` 移回本目录、触发发车。⛔ 不要自己再写一份同样的请求
 #
 # ⛔ 本脚本不 source 任何 .env，不读环境里的密钥，不接受请求文件里的任意命令。
 # ===========================================================================
@@ -90,11 +93,23 @@ reject() {
   exit 0
 }
 
-defer() {
+# 排队（2026-09-17 R1，取代原 .deferred 丢弃）。请求文件**原样**移入 queue/ 子目录：
+#   · 正文一个字节都不改——出队后 launcher 要照原样再走一遍白名单
+#   · queue/ 是子目录，WatchPaths 只看 launch/ 本层，往里搬不会再触发本脚本
+#   · 回执 .queued 留在本层给看护者看原因与去处
+QUEUE_DIR="$LAUNCH_DIR/queue"
+enqueue() {
   local reason="$1"
-  { cat "$claimed"; echo; echo "# 推迟原因：$reason"; } > "$base.deferred"
-  rm -f "$claimed"
-  log "⏸ 推迟：$reason"
+  local name; name="$(basename "$base")"
+  mkdir -p "$QUEUE_DIR" || reject "无法创建排队目录 $QUEUE_DIR"
+  mv "$claimed" "$QUEUE_DIR/$name.request" || reject "无法把请求移入 $QUEUE_DIR"
+  {
+    echo "queued=$QUEUE_DIR/$name.request"
+    echo "queued_at=$(date +%Y-%m-%dT%H:%M:%S)"
+    echo "# 排队原因：$reason"
+    echo "# 出队：run-lanes 收敛写出 events/lanes-done-* 后由 scripts/action_request.py launch-queue-drain 移回 launch/"
+  } > "$base.queued"
+  log "⏳ 排队：$reason → $QUEUE_DIR/$name.request"
   exit 0
 }
 
@@ -149,12 +164,14 @@ done
 # 拒绝并发。两条 run-lanes.sh 同时跑会让两批泳道抢同一批 worktree 分支
 # （实证见 memory「同一 opener 重复派发会静默覆盖产出」）。
 #
-# ⚠️ 被推迟的请求**不会自动重试**：它已经改名成 .deferred，不再匹配 *.request。
-#    这是刻意的——若改回 .request，重命名本身又会触发 WatchPaths，在 run-lanes
-#    跑完之前会一直空转。要重发由看护者写一个新的 .request（它写之前也会先查）。
+# 2026-09-17 前的处置是改名 .deferred 然后丢弃，看护者得自己记得重发——那是
+# 「伪装成机制的人工节奏控制」。现在改成排队（R1，见 docs/roadmap/任务驱动workflow设计.md §四）：
+# 请求进 queue/ 子目录等着；出队不在这里做（这里留在本层才会被 WatchPaths 看到，
+# 在 run-lanes 跑完之前只会空转），而是由 run-lanes 收敛写出的 lanes-done 事件驱动
+# `scripts/action_request.py launch-queue-drain` 把最早一条移回本层，重新触发本脚本。
 # ---------------------------------------------------------------------------
 if pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
-  defer "已有 run-lanes 进程在跑（pgrep -f '$PGREP_PATTERN' 非空）"
+  enqueue "已有 run-lanes 进程在跑（pgrep -f '$PGREP_PATTERN' 非空）"
 fi
 
 # ---------------------------------------------------------------------------

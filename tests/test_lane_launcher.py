@@ -138,37 +138,69 @@ def test_illegal_tokens_are_rejected_without_launching(repo: Path, line: str) ->
     assert not (repo / "args.txt").exists(), "假执行器被调用了，白名单没拦住"
 
 
-def test_concurrent_run_lanes_defers_the_request(repo: Path) -> None:
-    """③ 已有 run-lanes 进程在跑 → .deferred，不发车。
-
-    两条 run-lanes 同时跑会让两批泳道抢同一批 worktree 分支，产出互相覆盖且
-    **不报错**（memory「同一 opener 重复派发会静默覆盖产出」）。
-    """
+def _hold_a_fake_run_lanes(repo: Path) -> tuple[subprocess.Popen, str]:
+    """起一个能被 pgrep 看到的假占位进程，返回 (进程, 可作 pgrep 模式的名字)。"""
     busy = repo / f"fake-busy-{uuid.uuid4().hex}.sh"
     busy.write_text("#!/usr/bin/env bash\nsleep 20\n", encoding="utf-8")
     busy.chmod(0o755)
     holder = subprocess.Popen(["bash", str(busy)])
-    try:
-        # 等 pgrep 真能看到它，再跑 launcher —— 否则这条用例会偶发地测成 ①。
-        for _ in range(100):
-            if subprocess.run(["pgrep", "-f", busy.name], capture_output=True).returncode == 0:
-                break
-            time.sleep(0.05)
-        else:
-            pytest.fail("假占位进程没能被 pgrep 看到")
+    # 等 pgrep 真能看到它，再跑 launcher —— 否则并发用例会偶发地测成 ①。
+    for _ in range(100):
+        if subprocess.run(["pgrep", "-f", busy.name], capture_output=True).returncode == 0:
+            return holder, busy.name
+        time.sleep(0.05)
+    holder.kill()
+    holder.wait()
+    pytest.fail("假占位进程没能被 pgrep 看到")
 
-        write_request(repo, "20260908-140000", "--full-auto --yes")
-        proc = run_launcher(repo, pgrep_pattern=busy.name)
+
+def test_concurrent_run_lanes_queues_the_request(repo: Path) -> None:
+    """③ 已有 run-lanes 进程在跑 → 请求原样移入 launch/queue/，写 .queued 回执，不发车。
+
+    两条 run-lanes 同时跑会让两批泳道抢同一批 worktree 分支，产出互相覆盖且
+    **不报错**（memory「同一 opener 重复派发会静默覆盖产出」）。
+    09-17 前的处置是改名 .deferred 然后**丢弃**——看护者得自己记得重发，正是
+    「伪装成机制的人工节奏控制」。R1（任务驱动workflow设计 §四）改成排队：
+    queue/ 是子目录，不在 WatchPaths 的视野里，不会空转；出队由
+    `scripts/action_request.py launch-queue-drain` 在 lanes-done 事件后做。
+    """
+    holder, pattern = _hold_a_fake_run_lanes(repo)
+    try:
+        write_request(repo, "20260908-140000", "--full-auto --yes --only 0909C")
+        proc = run_launcher(repo, pgrep_pattern=pattern)
         assert proc.returncode == 0, proc.stderr
     finally:
         holder.kill()
         holder.wait()
 
     launch = repo / ".claude" / "handoff" / "launch"
-    deferred = launch / "20260908-140000.deferred"
-    assert deferred.exists(), proc.stdout + proc.stderr
-    assert "推迟原因" in deferred.read_text(encoding="utf-8")
+    queued_req = launch / "queue" / "20260908-140000.request"
+    assert queued_req.exists(), proc.stdout + proc.stderr
+    # 请求正文逐字保留：出队后 launcher 要照原样再读一次，⛔ 不许追加注释行。
+    assert queued_req.read_text(encoding="utf-8") == "--full-auto --yes --only 0909C\n"
+
+    receipt = launch / "20260908-140000.queued"
+    assert receipt.exists()
+    assert "排队原因" in receipt.read_text(encoding="utf-8")
+    assert "queue/20260908-140000.request" in receipt.read_text(encoding="utf-8")
+
+    assert not (launch / "20260908-140000.deferred").exists(), "不再 .deferred 丢弃"
+    assert not (launch / "20260908-140000.request").exists()
+    assert not (launch / "20260908-140000.claimed").exists()
     assert not (launch / "20260908-140000.started").exists()
+    time.sleep(0.3)
+    assert not (repo / "args.txt").exists()
+
+
+def test_queued_request_is_not_picked_up_while_still_queued(repo: Path) -> None:
+    """queue/ 里的请求不算待发车：launcher 再被 WatchPaths 触发一次也不会碰它。"""
+    queue = repo / ".claude" / "handoff" / "launch" / "queue"
+    queue.mkdir()
+    (queue / "20260908-141000.request").write_text("--full-auto --yes\n", encoding="utf-8")
+
+    proc = run_launcher(repo)
+    assert proc.returncode == 0, proc.stderr
+    assert (queue / "20260908-141000.request").exists()
     time.sleep(0.3)
     assert not (repo / "args.txt").exists()
 
