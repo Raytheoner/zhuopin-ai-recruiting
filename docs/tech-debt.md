@@ -324,6 +324,14 @@ test_approving_into_a_closed_switch_leaves_its_own_trail`（不同原因两条�
 （`tests/test_suspend_recovery.py` 已验 7 天），丢的只是提醒——所以这条债的代价是
 流程变慢，不是数据损坏。
 
+**进展（2026-09-17，`0917AA`，裁决 Shao Peishen 答 2a）**：**Mac 侧调度已落地**——
+`python -m tools.liaison tick`（`tools/liaison/tick.py`）由 launchd `StartInterval` 300 秒
+拉起一次、跑完即退（安装器 `scripts/install_liaison_tick.py`，安装说明
+`docs/findings/2026-09-17-liaison-tick-安装说明.md`）。三类提醒（泳道结果／跟进信超期
+第 3・7 天／观察窗到期）全部是带幂等键（含「第几次」）的 `effect_enqueue_owner_notify`，
+⛔ 没有 sleep 循环、没有后台线程。**`.51` 侧 M1 挂起提醒（第 1 天 / 第 3 天，tasks 6.8
+与 5.6）仍欠**——Windows 计划任务 ＋ 同一 `effect_*` 形状，随下一次发版做。⛔ 本条不销账。
+
 ---
 
 ## TD-JD-1｜JD 溯源用的是闭集术语词表
