@@ -51,7 +51,7 @@ cp314（本机 Python 3.14）无 `paddlepaddle` wheel，与计划「待裁决」
 
 ### `.51` 同款 Windows
 
-实跑：`[Mac]0917AX` 2026-09-17 21:2x–21:4x CST，随 `.51` 发版 ① 顺带。**隔离 venv** `C:\apps\m2-smoke\.venv`（由生产 `.venv` 的 Python 3.14.5 派生，与生产目录无交集，可整目录删）；原始输出 `data/eval/m2-pilot/smoke-Windows.json`／`.md`。
+实跑：`[Mac]0917AX` 2026-09-17 21:2x–21:4x CST，随 `.51` 发版 ① 顺带；torch／FlagEmbedding 两行为 `[Mac]0917BB` 22:09 CST 升级 VC++ 运行库后复跑（R-9，Q-27 放行；执行记录 `docs/releases/2026-09-17-发版二与R9执行记录.md`）。**隔离 venv** `C:\apps\m2-smoke\.venv`（由生产 `.venv` 的 Python 3.14.5 派生，与生产目录无交集，可整目录删）；原始输出 `data/eval/m2-pilot/smoke-Windows.json`／`.md`。
 
 平台：`Windows-2019Server-10.0.17763-SP0` ｜ Python 3.14.5
 
@@ -65,8 +65,8 @@ cp314（本机 Python 3.14）无 `paddlepaddle` wheel，与计划「待裁决」
 | pymupdf | ✅ | 1.28.2 | 55.7 | 134 | |
 | paddlepaddle | ❌ | | | | ModuleNotFoundError: No module named 'paddle' |
 | paddleocr | ❌ | | | | ModuleNotFoundError: No module named 'paddleocr' |
-| torch | ❌ | | | | OSError: [WinError 1114] 动态链接库(DLL)初始化例程失败。 Error loading "C:\apps\m2-smoke\.venv\Lib\site-packages\torch\lib\c10.dll" or one of its dependencies. |
-| FlagEmbedding | ❌ | | | | OSError: [WinError 1114] 动态链接库(DLL)初始化例程失败。 Error loading "C:\apps\m2-smoke\.venv\Lib\site-packages\torch\lib\c10.dll" or one of its dependencies. |
+| torch | ✅（复跑） | 2.14.0 | 539.3 | 6633 | 首跑 ❌ `OSError: [WinError 1114] … torch\lib\c10.dll`（VC++ v14.27）；2026-09-17 22:07 `[Mac]0917BB` 装 VC++ 2015–2022 x64 v14.44.35211 后复跑 ✅ |
+| FlagEmbedding | ✅（复跑） | 1.4.2 | 2.1 | 24754 | 同上，首跑 ❌ 同一 `c10.dll` 错误，复跑 ✅ |
 
 装包过程（逐项独立）：
 
@@ -75,11 +75,11 @@ cp314（本机 Python 3.14）无 `paddlepaddle` wheel，与计划「待裁决」
 | 轻依赖六项 | ✅ 一次装齐 | `pip install numpy==2.5.3 pypdf==6.19.0 python-docx==1.2.0 reportlab==5.0.1 pillow==12.3.0 pymupdf==1.28.2` ⇒ `pip list` 六项版本齐 |
 | `paddlepaddle==3.4.0` | ❌ 无 cp314 win_amd64 wheel | `ERROR: No matching distribution found for paddlepaddle==3.4.0`，与 Mac 结论、计划「待裁决」#6 一致 |
 | `paddleocr==3.7.0` | ❌ **依赖树内钉死**：`paddlex 3.7.x depends on PyYAML==6.0.2`，而 PyYAML 6.0.2 无 cp314 wheel ⇒ 回退源码编译 ⇒ `error: Microsoft Visual C++ 14.0 or greater is required`；`--only-binary=:all:` 复核为 `ResolutionImpossible` | 即使 paddlepaddle 有 wheel，paddleocr 3.7.0 在 cp314 Windows 也需要 MSVC 编译 PyYAML（或 paddlex 放宽钉版）。D14 退路成立的理由多一条 |
-| `FlagEmbedding==1.4.2` | ⚠️ **装得上、导不进** | pip 成功（torch 2.14.0 / transformers 5.17.0 / sentence-transformers 6.0.1，15 分钟内完成）；`import torch` ⇒ `OSError: [WinError 1114] 动态链接库(DLL)初始化例程失败 … torch\lib\c10.dll`。`.51` 已装 VC++ Runtime 为 **v14.27.29016**（VS 2019 16.7），torch 2.14 win 轮子按 VS 2022 工具链构建、需 ≥14.40 的 `msvcp140`/`vcruntime140`。处置＝在 `.51` 装 VC++ 2015–2022 x64 Redistributable（改 `.51` 系统组件，本次 opener 未授权，⏸ 留步登记） |
+| `FlagEmbedding==1.4.2` | ⚠️ **装得上、导不进** | pip 成功（torch 2.14.0 / transformers 5.17.0 / sentence-transformers 6.0.1，15 分钟内完成）；`import torch` ⇒ `OSError: [WinError 1114] 动态链接库(DLL)初始化例程失败 … torch\lib\c10.dll`。`.51` 已装 VC++ Runtime 为 **v14.27.29016**（VS 2019 16.7），torch 2.14 win 轮子按 VS 2022 工具链构建、需 ≥14.40 的 `msvcp140`/`vcruntime140`。处置＝在 `.51` 装 VC++ 2015–2022 x64 Redistributable（改 `.51` 系统组件，本次 opener 未授权，⏸ 留步登记）。**已闭合**：`0917BB` 装 v14.44.35211（安装器 `restart: None`，服务不停）后 `import torch` 6.6 s、`import FlagEmbedding` 24.8 s，两项 ✅ |
 
-Windows 侧另有一处脚本缺口：`smoke_m2_deps.py` 的 markdown 输出含 `✅`，在 GBK 控制台 `print` 直接 `UnicodeEncodeError`（JSON 文件因显式 `encoding="utf-8"` 不受影响）。本次以 `$env:PYTHONUTF8=1` 绕过；脚本应自带 `sys.stdout.reconfigure(encoding="utf-8")`，登记技术债随 U1 修。
+Windows 侧另有一处脚本缺口：`smoke_m2_deps.py` 的 markdown 输出含 `✅`，在 GBK 控制台 `print` 直接 `UnicodeEncodeError`（JSON 文件因显式 `encoding="utf-8"` 不受影响）。本次以 `$env:PYTHONUTF8=1` 绕过（`0917BB` 复跑以 `set PYTHONIOENCODING=utf-8` 绕过，同类）；脚本应自带 `sys.stdout.reconfigure(encoding="utf-8")`，登记技术债随 U1 修（R-10）。
 
-⇒ 对本文档「决策」节的影响：**BGE-M3 本地 CPU（D7）在 `.51` 现状下跑不起来**，前置条件是升级 VC++ 运行库（一次性、约 25 MB、不重启服务）；升级后需重跑本探针取 torch/FlagEmbedding 的 import 耗时与「BGE-M3 本地 CPU 召回」节的 `.51` 单份耗时。PaddleOCR 结论不变（D14 退路）。
+⇒ 对本文档「决策」节的影响：~~BGE-M3 本地 CPU（D7）在 `.51` 现状下跑不起来~~ **前置条件已满足**（2026-09-17 22:07 VC++ 运行库升至 v14.44，一次性、25 MB、未重启服务）；torch/FlagEmbedding import 耗时见上表，`.51` 单份耗时见「BGE-M3 本地 CPU 召回」节。PaddleOCR 结论不变（D14 退路）。
 
 ## 样本
 
@@ -146,7 +146,20 @@ doubao／qwen 本机跳过：`ARK_API_KEY` / `DASHSCOPE_API_KEY` 均未设置。
 
 模型权重下载（BAAI/bge-m3，约 30 个仓库文件含多套重复权重格式）：`HF_ENDPOINT=https://hf-mirror.com` 镜像在本机（美区网络）下载卡在 107 MB / 10 分钟后放弃，改直连 `huggingface.co` 用时 17 分钟拉全；本机 HF 缓存落盘 4.3 GB。备注（非决策，登记供生产参考）：`snapshot_download` 默认拉取仓库全部文件，生产部署应通过 `allow_patterns` 限制到实际推理所需的权重格式，估算可压到约 2.3 GB。
 
-`.51` Windows CPU 的画像/单份耗时数字 ⏸ 留步：2026-09-17 `.51` 冒烟证实 torch 因 VC++ 运行库过旧无法导入（见「环境」节），须先升级运行库再跑 `bench_bge_m3`。
+### `.51` Windows CPU 实跑（2026-09-17 22:19 CST，`[Mac]0917BB`，R-9 闭合）
+
+平台：`Windows-2019Server-10.0.17763-SP0`，Intel Xeon Gold 5318Y @ 2.10 GHz（16 逻辑核）、16 GB；隔离 venv `C:\apps\m2-smoke\.venv`（Python 3.14.5，torch 2.14.0 CPU + FlagEmbedding 1.4.2）；VC++ 运行库 v14.44.35211（本次升级，见「环境」节）。
+
+| 指标 | `.51`（两次实跑） | Mac M-series（对照） |
+|---|---|---|
+| 画像向量 | **493.8 / 492.1 ms** | ~205 ms |
+| 单份简历（批量摊薄，batch_size=4） | **116.2 / 117.9 ms**（20 份合计 2324 / 2358 ms） | ~58 ms |
+| 模型加载到首次推理 | ≈ 15 s（进程启动 22:19:10 → 推理完成 22:19:28，含 2.3 s 推理） | — |
+| recall@10 | **40.0%**（top-10 顺序与 cosine 与 Mac 逐位一致：S20 .6762 / S08 .6755 / S14 .6622 / S15 .6544 / S03 .6451 / S16 .645 / S19 .6436 / S01 .6425 / S04 .642 / S07 .6306） | 40.0% |
+
+⇒ `.51` CPU 约为 Mac 的 1/2 速度：按单份 ~118 ms，1000 份简历向量化约 2 分钟（单进程、未调线程数），D7 本地 CPU 方案在现网可行；数值结果与 Mac 完全一致，平台差异只在耗时。原始输出 `data/eval/m2-pilot/bench-bge-m3-51.json`／`-run2.json`（`data/` 不入 git）。
+
+权重获取（`.51` 在境内）：hf-mirror 对仓库内 `imgs/.DS_Store` 返回 **403**，FlagEmbedding 走 `snapshot_download` 整仓拉取直接失败；且 hf-mirror 实测只有 ~116 KB/s。改从 **ModelScope**（`https://www.modelscope.cn/models/BAAI/bge-m3/resolve/master/<file>`，实测 24.8 MB/s，2.27 GB 约 90 s）只拉推理所需 11 个文件到 `C:\apps\m2-smoke\bge-m3\`（`pytorch_model.bin`、`tokenizer.json`、`sentencepiece.bpe.model`、`colbert_linear.pt`、`sparse_linear.pt` 五个 LFS 文件 SHA256 与 HF 仓库 `5617a9f` 元数据逐一核对一致），bench 以本地目录路径作 `MODEL_ID`（`python -c "import scripts.bench_bge_m3 as b; b.MODEL_ID=r'C:\apps\m2-smoke\bge-m3'; b.main([...])"`，⛔ 未改脚本）。**生产部署口径**：`.51` 上模型权重走 ModelScope 拉取 ＋ 本地目录加载 ＋ SHA256 核对，⛔ 不依赖 HF hub 在线解析（U3 上线时落进部署文档）。
 
 ## 扫描件 OCR（D14）
 
@@ -164,7 +177,7 @@ OcrUnavailable: PaddleOCR/PyMuPDF 未安装: No module named 'paddleocr'
 |---|---|---|
 | 抽取模型 | **deepseek-flash**（响应侧 `model`＝`deepseek-flash`，fingerprint `aeb56401ca74e127821c4f9126dcb669`；请求侧配置 `deepseek-v4-flash`）——Shao Peishen 2026-09-17 答 1.7(b) 先定本行；真实脱敏样本到位后复算，字段准确率显著劣于 pro 则回本线重议 | 合成样本 pro／flash 字段准确率均 100%；解析 P50 flash 1835 ms vs pro 43915 ms |
 | 精排模型 | 待数据（Spearman pro 0.24 / flash 0.26，Top-10 召回 pro 60.0% / flash 70.0%，均未达 D9 门槛 ≥0.70 / ≥85%；合成样本的「设计排序」与 LLM 精排口径存在差异，需在真实脱敏样本上复算） | 见「对比结果」节表首「门槛（D9）」行对照 |
-| embedding 方案 | `.51` 本地 CPU BGE-M3（已裁决，D7）；装包体积：torch 587 MB + FlagEmbedding 2.1 MB（依赖链约 1 GB 量级）+ 权重缓存 4.3 GB（可用 `allow_patterns` 限至约 2.3 GB）；单份耗时：Mac M-series CPU 单份 ~58 ms、画像 ~205 ms；recall@10（合成样本，n=20）= 40.0%，仅记录不作结论 | 见「BGE-M3 本地 CPU 召回」节 |
+| embedding 方案 | `.51` 本地 CPU BGE-M3（已裁决，D7）；装包体积：torch 587 MB + FlagEmbedding 2.1 MB（依赖链约 1 GB 量级）+ 权重缓存 4.3 GB（可用 `allow_patterns` 限至约 2.3 GB；`.51` 实际只拉 11 个文件 2.3 GB）；单份耗时：Mac M-series CPU 单份 ~58 ms、画像 ~205 ms；**`.51` Xeon Gold 5318Y 单份 ~117 ms、画像 ~493 ms、加载 ≈ 15 s**（2026-09-17 实跑）；recall@10（合成样本，n=20）= 40.0%，两平台逐位一致，仅记录不作结论 | 见「BGE-M3 本地 CPU 召回」节 |
 | 置信度阈值起步值（Q3） | 0.7（推荐起步）；终值：待真实脱敏样本复算（合成样本 evidence 可定位率 100%、字段准确率 100%，区分度不足，无法给出比 0.7 更细的终值） | 见「对比结果」节 evidence 可定位率与逐字段准确率表 |
 | 扫描件路径 | PaddleOCR（已裁决，D14）；可装性：❌ cp314 无 wheel（Mac 实测 `pip install paddlepaddle==3.4.0` 报 `No matching distribution found`）；相似度：无数据（20 份扫描件全部 `OcrUnavailable`）⇒ 按 D14 退路（不可读文件进人工队列 + 登记技术债），待裁决 #6 保持开放 | 见「扫描件 OCR」节 |
 
@@ -176,7 +189,7 @@ OcrUnavailable: PaddleOCR/PyMuPDF 未安装: No module named 'paddleocr'
 2. **真实脱敏样本未到位**：本次「对比结果」「BGE-M3 本地 CPU 召回」「扫描件 OCR」三节数字全部基于 `sample_class=synthetic`（合成，seed 20260917），只证明管线/schema/evidence/延迟/成本可跑通，**不作 D9 等验收结论**；待真实脱敏样本（计划「待裁决」#2）到位后重算。
 3. **缺 key 候选**：`doubao`（缺 `ARK_API_KEY`）、`qwen`（缺 `DASHSCOPE_API_KEY`）本机均未跑，属「预算与外部采购」不可代项，待 Shao Peishen 采购。
 4. **`paddlepaddle` 在 Python 3.14 装不上**：PyPI 与官方索引均无 cp314 wheel（2026-09-17 Mac 实测），按 D14 退路（一期扫描件进人工队列 + 技术债，等 Paddle 发 cp314 wheel 再接）；另一处置（`.51` 另建 3.13 sidecar venv）属技术方案审查，代理人未设，挂起等本人（计划「待裁决」#6）。
-5. **`.51` Windows 冒烟已跑（2026-09-17，`0917AX`）**：轻依赖六项 ✅；paddlepaddle／paddleocr ❌（cp314 无 wheel ＋ paddlex 钉 PyYAML==6.0.2 需 MSVC）；**torch/FlagEmbedding 装得上但 `c10.dll` 初始化失败——`.51` VC++ 运行库 v14.27 过旧，需装 VC++ 2015–2022 x64 Redistributable 后重跑**（改 `.51` 系统组件，待派单独 opener；属环境操作，代理人未设 ⇒ 挂起等本人）。见「环境」节「`.51` 同款 Windows」。
+5. **`.51` Windows 冒烟已跑（2026-09-17，`0917AX`）**：轻依赖六项 ✅；paddlepaddle／paddleocr ❌（cp314 无 wheel ＋ paddlex 钉 PyYAML==6.0.2 需 MSVC）；~~torch/FlagEmbedding 装得上但 `c10.dll` 初始化失败——`.51` VC++ 运行库 v14.27 过旧，需装 VC++ 2015–2022 x64 Redistributable 后重跑~~ ✅ 已闭合：Q-27 放行，`0917BB` 2026-09-17 22:07 装 v14.44.35211 后复跑两项 ✅。见「环境」节「`.51` 同款 Windows」。
 6. **Q3 置信度阈值终值待真实样本**：本文档暂定 0.7 起步，终值需真实脱敏样本复算后由 1.6/1.7 收口。
 7. **D9 精排指标在合成样本上未达标**（Spearman 0.24/0.26 < 0.70，Top-10 召回 60.0%/70.0% < 85%）：非最终结论，需在真实脱敏样本上复算——合成样本的「设计排序」真值口径与 LLM 精排口径可能本身存在差异。
 

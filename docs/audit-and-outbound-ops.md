@@ -285,8 +285,10 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
 本轮 opener 明确不连服务器，以下三项如实登记，**不得当作已完成**：
 
-1. **1.3 备份**：`.51` 上是否已有覆盖 `C:\apps\zhuopin-recruit-agent\data\` 的
-   备份任务，未确认；若无，需新增。
+1. **1.3 备份**：✅ 已闭合（2026-09-17 发版 ②，`[Mac]0917BB`）——`.51` 计划任务
+   `ZhuopinDailySnapshot`（SYSTEM，每日 03:00）跑 `scripts\snapshot_data.py`，SQLite 在线备份 API
+   拷 `demo.db` ＋ `audit\` ＋ `candidate_outbound.switch` 到 `C:\apps\backups\daily-<yyyyMMdd-HHmm>\`，
+   保留 14 份；首跑 `daily-20260917-2206` integrity ok。见下「八次发版记录」。
 2. **2.2 链校验**：✅ 已闭合（2026-09-03 三次实跑，见下）——`.51` 完成重新部署后
    命令正常执行，返回 `ok=True, total=0`（`decisions.jsonl` 尚不存在，属"还没有
    东西可验"，非"验证失败"，读法见 §2.3）。此前两轮的 `ModuleNotFoundError` /
@@ -815,6 +817,23 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
    `liaison_group_notify` 补两条 CHECK（备份 `liaison.db.bak-20260917-2135`，值守中断 < 1 分钟，pid 89987 回来）。
 
    §五 第 1 项（`data\` 备份任务）状态不变，仍 ⏸——Q-14 快照脚本由 `0917AY` 泳道写，随发版 ② 上。
+
+   **2026-09-17 八次发版记录（发版 ②：Q-14 每日快照计划任务，`[Mac]0917BB`，无头）——✅ 成功**
+
+   执行：`[Mac]0917BB`（run-lanes 无头，Opus）｜ 依据：定夺队列 **Q-28 答复「发」**（Shao Peishen
+   2026-09-17），开工闸 `gates.gate_state('G3','发版 ② Q-14 每日快照计划任务')` = `已放行`。
+   逐步命令／退出码：`docs/releases/2026-09-17-发版二与R9执行记录.md`。
+
+   | 项 | 值 |
+   |---|---|
+   | 上线范围 | 只 scp 一个文件 `scripts/snapshot_data.py`（SHA256 `b4d7c13d…76544b` 两端一致）＋ `schtasks /create`；⛔ 未跑 `sync-to-server.sh`、未重启服务、未动 `.venv` |
+   | 安装时间 | 22:05 手工首跑 `EXIT=0`（`daily-20260917-2205`）→ 22:06 注册任务 → 22:06:18 `schtasks /run` |
+   | 计划任务 | `ZhuopinDailySnapshot`：`作为用户运行 SYSTEM`、`每天 03:00`、`要运行的任务` 含 `> C:\apps\backups\snapshot-last.log 2>&1`（须 `^>` 转义，安装说明已改）；下次运行 2026-09-18 03:00 |
+   | 首跑目录 | **`C:\apps\backups\daily-20260917-2206`**：`demo.db` 1222 页 / 5,005,312 B，`PRAGMA integrity_check`（只读 URI 打开）= ok，13 张表；`audit\`、`candidate_outbound.switch`、`manifest.json` 齐 |
+   | Last Result | **0**；`snapshot-last.log` 末行 `[snapshot] 完成` |
+   | 服务 | 全程 `HTTP 200`，未触发回滚 |
+
+   §五 第 1 项自此 ✅ 闭合。同次顺带 R-9（`.51` VC++ 运行库 v14.27 → v14.44，Q-27 放行，非发版）见同一执行记录。
 
 
 ---
