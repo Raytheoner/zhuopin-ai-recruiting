@@ -1,0 +1,97 @@
+**进度：0/69**（2026-09-17 `0917AD` 立包。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决，对应 `design.md` Open Questions；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支。涉及副作用的任务已逐条写幂等策略。）
+
+## 0. 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+
+- [ ] 0.1 🔴 **G1 私信附件真实帧确认（TD-51）**（Shao Peishen 或汤丽萍私信机器人一个测试文件 → 按日志键结构填 `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` → 重启值守）。判据：`docs/tech-debt.md` TD-51 销账。阻塞 U6 的回件导入路径（U6 代码不阻塞，见 6.4 本地路径）
+- [ ] 0.2 🔴 **合规验收 #1 启动**（Shao Peishen 发起；PIA 报告 ＋ 候选人同意条款单列 AI 评估 ＋ 留存与删除策略；法务结论）。判据：三份文档落 `docs/compliance/` 并由本人签认。阻塞 U7 的 7.8 开闸
+- [ ] 0.3 🔴 **试运行岗位选定**（Shao Peishen 从 供应链总监／底层软件工程师／非标产品采购员 中选 1 个仍在招的）。判据：`intent.md` 末尾补一行「试运行岗位：<岗位> job_id=<…> profile_version=<n>」。阻塞 U6 的样本征集与 U7 试运行
+- [ ] 0.4 🔴 **评测集标注安排**（汤丽萍牵头；按 0.3 岗位分批 ≤20 份，脱敏或历史离职样本；模板由 6.1 提供）。判据：`人事部#2` 跟进信里有排期回复
+- [ ] 0.5 ⏸ 待 Shao Peishen 裁决 Q1（BGE-M3 运行位置）、Q2（扫描件引擎）——两者决定 U0 的冒烟清单。默认按推荐 (a)/(a) 准备冒烟脚本，⛔ 未答前不装 2 GB 依赖到 `.51`
+- [ ] 0.6 ⏸ 待 Shao Peishen 裁决 Q4（申诉由 HR 代登记）、Q5（bias 夹具另立包）、Q6（手机号哈希）、Q7（归档件留存 90 天）。未答前 tasks 按推荐项写，答复不同则用 `openspec-update-change` 回改 specs
+
+## 1. U0 模型对比定型
+
+- [ ] 1.1 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、Q2 选定的 OCR 引擎、Q1 选定的 embedding 方案；记录可装性与体积到 `docs/m2-model-comparison.md`「环境」节。⏸ 依赖 0.5
+- [ ] 1.2 准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore` 登记）
+- [ ] 1.3 扩展 `scripts/compare_models.py` 方法为 `scripts/compare_models_m2.py`：对每个候选模型跑「抽取 → 精排」，输出字段准确率、Spearman、Top-10 召回、span 可回溯率、P50/P95 延迟、每份成本
+- [ ] 1.4 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量
+- [ ] 1.5 对 embedding 方案（Q1 所选）测召回：以人工排序前 10 为真值，测 top-30 召回率与单份耗时
+- [ ] 1.6 写 `docs/m2-model-comparison.md`「决策」节：抽取模型、精排模型、embedding 方案、置信度阈值起步值（Q3）、扫描件路径；判据：每项都有数据支撑，模型标识非别名
+- [ ] 1.7 🔴 **定型确认**（Shao Peishen 签认 1.6 的决策节）。判据：文档末尾有「已确认 <日期>」
+
+## 2. U1 数据模型（ATS 域 ＋ 评分审计域接线）
+
+- [ ] 2.1 `app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN anonymized/departed/live、`parser_version`、`parse_confidence`）、`resume_text_span`（`resume_id, span_id, start, end, text`）；全部 `CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`
+- [ ] 2.2 新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` CHECK IN human/agent）；测试：状态不挂在 `candidate` 上
+- [ ] 2.3 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('none','requested','under_review','upheld','overturned')`、`decided_by`、`batch_id`；反证测试：直接 INSERT `ai_score` 被 CHECK 拒绝
+- [ ] 2.4 新增 `resume_access_log`（`accessor, resume_id, access_type, at`，无内容列）、`field_review_queue`（`resume_id, field, machine_value, confidence, status, reviewed_by, reviewed_at, human_value`）、`screening_flag`（`application_id, profile_version, rule_ref, verdict CHECK IN pass/fail/skipped, reason, evidence_ref`；`fail` 时 `evidence_ref` 非空 CHECK）
+- [ ] 2.5 新增 `resume_embedding`（`resume_id, model, dim, vector BLOB`）、`eval_sample` / `eval_annotation` / `eval_import_batch`（含「禁止训练用途」表注释，同 `analysis_run` 口径）、`hr_account`（用户名唯一、盐哈希口令）
+- [ ] 2.6 `analysis_run` 增加 `run_type` 语义约定（`parse/rank`，可空列已存在的用 `prompt_version` 前缀区分，⛔ 不加列）；`criterion_score.evidence_ref` 的 JSON 形态 `{span_id,start,end}` 定为约定并加解析工具函数 + 测试
+- [ ] 2.7 `tests/test_db_m2_schema.py`：新库建表齐全、老库（复制 `.51` 的 demo.db 结构）升级后既有表一行不改、全部 CHECK 反证
+- [ ] 2.8 `scripts/create_hr_account.py`（建账号，幂等：同用户名重复运行只更新口令并提示）
+
+## 3. U2 上传与解析管线（含置信度与校对队列）
+
+- [ ] 3.1 `Settings.live_resume_intake_enabled` 默认 False；`is_live_resume_intake_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 鉴权可识别 AND 访问留痕探针；测试覆盖 spec 四个 Scenario（含"配置开但身份未知 ⇒ 关"）
+- [ ] 3.2 `AuthMiddleware.dispatch` 换成会话 cookie → `hr_account` 校验；`AuthContext` / `reviewer_of()` 签名不变；`/candidates* /resumes* /applications*` 未登录 401；登录页与登出接口；测试：`reviewer_of()` 返回真实用户名而非 `unknown:*`
+- [ ] 3.3 上传接口 `POST /resumes/upload`（多文件、`job_id`、`sample_class` 必填；类型白名单 pdf/docx；逐文件结果；`live` 且闸关 ⇒ 整批拒 + 留痕尝试不存内容）；幂等：文件内容 SHA-256 + `job_id` 唯一，重复返回既有 `resume_id` 不重解析
+- [ ] 3.4 文件 → 文本：文本型 PDF 直抽、Word 走 `python-docx`、扫描件走 Q2 引擎；有效字符 < 阈值 ⇒ `resume.status='unreadable'` 进人工队列；分片器产出 `resume_text_span`（按段落，带 offset）；测试三种文件各一
+- [ ] 3.5 `ResumeFields` Pydantic schema（六字段 × `{value, confidence, spans[]}`，缺失 = `not_mentioned`）；`app/agents/resume_parser.py::compute_parse(text_spans) -> ResumeFields` 纯函数，走 LLM 网关 json_schema 路径，走 `AuditHook` 留痕（`prompt_version=parse-v1`）
+- [ ] 3.6 置信度合成：模型自报 × span 可定位性（`quote` 反查校正偏移，反查失败 ⇒ 无 span ⇒ 低置信度）；阈值读 `job.parse_confidence_threshold`（默认 Q3 值）
+- [ ] 3.7 LangGraph 节点 `effect_persist_parse`：写 `resume.parsed_json` ＋ `field_review_queue` 低置信度行；幂等键 `{application_id}:effect_persist_parse:{parser_version}`，`effect_log` 与业务写同事务；测试：节点重跑不产生第二份解析版本
+- [ ] 3.8 重解析：新 `parser_version` ⇒ 新版本并存、旧版保留、工作台默认最新；测试
+- [ ] 3.9 简历访问留痕：读取原文／分片／解析结果／下载的接口统一经 `record_resume_access()`，留痕失败 ⇒ 读取失败不返回内容；测试覆盖四种 access_type 与失败路径
+- [ ] 3.10 校对接口 `POST /resumes/{id}/fields/{field}/review`：写 `field_review_queue.human_value/reviewed_by/at`、关闭队列行、触发该投递重判（发一个内部事件，⛔ 不在接口里同步跑判定）；幂等：同字段同值重复提交不产生第二行
+
+## 4. U3 硬门槛引擎（标记＋依据＋申诉）
+
+- [ ] 4.1 `app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现；依赖字段在队列 ⇒ `skipped(待校对)`、`not_mentioned` ⇒ `skipped(未提及)`；`fail` 必带 `evidence_ref` 与 `human_readable`。测试：每个 operator × 三态；模块内 grep 不得出现 storage 写入
+- [ ] 4.2 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-ranking` spec「主观描述不入硬门槛」）；空规则集 ⇒ 全 pass 并注明
+- [ ] 4.3 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version}`，同事务；重判（校对完成／画像升版）产生新一组 flags，旧组保留带版本；测试：重跑不重复、三种触发点各一
+- [ ] 4.4 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_rule` 必带 `rule_ref`；测试：传 `ai_score` 在应用层被拒，绕过应用层在 CHECK 被拒
+- [ ] 4.5 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_history(actor_type=human)`；幂等：同记录同目标状态重复提交无第二条流转；原拒绝记录不删
+- [ ] 4.6 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；⏸ Q4 答复为"开候选人入口"时本条改写（本包默认 HR 代登记）
+
+## 5. U4 召回＋rubric 精排＋evidence span
+
+- [ ] 5.1 embedding 适配器（按 1.6 定型：本地 BGE-M3 或境内 API），接口 `embed(texts) -> vectors`；写 `resume_embedding`，幂等键 `{resume_id}:embed:{model}`；上传后离线批算，不在页面请求路径
+- [ ] 5.2 召回：岗位画像文本向量 vs 该岗全部通过／待决投递的简历向量，numpy cosine 取 top-K（`job.recall_top_k` 默认 30）；未召回投递标 `not_recalled`；测试：K 边界、空集、全量 100 份耗时 < 1s
+- [ ] 5.3 rubric 派生：从冻结画像生成 `scoring_criterion` 快照（维度 key 必在 `CRITERION_KEY_WHITELIST`）；软技能只进 rubric 不进规则；测试：白名单外 key 拒绝
+- [ ] 5.4 `app/agents/ranker.py::compute_rank(fields, spans, rubric) -> RankResult` 纯函数：输出 schema 每维 `{score, evidence:{span_id,start,end,quote}}` 强制；`quote` 反查校正偏移；任一维缺证据 ⇒ 整次不可用；走 `AuditHook`（`prompt_version=rank-v1`，`temperature=0`，rubric 快照）
+- [ ] 5.5 节点 `compute_recall_rank` → `effect_persist_scores`：写 `analysis_run` 关联 + N 条 `criterion_score`；幂等键 `{application_id}:effect_persist_scores:{analysis_run_id}`，同事务；评分失败 ⇒ 投递标 `rank_failed` 可重试，不落分；测试：重跑不重复、留痕失败 ⇒ 不进排序
+- [ ] 5.6 手动加入精排接口 `POST /applications/{id}/rank`：留痕"人工加入"；幂等：已有当前版本评分则返回既有
+- [ ] 5.7 总分与排名只入列表查询（`app/storage/candidate_queries.py`），⛔ 不写任何阶段流转；测试：排名末位投递状态不变、无拒绝记录
+
+## 6. U5 工作台页面（列表／校对／复核／批量确认）
+
+- [ ] 6.1 候选人列表页 + `GET /jobs/{id}/applications`：按总分降序、未评分排末并注明原因；筛选（阶段／硬门槛状态／待校对）；AI 标识与"仅供参考"说明；相对路径（部署约束 1，测试在非根前缀下可用）
+- [ ] 6.2 字段校对页：左原文右六字段，置信度与来源高亮（按 span offset 切字符串）；队列字段醒目；提交走 3.10
+- [ ] 6.3 逐份复核页：硬门槛逐条（依据高亮）、逐维评分（证据摘录高亮）、原文；动作：进入下一阶段／标记淘汰（待确认）／加入精排／登记申诉，每个动作写 `human_review`
+- [ ] 6.4 "标记淘汰"接口：投递进入待确认清单（`application.kanban_state='pending_reject'` + 理由类型），⛔ 不产生拒绝记录、阶段不变；幂等：重复标记无第二条
+- [ ] 6.5 批量确认页 + `POST /rejections/batch-confirm`：服务端按勾选集合哈希生成 `batch_id`；先写 `human_review(batch_id)`，再逐 thread 唤醒 `effect_apply_batch_decision`；无理由条目拒绝并提示其余照常；⛔ 不提供任何按分数线的批量动作（测试：接口不接受 score 参数）
+- [ ] 6.6 节点 `effect_apply_batch_decision`：写 `rejection_record` + `application_stage_history` + 阶段更新，幂等键 `{application_id}:effect_apply_batch_decision:{batch_id}`，同事务；测试：同批重复提交无重复、节点重跑无重复、`human_review` 条数与 `rejection_record` 条数按 batch 恒等
+- [ ] 6.7 流程挂起：`effect_persist_scores` 后 `interrupt()`，SqliteSaver 持久化；测试：进程重启后从挂起点恢复、三天后仍可继续
+- [ ] 6.8 页面 e2e（Playwright 或 httpx+HTML 断言）：上传 → 校对 → 复核 → 批量确认 全链路在子路径前缀下跑通
+
+## 7. U6 评测集导入与指标脚本
+
+- [ ] 7.1 「判例批改表」xlsx 模板（固定列：样本标识、岗位、六字段人工值、人工排序名次、标注人、标注时刻）与填写说明，存 `docs/templates/m2-判例批改表.xlsx` + `.md`；给 0.4 用
+- [ ] 7.2 `scripts/eval_m2.py import <file> --job <id> --source <archive_path|local>`：逐行校验（必填列、类型、样本存在、类别非 live、≤20 行），任一失败整批拒并列出行；幂等：同批次重复导入不重复，值变化以最新为准保留历史；记录归档件路径 ↔ 批次
+- [ ] 7.3 指标计算 `scripts/eval_m2.py report --job <id>`：字段准确率（design D9 归一化口径）、Spearman、Top-10 召回、span 可回溯率；门槛与通过/不通过；样本 < 10 ⇒ "不足"；记录模型／prompt／解析器版本；只读（测试：跑前后业务表哈希一致）
+- [ ] 7.4 本地路径导入兜底（不依赖 G1 链路）：`--source local` 直接读文件；测试用 3 份合成样本跑通 import → report
+- [ ] 7.5 评测集目录 `data/eval/` 加 `.gitignore` 与 README（访问控制、留存期 Q7、禁止训练用途）；`tests/test_eval_no_training_use.py`：grep 训练／微调相关 import 不得出现在 `scripts/eval_m2.py`
+- [ ] 7.6 🔴 **首批标注回件并导入**（汤丽萍标注；Shao Peishen 确认导入结果）。判据：`report` 输出非"样本不足"
+- [ ] 7.7 用全部已标注样本跑 `report`，结果落 `docs/m2-eval-report.md`；未达标项回到对应单元返工并登记
+
+## 8. U7 合规断言与真实简历入库闸
+
+- [ ] 8.1 `app/audit/assertions.py`：`REJECTION_TABLE` 缺表分支从"M1 现状放行"改为判失败；反证测试同步改；⚠️ 与 U1 建表在同一交付单元合并，不跨 session
+- [ ] 8.2 新增断言「评分 100% 可回溯」：`criterion_score.evidence_ref` 解析后分片存在且偏移不越界；反证：造一条越界记录
+- [ ] 8.3 新增断言「真实简历入库闸默认关闭」：无配置环境下 `is_live_resume_intake_enabled()` 为 False；反证：临时改默认值
+- [ ] 8.4 新增断言「简历访问留痕不可缺」：表缺失判失败；被读取过的简历至少一条留痕；反证
+- [ ] 8.5 `-m compliance` 标记覆盖 8.1–8.4，CI 接入；`tests/test_audit_assertion_effectiveness.py` 扩展四条反证
+- [ ] 8.6 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
+- [ ] 8.7 ⏸ Q5 答 (a) 时：bias 回归夹具纳入本单元（改造 `re-cinq/hiring-bias`，盲筛对照轴）；答 (b) 时本条划掉留墓碑并另立包
+- [ ] 8.8 🔴 **真实简历入库闸开启**（Shao Peishen 亲自改配置；前置：0.2 通过 + 3.2 上线 + 8.4 绿）。判据：`.51` 上 `live` 上传被接收且访问留痕可查
+- [ ] 8.9 🔴 **`.51` 发版决定**（Shao Peishen；含 U0 冒烟通过的新依赖、`sync-to-server.sh` 白名单更新）。判据：`docs/deploy-51-server.md` 记录本次发版与依赖
+- [ ] 8.10 试运行：0.3 选定岗位在闸开启后跑一批真实简历，用真实样本复算一次四项指标落 `docs/m2-eval-report.md`「真实样本」节；🔴 试运行期间的任何淘汰确认由 HR 执行、Shao Peishen 抽查留痕
