@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -41,6 +42,8 @@ from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.storage import job_queries
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_TEMPLATE_PATH = STATIC_DIR / "index.html"
@@ -310,7 +313,15 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             # 超出本交付单元边界。⛔ 不要在这里加"定期清理僵尸行"的兜底
             # 逻辑掩盖它——那会把一个已登记的窗口变成一个隐形的窗口。
             discard_unstarted_job(conn, job_id)
-            discard_thread_checkpoints(graph.checkpointer, job_id)
+            try:
+                discard_thread_checkpoints(graph.checkpointer, job_id)
+            except Exception:  # noqa: BLE001 —— 清理动作不能拖垮用户可见响应，方案 C（TD-13）
+                logger.error(
+                    "discard_thread_checkpoints 失败，job_id=%s；checkpoint 行留存，"
+                    "不影响本次响应（清理是维护性动作，不是用户可见路径）",
+                    job_id,
+                    exc_info=True,
+                )
             # 没有岗位就没有 id 可给。⛔ 不要回那个已删的 uuid：前端会拿它
             # 去 POST /reply，撞上 404，错误信息与真正的原因毫无关系。
             return {"job_id": None, "message": outcome.message}

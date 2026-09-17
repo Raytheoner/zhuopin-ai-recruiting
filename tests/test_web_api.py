@@ -1276,6 +1276,34 @@ def test_off_topic_first_message_creates_no_job_record(tmp_path):
     }
 
 
+def test_off_topic_first_message_survives_checkpoint_discard_failure(tmp_path, monkeypatch, caplog):
+    """TD-13 方案 C：discard_thread_checkpoints 是清理动作，不是用户可见路径的
+    一部分（工程铁律 1）——它炸了也不能拖垮 /api/jobs 的响应，只记 ERROR 日志。
+    """
+    import logging
+
+    from app.agents.intake_agent import _GUIDANCE_TEXT
+    import app.web.server as server_module
+
+    def _boom(saver, thread_id):
+        raise RuntimeError("checkpoint store unavailable")
+
+    monkeypatch.setattr(server_module, "discard_thread_checkpoints", _boom)
+
+    responses = [json.dumps({"is_job_related": False, "questions": [], "profile_patch": {}})]
+    client = make_app(tmp_path, responses)
+
+    with caplog.at_level(logging.ERROR):
+        resp = client.post("/api/jobs", json={"message": "今天中午吃什么"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # 引导语照常回给用户 —— 清理失败不该让业务经理连问句都收不到。
+    assert [q["text"] for q in body["message"]["payload"]["questions"]] == [_GUIDANCE_TEXT]
+    assert body["job_id"] is None
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
 def test_off_topic_first_message_leaves_the_job_list_empty(tmp_path):
     """岗位列表走 LEFT JOIN（job_queries.latest_profile_rows 的注释写明是刻意的）：
     只删 job_profile 不删 job，列表里会留一条「待确定 / drafting」的僵尸。"""
