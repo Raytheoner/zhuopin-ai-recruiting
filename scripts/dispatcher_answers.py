@@ -114,8 +114,21 @@ ANSWER_MAP: dict[str, Mapping] = {
         },
     ),
     "Q-07a": Mapping(
-        说明="注册火山方舟＋阿里百炼由本人办理并写 .env",
+        说明="注册火山方舟＋阿里百炼由本人办理并写 .env（原答，2026-09-17 21:5x 已撤回，见 `Q-07`）",
         保持阻塞={f"{M2}/1.4": ("外部", "等本人注册火山方舟（ARK_API_KEY）＋阿里百炼（DASHSCOPE_API_KEY）并写入 .env")},
+    ),
+    "Q-07": Mapping(
+        说明="改：近期只用 DeepSeek（两款）起步，第 3／4 家（火山方舟／阿里百炼）后补，不阻塞主航道；"
+        "1.4 解除对下游阻塞（Q-26 同意，原答 `Q-07a`「注册两家」撤回）",
+        任务=[
+            Task(
+                id="answer:Q-07",
+                阶段="build",
+                标题="后补（非阻塞）：注册火山方舟（ARK_API_KEY）＋阿里百炼（DASHSCOPE_API_KEY）并补对比表第 3／4 家",
+                触碰区=["docs/m2-model-comparison.md"],
+                产出判据="两家 API key 写入 `.env`、`docs/m2-model-comparison.md` 补齐第 3／4 家对比数据；⛔ 不阻塞 1.4 主线",
+            )
+        ],
     ),
     "Q-09a": Mapping(说明="一期扫描件进不可读队列＋技术债，不建 3.13 sidecar（U0 已按此执行）"),
     "Q-12a": Mapping(

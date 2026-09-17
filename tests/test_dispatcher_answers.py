@@ -219,7 +219,7 @@ REAL_QUEUE = Path(__file__).resolve().parent.parent / "docs/roadmap/定夺队列
 RULES = Path(__file__).resolve().parent.parent / ".claude/skills/task-dispatcher/rules.md"
 
 
-ANSWERED_20260917 = ["Q-02a", "Q-03b", "Q-05b", "Q-06a", "Q-07a", "Q-09a", "Q-12a", "Q-13b", "Q-14a", "Q-15a", "Q-17a", "Q-18b", "Q-19①", "Q-20a", "Q-21a"]
+ANSWERED_20260917 = ["Q-02a", "Q-03b", "Q-05b", "Q-06a", "Q-07", "Q-09a", "Q-12a", "Q-13b", "Q-14a", "Q-15a", "Q-17a", "Q-18b", "Q-19①", "Q-20a", "Q-21a"]
 
 
 def test_first_version_map_covers_the_15_rows_answered_on_20260917():
