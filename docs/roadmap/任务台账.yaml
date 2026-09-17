@@ -2654,12 +2654,13 @@ tasks:
   依赖: []
   触碰区:
   - docs/compliance/
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '`docs/compliance/` 下三份草稿（PIA／候选人同意条款单列 AI 评估／留存与删除策略）落档、标注「草稿·待签认」；定夺队列追加 G5 类签认行（`gates.py request G5 合规验收#1 …`，阻塞的任务 id＝`m2-resume-parse-and-rank/0.2`）；⛔
     不代签、不对外发送'
   来源: docs/roadmap/定夺队列.md:18 Q-02a
   队列: Q-02 已答 a
+  备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AT，task-dispatcher·answers-mapped-20260917-190659 发车
 - id: answer:Q-12
   场景: '.51'
   阶段: release
@@ -2706,11 +2707,12 @@ tasks:
   依赖: []
   触碰区:
   - 06-企业AI转型资产借鉴清单.md
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '`06-企业AI转型资产借鉴清单.md` 的 3.3、9.1、9.2、9.3 标题与末尾清单对应项标「⚰️ 作废（Q-17a）」并写去向，⛔ 不删原文'
   来源: docs/roadmap/定夺队列.md:33 Q-17a
   队列: Q-17 已答 a
+  备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AR，task-dispatcher·answers-mapped-20260917-190659 发车
 - id: answer:Q-19
   场景: M2
   阶段: build
@@ -2733,11 +2735,12 @@ tasks:
   - app/web/server.py
   - docs/tech-debt.md
   - tests/test_web_api.py
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '`tests/test_web_api.py` 新增用例：checkpointer 删除抛异常时接口仍返回引导语且日志含 ERROR；`docs/tech-debt.md` TD-13 销账'
   来源: docs/roadmap/定夺队列.md:36 Q-20a
   队列: Q-20 已答 a
+  备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AS，task-dispatcher·answers-mapped-20260917-190659 发车
 - id: answer:Q-21
   场景: 构建自动化
   阶段: build
@@ -2746,11 +2749,12 @@ tasks:
   触碰区:
   - .claude/skills/requirement-grill/SKILL.md
   - tests/test_requirement_grill_skill.py
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: SKILL.md 含「⏸️ 默认项」行与 15 分钟规则、落档措辞「超时按默认项生效（未获明确答复，<会话> <时刻>）」，并保留 G1 intent 定稿人闸与「判据／口径／阈值类永不默认生效」；`tests/test_requirement_grill_skill.py` 覆盖
   来源: docs/roadmap/定夺队列.md:37 Q-21a
   队列: Q-21 已答 a
+  备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AU，task-dispatcher·answers-mapped-20260917-190659 发车
 - id: m2-resume-parse-and-rank/0.3
   场景: M2
   阶段: gate
