@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app.eval.metrics import FieldAccuracy, field_accuracy, spearman, span_traceability, top_k_recall
-from app.llm.gateway import LLMCallMeta, LLMGateway, LLMProviderUnavailable, SchemaExtractionFailed
+from app.llm.gateway import LLMCallMeta, LLMGateway
 from app.parsing.spans import TextSpan, render_for_prompt, resolve_span_ref, split_into_spans
 from app.schemas.rank_result import RankResult
 from app.schemas.resume_fields import FIELD_LABELS, FIELD_NAMES, ResumeFields
@@ -209,7 +209,8 @@ def evaluate_sample(gateway: LLMGateway, sample: Sample, rubric: dict[str, Any])
     spans = split_into_spans(sample.text)
     try:
         fields, meta = run_parse(gateway, spans)
-    except (SchemaExtractionFailed, LLMProviderUnavailable) as exc:
+    except Exception as exc:  # noqa: BLE001
+        # 网关对不可切换的 4xx 原样抛出（gateway.py），单份样本的失败不能拖垮整个候选的对比，按样本记错继续。
         outcome.parse_error = f"{sample.sample_id}: parse 失败 {type(exc).__name__}: {exc}"
         return outcome
     outcome.parse_ok = True
@@ -219,7 +220,8 @@ def evaluate_sample(gateway: LLMGateway, sample: Sample, rubric: dict[str, Any])
         outcome.response_models.add(meta.response_model)
     try:
         grounded, meta, missing, raw = run_rank(gateway, spans, rubric)
-    except (SchemaExtractionFailed, LLMProviderUnavailable) as exc:
+    except Exception as exc:  # noqa: BLE001
+        # 网关对不可切换的 4xx 原样抛出（gateway.py），单份样本的失败不能拖垮整个候选的对比，按样本记错继续。
         outcome.rank_error = f"{sample.sample_id}: rank 失败 {type(exc).__name__}: {exc}"
         return outcome
     outcome.rank_latency_ms = meta.latency_ms

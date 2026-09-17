@@ -173,6 +173,56 @@ def test_evaluate_model_end_to_end_with_fake_client(tmp_path):
     assert all(r["response_model"] == "fake-model-2026-01" for r in rows)
 
 
+def test_raw_provider_error_is_recorded_per_sample_and_run_continues(tmp_path):
+    # SA 的第一次调用命中网关对不可切换 4xx 原样抛出的原始异常（app/llm/gateway.py ~394-398）；
+    # SB 的 parse/rank 照常返回，验证单份样本报错不拖垮整个候选的对比（review 裁决）。
+    responses = [
+        _parse_json("李子墨", "李子墨", 2, "", ["Java", "SQL"], "Java、SQL", ["杭州云栈软件有限公司"], "杭州云栈软件有限公司", "大专", "苏州大学", "苏州大学｜大专", None, ""),
+        _rank_json("Java、SQL", 7, "2024年—2026年", 5, 1.0, 1.0),
+    ]
+
+    class _FlakyCompletions:
+        def __init__(self, responses, model):
+            self._responses = list(responses)
+            self._model = model
+            self._raised = False
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if not self._raised:
+                self._raised = True
+                raise RuntimeError("400 model not found")
+            return _Resp(choices=[_Choice(_Msg(self._responses.pop(0)))], model=self._model)
+
+    class _FlakyChat:
+        def __init__(self, responses, model):
+            self.completions = _FlakyCompletions(responses, model)
+
+    class _FlakyClient:
+        def __init__(self, responses, model="fake-model-2026-01"):
+            self.chat = _FlakyChat(responses, model)
+
+    def factory(candidate, hook):
+        return LLMGateway(
+            api_key="k",
+            base_url=candidate.base_url,
+            model=candidate.model,
+            supports_json_schema=False,
+            max_retries=0,
+            audit_hook=hook,
+            client=_FlakyClient(responses),
+        )
+
+    report = evaluate_model(_candidate(), _samples()[:2], RUBRIC, gateway_factory=factory, audit_dir=tmp_path)
+
+    assert report.skipped is False
+    assert report.n_samples == 2
+    assert report.parse_ok == 1
+    assert len(report.errors) == 1
+    assert "SA" in report.errors[0] and "RuntimeError" in report.errors[0]
+
+
 def test_schema_failure_counts_as_parse_error_and_skips_rank(tmp_path):
     responses = ["{not json", _rank_json("C", 9, "2021年—2026年", 7)]  # 第二条不会被消费
     report = evaluate_model(_candidate(), _samples()[:1], RUBRIC, gateway_factory=_factory_with(responses), audit_dir=tmp_path)
