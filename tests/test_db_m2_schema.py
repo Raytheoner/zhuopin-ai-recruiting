@@ -39,7 +39,7 @@ def test_candidate_table_exists_with_expected_columns(conn):
 
 
 def test_candidate_has_no_status_column(conn):
-    """CLAUDE.md 数据모델要점：상태는 지원서에 속하며 후보자에 속하지 않습니다."""
+    """CLAUDE.md 数据模型要点：状态属于投递不属于候选人。"""
     assert "status" not in _columns(conn, "candidate")
     assert "current_stage_id" not in _columns(conn, "candidate")
 
