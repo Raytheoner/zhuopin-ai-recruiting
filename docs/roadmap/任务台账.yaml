@@ -21,6 +21,7 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
+  - m2-resume-parse-and-rank/1.1
   - relay:H-4
   ready:
   - answer:Q-12
@@ -52,7 +53,8 @@ summary:
   - 2026-09-10-liaison-reply-bridge
   - 2026-09-10-liaison-unpack-charter
   - 2026-09-10-liaison-unpack-dispatch
-  缺任务映射: []
+  缺任务映射:
+  - Q-07
 tasks:
 - id: scene:M0
   场景: M0
@@ -1224,23 +1226,6 @@ tasks:
   产出判据: '`人事部#2` 跟进信里有排期回复'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:8
   队列: Q-04 待答
-- id: m2-resume-parse-and-rank/1.1
-  场景: M2
-  阶段: build
-  标题: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence
-  单元: U0 模型对比定型
-  依赖:
-  - plan:2026-09-17-m2-unit0-model-comparison/seg1
-  - plan:2026-09-17-m2-unit0-model-comparison/seg2
-  - plan:2026-09-17-m2-unit0-model-comparison/seg3
-  触碰区:
-  - docs/m2-model-comparison.md
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence-transformers` 二选一按可装性定）；记录可装性与体积到
-    `docs/m2-model-comparison.md`「环境」节 ⏸ 留步：.51 W
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:14
-  队列: Q-08 待答
 - id: m2-resume-parse-and-rank/1.2
   场景: M2
   阶段: build
@@ -1262,7 +1247,7 @@ tasks:
 - id: m2-resume-parse-and-rank/1.4
   场景: M2
   阶段: build
-  标题: 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量 留步：仅 DeepSee
+  标题: ⚑ 口径调整（Shao Peishen 2026-09-17 21:3x）：DeepSeek 两款先行即满足主航道，第 3／4 家后补不阻塞下游
   单元: U0 模型对比定型
   依赖:
   - plan:2026-09-17-m2-unit0-model-comparison/seg1
@@ -1272,10 +1257,10 @@ tasks:
   - docs/m2-model-comparison.md
   状态: 阻塞
   阻塞类型: 外部
-  产出判据: 【Q-07 已答 a·仍阻塞：等本人注册火山方舟（ARK_API_KEY）＋阿里百炼（DASHSCOPE_API_KEY）并写入 .env】对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object
-    支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek 两款有 key 实跑（20/20，数据见 docs/m2-model-comparison.md）；doubao/qwen 缺 ARK_API_KEY/
+  产出判据: '【Q-07 已答·缺任务映射】⚑ 口径调整（Shao Peishen 2026-09-17 21:3x）：DeepSeek 两款先行即满足主航道，第 3／4 家后补不阻塞下游。原文：对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测
+    json_schema / json_object 支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek '
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:17
-  队列: Q-07 已答 a
+  队列: Q-07 已答
   备注: Q-07 已答 a：注册火山方舟＋阿里百炼由本人亲自办理并写 .env；key 到位前不可派车
 - id: m2-resume-parse-and-rank/1.6
   场景: M2
@@ -1328,7 +1313,6 @@ tasks:
   标题: 1. U0 模型对比定型
   单元: U0 模型对比定型
   依赖:
-  - m2-resume-parse-and-rank/1.1
   - m2-resume-parse-and-rank/1.2
   - m2-resume-parse-and-rank/1.4
   - m2-resume-parse-and-rank/1.6
@@ -2822,6 +2806,27 @@ tasks:
   产出判据: '`intent.md` 末尾补一行「试运行岗位：<岗位> job_id=<…> profile_version=<n>」'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:7
   备注: 0917 dispatcher 核实：commit 05fd82c 已合 main（本地曾落后 origin 一手，已 git pull 追平），tasks.md:7 checkbox 现为 [x]，intent.md 末尾已补行
+- id: m2-resume-parse-and-rank/1.1
+  场景: M2
+  阶段: build
+  标题: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence
+  单元: U0 模型对比定型
+  依赖:
+  - plan:2026-09-17-m2-unit0-model-comparison/seg1
+  - plan:2026-09-17-m2-unit0-model-comparison/seg2
+  - plan:2026-09-17-m2-unit0-model-comparison/seg3
+  触碰区:
+  - docs/m2-model-comparison.md
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence-transformers` 二选一按可装性定）；记录可装性与体积到
+    `docs/m2-model-comparison.md`「环境」节 ⏸ 留步：.51 W
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:14
+  队列: Q-08 待答
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 来源已消失或已勾选
 - id: opener:[Mac]0917AK
   场景: 构建自动化
   阶段: build
