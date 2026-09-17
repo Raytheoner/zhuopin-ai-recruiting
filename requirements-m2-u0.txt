@@ -1,0 +1,18 @@
+# M2 U0 对比与冒烟用的新依赖（tasks 1.1）。⛔ 不并入 requirements.txt——定型后由 U2/U4 只把
+# 真正进生产的挑进去。版本号 2026-09-17 已实测：下面六项在 cp314 的 macosx_arm64 与 win_amd64
+# 都有 wheel（pip download --only-binary=:all: --python-version 3.14 --platform win_amd64 逐项 OK）。
+# ---- 轻依赖（单测需要）----
+numpy==2.5.3
+pypdf==6.19.0
+python-docx==1.2.0
+reportlab==5.0.1
+pillow==12.3.0
+pymupdf==1.28.2
+# ---- 重依赖（不随上面一起装；单测懒加载、缺包即 skip）----
+# PaddleOCR（design D14）。⚠️ 2026-09-17 实测：paddlepaddle 最新 3.4.0 只有 cp313 wheel，
+# cp314 在 PyPI 与 https://www.paddlepaddle.org.cn/packages/stable/cpu/ 都没有——项目锁 Python 3.14，
+# 项目 venv 里装不上。处置见计划「待裁决」#6；未裁决前按 D14 退路（扫描件进「不可读」队列＋技术债）。
+# paddlepaddle==3.4.0   # cp313 only（实测）
+paddleocr==3.7.0        # 纯 py wheel 可装，但没有 paddlepaddle 跑不起来
+# BGE-M3 本地 CPU（design D7）。FlagEmbedding 拉 torch（cp314 win_amd64 有 2.14.0、mac 有 2.11.0）与 ~2.2 GB 模型权重。
+FlagEmbedding==1.4.2
