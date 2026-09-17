@@ -1,14 +1,14 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 216
+  条目数: 402
   按状态:
-    待开: 78
-    在跑: 10
-    完成: 93
-    阻塞: 35
-  阻塞·决策: 16
-  阻塞·外部: 18
+    待开: 218
+    在跑: 7
+    完成: 103
+    阻塞: 74
+  阻塞·决策: 46
+  阻塞·外部: 27
   conflicts:
   - m1-intake-quality-fixes/8.9
   - m1-intake-quality-fixes/U8/plan
@@ -21,20 +21,22 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
-  - m2-resume-parse-and-rank/1.4
   - propose:S-Offer
-  - propose:S-Offer Offer 生成
   - propose:S-入职
-  - propose:S-入职 入职流程
   - propose:S-排期
-  - propose:S-排期 面试排期
   - propose:S-渠道
-  - propose:S-渠道 渠道对接与简历自动汇总
-  - propose:波次0-grill首轮汇总
   - relay:H-4
   ready:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  - channel-resume-intake/0.1
+  - interview-scheduling/0.2
+  - offer-generation/0.2
+  - offer-generation/0.5
+  - onboarding-flow/0.2
   闸门待放行:
+  - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（缺行）
+  - interview-scheduling/U1/plan ← G2 `interview-scheduling`（缺行）
+  - offer-generation/U1/plan ← G2 `offer-generation`（缺行）
+  - onboarding-flow/U1/plan ← G2 `onboarding-flow`（缺行）
   - propose:M3 ← G1 `M3`（待答）
   未知依赖: []
   未归属plans:
@@ -198,6 +200,566 @@ tasks:
   阻塞类型: 无
   产出判据: 撤包或正式延后
   来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:68
+  可见: false
+- id: channel-resume-intake/0.1
+  场景: channel-resume-intake
+  阶段: gate
+  标题: M2 U2 上传接口与 U1 `candidate` 表交付
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: M2 tasks 2.1／3.3／3.4 勾选
+  来源: openspec/changes/channel-resume-intake/tasks.md:5
+  可见: false
+- id: channel-resume-intake/0.2
+  场景: channel-resume-intake
+  阶段: gate
+  标题: 人事部#3 回件：渠道清单与占比／各平台脱敏导出样例／邮箱现状／重复口径（汤丽萍，经跟进信线；样例只收脱敏件，⛔ 不经值守通道）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 四项归档且 design OQ1–OQ4 回填
+  来源: openspec/changes/channel-resume-intake/tasks.md:6
+  可见: false
+- id: channel-resume-intake/0.3
+  场景: channel-resume-intake
+  阶段: gate
+  标题: '合规验收 #1 入库闸开启（Shao Peishen 亲自，M2 8.8）'
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: M2 tasks 8.8 勾选
+  来源: openspec/changes/channel-resume-intake/tasks.md:7
+  可见: false
+- id: channel-resume-intake/0.4
+  场景: channel-resume-intake
+  阶段: gate
+  标题: 邮箱凭据／ATS 采购（Shao Peishen；本包不需要，Q1a 已定）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 🔴 邮箱凭据／ATS 采购（Shao Peishen；本包不需要，Q1a 已定）。⚰️ 墓碑：本包内保持"不需要"，Q1b／Q1c 重提时另立包
+  来源: openspec/changes/channel-resume-intake/tasks.md:8
+  可见: false
+- id: channel-resume-intake/1.1
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`app/intake/bundle.py::unpack_bundle(data: bytes, limits) -> list[FileEntry]` 纯函数：标准库 `zipfile`；一层子目录；白名单 pdf/docx；超限（文件'
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/U1/plan
+  触碰区:
+  - app/intake/bundle.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/intake/bundle.py::unpack_bundle(data: bytes, limits) -> list[FileEntry]` 纯函数：标准库 `zipfile`；一层子目录；白名单 pdf/docx；超限（文件数／总大小／压缩比）抛 `BundleTooLarge`；损坏条目标
+    `unreadable`；两层以上目录标 `too_deep`；测试覆盖 spec 四个 '
+  来源: openspec/changes/channel-resume-intake/tasks.md:12
+  可见: false
+- id: channel-resume-intake/1.2
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`app/intake/source.py::detect_source(filename, first_page_text) -> Source | None` 纯函数：`Source` 枚举 `boss/liepin/51job/zha'
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/U1/plan
+  触碰区:
+  - app/intake/source.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/intake/source.py::detect_source(filename, first_page_text) -> Source | None` 纯函数：`Source` 枚举 `boss/liepin/51job/zhaopin/referral/other/unknown`；规则表
+    `SOURCE_RULES`（文件名正则＋首页关键词）占位版；⛔ 不抽取水印之外字段（测试：输'
+  来源: openspec/changes/channel-resume-intake/tasks.md:13
+  可见: false
+- id: channel-resume-intake/1.3
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`app/storage/db.py`：`resume` 加 `source`（可空）与 `source_origin CHECK IN detected/default/corrected`（走 `_ADDED_COLUMNS`）；新增 '
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/U1/plan
+  触碰区:
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/storage/db.py`：`resume` 加 `source`（可空）与 `source_origin CHECK IN detected/default/corrected`（走 `_ADDED_COLUMNS`）；新增 `source_correction_log`（`resume_id,
+    from_source, to_source, corrected_by, at`）；`'
+  来源: openspec/changes/channel-resume-intake/tasks.md:14
+  可见: false
+- id: channel-resume-intake/1.4
+  场景: channel-resume-intake
+  阶段: build
+  标题: 上传接口 ZIP 分支：`POST /resumes/upload` 遇 `.zip` ⇒ `live` 先求值入库闸（关 ⇒ 整包拒收＋留痕尝试不存内容）⇒ 1.1 展开 ⇒ 逐文件调既有单文件接收 ⇒ 每文件 `source` ＝ 1.
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 上传接口 ZIP 分支：`POST /resumes/upload` 遇 `.zip` ⇒ `live` 先求值入库闸（关 ⇒ 整包拒收＋留痕尝试不存内容）⇒ 1.1 展开 ⇒ 逐文件调既有单文件接收 ⇒ 每文件 `source` ＝ 1.2 识别 ∥ `default_source` 参数 ∥ `unknown`；包内同哈希只入一次标"包内重复"；节点
+    `effect_ingest_bundle
+  来源: openspec/changes/channel-resume-intake/tasks.md:15
+  可见: false
+- id: channel-resume-intake/1.5
+  场景: channel-resume-intake
+  阶段: build
+  标题: 来源改正接口 `POST /resumes/{id}/source`：写 `source_correction_log`，`source_origin=corrected`；幂等：同值重复提交无第二条留痕；测试
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 来源改正接口 `POST /resumes/{id}/source`：写 `source_correction_log`，`source_origin=corrected`；幂等：同值重复提交无第二条留痕；测试
+  来源: openspec/changes/channel-resume-intake/tasks.md:16
+  可见: false
+- id: channel-resume-intake/1.6
+  场景: channel-resume-intake
+  阶段: build
+  标题: 上传页增量：接受 `.zip`、默认来源下拉（值域固定）、逐文件结果表新增"来源／包内重复／不可读"列；相对路径，子路径前缀测试
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 上传页增量：接受 `.zip`、默认来源下拉（值域固定）、逐文件结果表新增"来源／包内重复／不可读"列；相对路径，子路径前缀测试
+  来源: openspec/changes/channel-resume-intake/tasks.md:17
+  可见: false
+- id: channel-resume-intake/1.7
+  场景: channel-resume-intake
+  阶段: build
+  标题: U1 e2e：合成样本打成 ZIP（含 1 个 xlsx、1 个损坏 PDF、2 个相同 PDF、1 个两层目录文件）→ 上传 → 逐文件结果符合 spec → 重传同 ZIP 返回相同结果且简历数不变
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U1 e2e：合成样本打成 ZIP（含 1 个 xlsx、1 个损坏 PDF、2 个相同 PDF、1 个两层目录文件）→ 上传 → 逐文件结果符合 spec → 重传同 ZIP 返回相同结果且简历数不变
+  来源: openspec/changes/channel-resume-intake/tasks.md:18
+  可见: false
+- id: channel-resume-intake/U1/plan
+  场景: channel-resume-intake
+  阶段: plan
+  标题: spec-to-plan：1. U1 导出包解包与来源识别
+  单元: U1 导出包解包与来源识别
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-channel-resume-intake-unit1-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+  闸门: G2 channel-resume-intake
+- id: channel-resume-intake/U1
+  场景: channel-resume-intake
+  阶段: build
+  标题: 1. U1 导出包解包与来源识别
+  单元: U1 导出包解包与来源识别
+  依赖:
+  - channel-resume-intake/0.1
+  - channel-resume-intake/1.1
+  - channel-resume-intake/1.2
+  - channel-resume-intake/1.3
+  - channel-resume-intake/1.4
+  - channel-resume-intake/1.5
+  - channel-resume-intake/1.6
+  - channel-resume-intake/1.7
+  - channel-resume-intake/U1/plan
+  触碰区:
+  - app/intake/bundle.py
+  - app/intake/source.py
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+- id: channel-resume-intake/2.1
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`app/intake/phone_hash.py::extract_phone_hash(text_spans) -> str | None` 纯函数：中国大陆手机号正则 → 取第一个 → 立即按 M2 既定哈希函数哈希 → 返回哈希；明'
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区:
+  - app/intake/phone_hash.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/intake/phone_hash.py::extract_phone_hash(text_spans) -> str | None` 纯函数：中国大陆手机号正则 → 取第一个 → 立即按 M2 既定哈希函数哈希 → 返回哈希；明文不出函数（测试：返回值不匹配手机号正则、日志无明文）'
+  来源: openspec/changes/channel-resume-intake/tasks.md:22
+  可见: false
+- id: channel-resume-intake/2.2
+  场景: channel-resume-intake
+  阶段: build
+  标题: 节点 `effect_attach_resume_to_candidate`：在 M2 `effect_persist_parse` 之后；按（姓名规范化＋哈希）查 `candidate`：命中 ⇒ `resume.candidate_id
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_attach_resume_to_candidate`：在 M2 `effect_persist_parse` 之后；按（姓名规范化＋哈希）查 `candidate`：命中 ⇒ `resume.candidate_id` 指向既有；不命中 ⇒ 新建 `candidate`（`source`＝该简历来源）；幂等键
+    `{resume_id}:effect_attach_resum
+  来源: openspec/changes/channel-resume-intake/tasks.md:23
+  可见: false
+- id: channel-resume-intake/2.3
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`app/intake/duplicates.py::detect_suspected_duplicates(candidate, same_job_candidates) -> list` 纯函数：姓名规范化（去空白、全半角）相同且同岗位'
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区:
+  - app/intake/duplicates.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/intake/duplicates.py::detect_suspected_duplicates(candidate, same_job_candidates) -> list` 纯函数：姓名规范化（去空白、全半角）相同且同岗位 ⇒ 疑似；⛔ 无模型调用（grep 反证）；测试'
+  来源: openspec/changes/channel-resume-intake/tasks.md:24
+  可见: false
+- id: channel-resume-intake/2.4
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`app/storage/db.py` 新增 `candidate_merge_log`（`primary_id, secondary_id, reason, secondary_snapshot JSON, merged_by, merg'
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区:
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/storage/db.py` 新增 `candidate_merge_log`（`primary_id, secondary_id, reason, secondary_snapshot JSON, merged_by, merged_at, unmerged_by, unmerged_at`）；`candidate`
+    加 `merged_into`（可空，走 `_ADDED_COLUM'
+  来源: openspec/changes/channel-resume-intake/tasks.md:25
+  可见: false
+- id: channel-resume-intake/2.5
+  场景: channel-resume-intake
+  阶段: build
+  标题: 节点 `effect_merge_candidates(primary, secondary, reason, keep_application_per_job)`：写快照 → 改 `resume.candidate_id` / `appl
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_merge_candidates(primary, secondary, reason, keep_application_per_job)`：写快照 → 改 `resume.candidate_id` / `application.candidate_id` → 同岗位双投递时按 HR
+    选择保留一份、另一份写 `application_stage_history(actio
+  来源: openspec/changes/channel-resume-intake/tasks.md:26
+  可见: false
+- id: channel-resume-intake/2.6
+  场景: channel-resume-intake
+  阶段: build
+  标题: 节点 `effect_unmerge_candidates(merge_log_id)`：按快照恢复 secondary 原有 `resume`／`application` 归属；合并期间 primary 新增记录保留在 primary；写
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_unmerge_candidates(merge_log_id)`：按快照恢复 secondary 原有 `resume`／`application` 归属；合并期间 primary 新增记录保留在 primary；写 `unmerged_by/at`；幂等键 `{merge_log_id}:effect_unmerge_candidates`；测试："合并→新增→撤销"三段
+  来源: openspec/changes/channel-resume-intake/tasks.md:27
+  可见: false
+- id: channel-resume-intake/2.7
+  场景: channel-resume-intake
+  阶段: build
+  标题: 候选人列表页增量：来源列、"疑似重复"标记与跳转；合并页 `GET /candidates/{id}/merge`（选主、填依据、双投递选择、撤销按钮）；相对路径
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 候选人列表页增量：来源列、"疑似重复"标记与跳转；合并页 `GET /candidates/{id}/merge`（选主、填依据、双投递选择、撤销按钮）；相对路径
+  来源: openspec/changes/channel-resume-intake/tasks.md:28
+  可见: false
+- id: channel-resume-intake/2.8
+  场景: channel-resume-intake
+  阶段: build
+  标题: U2 e2e：两份同手机号不同来源 ZIP → 自动挂接同一候选人 → 一份无手机号同名同岗 → 疑似重复 → HR 合并 → 撤销 → 归属恢复；`candidate_merge_log` 条数守恒
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U2 e2e：两份同手机号不同来源 ZIP → 自动挂接同一候选人 → 一份无手机号同名同岗 → 疑似重复 → HR 合并 → 撤销 → 归属恢复；`candidate_merge_log` 条数守恒
+  来源: openspec/changes/channel-resume-intake/tasks.md:29
+  可见: false
+- id: channel-resume-intake/U2/plan
+  场景: channel-resume-intake
+  阶段: plan
+  标题: spec-to-plan：2. U2 去重合并
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/U1
+  触碰区:
+  - docs/superpowers/plans/*-channel-resume-intake-unit2-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+  闸门: G2 channel-resume-intake
+- id: channel-resume-intake/U2
+  场景: channel-resume-intake
+  阶段: build
+  标题: 2. U2 去重合并
+  单元: U2 去重合并
+  依赖:
+  - channel-resume-intake/2.1
+  - channel-resume-intake/2.2
+  - channel-resume-intake/2.3
+  - channel-resume-intake/2.4
+  - channel-resume-intake/2.5
+  - channel-resume-intake/2.6
+  - channel-resume-intake/2.7
+  - channel-resume-intake/2.8
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2/plan
+  触碰区:
+  - app/intake/duplicates.py
+  - app/intake/phone_hash.py
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+- id: channel-resume-intake/3.1
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`application_stage_history` 加 `source`（可空，走 `_ADDED_COLUMNS`）；M2 创建投递写初始流转事实处带上 `resume.source`；测试：既有 M2 断言与查询不受影响'
+  单元: U3 来源进流转事实
+  依赖:
+  - channel-resume-intake/U2
+  - channel-resume-intake/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`application_stage_history` 加 `source`（可空，走 `_ADDED_COLUMNS`）；M2 创建投递写初始流转事实处带上 `resume.source`；测试：既有 M2 断言与查询不受影响'
+  来源: openspec/changes/channel-resume-intake/tasks.md:33
+  可见: false
+- id: channel-resume-intake/3.2
+  场景: channel-resume-intake
+  阶段: build
+  标题: 1.5 来源改正 ⇒ 追加 `application_stage_history(action=source_corrected, source=<new>)`，⛔ 不改写初始记录；同事务；幂等由 1.5 承担；测试：初始记录保持原值
+  单元: U3 来源进流转事实
+  依赖:
+  - channel-resume-intake/U2
+  - channel-resume-intake/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 1.5 来源改正 ⇒ 追加 `application_stage_history(action=source_corrected, source=<new>)`，⛔ 不改写初始记录；同事务；幂等由 1.5 承担；测试：初始记录保持原值
+  来源: openspec/changes/channel-resume-intake/tasks.md:34
+  可见: false
+- id: channel-resume-intake/3.3
+  场景: channel-resume-intake
+  阶段: build
+  标题: 查询函数 `source_distribution(job_id)`（只读，从流转事实表按来源计数）＋测试；⛔ 无报表页（HTML 路由不存在，测试反证 404）
+  单元: U3 来源进流转事实
+  依赖:
+  - channel-resume-intake/U2
+  - channel-resume-intake/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 查询函数 `source_distribution(job_id)`（只读，从流转事实表按来源计数）＋测试；⛔ 无报表页（HTML 路由不存在，测试反证 404）
+  来源: openspec/changes/channel-resume-intake/tasks.md:35
+  可见: false
+- id: channel-resume-intake/3.4
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`app/audit/assertions.py` 新增：① `candidate` 无明文手机号列（M2 断言沿用并扩到 `resume.source_*`）；② `candidate_merge_log` 每行 `merged_by` '
+  单元: U3 来源进流转事实
+  依赖:
+  - channel-resume-intake/U2
+  - channel-resume-intake/U3/plan
+  触碰区:
+  - app/audit/assertions.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/audit/assertions.py` 新增：① `candidate` 无明文手机号列（M2 断言沿用并扩到 `resume.source_*`）；② `candidate_merge_log` 每行 `merged_by` 非空；③ `candidate.merged_into` 非空的候选人无活跃投递；CI
+    接入'
+  来源: openspec/changes/channel-resume-intake/tasks.md:36
+  可见: false
+- id: channel-resume-intake/U3/plan
+  场景: channel-resume-intake
+  阶段: plan
+  标题: spec-to-plan：3. U3 来源进流转事实
+  单元: U3 来源进流转事实
+  依赖:
+  - channel-resume-intake/U2
+  触碰区:
+  - docs/superpowers/plans/*-channel-resume-intake-unit3-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+  闸门: G2 channel-resume-intake
+- id: channel-resume-intake/U3
+  场景: channel-resume-intake
+  阶段: build
+  标题: 3. U3 来源进流转事实
+  单元: U3 来源进流转事实
+  依赖:
+  - channel-resume-intake/3.1
+  - channel-resume-intake/3.2
+  - channel-resume-intake/3.3
+  - channel-resume-intake/3.4
+  - channel-resume-intake/U2
+  - channel-resume-intake/U3/plan
+  触碰区:
+  - app/audit/assertions.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+- id: channel-resume-intake/4.1
+  场景: channel-resume-intake
+  阶段: build
+  标题: 规则表迭代：0.2 样例到后按平台补 `SOURCE_RULES` 与夹具，识别率目标每平台 ≥ 90%（在脱敏样例上）；记录到 tasks 本条
+  单元: U4 交付与发版
+  依赖:
+  - channel-resume-intake/U3
+  - channel-resume-intake/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 规则表迭代：0.2 样例到后按平台补 `SOURCE_RULES` 与夹具，识别率目标每平台 ≥ 90%（在脱敏样例上）；记录到 tasks 本条
+  来源: openspec/changes/channel-resume-intake/tasks.md:40
+  可见: false
+- id: channel-resume-intake/4.2
+  场景: channel-resume-intake
+  阶段: build
+  标题: 技术探针数据：上传结果按来源统计"不可读比例"，落 `docs/m2-model-comparison.md`「环境」节（design OQ6）
+  单元: U4 交付与发版
+  依赖:
+  - channel-resume-intake/U3
+  - channel-resume-intake/U4/plan
+  触碰区:
+  - docs/m2-model-comparison.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 技术探针数据：上传结果按来源统计"不可读比例"，落 `docs/m2-model-comparison.md`「环境」节（design OQ6）
+  来源: openspec/changes/channel-resume-intake/tasks.md:41
+  可见: false
+- id: channel-resume-intake/4.3
+  场景: channel-resume-intake
+  阶段: build
+  标题: HR 一页操作说明 `docs/channel-resume-intake-guide.md`：怎么导出、传 ZIP、指定默认来源、疑似重复怎么合并／撤销、哪些不能传（`live` 闸关时）
+  单元: U4 交付与发版
+  依赖:
+  - channel-resume-intake/U3
+  - channel-resume-intake/U4/plan
+  触碰区:
+  - docs/channel-resume-intake-guide.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: HR 一页操作说明 `docs/channel-resume-intake-guide.md`：怎么导出、传 ZIP、指定默认来源、疑似重复怎么合并／撤销、哪些不能传（`live` 闸关时）
+  来源: openspec/changes/channel-resume-intake/tasks.md:42
+  可见: false
+- id: channel-resume-intake/4.4
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`docs/tech-debt.md`：登记"图片型导出件手机号取不到 ⇒ 去重退化为疑似重复"的已知代价（随 M2 D14 退路）'
+  单元: U4 交付与发版
+  依赖:
+  - channel-resume-intake/U3
+  - channel-resume-intake/U4/plan
+  触碰区:
+  - docs/tech-debt.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`docs/tech-debt.md`：登记"图片型导出件手机号取不到 ⇒ 去重退化为疑似重复"的已知代价（随 M2 D14 退路）'
+  来源: openspec/changes/channel-resume-intake/tasks.md:43
+  可见: false
+- id: channel-resume-intake/4.5
+  场景: channel-resume-intake
+  阶段: build
+  标题: '`.51` 发版（Shao Peishen 拍「发」，G3）'
+  单元: U4 交付与发版
+  依赖:
+  - channel-resume-intake/U3
+  - channel-resume-intake/U4/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`05-发布运行手册.md` 流程跑完，入库闸状态不变'
+  来源: openspec/changes/channel-resume-intake/tasks.md:44
+  可见: false
+- id: channel-resume-intake/U4/plan
+  场景: channel-resume-intake
+  阶段: plan
+  标题: spec-to-plan：4. U4 交付与发版
+  单元: U4 交付与发版
+  依赖:
+  - channel-resume-intake/U3
+  触碰区:
+  - docs/superpowers/plans/*-channel-resume-intake-unit4-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 channel-resume-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+  闸门: G2 channel-resume-intake
+- id: channel-resume-intake/U4
+  场景: channel-resume-intake
+  阶段: build
+  标题: 4. U4 交付与发版
+  单元: U4 交付与发版
+  依赖:
+  - channel-resume-intake/0.2
+  - channel-resume-intake/4.1
+  - channel-resume-intake/4.2
+  - channel-resume-intake/4.3
+  - channel-resume-intake/4.4
+  - channel-resume-intake/4.5
+  - channel-resume-intake/U3
+  - channel-resume-intake/U4/plan
+  触碰区:
+  - docs/channel-resume-intake-guide.md
+  - docs/m2-model-comparison.md
+  - docs/tech-debt.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/channel-resume-intake/tasks.md
+  可见: false
+- id: change:channel-resume-intake
+  场景: channel-resume-intake
+  阶段: archive
+  标题: 变更包 channel-resume-intake
+  依赖:
+  - channel-resume-intake/U1
+  - channel-resume-intake/U2
+  - channel-resume-intake/U3
+  - channel-resume-intake/U4
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/channel-resume-intake/tasks.md
   可见: false
 - id: hr-wecom-aibot-liaison/U1/plan
   场景: M0
@@ -523,6 +1085,808 @@ tasks:
   阻塞类型: 无
   产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
   来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: interview-scheduling/0.1
+  场景: interview-scheduling
+  阶段: gate
+  标题: 登录＋访问留痕就位（M2 U2 的 3.2／3.9 交付并发版；Shao Peishen 拍发版）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`.51` 上 `reviewer_of()` 返回真实用户名'
+  来源: openspec/changes/interview-scheduling/tasks.md:5
+  可见: false
+- id: interview-scheduling/0.2
+  场景: interview-scheduling
+  阶段: gate
+  标题: M2 U5 批量确认页交付（「进入面试」的唯一来源）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: M2 tasks 第 6 章批量确认条目勾选
+  来源: openspec/changes/interview-scheduling/tasks.md:6
+  可见: false
+- id: interview-scheduling/0.3
+  场景: interview-scheduling
+  阶段: gate
+  标题: PIA 与留存策略扩展到"面试阶段联系方式"（Shao Peishen 发起并签认；法务结论）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`docs/compliance/` 下 PIA 扩展版落档并签认'
+  来源: openspec/changes/interview-scheduling/tasks.md:7
+  可见: false
+- id: interview-scheduling/0.4
+  场景: interview-scheduling
+  阶段: gate
+  标题: 人事部#3 回件：排期流程／面试官清单与轮次／邀约话术 3 条／上周排期表（汤丽萍，经跟进信线）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 四项在 `docs/跟进信/` 归档且 design OQ1–OQ4 回填
+  来源: openspec/changes/interview-scheduling/tasks.md:8
+  可见: false
+- id: interview-scheduling/0.5
+  场景: interview-scheduling
+  阶段: gate
+  标题: 企微自建应用注册（Shao Peishen；仅当将来改为系统直发时才需要，本包默认不需要）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 本包内保持"不需要"，留墓碑即可
+  来源: openspec/changes/interview-scheduling/tasks.md:9
+  可见: false
+- id: interview-scheduling/1.1
+  场景: interview-scheduling
+  阶段: build
+  标题: '`app/storage/db.py` 新增 `interviewer`（`account_id` 唯一外键 `hr_account`、姓名、部门、可面岗位 JSON、启用状态）、`interviewer_availability`（`in'
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/U1/plan
+  触碰区:
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/storage/db.py` 新增 `interviewer`（`account_id` 唯一外键 `hr_account`、姓名、部门、可面岗位 JSON、启用状态）、`interviewer_availability`（`interviewer_id, start_at, end_at, note,
+    registered_by, on_behalf BOOL, created_at`'
+  来源: openspec/changes/interview-scheduling/tasks.md:13
+  可见: false
+- id: interview-scheduling/1.2
+  场景: interview-scheduling
+  阶段: build
+  标题: 新增 `interview_slot`（`application_id, round, start_at, end_at, mode CHECK IN onsite/phone/online, location_or_link, statu
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `interview_slot`（`application_id, round, start_at, end_at, mode CHECK IN onsite/phone/online, location_or_link, status CHECK IN scheduled/rescheduled/cancelled/completed/no_show,
+    cancel_reason, inv
+  来源: openspec/changes/interview-scheduling/tasks.md:14
+  可见: false
+- id: interview-scheduling/1.3
+  场景: interview-scheduling
+  阶段: build
+  标题: 新增 `interview_invitation_draft`（`slot_id, version, template_version, body, ai_generated BOOL, authorship_marked_by, auth
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `interview_invitation_draft`（`slot_id, version, template_version, body, ai_generated BOOL, authorship_marked_by, authorship_marked_at, analysis_run_id,
+    created_at`；`(slot_id, version)` 唯一）与 `invita
+  来源: openspec/changes/interview-scheduling/tasks.md:15
+  可见: false
+- id: interview-scheduling/1.4
+  场景: interview-scheduling
+  阶段: build
+  标题: 新增 `candidate_contact`（`application_id` 唯一、`phone_enc BLOB`、`email_enc BLOB`、`registered_by`、`registered_at`、`source CHE
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `candidate_contact`（`application_id` 唯一、`phone_enc BLOB`、`email_enc BLOB`、`registered_by`、`registered_at`、`source CHECK IN hr_manual/candidate_confirmed`、`purged_at`、`purge_reason`）与
+    `candidate_con
+  来源: openspec/changes/interview-scheduling/tasks.md:16
+  可见: false
+- id: interview-scheduling/1.5
+  场景: interview-scheduling
+  阶段: build
+  标题: '`stage` 预置行追加 `interview`（`stage_type=interview`，幂等插入：已存在跳过）；测试：M2 预置三行不变、`interview` 行存在且唯一'
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`stage` 预置行追加 `interview`（`stage_type=interview`，幂等插入：已存在跳过）；测试：M2 预置三行不变、`interview` 行存在且唯一'
+  来源: openspec/changes/interview-scheduling/tasks.md:17
+  可见: false
+- id: interview-scheduling/1.6
+  场景: interview-scheduling
+  阶段: build
+  标题: '`tests/test_db_interview_schema.py`：新库建表齐全；复制 M2 结构的老库升级后既有表一行不改；全部 CHECK 反证（非法 status／mode／kind 被拒）'
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/U1/plan
+  触碰区:
+  - tests/test_db_interview_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`tests/test_db_interview_schema.py`：新库建表齐全；复制 M2 结构的老库升级后既有表一行不改；全部 CHECK 反证（非法 status／mode／kind 被拒）'
+  来源: openspec/changes/interview-scheduling/tasks.md:18
+  可见: false
+- id: interview-scheduling/1.7
+  场景: interview-scheduling
+  阶段: build
+  标题: 面试官名单维护接口 `GET/POST/PATCH /interviewers`（HR 角色）；幂等：同 `account_id` 重复创建返回既有记录；测试：非 HR 角色 403
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 面试官名单维护接口 `GET/POST/PATCH /interviewers`（HR 角色）；幂等：同 `account_id` 重复创建返回既有记录；测试：非 HR 角色 403
+  来源: openspec/changes/interview-scheduling/tasks.md:19
+  可见: false
+- id: interview-scheduling/U1/plan
+  场景: interview-scheduling
+  阶段: plan
+  标题: spec-to-plan：1. U1 面试域模型
+  单元: U1 面试域模型
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-interview-scheduling-unit1-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+  闸门: G2 interview-scheduling
+- id: interview-scheduling/U1
+  场景: interview-scheduling
+  阶段: build
+  标题: 1. U1 面试域模型
+  单元: U1 面试域模型
+  依赖:
+  - interview-scheduling/1.1
+  - interview-scheduling/1.2
+  - interview-scheduling/1.3
+  - interview-scheduling/1.4
+  - interview-scheduling/1.5
+  - interview-scheduling/1.6
+  - interview-scheduling/1.7
+  - interview-scheduling/U1/plan
+  触碰区:
+  - app/storage/db.py
+  - tests/test_db_interview_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+- id: interview-scheduling/2.1
+  场景: interview-scheduling
+  阶段: build
+  标题: '`app/agents/conflict_check.py::check(candidate_window, interviewer_windows, existing_slots) -> list[Conflict]` 纯函数：面试官无可'
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区:
+  - app/agents/conflict_check.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/agents/conflict_check.py::check(candidate_window, interviewer_windows, existing_slots) -> list[Conflict]` 纯函数：面试官无可用时段、面试官时段被占、候选人同时刻另有场次三类，全部列出；测试覆盖
+    spec 三个 Scenario；模块内 grep 不得出现 storage 写入'
+  来源: openspec/changes/interview-scheduling/tasks.md:23
+  可见: false
+- id: interview-scheduling/2.2
+  场景: interview-scheduling
+  阶段: build
+  标题: 时段登记接口 `POST/DELETE /interviewers/me/availability`：只写本人；重叠拒绝；被场次占用的时段不可撤销；HR `on_behalf` 代登记留痕；幂等：同起止时刻重复登记返回既有行
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 时段登记接口 `POST/DELETE /interviewers/me/availability`：只写本人；重叠拒绝；被场次占用的时段不可撤销；HR `on_behalf` 代登记留痕；幂等：同起止时刻重复登记返回既有行。测试：面试官 A 读 B 的时段 403
+  来源: openspec/changes/interview-scheduling/tasks.md:24
+  可见: false
+- id: interview-scheduling/2.3
+  场景: interview-scheduling
+  阶段: build
+  标题: 节点 `effect_schedule_slot`：先跑 2.1 过冲突再写 `interview_slot` ＋ `interview_slot_interviewer` ＋ `application_stage_history(acti
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_schedule_slot`：先跑 2.1 过冲突再写 `interview_slot` ＋ `interview_slot_interviewer` ＋ `application_stage_history(action=scheduled, actor_type=human)`，三写同事务；幂等键
+    `{application_id}:effect_schedule_slo
+  来源: openspec/changes/interview-scheduling/tasks.md:25
+  可见: false
+- id: interview-scheduling/2.4
+  场景: interview-scheduling
+  阶段: build
+  标题: 节点 `effect_reschedule_slot`：新时刻过 2.1；更新场次并写 history（含原时刻／新时刻）；幂等键 `{application_id}:effect_reschedule_slot:{slot_id}:{re
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_reschedule_slot`：新时刻过 2.1；更新场次并写 history（含原时刻／新时刻）；幂等键 `{application_id}:effect_reschedule_slot:{slot_id}:{request_id}`；测试
+  来源: openspec/changes/interview-scheduling/tasks.md:26
+  可见: false
+- id: interview-scheduling/2.5
+  场景: interview-scheduling
+  阶段: build
+  标题: 节点 `effect_cancel_slot`（须 `cancel_reason`，记录保留）与 `effect_complete_slot`（`completed/no_show`，开始时刻前拒绝；HR 或该场面试官可操作）；各写 his
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_cancel_slot`（须 `cancel_reason`，记录保留）与 `effect_complete_slot`（`completed/no_show`，开始时刻前拒绝；HR 或该场面试官可操作）；各写 history；幂等键含 `slot_id` 与目标状态；测试：取消后记录仍在、开始前标完成被拒
+  来源: openspec/changes/interview-scheduling/tasks.md:27
+  可见: false
+- id: interview-scheduling/2.6
+  场景: interview-scheduling
+  阶段: build
+  标题: 不变式测试 `tests/test_interview_history_invariant.py`：对任一投递，`application_stage_history` 中面试相关条数 ＝ 该投递成功执行的排期动作次数（安排／改期／取消／完成
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区:
+  - tests/test_interview_history_invariant.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 不变式测试 `tests/test_interview_history_invariant.py`：对任一投递，`application_stage_history` 中面试相关条数 ＝ 该投递成功执行的排期动作次数（安排／改期／取消／完成），穷举含重跑的序列
+  来源: openspec/changes/interview-scheduling/tasks.md:28
+  可见: false
+- id: interview-scheduling/2.7
+  场景: interview-scheduling
+  阶段: build
+  标题: 面试官周视图页 `GET /interviewers/me/availability`（登记／撤销）与当日安排页 `GET /interviewers/me/schedule`（今日＋7 日，⛔ 不显示评分／排名／硬门槛／联系方式）；相对路
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 面试官周视图页 `GET /interviewers/me/availability`（登记／撤销）与当日安排页 `GET /interviewers/me/schedule`（今日＋7 日，⛔ 不显示评分／排名／硬门槛／联系方式）；相对路径，子路径前缀测试
+  来源: openspec/changes/interview-scheduling/tasks.md:29
+  可见: false
+- id: interview-scheduling/2.8
+  场景: interview-scheduling
+  阶段: build
+  标题: HR 排期页 `GET /applications/{id}/schedule`：面试官多选、轮次、时刻、形式；冲突原因全部展示；改期／取消／完成按钮；"已安排但邀约结果未回填 > 2 天"醒目标记（页面计算，无定时任务）
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: HR 排期页 `GET /applications/{id}/schedule`：面试官多选、轮次、时刻、形式；冲突原因全部展示；改期／取消／完成按钮；"已安排但邀约结果未回填 > 2 天"醒目标记（页面计算，无定时任务）
+  来源: openspec/changes/interview-scheduling/tasks.md:30
+  可见: false
+- id: interview-scheduling/2.9
+  场景: interview-scheduling
+  阶段: build
+  标题: U2 e2e（httpx＋HTML 断言）：夹具把投递流转到 `interview` → 面试官登记时段 → HR 安排 → 冲突拒绝 → 改期 → 完成；全程子路径前缀；history 条数守恒
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U2 e2e（httpx＋HTML 断言）：夹具把投递流转到 `interview` → 面试官登记时段 → HR 安排 → 冲突拒绝 → 改期 → 完成；全程子路径前缀；history 条数守恒
+  来源: openspec/changes/interview-scheduling/tasks.md:31
+  可见: false
+- id: interview-scheduling/U2/plan
+  场景: interview-scheduling
+  阶段: plan
+  标题: spec-to-plan：2. U2 时段登记与排期动作
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/U1
+  触碰区:
+  - docs/superpowers/plans/*-interview-scheduling-unit2-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+  闸门: G2 interview-scheduling
+- id: interview-scheduling/U2
+  场景: interview-scheduling
+  阶段: build
+  标题: 2. U2 时段登记与排期动作
+  单元: U2 时段登记与排期动作
+  依赖:
+  - interview-scheduling/0.1
+  - interview-scheduling/0.2
+  - interview-scheduling/2.1
+  - interview-scheduling/2.2
+  - interview-scheduling/2.3
+  - interview-scheduling/2.4
+  - interview-scheduling/2.5
+  - interview-scheduling/2.6
+  - interview-scheduling/2.7
+  - interview-scheduling/2.8
+  - interview-scheduling/2.9
+  - interview-scheduling/U1
+  - interview-scheduling/U2/plan
+  触碰区:
+  - app/agents/conflict_check.py
+  - tests/test_interview_history_invariant.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+- id: interview-scheduling/3.1
+  场景: interview-scheduling
+  阶段: build
+  标题: '`invitation_template` v1 占位模板（岗位／轮次／时刻／形式／面试官称谓／联系人占位符；⛔ 无评分／排名／淘汰理由占位符，测试反证）；模板维护接口 `PUT /invitation-templates`（版本递增，不覆'
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`invitation_template` v1 占位模板（岗位／轮次／时刻／形式／面试官称谓／联系人占位符；⛔ 无评分／排名／淘汰理由占位符，测试反证）；模板维护接口 `PUT /invitation-templates`（版本递增，不覆盖）；0.4 回件到后只换内容'
+  来源: openspec/changes/interview-scheduling/tasks.md:35
+  可见: false
+- id: interview-scheduling/3.2
+  场景: interview-scheduling
+  阶段: build
+  标题: '`app/agents/invitation_drafter.py::compute_invitation_draft(slot, template, contact_hint) -> Draft` 纯函数：走 LLM 网关 json_sc'
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区:
+  - app/agents/invitation_drafter.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/agents/invitation_drafter.py::compute_invitation_draft(slot, template, contact_hint) -> Draft` 纯函数：走 LLM 网关 json_schema 路径，`temperature=0`，`prompt_version=invite-v1`，模型标识取
+    API 响应 `model` 字段，`Audi'
+  来源: openspec/changes/interview-scheduling/tasks.md:36
+  可见: false
+- id: interview-scheduling/3.3
+  场景: interview-scheduling
+  阶段: build
+  标题: '节点 `effect_persist_draft`：写 `interview_invitation_draft`（版本递增）；幂等键 `{slot_id}:effect_persist_draft:{analysis_run_id}`；对 '
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_persist_draft`：写 `interview_invitation_draft`（版本递增）；幂等键 `{slot_id}:effect_persist_draft:{analysis_run_id}`；对 `cancelled` 场次拒绝生成。测试：重复生成产生新版本、旧版保留；重跑不重复
+  来源: openspec/changes/interview-scheduling/tasks.md:37
+  可见: false
+- id: interview-scheduling/3.4
+  场景: interview-scheduling
+  阶段: build
+  标题: 编辑与"标记为人工撰写"：编辑后仍带标识；标记动作记录 `authorship_marked_by/at` 与原 AI 版本；测试两个 Scenario
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 编辑与"标记为人工撰写"：编辑后仍带标识；标记动作记录 `authorship_marked_by/at` 与原 AI 版本；测试两个 Scenario
+  来源: openspec/changes/interview-scheduling/tasks.md:38
+  可见: false
+- id: interview-scheduling/3.5
+  场景: interview-scheduling
+  阶段: build
+  标题: 回填接口 `POST /interview-slots/{id}/invitation/outcome`：`sent(channel)/confirmed/declined(reason)/reschedule_requested`；记录操
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 回填接口 `POST /interview-slots/{id}/invitation/outcome`：`sent(channel)/confirmed/declined(reason)/reschedule_requested`；记录操作人时刻；`declined` ⛔ 不写 `rejection_record`、投递阶段不动（测试断言
+    `rejection_record` 行数不变）；幂等：
+  来源: openspec/changes/interview-scheduling/tasks.md:39
+  可见: false
+- id: interview-scheduling/3.6
+  场景: interview-scheduling
+  阶段: build
+  标题: 系统外发接线（默认不可用）：`POST /interview-slots/{id}/invitation/send` 调 `deliver_candidate_message(type='interview_invitation', rec
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 系统外发接线（默认不可用）：`POST /interview-slots/{id}/invitation/send` 调 `deliver_candidate_message(type='interview_invitation', recipient=<从 U4 读取的联系方式拍平字符串，U4 关闭时为空
+    ⇒ 门禁按收件对象未知拦截>, confirmed_by=<HR>)`；⛔ 不新增外发路径
+  来源: openspec/changes/interview-scheduling/tasks.md:40
+  可见: false
+- id: interview-scheduling/3.7
+  场景: interview-scheduling
+  阶段: build
+  标题: 邀约页 `GET /interview-slots/{id}/invitation`：生成、查看各版本、复制、编辑、标记人工、回填结果；AI 标识可见；相对路径
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 邀约页 `GET /interview-slots/{id}/invitation`：生成、查看各版本、复制、编辑、标记人工、回填结果；AI 标识可见；相对路径
+  来源: openspec/changes/interview-scheduling/tasks.md:41
+  可见: false
+- id: interview-scheduling/3.8
+  场景: interview-scheduling
+  阶段: build
+  标题: U3 e2e：安排 → 生成 → 复制 → 回填已发出 → 回填确认；`declined` 路径投递阶段不变
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U3 e2e：安排 → 生成 → 复制 → 回填已发出 → 回填确认；`declined` 路径投递阶段不变
+  来源: openspec/changes/interview-scheduling/tasks.md:42
+  可见: false
+- id: interview-scheduling/U3/plan
+  场景: interview-scheduling
+  阶段: plan
+  标题: spec-to-plan：3. U3 邀约文案生成与回填
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/U2
+  触碰区:
+  - docs/superpowers/plans/*-interview-scheduling-unit3-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+  闸门: G2 interview-scheduling
+- id: interview-scheduling/U3
+  场景: interview-scheduling
+  阶段: build
+  标题: 3. U3 邀约文案生成与回填
+  单元: U3 邀约文案生成与回填
+  依赖:
+  - interview-scheduling/0.4
+  - interview-scheduling/3.1
+  - interview-scheduling/3.2
+  - interview-scheduling/3.3
+  - interview-scheduling/3.4
+  - interview-scheduling/3.5
+  - interview-scheduling/3.6
+  - interview-scheduling/3.7
+  - interview-scheduling/3.8
+  - interview-scheduling/U2
+  - interview-scheduling/U3/plan
+  触碰区:
+  - app/agents/invitation_drafter.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+- id: interview-scheduling/4.1
+  场景: interview-scheduling
+  阶段: build
+  标题: '`Settings.candidate_contact_vault_enabled` 默认 False；`is_candidate_contact_vault_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 密钥 `C'
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`Settings.candidate_contact_vault_enabled` 默认 False；`is_candidate_contact_vault_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 密钥 `CANDIDATE_CONTACT_KEY` 已注入；测试："配置开但密钥缺
+    ⇒ 关"'
+  来源: openspec/changes/interview-scheduling/tasks.md:46
+  可见: false
+- id: interview-scheduling/4.2
+  场景: interview-scheduling
+  阶段: build
+  标题: '`app/storage/contact_vault.py`：AES-GCM 字段级加解密（优先复用 `requirements.txt` 已有依赖，无则登记新增依赖待 `.51` 冒烟）；密钥不落库不入版本库；日志脱敏测试：异常信息不含明'
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区:
+  - app/storage/contact_vault.py
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: '`app/storage/contact_vault.py`：AES-GCM 字段级加解密（优先复用 `requirements.txt` 已有依赖，无则登记新增依赖待 `.51` 冒烟）；密钥不落库不入版本库；日志脱敏测试：异常信息不含明文'
+  来源: openspec/changes/interview-scheduling/tasks.md:47
+  可见: false
+- id: interview-scheduling/4.3
+  场景: interview-scheduling
+  阶段: build
+  标题: 登记接口 `POST /applications/{id}/contact`：开关关 ⇒ 拒绝并留痕尝试（不含明文）；投递阶段 < `interview` ⇒ 拒绝；成功 ⇒ 密文入库、记录登记人／时刻／来源；幂等：同投递重复登记覆盖密文并
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 登记接口 `POST /applications/{id}/contact`：开关关 ⇒ 拒绝并留痕尝试（不含明文）；投递阶段 < `interview` ⇒ 拒绝；成功 ⇒ 密文入库、记录登记人／时刻／来源；幂等：同投递重复登记覆盖密文并留痕一次"更新"
+  来源: openspec/changes/interview-scheduling/tasks.md:48
+  可见: false
+- id: interview-scheduling/4.4
+  场景: interview-scheduling
+  阶段: build
+  标题: '`read_contact(application_id, accessor, purpose)`：先写 `candidate_contact_access_log` 再解密；留痕失败 ⇒ 抛错不返回明文；已删除 ⇒ 返回 `purged`'
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`read_contact(application_id, accessor, purpose)`：先写 `candidate_contact_access_log` 再解密；留痕失败 ⇒ 抛错不返回明文；已删除 ⇒ 返回 `purged`；测试覆盖 spec 四个 Scenario'
+  来源: openspec/changes/interview-scheduling/tasks.md:49
+  可见: false
+- id: interview-scheduling/4.5
+  场景: interview-scheduling
+  阶段: build
+  标题: 节点 `effect_purge_contact`：投递终止（M2 批量确认淘汰／3.5 `declined` 且 HR 确认终止／入职完成）或留存到期触发；删密文、写 `purged_at/purge_reason`；幂等键 `{appl
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 节点 `effect_purge_contact`：投递终止（M2 批量确认淘汰／3.5 `declined` 且 HR 确认终止／入职完成）或留存到期触发；删密文、写 `purged_at/purge_reason`；幂等键 `{application_id}:effect_purge_contact:{reason}`；测试：重跑不报错不重复
+  来源: openspec/changes/interview-scheduling/tasks.md:50
+  可见: false
+- id: interview-scheduling/4.6
+  场景: interview-scheduling
+  阶段: build
+  标题: 存储层断言测试：直接 SELECT 联系方式列不匹配手机号／邮箱正则；去重路径不调用解密（M2 哈希口径不变，测试 mock 解密函数断言未被调用）
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 存储层断言测试：直接 SELECT 联系方式列不匹配手机号／邮箱正则；去重路径不调用解密（M2 哈希口径不变，测试 mock 解密函数断言未被调用）
+  来源: openspec/changes/interview-scheduling/tasks.md:51
+  可见: false
+- id: interview-scheduling/4.7
+  场景: interview-scheduling
+  阶段: build
+  标题: 排期页与邀约页"显示手机号／邮箱"按钮：每次点击一条留痕；开关关时显示"功能未开启"
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 排期页与邀约页"显示手机号／邮箱"按钮：每次点击一条留痕；开关关时显示"功能未开启"
+  来源: openspec/changes/interview-scheduling/tasks.md:52
+  可见: false
+- id: interview-scheduling/4.8
+  场景: interview-scheduling
+  阶段: build
+  标题: 开关开启（Shao Peishen 亲自；前置 0.3 PIA 扩展签认）
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`.51` 环境变量 `CANDIDATE_CONTACT_VAULT_ENABLED=1` 且密钥已注入，由本人执行并在 `intent.md` 末尾记「联系方式保管开启 <日期>」'
+  来源: openspec/changes/interview-scheduling/tasks.md:53
+  可见: false
+- id: interview-scheduling/U4/plan
+  场景: interview-scheduling
+  阶段: plan
+  标题: spec-to-plan：4. U4 候选人联系方式保管
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/U3
+  触碰区:
+  - docs/superpowers/plans/*-interview-scheduling-unit4-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+  闸门: G2 interview-scheduling
+- id: interview-scheduling/U4
+  场景: interview-scheduling
+  阶段: build
+  标题: 4. U4 候选人联系方式保管
+  单元: U4 候选人联系方式保管
+  依赖:
+  - interview-scheduling/0.3
+  - interview-scheduling/4.1
+  - interview-scheduling/4.2
+  - interview-scheduling/4.3
+  - interview-scheduling/4.4
+  - interview-scheduling/4.5
+  - interview-scheduling/4.6
+  - interview-scheduling/4.7
+  - interview-scheduling/4.8
+  - interview-scheduling/U3
+  - interview-scheduling/U4/plan
+  触碰区:
+  - app/storage/contact_vault.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+- id: interview-scheduling/5.1
+  场景: interview-scheduling
+  阶段: build
+  标题: '`app/audit/assertions.py` 新增：① `candidate_contact` 表存在时明文列不得匹配手机号／邮箱正则；② `candidate_contact_access_log` 条数 ≥ 明文读取调用计数（以测'
+  单元: U5 合规断言与发版
+  依赖:
+  - interview-scheduling/U4
+  - interview-scheduling/U5/plan
+  触碰区:
+  - app/audit/assertions.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/audit/assertions.py` 新增：① `candidate_contact` 表存在时明文列不得匹配手机号／邮箱正则；② `candidate_contact_access_log` 条数 ≥ 明文读取调用计数（以测试夹具计数器验证）；③ `rejection_record` 中不存在
+    `reason_type` 以外任何与"候选人拒绝邀约"相关的写入（`ai_score`'
+  来源: openspec/changes/interview-scheduling/tasks.md:57
+  可见: false
+- id: interview-scheduling/5.2
+  场景: interview-scheduling
+  阶段: build
+  标题: CI 接入三条断言；`tests/test_doc_size_budget.py` 通过；`requirements.txt` 与 `sync-to-server.sh` 白名单增量
+  单元: U5 合规断言与发版
+  依赖:
+  - interview-scheduling/U4
+  - interview-scheduling/U5/plan
+  触碰区:
+  - tests/test_doc_size_budget.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: CI 接入三条断言；`tests/test_doc_size_budget.py` 通过；`requirements.txt` 与 `sync-to-server.sh` 白名单增量
+  来源: openspec/changes/interview-scheduling/tasks.md:58
+  可见: false
+- id: interview-scheduling/5.3
+  场景: interview-scheduling
+  阶段: build
+  标题: HR 一页操作说明 `docs/interview-scheduling-guide.md`：面试官怎么登记时段、HR 怎么排期／改期、邀约怎么复制回填、哪些不能做（不自助、不自动发）
+  单元: U5 合规断言与发版
+  依赖:
+  - interview-scheduling/U4
+  - interview-scheduling/U5/plan
+  触碰区:
+  - docs/interview-scheduling-guide.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: HR 一页操作说明 `docs/interview-scheduling-guide.md`：面试官怎么登记时段、HR 怎么排期／改期、邀约怎么复制回填、哪些不能做（不自助、不自动发）
+  来源: openspec/changes/interview-scheduling/tasks.md:59
+  可见: false
+- id: interview-scheduling/5.4
+  场景: interview-scheduling
+  阶段: build
+  标题: '`.51` 发版（Shao Peishen 拍「发」，G3）'
+  单元: U5 合规断言与发版
+  依赖:
+  - interview-scheduling/U4
+  - interview-scheduling/U5/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`05-发布运行手册.md` 流程跑完，联系方式保管开关保持关闭（4.8 另行）'
+  来源: openspec/changes/interview-scheduling/tasks.md:60
+  可见: false
+- id: interview-scheduling/5.5
+  场景: interview-scheduling
+  阶段: build
+  标题: '`docs/tech-debt.md`：TD-8 追加"首个调用方＝interview-scheduling 3.6"；TD-11「怎么还」追加 `effect_send_reminder` 幂等键约定 `{slot_id}:effect_'
+  单元: U5 合规断言与发版
+  依赖:
+  - interview-scheduling/U4
+  - interview-scheduling/U5/plan
+  触碰区:
+  - docs/tech-debt.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`docs/tech-debt.md`：TD-8 追加"首个调用方＝interview-scheduling 3.6"；TD-11「怎么还」追加 `effect_send_reminder` 幂等键约定 `{slot_id}:effect_send_reminder:{nth}`；登记"面试官代登记时段真实性"技术债'
+  来源: openspec/changes/interview-scheduling/tasks.md:61
+  可见: false
+- id: interview-scheduling/U5/plan
+  场景: interview-scheduling
+  阶段: plan
+  标题: spec-to-plan：5. U5 合规断言与发版
+  单元: U5 合规断言与发版
+  依赖:
+  - interview-scheduling/U4
+  触碰区:
+  - docs/superpowers/plans/*-interview-scheduling-unit5-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit5 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+  闸门: G2 interview-scheduling
+- id: interview-scheduling/U5
+  场景: interview-scheduling
+  阶段: build
+  标题: 5. U5 合规断言与发版
+  单元: U5 合规断言与发版
+  依赖:
+  - interview-scheduling/5.1
+  - interview-scheduling/5.2
+  - interview-scheduling/5.3
+  - interview-scheduling/5.4
+  - interview-scheduling/5.5
+  - interview-scheduling/U4
+  - interview-scheduling/U5/plan
+  触碰区:
+  - app/audit/assertions.py
+  - docs/interview-scheduling-guide.md
+  - docs/tech-debt.md
+  - tests/test_doc_size_budget.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/interview-scheduling/tasks.md
+  可见: false
+- id: change:interview-scheduling
+  场景: interview-scheduling
+  阶段: archive
+  标题: 变更包 interview-scheduling
+  依赖:
+  - interview-scheduling/U1
+  - interview-scheduling/U2
+  - interview-scheduling/U3
+  - interview-scheduling/U4
+  - interview-scheduling/U5
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
 - id: m1-intake-quality-fixes/U1/plan
   场景: M1
@@ -2611,6 +3975,1455 @@ tasks:
   产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
+- id: offer-generation/0.1
+  场景: offer-generation
+  阶段: gate
+  标题: 登录＋访问留痕就位（M2 3.2／3.9 交付并发版；Shao Peishen 拍发版）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`.51` 上 `reviewer_of()` 返回真实用户名'
+  来源: openspec/changes/offer-generation/tasks.md:5
+  可见: false
+- id: offer-generation/0.2
+  场景: offer-generation
+  阶段: gate
+  标题: M2 U1 `rejection_record` 与 U5 批量确认交付
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: M2 tasks 2.3 与第 6 章批量确认条目勾选
+  来源: openspec/changes/offer-generation/tasks.md:6
+  可见: false
+- id: offer-generation/0.3
+  场景: offer-generation
+  阶段: gate
+  标题: 人事部#3 回件：Offer 模板／审批链／拒信话术与时机／答复现状（汤丽萍，经跟进信线）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 四项归档且 design OQ1–OQ4 回填
+  来源: openspec/changes/offer-generation/tasks.md:7
+  可见: false
+- id: offer-generation/0.4
+  场景: offer-generation
+  阶段: gate
+  标题: 电子签／短信采购（Shao Peishen；本包不需要，Q1b／Q4a 已定）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 🔴 电子签／短信采购（Shao Peishen；本包不需要，Q1b／Q4a 已定）。⚰️ 墓碑：本包内保持"不需要"，将来改系统发送并签收时另立包重提
+  来源: openspec/changes/offer-generation/tasks.md:8
+  可见: false
+- id: offer-generation/0.5
+  场景: offer-generation
+  阶段: gate
+  标题: '`interview-scheduling` 的 `candidate-contact-vault` 交付（系统外发收件对象来源；HR 自行发送不依赖）'
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`interview-scheduling` tasks 4.4 勾选'
+  来源: openspec/changes/offer-generation/tasks.md:9
+  可见: false
+- id: offer-generation/1.1
+  场景: offer-generation
+  阶段: build
+  标题: '`app/storage/db.py` 新增 `letter_template`（`kind CHECK IN offer/rejection, version, body, updated_by, updated_at`；`(kind, '
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/U1/plan
+  触碰区:
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/storage/db.py` 新增 `letter_template`（`kind CHECK IN offer/rejection, version, body, updated_by, updated_at`；`(kind, version)` 唯一）、`candidate_letter`（`application_id,
+    kind, version, template_versio'
+  来源: openspec/changes/offer-generation/tasks.md:13
+  可见: false
+- id: offer-generation/1.2
+  场景: offer-generation
+  阶段: build
+  标题: 新增 `offer`（`application_id` 唯一、`job_id, department, start_date, report_to, note, status CHECK IN pending_approval/needs_
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `offer`（`application_id` 唯一、`job_id, department, start_date, report_to, note, status CHECK IN pending_approval/needs_revision/approved/exported/accepted/declined/negotiating,
+    approval_round, create
+  来源: openspec/changes/offer-generation/tasks.md:14
+  可见: false
+- id: offer-generation/1.3
+  场景: offer-generation
+  阶段: build
+  标题: 新增 `offer_approval_chain`（`job_id, level, approver_account_ids JSON, updated_by`）与 `offer_approval`（`offer_id, round, le
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `offer_approval_chain`（`job_id, level, approver_account_ids JSON, updated_by`）与 `offer_approval`（`offer_id, round, level, approver, decision CHECK IN approved/returned,
+    comment, at`；`(offer_id, rou
+  来源: openspec/changes/offer-generation/tasks.md:15
+  可见: false
+- id: offer-generation/1.4
+  场景: offer-generation
+  阶段: build
+  标题: 新增 `letter_access_log`（`accessor, application_id, letter_id, access_type CHECK IN view/export, at`，无正文列）
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `letter_access_log`（`accessor, application_id, letter_id, access_type CHECK IN view/export, at`，无正文列）
+  来源: openspec/changes/offer-generation/tasks.md:16
+  可见: false
+- id: offer-generation/1.5
+  场景: offer-generation
+  阶段: build
+  标题: '`stage` 预置行幂等追加 `offer`（`stage_type=offer`）与 `hired`（`stage_type=hired`）；测试：M2 预置三行不变、`interview` 行（若 `interview-schedul'
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`stage` 预置行幂等追加 `offer`（`stage_type=offer`）与 `hired`（`stage_type=hired`）；测试：M2 预置三行不变、`interview` 行（若 `interview-scheduling` 已建）不重复'
+  来源: openspec/changes/offer-generation/tasks.md:17
+  可见: false
+- id: offer-generation/1.6
+  场景: offer-generation
+  阶段: build
+  标题: '`tests/test_db_offer_schema.py`：新库建表齐全；老库升级既有表不变；全部 CHECK 反证；`offer` 表无薪资列断言'
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/U1/plan
+  触碰区:
+  - tests/test_db_offer_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`tests/test_db_offer_schema.py`：新库建表齐全；老库升级既有表不变；全部 CHECK 反证；`offer` 表无薪资列断言'
+  来源: openspec/changes/offer-generation/tasks.md:18
+  可见: false
+- id: offer-generation/1.7
+  场景: offer-generation
+  阶段: build
+  标题: 审批链维护接口 `GET/PUT /jobs/{id}/offer-approval-chain`（HR 角色；默认一级＝业务经理）；幂等：同内容重复 PUT 不产生新版本；审批人必须是可识别账号
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/U1/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 审批链维护接口 `GET/PUT /jobs/{id}/offer-approval-chain`（HR 角色；默认一级＝业务经理）；幂等：同内容重复 PUT 不产生新版本；审批人必须是可识别账号
+  来源: openspec/changes/offer-generation/tasks.md:19
+  可见: false
+- id: offer-generation/U1/plan
+  场景: offer-generation
+  阶段: plan
+  标题: spec-to-plan：1. U1 Offer 域模型
+  单元: U1 Offer 域模型
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-offer-generation-unit1-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+  闸门: G2 offer-generation
+- id: offer-generation/U1
+  场景: offer-generation
+  阶段: build
+  标题: 1. U1 Offer 域模型
+  单元: U1 Offer 域模型
+  依赖:
+  - offer-generation/1.1
+  - offer-generation/1.2
+  - offer-generation/1.3
+  - offer-generation/1.4
+  - offer-generation/1.5
+  - offer-generation/1.6
+  - offer-generation/1.7
+  - offer-generation/U1/plan
+  触碰区:
+  - app/storage/db.py
+  - tests/test_db_offer_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+- id: offer-generation/2.1
+  场景: offer-generation
+  阶段: build
+  标题: 模板维护接口 `GET/PUT /letter-templates/{kind}`：版本递增不覆盖；保存校验 ⛔ 评分／排名／硬门槛占位符、Offer ⛔ 薪资类占位符（正则＋关键词表），命中即拒并指出；占位模板 v1 各一份（0.3 回件
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 模板维护接口 `GET/PUT /letter-templates/{kind}`：版本递增不覆盖；保存校验 ⛔ 评分／排名／硬门槛占位符、Offer ⛔ 薪资类占位符（正则＋关键词表），命中即拒并指出；占位模板 v1 各一份（0.3 回件到后只换内容）；测试两个 Scenario
+  来源: openspec/changes/offer-generation/tasks.md:23
+  可见: false
+- id: offer-generation/2.2
+  场景: offer-generation
+  阶段: build
+  标题: '`app/agents/letter_drafter.py::compute_letter_draft(kind, template, facts) -> Draft` 纯函数：LLM 网关 json_schema 路径，`temperat'
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区:
+  - app/agents/letter_drafter.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/agents/letter_drafter.py::compute_letter_draft(kind, template, facts) -> Draft` 纯函数：LLM 网关 json_schema 路径，`temperature=0`，`prompt_version=letter-{kind}-v1`，模型标识取
+    API 响应 `model` 字段，`AuditHook` 留痕（'
+  来源: openspec/changes/offer-generation/tasks.md:24
+  可见: false
+- id: offer-generation/2.3
+  场景: offer-generation
+  阶段: build
+  标题: 节点 `effect_persist_letter`：写 `candidate_letter`（版本递增）；幂等键 `{application_id}:effect_persist_letter:{kind}:{analysis_run_i
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_persist_letter`：写 `candidate_letter`（版本递增）；幂等键 `{application_id}:effect_persist_letter:{kind}:{analysis_run_id}`；Offer 类前置 `offer.status=approved`；拒信类前置该投递存在
+    `rejection_record`（缺则拒并提示先批量确认）
+  来源: openspec/changes/offer-generation/tasks.md:25
+  可见: false
+- id: offer-generation/2.4
+  场景: offer-generation
+  阶段: build
+  标题: 编辑与"标记为人工撰写"：`PATCH /letters/{id}`（编辑后 `ai_generated` 仍为真）、`POST /letters/{id}/mark-human`（记 `authorship_marked_by/at/fr
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 编辑与"标记为人工撰写"：`PATCH /letters/{id}`（编辑后 `ai_generated` 仍为真）、`POST /letters/{id}/mark-human`（记 `authorship_marked_by/at/from_version`）；测试
+  来源: openspec/changes/offer-generation/tasks.md:26
+  可见: false
+- id: offer-generation/2.5
+  场景: offer-generation
+  阶段: build
+  标题: docx 导出 `GET /letters/{id}/export.docx`：`python-docx` 渲染；未标记人工撰写 ⇒ 页眉含 AI 标识文字；Offer 薪资处留空段落；写 `letter_access_log(export
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docx 导出 `GET /letters/{id}/export.docx`：`python-docx` 渲染；未标记人工撰写 ⇒ 页眉含 AI 标识文字；Offer 薪资处留空段落；写 `letter_access_log(export)`；`candidate_letter.sent_status=exported`；测试：docx
+    解析回读含标识、薪资段为空
+  来源: openspec/changes/offer-generation/tasks.md:27
+  可见: false
+- id: offer-generation/2.6
+  场景: offer-generation
+  阶段: build
+  标题: 查看留痕：`GET /letters/{id}` 先写 `letter_access_log(view)` 再返回正文，留痕失败 ⇒ 不返回正文；测试
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 查看留痕：`GET /letters/{id}` 先写 `letter_access_log(view)` 再返回正文，留痕失败 ⇒ 不返回正文；测试
+  来源: openspec/changes/offer-generation/tasks.md:28
+  可见: false
+- id: offer-generation/2.7
+  场景: offer-generation
+  阶段: build
+  标题: 文书页 `GET /applications/{id}/letters`：生成、各版本、编辑、标记人工、导出／复制、AI 标识可见；相对路径，子路径前缀测试
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 文书页 `GET /applications/{id}/letters`：生成、各版本、编辑、标记人工、导出／复制、AI 标识可见；相对路径，子路径前缀测试
+  来源: openspec/changes/offer-generation/tasks.md:29
+  可见: false
+- id: offer-generation/2.8
+  场景: offer-generation
+  阶段: build
+  标题: 在 `.51` 同款 Windows 环境冒烟导出一份 docx 并用 Word 打开确认（记录到 tasks 本条）
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 在 `.51` 同款 Windows 环境冒烟导出一份 docx 并用 Word 打开确认（记录到 tasks 本条）
+  来源: openspec/changes/offer-generation/tasks.md:30
+  可见: false
+- id: offer-generation/U2/plan
+  场景: offer-generation
+  阶段: plan
+  标题: spec-to-plan：2. U2 文书引擎（Offer／拒信共用）
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/U1
+  触碰区:
+  - docs/superpowers/plans/*-offer-generation-unit2-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+  闸门: G2 offer-generation
+- id: offer-generation/U2
+  场景: offer-generation
+  阶段: build
+  标题: 2. U2 文书引擎（Offer／拒信共用）
+  单元: U2 文书引擎（Offer／拒信共用）
+  依赖:
+  - offer-generation/2.1
+  - offer-generation/2.2
+  - offer-generation/2.3
+  - offer-generation/2.4
+  - offer-generation/2.5
+  - offer-generation/2.6
+  - offer-generation/2.7
+  - offer-generation/2.8
+  - offer-generation/U1
+  - offer-generation/U2/plan
+  触碰区:
+  - app/agents/letter_drafter.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+- id: offer-generation/3.1
+  场景: offer-generation
+  阶段: build
+  标题: 发起 Offer `POST /applications/{id}/offer`：前置投递阶段 ≥ `interview`、无 `rejection_record`、`status=ongoing`；写 `offer(pending_app
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 发起 Offer `POST /applications/{id}/offer`：前置投递阶段 ≥ `interview`、无 `rejection_record`、`status=ongoing`；写 `offer(pending_approval, round=1)` ＋ 流转到 `offer` 阶段
+    ＋ history，同事务；幂等键 `{application_id}:effect_cre
+  来源: openspec/changes/offer-generation/tasks.md:34
+  可见: false
+- id: offer-generation/3.2
+  场景: offer-generation
+  阶段: build
+  标题: 节点 `effect_record_approval`：校验操作人在该 `(job, level)` 审批人列表；写 `offer_approval`；最后一级 `approved` ⇒ `offer.status=approved`；任一
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_record_approval`：校验操作人在该 `(job, level)` 审批人列表；写 `offer_approval`；最后一级 `approved` ⇒ `offer.status=approved`；任一级 `returned` ⇒ `needs_revision` 且后续级不触发；幂等键
+    `{offer_id}:effect_record_approval:{
+  来源: openspec/changes/offer-generation/tasks.md:35
+  可见: false
+- id: offer-generation/3.3
+  场景: offer-generation
+  阶段: build
+  标题: 退回后修改 `PATCH /offers/{id}`（仅 `needs_revision` 可改；改后 `round+1`、`status=pending_approval`）；测试：链从第一级重走
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 退回后修改 `PATCH /offers/{id}`（仅 `needs_revision` 可改；改后 `round+1`、`status=pending_approval`）；测试：链从第一级重走
+  来源: openspec/changes/offer-generation/tasks.md:36
+  可见: false
+- id: offer-generation/3.4
+  场景: offer-generation
+  阶段: build
+  标题: 审批页 `GET /offers/pending`（本人待审列表）与 `GET /offers/{id}/approve`：显示 Offer 非敏感字段与投递基本信息；⛔ 不显示 AI 评分／排名／"建议录用"类文本（测试反证页面无相关字符
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 审批页 `GET /offers/pending`（本人待审列表）与 `GET /offers/{id}/approve`：显示 Offer 非敏感字段与投递基本信息；⛔ 不显示 AI 评分／排名／"建议录用"类文本（测试反证页面无相关字符串）；通过／退回＋意见
+  来源: openspec/changes/offer-generation/tasks.md:37
+  可见: false
+- id: offer-generation/3.5
+  场景: offer-generation
+  阶段: build
+  标题: 审批待办的内部通知：复用既有内部通知通道（`question`／`confirmation_prompt` 同类，非候选人门禁范围）；幂等键含 `offer_id/round/level`；无通道时只靠列表页（不阻塞）
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 审批待办的内部通知：复用既有内部通知通道（`question`／`confirmation_prompt` 同类，非候选人门禁范围）；幂等键含 `offer_id/round/level`；无通道时只靠列表页（不阻塞）
+  来源: openspec/changes/offer-generation/tasks.md:38
+  可见: false
+- id: offer-generation/3.6
+  场景: offer-generation
+  阶段: build
+  标题: 导出门槛：2.5 的导出接口对 `offer.status ∉ {approved, exported, accepted, declined, negotiating}` 拒绝；测试：`pending_approval` 导出被拒
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 导出门槛：2.5 的导出接口对 `offer.status ∉ {approved, exported, accepted, declined, negotiating}` 拒绝；测试：`pending_approval` 导出被拒
+  来源: openspec/changes/offer-generation/tasks.md:39
+  可见: false
+- id: offer-generation/3.7
+  场景: offer-generation
+  阶段: build
+  标题: U3 e2e：发起 → 一级退回 → 修改 → 两级通过 → 生成文书 → 导出；审批留痕条数守恒
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U3 e2e：发起 → 一级退回 → 修改 → 两级通过 → 生成文书 → 导出；审批留痕条数守恒
+  来源: openspec/changes/offer-generation/tasks.md:40
+  可见: false
+- id: offer-generation/U3/plan
+  场景: offer-generation
+  阶段: plan
+  标题: spec-to-plan：3. U3 内部审批流
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/U2
+  触碰区:
+  - docs/superpowers/plans/*-offer-generation-unit3-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+  闸门: G2 offer-generation
+- id: offer-generation/U3
+  场景: offer-generation
+  阶段: build
+  标题: 3. U3 内部审批流
+  单元: U3 内部审批流
+  依赖:
+  - offer-generation/0.1
+  - offer-generation/3.1
+  - offer-generation/3.2
+  - offer-generation/3.3
+  - offer-generation/3.4
+  - offer-generation/3.5
+  - offer-generation/3.6
+  - offer-generation/3.7
+  - offer-generation/U2
+  - offer-generation/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+- id: offer-generation/4.1
+  场景: offer-generation
+  阶段: build
+  标题: '`app/outbound/contracts.py` 已登记类型加 `offer_letter`（风险最高级、需确认）；既有门禁测试全部原样通过；新增测试：`offer_letter` 不再按未知类型拦截、无确认人仍拦截'
+  单元: U4 门禁接线与拒信
+  依赖:
+  - offer-generation/U3
+  - offer-generation/U4/plan
+  触碰区:
+  - app/outbound/contracts.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/outbound/contracts.py` 已登记类型加 `offer_letter`（风险最高级、需确认）；既有门禁测试全部原样通过；新增测试：`offer_letter` 不再按未知类型拦截、无确认人仍拦截'
+  来源: openspec/changes/offer-generation/tasks.md:44
+  可见: false
+- id: offer-generation/4.2
+  场景: offer-generation
+  阶段: build
+  标题: 节点 `effect_enqueue_letter`：`POST /letters/{id}/send` 调 `deliver_candidate_message(type=offer_letter|rejection_letter, re
+  单元: U4 门禁接线与拒信
+  依赖:
+  - offer-generation/U3
+  - offer-generation/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_enqueue_letter`：`POST /letters/{id}/send` 调 `deliver_candidate_message(type=offer_letter|rejection_letter, recipient=<contact-vault 读取拍平字符串；未开启
+    ⇒ 空 ⇒ 门禁按收件对象未知拦截>, confirmed_by=<HR>)`；⛔ 不新增
+  来源: openspec/changes/offer-generation/tasks.md:45
+  可见: false
+- id: offer-generation/4.3
+  场景: offer-generation
+  阶段: build
+  标题: 拒信页 `GET /rejections/letters`：列出有 `rejection_record` 且未生成拒信的投递，显示淘汰理由类型（`hard_rule` 指向规则／`human_decision`），HR 勾选后显式"生成"；
+  单元: U4 门禁接线与拒信
+  依赖:
+  - offer-generation/U3
+  - offer-generation/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 拒信页 `GET /rejections/letters`：列出有 `rejection_record` 且未生成拒信的投递，显示淘汰理由类型（`hard_rule` 指向规则／`human_decision`），HR 勾选后显式"生成"；⛔ 批量确认淘汰不自动生成（测试：批量确认后 `candidate_letter`
+    无新行）
+  来源: openspec/changes/offer-generation/tasks.md:46
+  可见: false
+- id: offer-generation/4.4
+  场景: offer-generation
+  阶段: build
+  标题: 复制／发送回填 `POST /letters/{id}/sent`（`channel`）：`sent_status=copied|sent`，记录 HR 与时刻；幂等：同状态重复无第二条留痕
+  单元: U4 门禁接线与拒信
+  依赖:
+  - offer-generation/U3
+  - offer-generation/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 复制／发送回填 `POST /letters/{id}/sent`（`channel`）：`sent_status=copied|sent`，记录 HR 与时刻；幂等：同状态重复无第二条留痕
+  来源: openspec/changes/offer-generation/tasks.md:47
+  可见: false
+- id: offer-generation/4.5
+  场景: offer-generation
+  阶段: build
+  标题: U4 e2e：批量确认淘汰（夹具）→ 拒信页可见 → 生成 → 复制回填；`send` 在总开关关时拦截
+  单元: U4 门禁接线与拒信
+  依赖:
+  - offer-generation/U3
+  - offer-generation/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U4 e2e：批量确认淘汰（夹具）→ 拒信页可见 → 生成 → 复制回填；`send` 在总开关关时拦截
+  来源: openspec/changes/offer-generation/tasks.md:48
+  可见: false
+- id: offer-generation/U4/plan
+  场景: offer-generation
+  阶段: plan
+  标题: spec-to-plan：4. U4 门禁接线与拒信
+  单元: U4 门禁接线与拒信
+  依赖:
+  - offer-generation/U3
+  触碰区:
+  - docs/superpowers/plans/*-offer-generation-unit4-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+  闸门: G2 offer-generation
+- id: offer-generation/U4
+  场景: offer-generation
+  阶段: build
+  标题: 4. U4 门禁接线与拒信
+  单元: U4 门禁接线与拒信
+  依赖:
+  - offer-generation/0.2
+  - offer-generation/4.1
+  - offer-generation/4.2
+  - offer-generation/4.3
+  - offer-generation/4.4
+  - offer-generation/4.5
+  - offer-generation/U3
+  - offer-generation/U4/plan
+  触碰区:
+  - app/outbound/contracts.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+- id: offer-generation/5.1
+  场景: offer-generation
+  阶段: build
+  标题: 节点 `effect_apply_offer_outcome`：前置 `sent_status ∈ {exported, copied, sent, system_queued}`；`accepted(start_date)` ⇒ `off
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '节点 `effect_apply_offer_outcome`：前置 `sent_status ∈ {exported, copied, sent, system_queued}`；`accepted(start_date)` ⇒ `offer.status=accepted`、`stage=hired`、`application.status=hired`；`declined(reason)` '
+  来源: openspec/changes/offer-generation/tasks.md:52
+  可见: false
+- id: offer-generation/5.2
+  场景: offer-generation
+  阶段: build
+  标题: '"终止投递" `POST /applications/{id}/refuse`（仅 `offer.status=declined` 后可用）：`application.status=refused` ＋ history（`actor_typ'
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '"终止投递" `POST /applications/{id}/refuse`（仅 `offer.status=declined` 后可用）：`application.status=refused` ＋ history（`actor_type=human`）；⛔ 不写 `rejection_record`；幂等键
+    `{application_id}:effect_refuse_applicatio'
+  来源: openspec/changes/offer-generation/tasks.md:53
+  可见: false
+- id: offer-generation/5.3
+  场景: offer-generation
+  阶段: build
+  标题: 不变式测试 `tests/test_offer_history_invariant.py`：任一投递 `offer/hired/回退` 相关 history 条数 ＝ 成功回填与终止次数，穷举含重跑序列
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区:
+  - tests/test_offer_history_invariant.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 不变式测试 `tests/test_offer_history_invariant.py`：任一投递 `offer/hired/回退` 相关 history 条数 ＝ 成功回填与终止次数，穷举含重跑序列
+  来源: openspec/changes/offer-generation/tasks.md:54
+  可见: false
+- id: offer-generation/5.4
+  场景: offer-generation
+  阶段: build
+  标题: 回填页 `GET /offers/{id}/outcome`：接受（入职日期）／拒绝（原因）／谈判中（备注）；相对路径
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 回填页 `GET /offers/{id}/outcome`：接受（入职日期）／拒绝（原因）／谈判中（备注）；相对路径
+  来源: openspec/changes/offer-generation/tasks.md:55
+  可见: false
+- id: offer-generation/5.5
+  场景: offer-generation
+  阶段: build
+  标题: '`app/audit/assertions.py` 新增：① `offer` 表列名不含薪资关键词；② `candidate_letter.kind=''rejection''` 的每行对应投递存在 `rejection_record`；③ `'
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区:
+  - app/audit/assertions.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/audit/assertions.py` 新增：① `offer` 表列名不含薪资关键词；② `candidate_letter.kind=''rejection''` 的每行对应投递存在 `rejection_record`；③ `application.status=''refused''`
+    的投递中由本包写入的 `rejection_record` 行数为 0（`ai_score` 恒 0'
+  来源: openspec/changes/offer-generation/tasks.md:56
+  可见: false
+- id: offer-generation/5.6
+  场景: offer-generation
+  阶段: build
+  标题: HR 一页操作说明 `docs/offer-generation-guide.md`：发起／审批／导出／手填薪资／发送／回填；明写 `note` 不得填薪资、拒信由 HR 显式生成
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区:
+  - docs/offer-generation-guide.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: HR 一页操作说明 `docs/offer-generation-guide.md`：发起／审批／导出／手填薪资／发送／回填；明写 `note` 不得填薪资、拒信由 HR 显式生成
+  来源: openspec/changes/offer-generation/tasks.md:57
+  可见: false
+- id: offer-generation/5.7
+  场景: offer-generation
+  阶段: build
+  标题: '`docs/tech-debt.md`：TD-8 追加"调用方＝offer-generation 4.2（`rejection_letter` 首个调用方）"；登记"`note` 自由文本可能被填入薪资，无内容审查"残余风险'
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区:
+  - docs/tech-debt.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`docs/tech-debt.md`：TD-8 追加"调用方＝offer-generation 4.2（`rejection_letter` 首个调用方）"；登记"`note` 自由文本可能被填入薪资，无内容审查"残余风险'
+  来源: openspec/changes/offer-generation/tasks.md:58
+  可见: false
+- id: offer-generation/5.8
+  场景: offer-generation
+  阶段: build
+  标题: '`.51` 发版（Shao Peishen 拍「发」，G3）'
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`05-发布运行手册.md` 流程跑完，系统外发总开关保持关闭'
+  来源: openspec/changes/offer-generation/tasks.md:59
+  可见: false
+- id: offer-generation/U5/plan
+  场景: offer-generation
+  阶段: plan
+  标题: spec-to-plan：5. U5 答复回填、流转、断言与发版
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/U4
+  触碰区:
+  - docs/superpowers/plans/*-offer-generation-unit5-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit5 且含 offer-generation（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+  闸门: G2 offer-generation
+- id: offer-generation/U5
+  场景: offer-generation
+  阶段: build
+  标题: 5. U5 答复回填、流转、断言与发版
+  单元: U5 答复回填、流转、断言与发版
+  依赖:
+  - offer-generation/5.1
+  - offer-generation/5.2
+  - offer-generation/5.3
+  - offer-generation/5.4
+  - offer-generation/5.5
+  - offer-generation/5.6
+  - offer-generation/5.7
+  - offer-generation/5.8
+  - offer-generation/U4
+  - offer-generation/U5/plan
+  触碰区:
+  - app/audit/assertions.py
+  - docs/offer-generation-guide.md
+  - docs/tech-debt.md
+  - tests/test_offer_history_invariant.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+- id: change:offer-generation
+  场景: offer-generation
+  阶段: archive
+  标题: 变更包 offer-generation
+  依赖:
+  - offer-generation/U1
+  - offer-generation/U2
+  - offer-generation/U3
+  - offer-generation/U4
+  - offer-generation/U5
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/offer-generation/tasks.md
+  可见: false
+- id: onboarding-flow/0.1
+  场景: onboarding-flow
+  阶段: gate
+  标题: 登录＋访问留痕就位（M2 3.2／3.9 交付并发版；Shao Peishen 拍发版）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`.51` 上 `reviewer_of()` 返回真实用户名'
+  来源: openspec/changes/onboarding-flow/tasks.md:5
+  可见: false
+- id: onboarding-flow/0.2
+  场景: onboarding-flow
+  阶段: gate
+  标题: '`offer-generation` U5 交付（`application.status=hired` ＋ 入职日的来源）'
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`offer-generation` tasks 5.1 勾选'
+  来源: openspec/changes/onboarding-flow/tasks.md:6
+  可见: false
+- id: onboarding-flow/0.3
+  场景: onboarding-flow
+  阶段: gate
+  标题: '合规验收 #1 留存策略签认（Shao Peishen 发起，法务结论，本人签认并配置 `retention_policy_signed_version`）'
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`docs/compliance/` 留存策略落档签认'
+  来源: openspec/changes/onboarding-flow/tasks.md:7
+  可见: false
+- id: onboarding-flow/0.4
+  场景: onboarding-flow
+  阶段: gate
+  标题: 人事部#3 回件：现用入职清单／周期与卡点／现用系统建号／异常口径（汤丽萍，经跟进信线）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 四项归档且 design OQ1–OQ4 回填
+  来源: openspec/changes/onboarding-flow/tasks.md:8
+  可见: false
+- id: onboarding-flow/0.5
+  场景: onboarding-flow
+  阶段: gate
+  标题: 企微自建应用／ERP 对接账号（Shao Peishen；本包不需要，Q1a 已定）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 🔴 企微自建应用／ERP 对接账号（Shao Peishen；本包不需要，Q1a 已定）。⚰️ 墓碑：本包内保持"不需要"，将来 Q1c 另立包重提
+  来源: openspec/changes/onboarding-flow/tasks.md:9
+  可见: false
+- id: onboarding-flow/1.1
+  场景: onboarding-flow
+  阶段: build
+  标题: '`app/storage/db.py` 新增 `onboarding_template`（`scope_type CHECK IN job/department, scope_id, version, items JSON[{name, o'
+  单元: U1 入职域模型
+  依赖:
+  - onboarding-flow/U1/plan
+  触碰区:
+  - app/storage/db.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/storage/db.py` 新增 `onboarding_template`（`scope_type CHECK IN job/department, scope_id, version, items JSON[{name, owner_party CHECK IN hr/it/admin/finance/dept,
+    due_offset_days, required}], updat'
+  来源: openspec/changes/onboarding-flow/tasks.md:13
+  可见: false
+- id: onboarding-flow/1.2
+  场景: onboarding-flow
+  阶段: build
+  标题: 新增 `onboarding_checklist`（`application_id` 唯一、`template_version, start_date, status CHECK IN open/closed, closed_reason,
+  单元: U1 入职域模型
+  依赖:
+  - onboarding-flow/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `onboarding_checklist`（`application_id` 唯一、`template_version, start_date, status CHECK IN open/closed, closed_reason, created_by, created_at`）与 `onboarding_item`（`checklist_id,
+    name, owner_party, d
+  来源: openspec/changes/onboarding-flow/tasks.md:14
+  可见: false
+- id: onboarding-flow/1.3
+  场景: onboarding-flow
+  阶段: build
+  标题: 新增 `onboarding_item_history`（`item_id, from_status, to_status, reason, acted_by, at`）、`onboarding_access_log`（`accessor,
+  单元: U1 入职域模型
+  依赖:
+  - onboarding-flow/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 新增 `onboarding_item_history`（`item_id, from_status, to_status, reason, acted_by, at`）、`onboarding_access_log`（`accessor, application_id, at`）、`data_disposition_queue`（`application_id,
+    candidate_id, ca
+  来源: openspec/changes/onboarding-flow/tasks.md:15
+  可见: false
+- id: onboarding-flow/1.4
+  场景: onboarding-flow
+  阶段: build
+  标题: '`hr_account` 加 `role CHECK IN hr/interviewer/dept_manager`（默认 `hr`）与 `department`（走 `_ADDED_COLUMNS`；若其他包已加则复用不重复）；`Sett'
+  单元: U1 入职域模型
+  依赖:
+  - onboarding-flow/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`hr_account` 加 `role CHECK IN hr/interviewer/dept_manager`（默认 `hr`）与 `department`（走 `_ADDED_COLUMNS`；若其他包已加则复用不重复）；`Settings.retention_policy_signed_version:
+    str | None = None`'
+  来源: openspec/changes/onboarding-flow/tasks.md:16
+  可见: false
+- id: onboarding-flow/1.5
+  场景: onboarding-flow
+  阶段: build
+  标题: '`tests/test_db_onboarding_schema.py`：新库建表齐全；老库升级既有表不变；CHECK 反证；`onboarding_item` 无内容列断言'
+  单元: U1 入职域模型
+  依赖:
+  - onboarding-flow/U1/plan
+  触碰区:
+  - tests/test_db_onboarding_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`tests/test_db_onboarding_schema.py`：新库建表齐全；老库升级既有表不变；CHECK 反证；`onboarding_item` 无内容列断言'
+  来源: openspec/changes/onboarding-flow/tasks.md:17
+  可见: false
+- id: onboarding-flow/1.6
+  场景: onboarding-flow
+  阶段: build
+  标题: 占位模板 v1（部门级默认：签劳动合同／交入职材料／体检报告／配置设备／开通账号／指定带教人；负责方与 `due_offset_days` 按常识占位，0.4 回件到后 HR 在页面改）；模板维护接口 `GET/PUT /onboardin
+  单元: U1 入职域模型
+  依赖:
+  - onboarding-flow/U1/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 占位模板 v1（部门级默认：签劳动合同／交入职材料／体检报告／配置设备／开通账号／指定带教人；负责方与 `due_offset_days` 按常识占位，0.4 回件到后 HR 在页面改）；模板维护接口 `GET/PUT /onboarding-templates/{scope_type}/{scope_id}`（HR
+    角色，版本递增）；幂等：同内容 PUT 不新增版本
+  来源: openspec/changes/onboarding-flow/tasks.md:18
+  可见: false
+- id: onboarding-flow/U1/plan
+  场景: onboarding-flow
+  阶段: plan
+  标题: spec-to-plan：1. U1 入职域模型
+  单元: U1 入职域模型
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-onboarding-flow-unit1-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+  闸门: G2 onboarding-flow
+- id: onboarding-flow/U1
+  场景: onboarding-flow
+  阶段: build
+  标题: 1. U1 入职域模型
+  单元: U1 入职域模型
+  依赖:
+  - onboarding-flow/1.1
+  - onboarding-flow/1.2
+  - onboarding-flow/1.3
+  - onboarding-flow/1.4
+  - onboarding-flow/1.5
+  - onboarding-flow/1.6
+  - onboarding-flow/U1/plan
+  触碰区:
+  - app/storage/db.py
+  - tests/test_db_onboarding_schema.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+- id: onboarding-flow/2.1
+  场景: onboarding-flow
+  阶段: build
+  标题: 节点 `effect_instantiate_checklist`：前置 `application.status=hired` 且 `offer.status=accepted`；按"岗位模板优先、否则部门模板"展开条目；写 `onboar
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_instantiate_checklist`：前置 `application.status=hired` 且 `offer.status=accepted`；按"岗位模板优先、否则部门模板"展开条目；写 `onboarding_checklist` ＋ `onboarding_item`
+    同事务；幂等键 `{application_id}:effect_instantiate
+  来源: openspec/changes/onboarding-flow/tasks.md:22
+  可见: false
+- id: onboarding-flow/2.2
+  场景: onboarding-flow
+  阶段: build
+  标题: 节点 `effect_update_item`：`done / waived(reason 必填) / pending(撤回)`；操作人须为 HR 或该条 `owner_party` 对应部门经理；写 `onboarding_item` ＋
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_update_item`：`done / waived(reason 必填) / pending(撤回)`；操作人须为 HR 或该条 `owner_party` 对应部门经理；写 `onboarding_item` ＋ `onboarding_item_history` 同事务；幂等键
+    `{item_id}:effect_update_item:{to_status}:{re
+  来源: openspec/changes/onboarding-flow/tasks.md:23
+  可见: false
+- id: onboarding-flow/2.3
+  场景: onboarding-flow
+  阶段: build
+  标题: 进度与逾期纯函数 `app/agents/onboarding_progress.py::progress(items, start_date, today)`：`done+waived / required`；逾期＝`start_date
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区:
+  - app/agents/onboarding_progress.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 进度与逾期纯函数 `app/agents/onboarding_progress.py::progress(items, start_date, today)`：`done+waived / required`；逾期＝`start_date + due_offset_days < today` 且 `pending`；⛔
+    无 storage 写入、无消息发送（grep 反证）
+  来源: openspec/changes/onboarding-flow/tasks.md:24
+  可见: false
+- id: onboarding-flow/2.4
+  场景: onboarding-flow
+  阶段: build
+  标题: HR 清单页 `GET /applications/{id}/onboarding`：生成、逐条勾选／豁免／撤回、进度条、逾期标记；⛔ 无上传控件（HTML 断言）、接口拒绝 multipart（测试）；相对路径，子路径前缀测试
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: HR 清单页 `GET /applications/{id}/onboarding`：生成、逐条勾选／豁免／撤回、进度条、逾期标记；⛔ 无上传控件（HTML 断言）、接口拒绝 multipart（测试）；相对路径，子路径前缀测试
+  来源: openspec/changes/onboarding-flow/tasks.md:25
+  可见: false
+- id: onboarding-flow/2.5
+  场景: onboarding-flow
+  阶段: build
+  标题: HR 总览页 `GET /onboarding`：全部 `open` 清单按入职日升序，进度与逾期条目数
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: HR 总览页 `GET /onboarding`：全部 `open` 清单按入职日升序，进度与逾期条目数
+  来源: openspec/changes/onboarding-flow/tasks.md:26
+  可见: false
+- id: onboarding-flow/2.6
+  场景: onboarding-flow
+  阶段: build
+  标题: 部门经理只读页 `GET /onboarding/department`：按 `hr_account.department` 过滤；跨部门 403；`interviewer`／未登录 403；每次打开写 `onboarding_access
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 部门经理只读页 `GET /onboarding/department`：按 `hr_account.department` 过滤；跨部门 403；`interviewer`／未登录 403；每次打开写 `onboarding_access_log`，留痕失败不返回内容；页面 ⛔ 无评分／排名／简历／联系方式／复核工作台链接（HTML
+    反证）；本部门负责条目可勾选（走 2.2 留痕）
+  来源: openspec/changes/onboarding-flow/tasks.md:27
+  可见: false
+- id: onboarding-flow/2.7
+  场景: onboarding-flow
+  阶段: build
+  标题: U2 e2e：夹具置 `hired`＋入职日 → 生成清单 → HR 勾两条、豁免一条 → 经理只读看到进度 → 跨部门 403 → 逾期标记出现；`onboarding_item_history` 条数守恒
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: U2 e2e：夹具置 `hired`＋入职日 → 生成清单 → HR 勾两条、豁免一条 → 经理只读看到进度 → 跨部门 403 → 逾期标记出现；`onboarding_item_history` 条数守恒
+  来源: openspec/changes/onboarding-flow/tasks.md:28
+  可见: false
+- id: onboarding-flow/U2/plan
+  场景: onboarding-flow
+  阶段: plan
+  标题: spec-to-plan：2. U2 清单页与进度
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/U1
+  触碰区:
+  - docs/superpowers/plans/*-onboarding-flow-unit2-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+  闸门: G2 onboarding-flow
+- id: onboarding-flow/U2
+  场景: onboarding-flow
+  阶段: build
+  标题: 2. U2 清单页与进度
+  单元: U2 清单页与进度
+  依赖:
+  - onboarding-flow/0.1
+  - onboarding-flow/2.1
+  - onboarding-flow/2.2
+  - onboarding-flow/2.3
+  - onboarding-flow/2.4
+  - onboarding-flow/2.5
+  - onboarding-flow/2.6
+  - onboarding-flow/2.7
+  - onboarding-flow/U1
+  - onboarding-flow/U2/plan
+  触碰区:
+  - app/agents/onboarding_progress.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+- id: onboarding-flow/3.1
+  场景: onboarding-flow
+  阶段: build
+  标题: '节点 `effect_complete_onboarding(confirm_hired, actual_start_date, note)`：前置今日 ≥ 入职日、清单 `open`、该投递无终态；未完成必需条目 ⇒ 要求 `note` '
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/U2
+  - onboarding-flow/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_complete_onboarding(confirm_hired, actual_start_date, note)`：前置今日 ≥ 入职日、清单 `open`、该投递无终态；未完成必需条目 ⇒ 要求 `note` 并把未完成清单写进留痕；写 `application_stage_history(stage_type=hired,
+    action=onboarded, act
+  来源: openspec/changes/onboarding-flow/tasks.md:32
+  可见: false
+- id: onboarding-flow/3.2
+  场景: onboarding-flow
+  阶段: build
+  标题: '节点 `effect_enqueue_disposition`（由 3.1 同事务调用）：六类各一行，`policy_version=NULL`、`planned_action=pending`；幂等键 `{application_id}:'
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/U2
+  - onboarding-flow/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_enqueue_disposition`（由 3.1 同事务调用）：六类各一行，`policy_version=NULL`、`planned_action=pending`；幂等键 `{application_id}:effect_enqueue_disposition:{category}`；测试：六行、重跑不重复
+  来源: openspec/changes/onboarding-flow/tasks.md:33
+  可见: false
+- id: onboarding-flow/3.3
+  场景: onboarding-flow
+  阶段: build
+  标题: 节点 `effect_complete_onboarding(abandon, reason)`：`application.status=refused`、`offer.status=abandoned`、history 一条、清单 `cl
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/U2
+  - onboarding-flow/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 节点 `effect_complete_onboarding(abandon, reason)`：`application.status=refused`、`offer.status=abandoned`、history 一条、清单 `closed(abandoned)`；⛔ 不写 `rejection_record`（测试行数不变）；幂等键
+    `{application_id}:effect_co
+  来源: openspec/changes/onboarding-flow/tasks.md:34
+  可见: false
+- id: onboarding-flow/3.4
+  场景: onboarding-flow
+  阶段: build
+  标题: 不变式测试 `tests/test_onboarding_terminal_invariant.py`：任一投递终态 history ≤ 1 条且与 `application.status`／`offer.status` 一致；穷举含重跑序
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/U2
+  - onboarding-flow/U3/plan
+  触碰区:
+  - tests/test_onboarding_terminal_invariant.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 不变式测试 `tests/test_onboarding_terminal_invariant.py`：任一投递终态 history ≤ 1 条且与 `application.status`／`offer.status` 一致；穷举含重跑序列；⛔ 无自动终态路径（grep 反证无调度／无条件触发）
+  来源: openspec/changes/onboarding-flow/tasks.md:35
+  可见: false
+- id: onboarding-flow/3.5
+  场景: onboarding-flow
+  阶段: build
+  标题: 终态确认 UI：清单页"确认已入职"（实际入职日、说明）与"放弃入职"（原因）；入职日已过且未确认显示"待确认"
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/U2
+  - onboarding-flow/U3/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 终态确认 UI：清单页"确认已入职"（实际入职日、说明）与"放弃入职"（原因）；入职日已过且未确认显示"待确认"
+  来源: openspec/changes/onboarding-flow/tasks.md:36
+  可见: false
+- id: onboarding-flow/3.6
+  场景: onboarding-flow
+  阶段: build
+  标题: '`app/audit/assertions.py` 新增：① `onboarding_item` 无内容列；② `retention_policy_signed_version` 为空时 `data_disposition_queue.ex'
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/U2
+  - onboarding-flow/U3/plan
+  触碰区:
+  - app/audit/assertions.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`app/audit/assertions.py` 新增：① `onboarding_item` 无内容列；② `retention_policy_signed_version` 为空时 `data_disposition_queue.executed_at` 全空；③ `application.status=''refused''`
+    的投递无本包写入的 `rejection_record`；CI 接'
+  来源: openspec/changes/onboarding-flow/tasks.md:37
+  可见: false
+- id: onboarding-flow/U3/plan
+  场景: onboarding-flow
+  阶段: plan
+  标题: spec-to-plan：3. U3 终态与处置登记
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/U2
+  触碰区:
+  - docs/superpowers/plans/*-onboarding-flow-unit3-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit3 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+  闸门: G2 onboarding-flow
+- id: onboarding-flow/U3
+  场景: onboarding-flow
+  阶段: build
+  标题: 3. U3 终态与处置登记
+  单元: U3 终态与处置登记
+  依赖:
+  - onboarding-flow/0.2
+  - onboarding-flow/3.1
+  - onboarding-flow/3.2
+  - onboarding-flow/3.3
+  - onboarding-flow/3.4
+  - onboarding-flow/3.5
+  - onboarding-flow/3.6
+  - onboarding-flow/U2
+  - onboarding-flow/U3/plan
+  触碰区:
+  - app/audit/assertions.py
+  - tests/test_onboarding_terminal_invariant.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+- id: onboarding-flow/4.1
+  场景: onboarding-flow
+  阶段: build
+  标题: '`is_retention_policy_signed()` 每次求值（环境变量 > 配置 > 默认空）；为空 ⇒ 执行节点直接返回"未签认"并留痕一次尝试；测试'
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/U3
+  - onboarding-flow/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`is_retention_policy_signed()` 每次求值（环境变量 > 配置 > 默认空）；为空 ⇒ 执行节点直接返回"未签认"并留痕一次尝试；测试'
+  来源: openspec/changes/onboarding-flow/tasks.md:41
+  可见: false
+- id: onboarding-flow/4.2
+  场景: onboarding-flow
+  阶段: build
+  标题: 脱敏规则 `app/storage/anonymize.py`：`resume.parsed_json` 去姓名／公司／联系方式保留年限与技能集合、`criterion_score` 保留分数与维度去 evidence 文本（`eviden
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/U3
+  - onboarding-flow/U4/plan
+  触碰区:
+  - app/storage/anonymize.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 脱敏规则 `app/storage/anonymize.py`：`resume.parsed_json` 去姓名／公司／联系方式保留年限与技能集合、`criterion_score` 保留分数与维度去 evidence 文本（`evidence_ref` 置 `disposed` 标记）、`analysis_run`
+    输入哈希保留原始响应删除、`candidate` 姓名置占位；流转事实与 `hu
+  来源: openspec/changes/onboarding-flow/tasks.md:42
+  可见: false
+- id: onboarding-flow/4.3
+  场景: onboarding-flow
+  阶段: build
+  标题: 节点 `effect_execute_disposition`：签认且 `due_at` 到期 ⇒ 按 `planned_action` 删除（简历文件与原文、联系方式密文、邀约与 Offer 文书正文）或脱敏（解析字段、评分、面试场次）；
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/U3
+  - onboarding-flow/U4/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 节点 `effect_execute_disposition`：签认且 `due_at` 到期 ⇒ 按 `planned_action` 删除（简历文件与原文、联系方式密文、邀约与 Offer 文书正文）或脱敏（解析字段、评分、面试场次）；写 `executed_at/executed_by`；幂等键 `{application_id}:effect_execute_disposition:{ca
+  来源: openspec/changes/onboarding-flow/tasks.md:43
+  可见: false
+- id: onboarding-flow/4.4
+  场景: onboarding-flow
+  阶段: build
+  标题: 断言兼容：既有 `ai-decision-audit` 断言与 M2 断言在脱敏数据上按"已处置"口径通过（`evidence_ref='disposed'` 不算缺失）；测试：脱敏后全量断言绿
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/U3
+  - onboarding-flow/U4/plan
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 断言兼容：既有 `ai-decision-audit` 断言与 M2 断言在脱敏数据上按"已处置"口径通过（`evidence_ref='disposed'` 不算缺失）；测试：脱敏后全量断言绿
+  来源: openspec/changes/onboarding-flow/tasks.md:44
+  可见: false
+- id: onboarding-flow/4.5
+  场景: onboarding-flow
+  阶段: build
+  标题: 签认后配置与首轮执行（Shao Peishen 在 `.51` 配置 `RETENTION_POLICY_SIGNED_VERSION`，并对首个到期事项亲自触发执行、核对留痕）
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/U3
+  - onboarding-flow/U4/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`intent.md` 末尾记「处置执行开启 <日期> 策略版本 <v>」'
+  来源: openspec/changes/onboarding-flow/tasks.md:45
+  可见: false
+- id: onboarding-flow/4.6
+  场景: onboarding-flow
+  阶段: build
+  标题: 处置触发方式：签认后由 HR 在总览页"执行到期处置"按钮手动触发（⛔ 本包不建定时任务；TD-11 落地后可改为定时，幂等键不变）
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/U3
+  - onboarding-flow/U4/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: 处置触发方式：签认后由 HR 在总览页"执行到期处置"按钮手动触发（⛔ 本包不建定时任务；TD-11 落地后可改为定时，幂等键不变）
+  来源: openspec/changes/onboarding-flow/tasks.md:46
+  可见: false
+- id: onboarding-flow/U4/plan
+  场景: onboarding-flow
+  阶段: plan
+  标题: spec-to-plan：4. U4 处置执行（受签认闸）
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/U3
+  触碰区:
+  - docs/superpowers/plans/*-onboarding-flow-unit4-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit4 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+  闸门: G2 onboarding-flow
+- id: onboarding-flow/U4
+  场景: onboarding-flow
+  阶段: build
+  标题: 4. U4 处置执行（受签认闸）
+  单元: U4 处置执行（受签认闸）
+  依赖:
+  - onboarding-flow/0.3
+  - onboarding-flow/4.1
+  - onboarding-flow/4.2
+  - onboarding-flow/4.3
+  - onboarding-flow/4.4
+  - onboarding-flow/4.5
+  - onboarding-flow/4.6
+  - onboarding-flow/U3
+  - onboarding-flow/U4/plan
+  触碰区:
+  - app/storage/anonymize.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+- id: onboarding-flow/5.1
+  场景: onboarding-flow
+  阶段: build
+  标题: HR 一页操作说明 `docs/onboarding-flow-guide.md`：模板维护、生成清单、勾选／豁免、经理怎么看、确认入职／放弃、处置执行；明写材料不上传、豁免原因不写证件号
+  单元: U5 交付与发版
+  依赖:
+  - onboarding-flow/U4
+  - onboarding-flow/U5/plan
+  触碰区:
+  - docs/onboarding-flow-guide.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: HR 一页操作说明 `docs/onboarding-flow-guide.md`：模板维护、生成清单、勾选／豁免、经理怎么看、确认入职／放弃、处置执行；明写材料不上传、豁免原因不写证件号
+  来源: openspec/changes/onboarding-flow/tasks.md:50
+  可见: false
+- id: onboarding-flow/5.2
+  场景: onboarding-flow
+  阶段: build
+  标题: '`docs/tech-debt.md`：TD-11「怎么还」追加入职提醒幂等键约定 `{item_id}:effect_send_reminder:{nth}` 与 4.6 手动触发改定时；登记"豁免原因自由文本可能含材料内容，无内容审查"'
+  单元: U5 交付与发版
+  依赖:
+  - onboarding-flow/U4
+  - onboarding-flow/U5/plan
+  触碰区:
+  - docs/tech-debt.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`docs/tech-debt.md`：TD-11「怎么还」追加入职提醒幂等键约定 `{item_id}:effect_send_reminder:{nth}` 与 4.6 手动触发改定时；登记"豁免原因自由文本可能含材料内容，无内容审查"残余风险'
+  来源: openspec/changes/onboarding-flow/tasks.md:51
+  可见: false
+- id: onboarding-flow/5.3
+  场景: onboarding-flow
+  阶段: build
+  标题: '`requirements.txt` 无增量确认；`tests/test_doc_size_budget.py` 通过'
+  单元: U5 交付与发版
+  依赖:
+  - onboarding-flow/U4
+  - onboarding-flow/U5/plan
+  触碰区:
+  - tests/test_doc_size_budget.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: '`requirements.txt` 无增量确认；`tests/test_doc_size_budget.py` 通过'
+  来源: openspec/changes/onboarding-flow/tasks.md:52
+  可见: false
+- id: onboarding-flow/5.4
+  场景: onboarding-flow
+  阶段: build
+  标题: '`.51` 发版（Shao Peishen 拍「发」，G3）'
+  单元: U5 交付与发版
+  依赖:
+  - onboarding-flow/U4
+  - onboarding-flow/U5/plan
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: '`05-发布运行手册.md` 流程跑完，处置执行保持未签认状态'
+  来源: openspec/changes/onboarding-flow/tasks.md:53
+  可见: false
+- id: onboarding-flow/U5/plan
+  场景: onboarding-flow
+  阶段: plan
+  标题: spec-to-plan：5. U5 交付与发版
+  单元: U5 交付与发版
+  依赖:
+  - onboarding-flow/U4
+  触碰区:
+  - docs/superpowers/plans/*-onboarding-flow-unit5-*.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·缺行】docs/superpowers/plans/ 下存在文件名含 unit5 且含 onboarding-flow（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+  闸门: G2 onboarding-flow
+- id: onboarding-flow/U5
+  场景: onboarding-flow
+  阶段: build
+  标题: 5. U5 交付与发版
+  单元: U5 交付与发版
+  依赖:
+  - onboarding-flow/5.1
+  - onboarding-flow/5.2
+  - onboarding-flow/5.3
+  - onboarding-flow/5.4
+  - onboarding-flow/U4
+  - onboarding-flow/U5/plan
+  触碰区:
+  - docs/onboarding-flow-guide.md
+  - docs/tech-debt.md
+  - tests/test_doc_size_budget.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
+- id: change:onboarding-flow
+  场景: onboarding-flow
+  阶段: archive
+  标题: 变更包 onboarding-flow
+  依赖:
+  - onboarding-flow/U1
+  - onboarding-flow/U2
+  - onboarding-flow/U3
+  - onboarding-flow/U4
+  - onboarding-flow/U5
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/onboarding-flow/tasks.md
+  可见: false
 - id: plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
   场景: M1
   阶段: build
@@ -2799,10 +5612,10 @@ tasks:
   产出判据: Task 1–8 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-17-m2-resume-parse-and-rank-unit1-data-model.md
   可见: false
-  备注: dispatcher-20260917-233156 核实：生成器原判「Task 1–8」单段（触碰区空），未识别计划文件 61 行「## 建议拆段点」三段式（`本计划 8 个 Task` 措辞与 `m2-unit0-model-comparison` 的 `Task = 8 ≥ 5` 措辞不同，`scripts/dispatcher_backlog.py::parse_plan` 的
-    `第\s*(\d+)\s*条` 正则未命中「Segment A：」措辞，回退成单段）；曾手工拆回 seg1/seg2/seg3 三条但被下一次生成器刷新静默覆盖（依赖／触碰区是计算字段，只有 备注／状态 跨刷新保留）——**手工拆段在本调度器架构下不持久，不再重复**。本条 ready 实际派发时
-    ⛔ 只派计划文件 61 行 Segment A（Task 1–3），⛔ 不按标题字面派 Task 1–8；Segment A 完成合 main 后，下一次刷新本条仍会判「完成」不准确（真身判据是 Task 1–8 全跑完），需下一位处理者比对 plan 文件手动确认「Task 1–3 已合 main」后手工在本条追加 Segment B（Task 4–6）
-    的下一条待办，而非依赖生成器自动推进。根治需改 `parse_plan` 正则以识别「Segment [A-Z]：Task N–M」格式，属代码改动，不在本 docs-only 会话授权范围（见 SKILL.md 步骤⑦ 白名单），已记 `docs/session接力.md` 待排期
+  备注: dispatcher-20260917-233156 核实：生成器原判「Task 1–8」单段（触碰区空），未识别计划文件 61 行「## 建议拆段点」三段式（`本计划 8 个 Task` 措辞与 `m2-unit0-model-comparison` 的 `Task = 8 ≥ 5` 措辞不同，`scripts/dispatcher_backlog.py::parse_plan`
+    的 `第\s*(\d+)\s*条` 正则未命中「Segment A：」措辞，回退成单段）；曾手工拆回 seg1/seg2/seg3 三条但被下一次生成器刷新静默覆盖（依赖／触碰区是计算字段，只有 备注／状态 跨刷新保留）——**手工拆段在本调度器架构下不持久，不再重复**。本条 ready 实际派发时 ⛔ 只派计划文件
+    61 行 Segment A（Task 1–3），⛔ 不按标题字面派 Task 1–8；Segment A 完成合 main 后，下一次刷新本条仍会判「完成」不准确（真身判据是 Task 1–8 全跑完），需下一位处理者比对 plan 文件手动确认「Task 1–3 已合 main」后手工在本条追加 Segment
+    B（Task 4–6） 的下一条待办，而非依赖生成器自动推进。根治需改 `parse_plan` 正则以识别「Segment [A-Z]：Task N–M」格式，属代码改动，不在本 docs-only 会话授权范围（见 SKILL.md 步骤⑦ 白名单），已记 `docs/session接力.md` 待排期
 - id: plan:2026-09-17-m2-unit0-model-comparison/seg1
   场景: M2
   阶段: build
@@ -2903,7 +5716,7 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-Offer-intent.md:1
@@ -2911,9 +5724,10 @@ tasks:
   闸门: G1 S-Offer
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: 0917BF（四场景立包，与 S-排期/S-入职/S-渠道 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
+  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+    无需改回
 - id: propose:S-入职
   场景: S-入职
   阶段: propose
@@ -2921,7 +5735,7 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-入职-intent.md:1
@@ -2929,9 +5743,10 @@ tasks:
   闸门: G1 S-入职
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: 0917BF（四场景立包，与 S-排期/S-Offer/S-渠道 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
+  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+    无需改回
 - id: propose:S-排期
   场景: S-排期
   阶段: propose
@@ -2939,7 +5754,7 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-排期-intent.md:1
@@ -2947,9 +5762,10 @@ tasks:
   闸门: G1 S-排期
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: 0917BF（四场景立包，与 S-Offer/S-入职/S-渠道 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
+  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+    无需改回
 - id: propose:S-渠道
   场景: S-渠道
   阶段: propose
@@ -2957,7 +5773,7 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-渠道-intent.md:1
@@ -2965,9 +5781,10 @@ tasks:
   闸门: G1 S-渠道
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: 0917BF（四场景立包，与 S-排期/S-Offer/S-入职 同一会话串行），task-dispatcher·decision-20260917-230511+230806 派
+  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+    无需改回
 - id: relay:R-6
   场景: M0
   阶段: build
@@ -3031,7 +5848,7 @@ tasks:
   阻塞类型: 无
   产出判据: 【作废：Q-11】拆件子会话（上条 `d703cd3`）运行期间在 `docs/跟进信/` 下新建了两份章程外文件—— `人事部-汤丽萍-答复单-2026-09-17-人事部#1决策点a.md`／`.docx`（拟发给汤丽萍的答复单草稿， 子会话最终自述完全未提及此事）；`--dry-run` 已确认 `allowedTools`
     无任何 `Write(...)` 路径约束， 是一次真实的越界写入（非 dry-ru
-  来源: docs/session接力.md:329
+  来源: docs/session接力.md:333
   可见: false
   队列: Q-11 作废
   备注: 作废：Q-11（0917R findings 已更正——两份答复单为 Cowork 所写并经本人审核，非拆件越界；人事部#1 已闭环）
@@ -3220,17 +6037,13 @@ tasks:
   - plan:2026-09-17-m2-unit0-model-comparison/seg3
   触碰区:
   - docs/m2-model-comparison.md
-  状态: 阻塞
-  阻塞类型: 外部
+  状态: 完成
+  阻塞类型: 无
   产出判据: '【Q-07 已答·缺任务映射】⚑ 口径调整（Shao Peishen 2026-09-17 21:3x）：DeepSeek 两款先行即满足主航道，第 3／4 家后补不阻塞下游。原文：对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测
     json_schema / json_object 支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek '
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:17
   队列: Q-07 已答
   备注: Q-07 已答 a：注册火山方舟＋阿里百炼由本人亲自办理并写 .env；key 到位前不可派车
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: m2-resume-parse-and-rank/6.2
   场景: M2
   阶段: build
@@ -3315,16 +6128,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
   来源: docs/roadmap/intents/S-Offer-intent.md:1
   可见: false
   闸门: G1 S-Offer Offer 生成
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: propose:S-入职 入职流程
   场景: S-入职 入职流程
   阶段: propose
@@ -3332,16 +6141,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
   来源: docs/roadmap/intents/S-入职-intent.md:1
   可见: false
   闸门: G1 S-入职 入职流程
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: propose:S-排期 面试排期
   场景: S-排期 面试排期
   阶段: propose
@@ -3349,16 +6154,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
   来源: docs/roadmap/intents/S-排期-intent.md:1
   可见: false
   闸门: G1 S-排期 面试排期
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: propose:S-渠道 渠道对接与简历自动汇总
   场景: S-渠道 渠道对接与简历自动汇总
   阶段: propose
@@ -3366,16 +6167,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
   来源: docs/roadmap/intents/S-渠道-intent.md:1
   可见: false
   闸门: G1 S-渠道 渠道对接与简历自动汇总
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: propose:波次0-grill首轮汇总
   场景: 波次0-grill首轮汇总
   阶段: propose
@@ -3383,16 +6180,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
   来源: docs/roadmap/intents/波次0-grill首轮汇总.md:1
   可见: false
   闸门: G1 波次0-grill首轮汇总
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:H-1
   场景: M0
   阶段: build
