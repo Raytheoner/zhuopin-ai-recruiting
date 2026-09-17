@@ -1,5 +1,7 @@
 # HR 招聘智能体 · 实施路线图与构建自动化流程
 
+> ⚑ 2026-09-17 21:4x 起，上线推进依据改为任务驱动版 `docs/roadmap/任务驱动上线路线图.md`（本文保留现状与自动化缺口视图）。
+
 > 2026-09-17 12:1x，Cowork·HR业务线-接力0917D 按仓库真身编写（openspec 各包勾选数、`02-系统架构与MVP范围.md`、`docs/session接力.md`、`docs/tech-debt.md`、`.claude/skills/lane-dispatch`、`docs/openers/*`）。
 > 本文是**全景视图**：业务上走到哪、构建流水线哪几环已自动、哪几环还缺。逐条待办的真身仍在 `docs/session接力.md`【下一步】，号池在 `docs/openers/号池台账.md`。两处不一致时以那两处为准，并回改本文。
 
