@@ -1,3 +1,5 @@
+> ⚰️ **2026-09-17 撤包**：Shao Peishen 答 3a。理由＝launchd 请求文件发车路（`lane-launcher.sh`）已稳定使用；本提案未实现、delta specs 未同步进 `openspec/specs/`，故不走 `archive` 流程，仅原位搬入 `openspec/changes/archive/` 并标记撤包（0917AC）。
+>
 > ⏸ **2026-09-16 Shao Peishen 裁定：搁置**（答 `2b`，见 `docs/session接力.md`）。维持现有 launchd 请求文件路，⛔ 不投入实现。
 > 理由：本提案的前提（`496f55e` 修复前 plist 缺 `AbandonProcessGroup`／`PATH` 导致请求文件路不可靠）已在
 > `496f55e`（早于本提案立项）修复；`[Mac]0916E` 2026-09-16 11:30 用同一条路径实测——写 `.request` 后 6 秒内
