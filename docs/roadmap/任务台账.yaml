@@ -3,21 +3,19 @@ version: 1
 summary:
   条目数: 187
   按状态:
-    待开: 75
-    在跑: 6
-    完成: 72
-    阻塞: 34
+    待开: 74
+    在跑: 5
+    完成: 73
+    阻塞: 35
   阻塞·决策: 23
   阻塞·外部: 10
   conflicts:
   - hr-wecom-aibot-liaison/8.9
   - m1-job-profile-intake/9.2
   - m2-resume-parse-and-rank/0.2
-  - m2-resume-parse-and-rank/0.3
   - relay:H-4
   - relay:tag#1297fb1e
-  ready:
-  - opener:[Mac]0917AP
+  ready: []
   闸门待放行:
   - m1-intake-quality-fixes/U8/plan ← G2 `m1-intake-quality-fixes`（待答）
   - m1-job-profile-intake/U1/plan ← G2 `m1-job-profile-intake`（待答）
@@ -419,7 +417,8 @@ tasks:
     状态:
       台账: 阻塞
       真身: 待开
-  备注: 第 8 章 7/10：8.8 观察窗未到期（09-24 到期，见 relay:R-6），不得当场归档；解析器未把同章未勾项计入依赖
+  备注: 0917 dispatcher 核实：生成器依赖图漏列同章节未完成的 8.6（阻塞/决策，待本人私信机器人）/8.8（阻塞/外部，一周观察窗口未到），archive 判据「全部章节勾完」不成立；依赖字段每次生成会被覆盖、加依赖不持久，故直接标状态=阻塞防止误判 ready，此条会持续显示 conflicts（真身待开），下次核对时先查
+    8.6/8.8 是否已完成，完成后再放行
 - id: hr-wecom-aibot-liaison/U8/plan
   场景: M0
   阶段: plan
@@ -1065,15 +1064,16 @@ tasks:
   - m1-job-profile-intake/U8
   - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
   触碰区: []
-  状态: 完成
+  状态: 阻塞
   阻塞类型: 无
   产出判据: 端到端测试：从企微发起到 JD 产出的完整链路
   来源: openspec/changes/m1-job-profile-intake/tasks.md:398
   conflicts:
     状态:
-      台账: 完成
+      台账: 阻塞
       真身: 待开
-  备注: tasks.md 397 行「已移出」到阶段二·企微通道（续行注解，解析器未识别）；Web 通道等价链路见 tests/test_web_api.py，非本包待办
+  备注: 0917 dispatcher 核实：本条原文起点写死「从企微发起」，tasks.md:449-465 已记录移出至 hr-wecom-aibot-liaison，真正等价的端到端验证是该包 8.6（单机灰度），8.6 仍阻塞/决策未完成；依赖字段每次生成会被覆盖、加依赖不持久，故直接标状态=阻塞防止被当独立
+    build 任务误派车重做「从企微发起」的测试，此条会持续显示 conflicts（真身待开），下次核对时先查 hr-wecom-aibot-liaison/8.6 是否已完成
 - id: m1-job-profile-intake/U9/plan
   场景: M1
   阶段: plan
@@ -1154,22 +1154,6 @@ tasks:
       台账: 待开
       真身: 阻塞
   备注: Q-02 已答 a（现在启动，法务对接人＝谷雨，2026-09-17）：Cowork 起草 PIA／同意条款／留存策略草稿进 docs/compliance/，待本人签认
-- id: m2-resume-parse-and-rank/0.3
-  场景: M2
-  阶段: gate
-  标题: 试运行岗位选定（Shao Peishen 从 供应链总监／底层软件工程师／非标产品采购员 中选 1 个仍在招的）
-  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
-  依赖: []
-  触碰区: []
-  状态: 在跑
-  阻塞类型: 决策
-  产出判据: '`intent.md` 末尾补一行「试运行岗位：<岗位> job_id=<…> profile_version=<n>」'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:7
-  conflicts:
-    状态:
-      台账: 在跑
-      真身: 阻塞
-  备注: Q-03 已答 b（底层软件工程师，仍在招，2026-09-17）：写入 intent.md 末尾；已派 [Mac]0917AP（task-dispatcher·decision-20260917-181604）
 - id: m2-resume-parse-and-rank/0.4
   场景: M2
   阶段: gate
@@ -2129,7 +2113,6 @@ tasks:
   单元: U6 评测集导入与指标脚本
   依赖:
   - m2-resume-parse-and-rank/0.1
-  - m2-resume-parse-and-rank/0.3
   - m2-resume-parse-and-rank/7.1
   - m2-resume-parse-and-rank/7.2
   - m2-resume-parse-and-rank/7.3
@@ -2645,16 +2628,18 @@ tasks:
   产出判据: ⏸ 仍未闭合：路径订正有效（`.venv` 确认存在），但真因是 `.51` 部署代码落后于功能开发进度——`app\config.py` 停在 08-19（34 行），功能 08-27 才落地（`4890fab`/`eb338b0`/`49c5e4c`），`app\audit\` 整包缺失。产线开关已独立确认为
     `false`（安全）。U5 接线前需 Shao Peishen 决定是否执行 `.
   来源: docs/openers/号池台账.md:31
-- id: opener:[Mac]0917AP
+- id: m2-resume-parse-and-rank/0.3
   场景: M2
-  阶段: build
-  标题: M2 0.3 试运行岗位 intent 补行（Q-03 已答 b：底层软件工程师）
+  阶段: gate
+  标题: 试运行岗位选定（Shao Peishen 从 供应链总监／底层软件工程师／非标产品采购员 中选 1 个仍在招的）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
   依赖: []
   触碰区: []
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
-  产出判据: 待派发（task-dispatcher·decision-20260917-181604）
-  来源: docs/openers/号池台账.md:230
+  产出判据: '`intent.md` 末尾补一行「试运行岗位：<岗位> job_id=<…> profile_version=<n>」'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:7
+  备注: 0917 dispatcher 核实：commit 05fd82c 已合 main（本地曾落后 origin 一手，已 git pull 追平），tasks.md:7 checkbox 现为 [x]，intent.md 末尾已补行
 - id: opener:[Mac]0917AK
   场景: 构建自动化
   阶段: build
@@ -2708,3 +2693,13 @@ tasks:
   阻塞类型: 无
   产出判据: 编排文件无头块（泳道「在环闸门接线」，Opus），待 AK/AM/AN 合 main 后发车；合入前不装调度器
   来源: docs/openers/号池台账.md:229
+- id: opener:[Mac]0917AP
+  场景: M2
+  阶段: build
+  标题: M2 0.3 试运行岗位 intent 补行（Q-03 已答 b：底层软件工程师）
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 已完成（lanes-20260917-182834，OK，2 分钟）；合入 commit 05fd82c
+  来源: docs/openers/号池台账.md:230
