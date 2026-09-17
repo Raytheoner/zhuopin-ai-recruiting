@@ -73,6 +73,11 @@ DOCS_EXCLUDED = frozenset({
 })
 DOC_SIZE_TEST = Path("tests") / "test_doc_size_budget.py"
 
+# 定夺答复事件（R2 调度器唤醒，0917AM）：一次提交里含定夺队列 ⇒ 写一个事件文件，launchd WatchPaths
+# 由此起调度器去解阻塞。只在 .done 之后写：commit 没成就没有「答复落档」这件事。
+DECISION_QUEUE_PATH = "docs/roadmap/定夺队列.md"
+EVENTS_SUBDIR = Path(".claude") / "handoff" / "events"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 纯函数：白名单
@@ -255,6 +260,25 @@ def now() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def write_decision_event(repo: Path, paths: list[str], commit_hash: str) -> Path | None:
+    """提交里含 `docs/roadmap/定夺队列.md` ⇒ 写 `.claude/handoff/events/decision-<ts>`，返回其路径；否则 None。
+
+    事件文件只用文件名触发（run-lanes 的 lanes-done-* 同款空文件），内容只记 commit hash 供人看，
+    ⛔ 调度器不把它当命令。写失败不影响提交结果（每日 09:00 兜底会补处理）。
+    """
+    if DECISION_QUEUE_PATH not in paths:
+        return None
+    events = repo / EVENTS_SUBDIR
+    try:
+        events.mkdir(parents=True, exist_ok=True)
+        event = events / f"decision-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        event.write_text(f"commit={commit_hash}\n", encoding="utf-8")
+    except OSError as exc:
+        log(f"⚠ 写定夺事件失败（不影响提交）：{exc}")
+        return None
+    return event
+
+
 def log(msg: str) -> None:
     print(f"[{now()}] {msg}", flush=True)
 
@@ -364,6 +388,9 @@ def main() -> int:
     if request["push"] and not pushed:
         # 本地 commit 已经在了，这不是失败；但 push 没成要让 Cowork 看见
         payload["warning"] = "本地已提交但 push 未成功，等下一条泳道推或人工 push"
+    event = write_decision_event(repo, request["paths"], commit_hash)
+    if event is not None:
+        payload["decision_event"] = str(event.relative_to(repo))
     return outcome.done(**payload)
 
 
