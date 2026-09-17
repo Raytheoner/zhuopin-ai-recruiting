@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from tools.liaison import alerts, frames, inbound, session, session_client
+from tools.liaison import alerts, frames, inbound, owner_notify, session, session_client
 from tools.liaison import logsetup
 from tools.liaison.archive import DEFAULT_ARCHIVE_ROOT
 from tools.liaison.config import load_credentials
@@ -220,6 +220,10 @@ class InboundPorts:
     reply: Callable[[str, str], object] | None = None
     ledger_path: Path = LEDGER_PATH
     download: inbound.AttachmentDownloader | None = None
+    #: 0917Y·本人通知发件箱的消费者。`None` = 不消费（发件箱只积不发）。生产由
+    #: `main()` 装 `SdkSendPort`；单测装替身。`whitelist_path` 由消费者自己持有
+    #: （它可能在别的 tmp 名单上），⛔ 不从本对象的 `whitelist_path` 取。
+    owner_notify: owner_notify.OwnerNotifyConsumer | None = None
 
 
 def handle_message_frame(
@@ -376,6 +380,7 @@ def run_session_worker(
             name, moment, *payload = events.get(timeout=tick_interval)
         except queue.Empty:
             svc.tick(clock())
+            _drain_owner_notify(svc, ports)
             continue
         if name == EVENT_MESSAGE:
             # ⚠️ 先记一次"SDK 真的送来了东西"（TD-42 的第二条判据看的就是它）：
@@ -388,10 +393,26 @@ def run_session_worker(
         apply_connection_event(svc, name, moment)
 
 
-def _session_thread_main(events, stop_event, session_builder) -> None:
+def _drain_owner_notify(svc: session.LiaisonSession, ports: InboundPorts) -> None:
+    """空闲 tick 里消费本人通知发件箱（0917Y）。**只在 connected 状态**：断线期间发送口
+    本来就不就绪，且 ⛔ 不许把断线算成发送失败（会烧掉重试次数）。
+
+    跑在值守线程、用 `svc.conn`（发送与标记同一连接、同一 `BEGIN`，工程铁律 1）。
+    任何异常只记 ERROR，⛔ 不许打死值守线程——它死了 = 存活戳停更 = 看门狗重启整个进程，
+    一条发不出去的提示 ⛔ 不配有这种破坏力。
+    """
+    if ports.owner_notify is None or svc.state != session.STATE_CONNECTED:
+        return
+    try:
+        ports.owner_notify.drain(svc.conn, alert_sink=svc.alert_sink)
+    except Exception:  # noqa: BLE001 —— 见 docstring
+        logger.error("本人通知发件箱消费失败（值守线程继续）", exc_info=True)
+
+
+def _session_thread_main(events, stop_event, session_builder, ports=None) -> None:
     svc = session_builder()
     svc.start(now())
-    run_session_worker(svc, events, stop_event)
+    run_session_worker(svc, events, stop_event, ports=ports)
 
 
 def main(
@@ -429,6 +450,9 @@ def main(
     # 一个，那个外面拿不到，看门狗于是停不了任何东西——兜底层看起来在跑、实际
     # 什么都没做，且 ⛔ 没有任何症状。
     loop_stopper = session_client.LoopStopper()
+    # 0917Y：正在 run() 的连接对象的把手，本人通知发送口从这里取对象（同 loop_stopper 的
+    # 理由：不在这里造并传进去，外面就拿不到 ⇒ 发件箱只积不发、⛔ 没有任何症状）。
+    client_holder = session_client.ClientHolder()
 
     # TD-42：SDK 活动的两个来源都汇到同一个回调——`authenticated` 事件（经
     # `make_sdk_connect`）与 SDK 日志里的入站证据（经 `SdkLogObserver`，接在
@@ -468,6 +492,7 @@ def main(
             loop_stopper=loop_stopper,
             on_activity=on_sdk_activity,
             on_message=on_message,
+            client_holder=client_holder,
         )
     except ImportError as exc:
         print(
@@ -491,9 +516,16 @@ def main(
         return 0
 
     stop_event = threading.Event()
+    # 0917Y：本人通知发件箱的消费者接进值守线程。收件人由消费者从生产名单解析，
+    # ⛔ 这里不传、也传不了收件人。
+    worker_ports = InboundPorts(
+        owner_notify=owner_notify.OwnerNotifyConsumer(
+            send_port=owner_notify.SdkSendPort(client_holder, loop_stopper),
+        ),
+    )
     worker = threading.Thread(
         target=_session_thread_main,
-        args=(events, stop_event, session_builder),
+        args=(events, stop_event, session_builder, worker_ports),
         name="liaison-session",
         daemon=True,
     )
@@ -583,6 +615,12 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "unpack-dispa
     from tools.liaison.unpack.unpack_cli import unpack_dispatch_main
 
     raise SystemExit(unpack_dispatch_main(sys.argv[2:]))
+
+# ── 0917Y·本人通知入队子命令 ─────────────────────────────────────────────
+# ⛔ 又一段**纯插入**：既有入口一字节未动。判据顺序同 cleanup/send-followup——
+# 入队只写库、不建连接、不需要企微凭据，必须短路在 main() 的 load_credentials() 之前。
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "owner-notify":
+    raise SystemExit(owner_notify.owner_notify_main(sys.argv[2:]))
 
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == SELF_CHECK_ARG:
     raise SystemExit(main(self_check=True))

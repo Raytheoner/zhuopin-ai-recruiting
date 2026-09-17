@@ -163,6 +163,13 @@ AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性�
 
 ## 二、下一步
 
+### 🆕 2026-09-17 `0917Y` G3 泳道结果私信本人——代码已合，待重启值守服务后观察首条真发
+
+裁决 1a（只私信本人、⛔ 不进群）已做成结构：`owner_notify_outbox` 发件箱 ＋ `python -m tools.liaison owner-notify` 入队 CLI ＋ 值守线程空闲 tick 消费（`owner_notify.py`）；`run-lanes.sh` 收敛后自动入队 `lanes-<STAMP>`。收件人只从 `config/whitelist.yaml` 按 `name == 邵培申` 解析，无收件人参数。发送口 = SDK `client.send_message(userid, markdown)`（1.0.2 表面只读核过，**未真发过**）。
+
+- 【谁做】Paul（CC opener，落档提交类）｜【状态】⏸ 待做｜【判据】`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`｜【不做会怎样】旧进程没有消费者代码，发件箱只积不发、无任何症状
+- 首条真发若 `attempts` 到 3 停发（看 `data/liaison/logs` 里「本人通知已停发」），最可能是单聊 chatid 口径或 markdown body 形状与真实 SDK 不符 ⇒ 按 `last_error` 修 `owner_notify.SdkSendPort`，⛔ 不改收件人解析
+
 ### 🆕 2026-09-16 `0916U` P2 拆件章程正本（liaison-unpack-charter）Task 4-5 建造收口
 
 全 5 Task（Task1-3 上一 session、Task4-5 本 session）+ 终审 + 修复波 全部通过，已合入 main（合并

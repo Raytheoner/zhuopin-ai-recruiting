@@ -31,6 +31,7 @@ EFFECT_NODE_TO_TABLE = {
     "effect_archive_message": "liaison_message",
     "effect_enqueue_task": "liaison_task",
     "effect_unpack_audit": "liaison_unpack_audit",
+    "effect_enqueue_owner_notify": "owner_notify_outbox",
 }
 
 
@@ -117,3 +118,27 @@ def effect_unpack_audit(
         (thread_id, msgid, sender_userid, letter_number, kind, detail),
     )
     return str(cursor.lastrowid)
+
+
+@idempotent_effect("effect_enqueue_owner_notify")
+def effect_enqueue_owner_notify(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    body: str,
+) -> str:
+    """把一条"私信本人"的摘要放进发件箱（0917Y）。`business_key` 即 `dedupe_key`。
+
+    **只入队、不发送**：发送是值守线程的事（`owner_notify.effect_send_owner_notify`），
+    本函数给 CLI（`python -m tools.liaison owner-notify`）用，它跑在值守服务之外的
+    进程里、没有企微连接。⛔ 不在这里接任何发送口。
+
+    幂等：装饰器按 `{thread_id}:effect_enqueue_owner_notify:{dedupe_key}` 短路，
+    表上 `dedupe_key UNIQUE` 是第二道防线——同一批次重复入队 ⇒ 一行。
+    """
+    conn.execute(
+        "INSERT INTO owner_notify_outbox (dedupe_key, thread_id, body) VALUES (?, ?, ?)",
+        (business_key, thread_id, body),
+    )
+    return business_key

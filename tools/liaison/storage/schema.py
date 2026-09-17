@@ -223,6 +223,39 @@ CREATE INDEX IF NOT EXISTS idx_liaison_unpack_audit_msgid ON liaison_unpack_audi
 CREATE INDEX IF NOT EXISTS idx_liaison_unpack_audit_kind ON liaison_unpack_audit (kind, at);
 """
 
+#: 0917Y·本人通知发件箱。裁决（Shao Peishen 2026-09-17 答 1a）：泳道批次收敛后经值守
+#: 通道**私信本人**一条摘要，⛔ 不进群、⛔ 不发给任何其他人。
+#:
+#: 为什么要一张发件箱表而不是让 run-lanes.sh 直接发：发消息只能由**值守服务进程**做
+#: （它持有企微 aibot 长连接），外部进程 ⛔ 不自建连接。CLI 只写这张表（纯写库、
+#: `dedupe_key` 冲突即忽略），值守线程在空闲 tick 里取未发的行去发。
+#:
+#: **收件人不在表里**：谁收由消费者从名单（`config/whitelist.yaml`）里按本人姓名解析，
+#: ⛔ 表里没有、CLI 也没有"收件人"这一列/参数——非本人收件人在结构上就不可能出现。
+#:
+#: `thread_id`：与 `effect_log` 同域，`assert_effect_log_identity` 按它分组比对；
+#: 本表所有行取固定哨兵 `owner_notify.OWNER_NOTIFY_THREAD_ID`。
+OWNER_NOTIFY_OUTBOX_SCHEMA = """
+CREATE TABLE IF NOT EXISTS owner_notify_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- 幂等键分量（结构防线）；机制防线是 effect_enqueue_owner_notify 的 effect_log 键。
+    dedupe_key TEXT NOT NULL UNIQUE,
+    thread_id TEXT NOT NULL,
+    -- 完整正文（Markdown）。⛔ 不存提要——发的就是这一列。
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- 发送**成功**后才落。失败只累加 attempts、记 last_error。
+    sent_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    CHECK (attempts >= 0)
+);
+
+-- 消费者要找 sent_at IS NULL 且 attempts 未满的行。
+CREATE INDEX IF NOT EXISTS idx_owner_notify_outbox_pending
+    ON owner_notify_outbox (sent_at, attempts, id);
+"""
+
 #: 本服务的全量 DDL。
 SCHEMA = (
     EFFECT_LOG_SCHEMA
@@ -230,4 +263,5 @@ SCHEMA = (
     + OUTAGE_WINDOW_SCHEMA
     + GROUP_NOTIFY_SCHEMA
     + UNPACK_AUDIT_SCHEMA
+    + OWNER_NOTIFY_OUTBOX_SCHEMA
 )

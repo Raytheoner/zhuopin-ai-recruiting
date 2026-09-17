@@ -402,6 +402,11 @@ class LoopStopper:
             return False
         return True
 
+    def current_loop(self):
+        """当前记住的 loop（可能为 None）。给 `owner_notify.SdkSendPort` 跨线程投递协程用，
+        ⛔ 只读，⛔ 不许拿它调 `loop.stop()`——停 loop 只走 `request_stop`。"""
+        return self._loop
+
     def forget(self) -> None:
         """丢掉上一次的把手。**每次新建连接前必须调**。
 
@@ -569,6 +574,31 @@ def _prepare_client(
     return client
 
 
+class ClientHolder:
+    """当前正在 `run()` 的 SDK 连接对象的引用（0917Y·本人通知发件箱用）。
+
+    与 `LoopStopper` 同一手法：值守线程要主动发消息（`client.send_message` 是协程、
+    跑在主线程 `client.run()` 自建的事件循环上），必须拿到**此刻正在跑的那个**对象——
+    `make_sdk_connect` 每次建连都造全新对象（`_started` 闩锁，见其 docstring），
+    所以引用必须随每次 `run()` 更新、`run()` 返回即清空。⛔ 留着旧对象的后果与
+    `LoopStopper.forget` 那段一样：往一个已经关掉的连接上投协程，报"发出去了"其实没有。
+
+    ⛔ **不写 `with`、不用锁**：持有的只是一个引用，赋值与读取在 GIL 下都是原子的。
+    """
+
+    def __init__(self) -> None:
+        self._client = None
+
+    def remember(self, client) -> None:
+        self._client = client
+
+    def current(self):
+        return self._client
+
+    def forget(self) -> None:
+        self._client = None
+
+
 def make_sdk_connect(
     client_factory: Callable[[], object],
     *,
@@ -577,8 +607,13 @@ def make_sdk_connect(
     loop_stopper: "LoopStopper | None" = None,
     on_activity: Callable[[], None] | None = None,
     on_message: Callable[[object], None] | None = None,
+    client_holder: "ClientHolder | None" = None,
 ) -> Callable[[], None]:
     """返回一个交给 `run_forever` 用的、真正阻塞到断开为止的调用。
+
+    `client_holder`（0917Y）：每次 `run()` 之前把这一轮的连接对象交给它、`run()` 返回后
+    清空，值守线程的本人通知发送口（`owner_notify.SdkSendPort`）从这里取对象。
+    不传就自己造一个（外面拿不到 ⇒ 发送口永远"未就绪" ⇒ 发件箱只积不发）。
 
     `on_activity`（TD-42）：见 `_prepare_client`。
 
@@ -615,6 +650,8 @@ def make_sdk_connect(
     """
     if loop_stopper is None:
         loop_stopper = LoopStopper()
+    if client_holder is None:
+        client_holder = ClientHolder()
     prepared = _prepare_client(
         client_factory, on_connected, on_disconnected, loop_stopper, on_activity, on_message
     )
@@ -641,7 +678,14 @@ def make_sdk_connect(
         # 这一层**一次都不会触发**。`run_liveness_watchdog` 就是补这个洞的——它在
         # 另一条线程上盯 `liveness.json` 的 `stamp_at`，停更超阈值就用
         # `loop_stopper` 把这个 loop 停掉，`run()` 才返回、外层才接得上。
-        client.run()
+        #
+        # 0917Y：`run()` 期间把对象交给 holder，返回（无论怎么返回）即清空——
+        # ⛔ 不许挪到 `run()` 之后才 remember（`run()` 是阻塞的，那时已经晚了）。
+        client_holder.remember(client)
+        try:
+            client.run()
+        finally:
+            client_holder.forget()
 
     return connect_once
 

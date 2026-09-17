@@ -688,6 +688,18 @@ echo "━━━━━━ 泳道执行汇总 ━━━━━━"
 echo
 echo "日志目录：$LOGDIR"
 
+# ---------------------------------------------------------------------------
+# 0917Y·批次收敛后私信 Shao Peishen 本人一条摘要（裁决 2026-09-17 答 1a：只私信本人，
+# ⛔ 不进群）。这里**只入队**（写 data/liaison.db 的 owner_notify_outbox），真正发送由
+# 值守服务进程做——它才持有企微长连接。幂等键 = lanes-<STAMP>，重跑同批次不重复入队。
+# 入队失败 ⛔ 不影响泳道结果与退出码；dry-run 不入队。
+# ---------------------------------------------------------------------------
+if [[ $DRY_RUN -eq 0 ]]; then
+  ( cd "$REPO" && python3 -m tools.liaison owner-notify \
+      --dedupe-key "lanes-$STAMP" --lane-logdir "$LOGDIR" ) \
+    || echo "  ⚠️ 本人通知入队失败（不影响泳道结果；查 data/liaison/logs 与 owner_notify_outbox）"
+fi
+
 failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" || $3=="WORKTREE-FAIL" {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"
 partial="$(awk -F'\t' '$3=="PARTIAL" {printf "%s ", $2}' "$LOGDIR/results.tsv")"
 

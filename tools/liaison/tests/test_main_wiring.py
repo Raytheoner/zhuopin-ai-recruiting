@@ -437,11 +437,16 @@ def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
         loop_stopper=None,
         on_activity=None,
         on_message=None,
+        client_holder=None,
     ):
         stoppers.append(loop_stopper)
         # ⚠️ `on_message` 必须原样透传（8.5bis）：吞掉它，本用例就会在"接线已拆掉"
         # 的代码上照样绿——间谍替身把被测接线改窄，是最难发现的一种假绿。
         assert on_message is not None, "main() 必须把入站消息接线传给 make_sdk_connect"
+        # 0917Y：连接对象把手同理——不传，本人通知发送口永远"未就绪"、发件箱只积不发。
+        assert isinstance(client_holder, session_client.ClientHolder), (
+            "main() 必须把 ClientHolder 传给 make_sdk_connect"
+        )
         return real_make(
             factory,
             on_connected=on_connected,
@@ -449,6 +454,7 @@ def test_main_starts_the_liveness_watchdog_wired_to_the_same_loop_stopper(
             loop_stopper=loop_stopper,
             on_activity=on_activity,
             on_message=on_message,
+            client_holder=client_holder,
         )
 
     def fake_watchdog(**kwargs):
