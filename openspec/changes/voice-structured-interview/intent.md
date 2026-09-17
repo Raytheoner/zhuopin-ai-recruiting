@@ -1,0 +1,101 @@
+---
+status: 已确认（G1 Q-37）
+场景: S-M3
+grill会话: "[Mac]0917BC（备料，无头）→ 追问由 Cowork·HR业务线 在本线发起"
+进入判例包的开放点数量: 4
+---
+# S-M3 实时语音结构化面试 · intent（需求收敛结论 · 首轮备料）
+
+> 来源：本文件「设计树与前沿」第 1 轮（备料），**尚未答题**。Shao Peishen 在本线答 `Q1a，…` 后由 Cowork 把答复转写进「决策」并清「待答题」。本文件是 `openspec propose` 的输入，逐条可充当 design.md 的 Decisions。依据文档：`02-系统架构与MVP范围.md` §1、§2.3、§3 M3、§5、§6；`01-开源调研与技术选型.md` §2.4；`CLAUDE.md` 工程铁律／部署约束／合规红线；`docs/roadmap/任务驱动上线路线图.md` §二 X5/X6、波次 0/4；`docs/roadmap/定夺队列.md` Q-F4（改答）。
+> ⛔ 本稿不是 spec，不是现状描述；所有「现状」以代码与 openspec 为准。
+
+## 目标
+岗位画像（M1）＋候选人简历弱点（M2 评分）→ **prep**（离线）预生成题目、难度曲线、rubric、预埋追问 → **live**（实时）候选人经一次性邀请链接、单独同意后进入语音房间，ASR ↔ 轻模型追问选择 ↔ TTS，全程录制 → **post**（离线）转写对齐 → rubric 评分 → ScoreCard（每条回指 `interview_turn`）＋「面试要点提示」→ 面试官拿着提示进**人工终面**。使用者：面试官（业务经理）看 ScoreCard 与要点；HR 看完成率与进度；候选人只见一次性链接与答题端。
+
+## M2 已自查的事实
+- 三段式 prep/live/post、级联架构（LiveKit Agents ＋ FunASR ＋ CosyVoice，⛔ 不走端到端 speech-to-speech）、分段延迟预算（endpointing+ASR 150–300ms、LLM TTFT ~500ms、TTS 首帧 100–200ms）**已决策**（来源：`01-开源调研与技术选型.md` §2.4；`02-系统架构与MVP范围.md` §1「实时语音的延迟设计」）。
+- 范围与验收：交付＝prep 出题引擎、LiveKit 语音链路、打断处理、ScoreCard、面试要点提示、身份核验、同意流程与录音留存策略；验收＝延迟中位 <800ms、候选人完成率 ≥70%、3 名面试官一致性评估；🚫 明确不做表情/情绪分析、声学情绪信号进评分、AI 自动淘汰（来源：`02-系统架构与MVP范围.md` §3 M3）。
+- 数据模型已有：`interview_session`（`prep_snapshot`／`invite_token`／`consent_at`／`recording_uri`／`retention_until`）、`interview_turn`（`audio_span`／`latency_ms`／`follow_up_of`／`asr_confidence`）、`identity_check`（不存人脸图像、不产生进评分的信号）；ScoreCard 复用 `analysis_run`＋`criterion_score`（`run_type=interview`，`evidence_ref` 指 `interview_turn`）（来源：`02-系统架构与MVP范围.md` §2.3）。
+- 合规硬约束：禁止人脸/表情分析（《人脸识别技术应用安全管理办法》2025-06-01 施行）；声学信号只展示给面试官；候选人入口一律一次性邀请链接；AI 面试单独同意＋身份核验单独同意；录音留存期限与删除机制；AI 生成邀约带标识；模型境内；法务须复核人脸识别办法适用性（来源：`CLAUDE.md` 合规红线；`02-系统架构与MVP范围.md` §6 合规验收 #2 清单）。
+- 邀约外发通道已建、无调用方：`deliver_candidate_message()` 门禁覆盖 `interview_invitation`，fail-closed，`CANDIDATE_OUTBOUND_ENABLED` 默认关（来源：`openspec/specs/outbound-approval-gate/spec.md`；`docs/tech-debt.md` TD-8）。
+- 运行环境：`.51` ＝ Windows Server 2019（`Windows-2019Server-10.0.17763`）、Python 3.14.5、CPU、无 Docker、无反向代理、无公网（LAN 全网段）、无正式鉴权（共享口令）；torch 因 VC++ 运行库过旧无法导入，升级已放行（Q-27）；`paddlepaddle` 无 cp314 wheel（来源：`04-部署与门户挂载.md` §1；`docs/m2-model-comparison.md`「环境」节；`docs/roadmap/定夺队列.md` Q-27）。
+- 题库校准数据：原设计依赖 M2 真实招聘 2 周数据（X6）；任务驱动路线图已定「可先用画像＋脱敏样本起步，上线后再校准」；探针 X5「现在就可做（不依赖 M2 数据）」（来源：`docs/roadmap/任务驱动上线路线图.md` §二 X5/X6、波次 0、波次 4）。
+- 启动裁决：Q-F4（改答）2026-09-17 21:5x 答「是」——按任务驱动口径现在启动 M3 grill，intent 落档停 G1（来源：`docs/roadmap/定夺队列.md` 已答区 Q-F4 行）。`docs/roadmap/任务台账.yaml` `scene:M3` 仍写「依赖 scene:M2／队列 Q-F4 待答」，属调度器下次刷新前的滞后，⛔ 本条不改台账。
+- 面试官侧载体先例：M1 已把企微回调卡片移出到阶段二；aibot 为被动应答形态、不能主动私信；M2 D8 定沿用 Web 工作台（来源：`docs/roadmap/M2-需求树草稿.md` Q8；`docs/跟进信/README-跟进信清单.md` 收件面口径）。
+- 出网：`.51` 境内 LLM 三家域名实测全通、无 TLS 拦截（来源：`04-部署与门户挂载.md` §4）。
+
+## 决策（已从事实源自答，依据逐条列出；G1 时可逐条改）
+- **D1 架构与三段式**：LiveKit Agents ＋ FunASR ＋ CosyVoice 级联；prep 离线重推理、live 只跑轻模型追问选择、post 离线评分。依据：`01` §2.4、`02` §1（已决策，不重问）。
+- **D2 不做表情/情绪；声学信号只展示不计分**：语速/停顿/静默只进面试官视图，⛔ 不进 `criterion_score`。依据：`CLAUDE.md` 合规红线；`02` §3 M3「明确不做」。
+- **D3 AI 不淘汰**：post 段只产 ScoreCard ＋ 要点提示，结论进人工终面；`rejection_record.reason_type='ai_score'` 恒 0 的机器断言延用到面试评分。依据：`CLAUDE.md` 合规红线；`02` §2.2。
+- **D4 数据模型复用**：`interview_session`／`interview_turn`／`identity_check` 按 `02` §2.3；ScoreCard 复用评分审计三件套，`evidence_ref` 必指 `interview_turn` offset（空不允许写入）。依据：`02` §2.2–2.3；`CLAUDE.md` 铁律 3/4。
+- **D5 候选人入口与同意**：一次性邀请链接；AI 面试单独同意、身份核验单独同意各自留痕（`consent_at`／`consent_version`）。依据：`CLAUDE.md` 合规红线；`02` §6。
+- **D6 邀约外发必经门禁**：走 `deliver_candidate_message()`（类型 `interview_invitation` 已登记），⛔ 不得直连 `channel.deliver`；AI 生成邀约带标识。依据：`openspec/specs/outbound-approval-gate/spec.md`；TD-8。
+- **D7 模型治理**：`temperature=0`、版本显式锁定、响应 `model` 字段回存、全量评分持久化；全部境内。依据：`CLAUDE.md` 铁律 3/5、合规红线。
+- **D8 题库起步数据**：prep 首版用 M1 画像＋M2 脱敏样本起步，M2 试运行数据到位后校准（X6 改口径）。依据：`docs/roadmap/任务驱动上线路线图.md` §二 X6、波次 4。
+- **D9 面试官侧载体**：沿用 Web 工作台（`.51` 门户 `hr/recruit-agent`）出 ScoreCard／要点提示／声学参考视图；⛔ 不做企微卡片。依据：M2 D8 同一理由（企微卡片已移阶段二、aibot 被动）。
+- **D10 部署形态**：Python venv ＋ Windows 计划任务，不引入容器；语音组件若装不进 `.51`，宿主另议（→ Q1）。依据：`CLAUDE.md` 部署约束 4；`04` §1。
+- **D11 现在启动 intent，不等 M2 上线**：Q-F4 改答「是」。依据：`docs/roadmap/定夺队列.md` Q-F4（改答）。
+
+- **D12 live 段宿主与公网暴露（Q1a，Shao Peishen 2026-09-17 23:0x 答）**：另立境内候选机／云主机跑 LiveKit SFU＋TURN＋语音组件，`.51` 只与其交换转写与评分（简历数据不出 `.51`）——远程面试成立、延迟目标可达；代价：新主机预算与采购（不可代）、两机间接口与鉴权、合规验收 #2 范围扩到第二台机。
+- **D13 身份核验一期范围（Q2a，Shao Peishen 2026-09-17 23:0x 答）**：一期不做活体／证件比对：一次性链接绑定手机号验证码作弱核验，替考风险由人工终面兜底；`identity_check.result` 一律 `skipped`
+- **D14 首批面试对象（Q3a，Shao Peishen 2026-09-17 23:0x 答）**：先内部模拟（员工扮演候选人，用脱敏画像与样本）跑通全链路并做 3 名面试官一致性评估，再对 M2 试运行岗位（底层软件工程师，Q-03b）的通过初筛候选人开真实场次（开闸另走 G3 前定夺）
+- **D15 ASR／TTS 来源口径（Q4a，Shao Peishen 2026-09-17 23:0x 答）**：只允许自托管（FunASR／CosyVoice，或探针证明可装的等价开源件），探针不过则 live 段延后
+- **D16 prep 题目是否须业务经理确认后冻结（Q5a，Shao Peishen 2026-09-17 23:0x 答）**：是：LLM 按画像＋简历弱点生成题目／rubric／预埋追问 → 业务经理在 Web 确认（同 M1 画像冻结形态）→ 冻结 `prep_snapshot`；未确认不得开场
+## 设计树与前沿（第 1 轮）
+
+```
+S-M3
+├─ A 宿主与网络：候选人在公网、.51 无公网无反代 ⇒ live 段跑在哪、怎么暴露    ← Q1
+│   └─ A1 延迟门槛是否沿用 <800ms（取决于 Q1 ＋ 探针 P1–P3）            → 第 2 轮
+├─ B 语音组件来源：自托管 FunASR/CosyVoice vs 境内云 ASR/TTS               ← Q4
+│   └─ B1 live 段追问模型选型（取决于探针 P4 TTFT）                        → 探针后
+├─ C 身份核验：一期做不做活体＋证件比对（人脸识别办法 ＋ 法务复核未出）      ← Q2
+├─ D 首批对象：先内部模拟再真实候选人；试运行岗位                           ← Q3
+│   └─ D1 真实候选人开闸（不可代：对外通道）                               → G3 前定夺
+├─ E prep 题目：LLM 生成 → 业务经理确认冻结？                                ← Q5
+│   └─ E1 现用面试题／面试记录样例（专员）                                  → 待专员
+├─ F 验收：完成率 ≥70%、3 名面试官一致性（人选＝专员）                       → 待专员
+├─ G 合规验收 #2：同意条款、录音留存期限、身份核验隔离（法务）              → 外部依赖
+└─ H 降级通道：候选人网络差 ⇒ 切文本作答（02 §5 已定为必做）               ✅ 已定（D 条不重问）
+```
+
+## 建议交付单元（propose 时细化）
+U0 技术探针（P1–P5，见「外部依赖与技术探针」）→ U1 面试域数据模型（`interview_session`／`interview_turn`／`identity_check` ＋ 评分审计复用）→ U2 prep 出题引擎（题目／难度曲线／rubric／预埋追问，业务经理确认冻结）→ U3 邀约与同意流程（一次性链接、双同意、门禁接线）→ U4 live 语音链路（房间、ASR、追问选择、TTS、打断、录制、文本降级）→ U5 post 转写对齐＋rubric 评分＋ScoreCard＋要点提示 → U6 面试官视图（Web）→ U7 合规验收 #2 断言（`evidence_ref` 非空、`ai_score` 恒 0、录音留存到期删除）。
+
+## 不做
+表情/情绪分析；声学情绪信号进评分；AI 自动淘汰；端到端 speech-to-speech；存储人脸图像；企微卡片；候选人自助改期（属 S-排期）；候选人公开入口（一律一次性链接）。
+
+## 不可代项（进 tasks 时标注）
+合规验收 #2 与法务复核（人脸识别办法适用性、同意条款、录音留存期限）；真实候选人开闸（候选人对外通道）；`.51` 发版；任何新增主机／云资源／语音 API 的预算与采购；`CANDIDATE_OUTBOUND_ENABLED` 开启。
+
+## 待答题
+
+（首轮 5 题已全部答复：Q1a，Q2a，Q3a，Q4a，Q5a，已转写为决策 D12–D16；第 2 轮如有另列于此）
+
+## 待专员（＝跟进信判例批改待办）
+> ⛔ 不在 grill 里问；`人事部#3` 在途（`人事部#2` 已作废并入 #3；串行闸锁），本表在其闭环后成信。判例批改硬规则 1–6 照 `.claude/skills/requirement-grill/SKILL.md` §三。
+
+| 占位 ID | 问题 | 计划取的真实案例 | 对应 D 条 |
+|---|---|---|---|
+| `HR-G-NN`（登台账时现取） | 现用面试流程：几轮、谁面、每轮多长、是否有结构化打分表 | 近 1 年 3 个岗位的面试记录（脱敏） | D1/D3、U2 |
+| `HR-G-NN` | 各岗现用面试题与「必问项」（prep 题库的种子） | M1 试点三岗各 ≤10 题 | D8、Q5 |
+| `HR-G-NN` | 3 名面试官一致性评估人选与可用时间 | — | 验收（02 §3 M3） |
+| `HR-G-NN` | 到访面试的房间／设备／网络现状（Q1b 与内部模拟都要用） | — | Q1、Q3 |
+
+## 外部依赖与技术探针（不进待答题，单列）
+- **X5 探针（现在就可做，不依赖 M2 数据）**，落 `docs/m3-voice-probe.md`（名从 `docs/m2-model-comparison.md` 例）：
+  - P1 LiveKit server（Go 二进制）在 Windows Server 2019 可运行性；LAN 内 WebRTC 建连；TURN 需求评估。
+  - P2 FunASR 在 `.51` 同款 venv（Python 3.14.5、CPU、VC++ 升级后）的可装性与流式 ASR 首字延迟；不可装则记录阻塞点（wheel 缺失／编译）。
+  - P3 CosyVoice 同上：可装性与 TTS 首帧延迟（CPU）。
+  - P4 live 段追问选择用 LLM（DeepSeek，现网关）TTFT 实测（`.51` 出网已通）。
+  - P5 `livekit-agents` Python SDK 对 3.14 的兼容性（同 `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md` 方法）。
+  - 前置：Q-27 VC++ 升级完成（`relay:R-9`）。
+- **合规验收 #2**（法务通道，与 X3 同一通道提前起草）：AI 面试单独同意条款、身份核验单独同意（若 Q2b）、录音留存期限与删除机制、人脸识别办法适用性结论。
+- **X6**：M2 试运行数据（校准题库，非阻塞）。
+- **候选人对外通道**：`CANDIDATE_OUTBOUND_ENABLED` 开启、真实候选人开闸——G3 前单独定夺。
+
+## 收工指标（三列，见 SKILL §六；首轮备料值，答题后由 Cowork 复核）
+| ① grill 前既有 | ② grill 新发现＋归因 | ③ 拦下数 |
+|---|---|---|
+| 0（`口径点台账.md` 仅 HR-G-01，与本场景无关） | 4（ⓐ 1：3 名面试官人选来自 02 验收线；ⓒ 3：面试流程／现用面试题／面试间现状） | 预计 16＝自答 11 ＋ 待答 5（全部内部消化，未发专员；答题后核实） |

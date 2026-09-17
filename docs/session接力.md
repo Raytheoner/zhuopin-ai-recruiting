@@ -166,6 +166,11 @@ AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性�
 
 ## 二、下一步
 
+### 🆕 2026-09-18 `0918B` S-M3 立包 `voice-structured-interview`（G1 Q-37 放行后，无头）
+- 包已立并过 `openspec validate --strict`：6 能力（`interview-prep-question-engine`／`interview-invite-and-consent`／`live-voice-interview-session`／`interview-scorecard`／`interview-recording-retention`／`m3-compliance-assertions`）／tasks 76 条（0.1 R-9 已勾，1/76）／🔴 7／design Open Questions **11**（OQ-1–4 待专员 `HR-G-NN` 四条、OQ-5 X5 探针、OQ-6 合规验收 #2、OQ-7 X6、OQ-8 对外通道、OQ-9 语音主机采购、OQ-10 短信通道与验证码门禁口径、OQ-11 内部模拟录音留存）。路线图 §二 M3 行改「已立包 1/76」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/voice-structured-interview/proposal.md`）
+- 【谁做】task-dispatcher【状态】待 G2（Open Questions 全部是待专员＋外部依赖原样转入，不阻塞 spec-to-plan；U0 探针与 U1–U3、U5 不依赖任何 OQ）【判据】Shao Peishen 在定夺队列对本包 G2 答「定」后派 spec-to-plan（从 U0 探针起）【不做会怎样】M3 停在 propose；X5 探针继续空等
+- ⚠️ 本文件追加后 ≈55 KB，闸 58 KB（`tests/test_doc_size_budget.py` 现值，5 passed）——余量 < 3 KB，下一条追加前宜先打「【已闭环】」跑 `scripts/archive_docs.py --apply`
+
 ### 🆕 2026-09-17 `0917BF` 四场景立包完成（G1 Q-33–36 放行后，无头单条串行）
 - 四包已立并过 `openspec validate --strict`：`interview-scheduling`（4 能力／42 条／🔴 6／OQ 8）、`offer-generation`（4 新能力＋`outbound-approval-gate` delta 增 `offer_letter`／40 条／🔴 4／OQ 7）、`onboarding-flow`（4 能力／34 条／🔴 6／OQ 7）、`channel-resume-intake`（4 能力／28 条／🔴 4／OQ 7）。四份 intent `status` 已改「已确认（G1 Q-xx）」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/interview-scheduling/proposal.md`）
 - 【谁做】task-dispatcher【状态】待 G2（四包 design 各留 7–8 条 Open Questions，全部是「待专员」＋外部依赖原样转入，不阻塞 spec-to-plan）【判据】Shao Peishen 在定夺队列对四包 G2 答「定」后派 spec-to-plan【不做会怎样】四包停在 propose，波次 5 无法开工。路线图 §二 无四场景行，按 opener 预案跳过不新建
