@@ -34,7 +34,7 @@ HF_ENDPOINT=https://hf-mirror.com venv/bin/python -m scripts.bench_bge_m3 --json
 | paddlepaddle | ❌ | | | | ModuleNotFoundError: No module named 'paddle' |
 | paddleocr | ❌ | | | | ModuleNotFoundError: No module named 'paddleocr' |
 | torch | ✅ | 2.14.0 | 587.3 | 591 | |
-| FlagEmbedding | ✅ | 1.4.2 | 2.1 | 2385（冷启动首次 import，约 32 s 量级见 pip 安装后首跑） | |
+| FlagEmbedding | ✅ | 1.4.2 | 2.1 | 2385 | |
 
 `pip install paddlepaddle==3.4.0 paddleocr==3.7.0` 失败（`pip-paddle.log`）：
 
