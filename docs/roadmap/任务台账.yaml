@@ -3,11 +3,11 @@ version: 1
 summary:
   条目数: 215
   按状态:
-    待开: 80
-    在跑: 6
+    待开: 83
+    在跑: 7
     完成: 91
-    阻塞: 38
-  阻塞·决策: 20
+    阻塞: 34
+  阻塞·决策: 16
   阻塞·外部: 17
   conflicts:
   - m1-intake-quality-fixes/8.9
@@ -23,6 +23,7 @@ summary:
   - m1-job-profile-intake/U6
   - m2-resume-parse-and-rank/1.4
   - m2-resume-parse-and-rank/6.2
+  - m2-resume-parse-and-rank/U1/plan
   - propose:S-Offer Offer 生成
   - propose:S-入职 入职流程
   - propose:S-排期 面试排期
@@ -31,13 +32,12 @@ summary:
   - relay:H-4
   ready:
   - answer:Q-07
-  - m2-resume-parse-and-rank/U1/plan
+  - propose:S-Offer
+  - propose:S-入职
+  - propose:S-排期
+  - propose:S-渠道
   闸门待放行:
-  - propose:M3 ← G1 `M3`（缺行）
-  - propose:S-Offer ← G1 `S-Offer`（待答）
-  - propose:S-入职 ← G1 `S-入职`（待答）
-  - propose:S-排期 ← G1 `S-排期`（待答）
-  - propose:S-渠道 ← G1 `S-渠道`（待答）
+  - propose:M3 ← G1 `M3`（待答）
   未知依赖: []
   未归属plans:
   - 2026-08-06-m1-chapter0-demo
@@ -1441,6 +1441,10 @@ tasks:
   可见: false
   闸门: G2 m2-resume-parse-and-rank
   队列: Q-18 已答 b
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
   备注: 0917BE 已派（task-dispatcher·lanes-done-20260917-225628，G2 已放行），opener 见 docs/openers/OP-0820-全量编排.md
 - id: m2-resume-parse-and-rank/U1
   场景: M2
@@ -2878,7 +2882,7 @@ tasks:
   - openspec/changes/
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: 【G1 闸门·缺行】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
+  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 M3
@@ -2889,9 +2893,9 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
+  状态: 待开
+  阻塞类型: 无
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-Offer-intent.md:1
   可见: false
   闸门: G1 S-Offer
@@ -2902,9 +2906,9 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
+  状态: 待开
+  阻塞类型: 无
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-入职-intent.md:1
   可见: false
   闸门: G1 S-入职
@@ -2915,9 +2919,9 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
+  状态: 待开
+  阻塞类型: 无
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-排期-intent.md:1
   可见: false
   闸门: G1 S-排期
@@ -2928,9 +2932,9 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
+  状态: 待开
+  阻塞类型: 无
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-渠道-intent.md:1
   可见: false
   闸门: G1 S-渠道
@@ -3035,11 +3039,12 @@ tasks:
   依赖: []
   触碰区:
   - docs/m2-model-comparison.md
-  状态: 待开
-  阻塞类型: 无
+  状态: 阻塞
+  阻塞类型: 决策
   产出判据: 两家 API key 写入 `.env`、`docs/m2-model-comparison.md` 补齐第 3／4 家对比数据；⛔ 不阻塞 1.4 主线
   来源: docs/roadmap/定夺队列.md:23 Q-07
   可见: false
+  备注: 注册两家付费账号需本人实名办理（预算与外部采购，不可代）——调度器不可派车；是否现在办理见 Q-38。⚠️ generator（`dispatcher_answers.py` ANSWER_MAP `Q-07`）默认此任务 阻塞类型=无，重跑 `dispatcher_backlog.py` 可能把本条状态改回「待开」——下一轮调度器核 conflicts 时须重复本条判断，直到 ANSWER_MAP 补上「决策」标记或 Q-38 已答。
   队列: Q-07 已答
 - id: answer:Q-12
   场景: '.51'
