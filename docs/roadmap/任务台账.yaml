@@ -5,9 +5,9 @@ summary:
   按状态:
     待开: 71
     在跑: 6
-    完成: 90
-    阻塞: 47
-  阻塞·决策: 29
+    完成: 91
+    阻塞: 46
+  阻塞·决策: 28
   阻塞·外部: 17
   conflicts:
   - m1-intake-quality-fixes/8.9
@@ -2953,20 +2953,6 @@ tasks:
   来源: docs/session接力.md:77
   可见: false
   队列: Q-F5 待答
-- id: relay:R-9
-  场景: M3
-  阶段: build
-  标题: '`.51` 装 VC++ 2015–2022 x64 Redistributable（现 v14.27 过旧，torch 2.14 `c10.dll` WinError 1114）后重跑 `smoke_m2_deps` 与 `bench_b'
-  依赖: []
-  触碰区:
-  - docs/m2-model-comparison.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【Q-27 已答·缺任务映射】`.51` 隔离 venv `C:\apps\m2-smoke` 里 `import torch` 成功、探针 torch/FlagEmbedding 行 ✅
-  来源: docs/session接力.md:79
-  可见: false
-  队列: Q-27 已答
-  备注: 源行自带「环境操作·代理人未设 ⇒ 等本人放行」（改 .51 系统组件），调度器不可代，2026-09-17 task-dispatcher 登记 Q-27
 - id: relay:R-10
   场景: 构建自动化
   阶段: build
@@ -3364,3 +3350,17 @@ tasks:
   来源: docs/session接力.md:97
   队列: Q-12 已答 a
   备注: 2026-09-17 task-dispatcher 核实完成——sqlite_master 建表语句含跨字段 CHECK，备份文件存在，与 `docs/roadmap/定夺队列.md` Q-12 行「✅ 已执行」一致
+- id: relay:R-9
+  场景: M3
+  阶段: build
+  标题: '`.51` 装 VC++ 2015–2022 x64 Redistributable（现 v14.27 过旧，torch 2.14 `c10.dll` WinError 1114）后重跑 `smoke_m2_deps` 与 `bench_b'
+  依赖: []
+  触碰区:
+  - docs/m2-model-comparison.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 已完成：`0917BB` 装 VC++ v14.27→v14.44.35211（服务未重启），`.51` 隔离 venv `C:\apps\m2-smoke` 里 torch/FlagEmbedding 探针 ✅，`bench_bge_m3` 单份 ~117 ms、画像 ~493 ms，recall@10=40.0%，结论已落
+    `docs/m2-model-comparison.md`（149 行起）与 `docs/releases/2026-09-17-发版二与R9执行记录.md`；commit `f6dc230`
+  来源: docs/session接力.md:79
+  队列: Q-27 已答
+  备注: 2026-09-17 task-dispatcher 核实完成——`0917BB` 泳道日志与 `docs/m2-model-comparison.md` 实测数据一致，判定完成；Q-29（答复→任务映射缺失）留待，不影响本条
