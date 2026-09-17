@@ -93,3 +93,53 @@ def test_unpack_subcommand_modules_do_not_import_storage_db():
                     assert "storage.db" not in alias.name, (
                         f"{path} 违规 import 了 storage.db：{alias.name}"
                     )
+
+
+# ---- TD-48（0917O）：`unpack-dispatch --force` 也带真章程 ----------------------
+"""`0917K`/`0917N` 实测：`--force` 走占位 prompt，子会话没有章程红线，却照常加载
+仓库根 CLAUDE.md，据此自发改写并提交 `docs/session接力.md`。Shao Peishen
+2026-09-17 答 `1a`：`--force` 与真实起活走同一份 `charter.compute_prompt`。
+以下用例进程内调 `unpack_dispatch_main`，用替身接住 `dispatch_headless_unpack`，
+⛔ 不起真实子进程。"""
+
+from tools.liaison.unpack import charter as _charter
+from tools.liaison.unpack import unpack_cli as _unpack_cli
+
+
+def test_force_的prompt以真章程全文结尾(tmp_path, monkeypatch):
+    received: dict = {}
+
+    def fake_dispatch(**kwargs):
+        received.update(kwargs)
+        from tools.liaison.unpack.dispatch import DispatchOutcome
+        return DispatchOutcome(status="started", pid=1, log_path="x.log")
+
+    monkeypatch.setattr(_unpack_cli, "dispatch_headless_unpack", fake_dispatch)
+    monkeypatch.setattr(_unpack_cli, "DEFAULT_LOCK_PATH", tmp_path / "lock.json")
+    monkeypatch.setattr(_unpack_cli, "DEFAULT_LOG_DIR", tmp_path / "logs")
+
+    assert _unpack_cli.unpack_dispatch_main(["--force"]) == 0
+
+    charter_text = _charter.read_charter(_unpack_cli.REPO_ROOT)
+    assert received["charter_text"] == charter_text
+    assert received["prompt"].endswith(charter_text), "--force 的 prompt 必须以章程全文逐字结尾"
+    preamble = received["prompt"][: -len(charter_text)]
+    assert "（验收起活·无真实回件）" in preamble
+    assert "FORCE-" in preamble
+    assert "验收占位" not in received["prompt"]
+
+
+def test_force_缺章程时不起进程且退出码非零(tmp_path, monkeypatch, capsys):
+    calls: list = []
+    monkeypatch.setattr(_unpack_cli, "dispatch_headless_unpack", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(_unpack_cli, "DEFAULT_LOCK_PATH", tmp_path / "lock.json")
+    monkeypatch.setattr(_unpack_cli, "DEFAULT_LOG_DIR", tmp_path / "logs")
+    # 把仓库根指到一个没有章程正本的空目录
+    monkeypatch.setattr(_unpack_cli, "REPO_ROOT", tmp_path / "empty-repo")
+
+    rc = _unpack_cli.unpack_dispatch_main(["--force"])
+
+    assert rc != 0
+    assert calls == [], "缺章程 ⛔ 不得起进程"
+    out = capsys.readouterr()
+    assert "章程" in (out.out + out.err)

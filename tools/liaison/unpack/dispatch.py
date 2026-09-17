@@ -90,16 +90,57 @@ def resolve_claude_bin(env: Mapping[str, str]) -> str | None:
     return None
 
 
-#: 受限权限 argv 模板（design D4）。⛔ **唯一真源**——白名单是否放行某条命令、
-#: 预算参数是否存在，全部由 `subagent-driven-development` 的 reviewer 对着*这个
-#: 常量*核对，⛔ 不许在别处再拼一份 argv 字面量。
+#: 章程 §三 允许会话写入并 `git add` 的路径（TD-48，0917O）。⛔ 必须与
+#: 章程正本（`charter.CHARTER_RELATIVE_PATH`）§三 「只 `git add` 本轮明确写入的路径」
+#: 逐字一致——`test_unpack_path_guard.py` 从章程正本解析出清单来核对，两边任一漂移
+#: 即红。目录以 `/` 结尾，文件写全名。
+CHARTER_WRITABLE_PATHS: tuple[str, ...] = (
+    "docs/跟进信/回件/",
+    "docs/跟进信/README-跟进信清单.md",
+    "docs/跟进信/口径点台账.md",
+    "docs/session接力.md",
+)
+
+#: 红线 ②④⑤⑧ 涉及的目录与文件，外加 opener 目录与 `data/`（信号只经 CLI）。
+#: 对 `Edit` 与 `Write` 一律显式 deny——`acceptEdits` 会自动接受项目内任何编辑，
+#: 只收窄 allow 拦不住（2026-09-17 一次性仓实验：写法 甲 下改 `tools/x.py` 仍放行；
+#: 加 deny 后报「File is in a directory that is denied by your permission settings」）。
+HEADLESS_DENY_EDIT_PATTERNS: tuple[str, ...] = (
+    "tools/**", "app/**", "scripts/**", "tests/**", "openspec/**", ".claude/**",
+    "CLAUDE.md", "data/**", ".env*", "docs/openers/**",
+)
+
+#: 整体性 git 动作，显式 deny（CLAUDE.md 并行四条 ＋ 红线 ⑦）。deny 规则优先级高于
+#: allow 与权限模式，`git add -A` 实测报「Permission to use Bash with command
+#: git add -A has been denied」。
+HEADLESS_DENY_BASH_PREFIXES: tuple[str, ...] = (
+    "git add -A", "git add .", "git commit -a", "git stash", "git push",
+)
+
+
+def _path_rule(tool: str, path: str) -> str:
+    """章程路径 → 权限规则：目录 `docs/x/` ⇒ `Edit(docs/x/**)`，文件 ⇒ `Edit(docs/x.md)`。
+    路径相对子进程 cwd（＝仓库根，见 `dispatch_headless_unpack` 的 `cwd=str(REPO_ROOT)`），
+    实验证实相对 pattern 能匹配工具收到的绝对路径。"""
+    return f"{tool}({path}**)" if path.endswith("/") else f"{tool}({path})"
+
+
+#: 受限权限 argv 模板（design D4，TD-48 后为写法 乙）。⛔ **唯一真源**——白名单是否
+#: 放行某条命令、预算参数是否存在，全部由 `subagent-driven-development` 的 reviewer
+#: 对着*这个常量*核对，⛔ 不许在别处再拼一份 argv 字面量。
 HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
     "-p",
     "--output-format", "text",
     "--permission-mode", "acceptEdits",
     "--allowedTools",
-    "Read", "Edit", "Write", "Glob", "Grep",
-    "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)",
+    "Read", "Glob", "Grep",
+    # TD-48：`Edit`/`Write` 不再裸放行，只放行章程 §三 列出的路径。
+    *(_path_rule("Edit", path) for path in CHARTER_WRITABLE_PATHS),
+    *(_path_rule("Write", path) for path in CHARTER_WRITABLE_PATHS),
+    # TD-48：`git add` 逐路径前缀放行（`Bash(git add docs/x/:*)` 匹配
+    # `git add docs/x/任意文件`）；`git commit` 只放行 `-m` 开头的形式。
+    *(f"Bash(git add {path}:*)" for path in CHARTER_WRITABLE_PATHS),
+    "Bash(git commit -m:*)", "Bash(git status:*)",
     "Bash(git diff:*)", "Bash(git log:*)",
     # I4（2026-09-16 修）：⛔ 裸 "python -m tools.liaison unpack-signal:*" 匹配不上
     # 本仓库的真实调法——`tools.liaison` 不是装进 site-packages 的包，必须
@@ -111,6 +152,10 @@ HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
     # 旧的裸写法会让拆件会话在它唯一需要的自我轮询命令上被 permission-denied。
     "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal:*)",
     "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria:*)",
+    "--disallowedTools",
+    *(f"Edit({pattern})" for pattern in HEADLESS_DENY_EDIT_PATTERNS),
+    *(f"Write({pattern})" for pattern in HEADLESS_DENY_EDIT_PATTERNS),
+    *(f"Bash({prefix}:*)" for prefix in HEADLESS_DENY_BASH_PREFIXES),
 )
 
 

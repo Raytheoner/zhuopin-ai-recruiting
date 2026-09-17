@@ -109,6 +109,8 @@ def test_resolve_claude_bin_none_when_all_three_fail(monkeypatch, tmp_path):
 
 
 def test_build_headless_argv_shape():
+    from tools.liaison.tests._argv_rules import split_tool_rules
+
     argv = build_headless_argv("/usr/local/bin/claude", "5")
     assert argv[0] == "/usr/local/bin/claude"
     assert "-p" in argv
@@ -116,12 +118,18 @@ def test_build_headless_argv_shape():
     assert "--permission-mode" in argv and "acceptEdits" in argv
     assert "--max-budget-usd" in argv and "5" in argv
     assert "--dangerously-skip-permissions" not in argv
-    joined = " ".join(argv)
+    allowed, disallowed = split_tool_rules()
+    joined = " ".join(allowed)
     assert "send-followup" not in joined
+    # TD-48（0917O）：`git push` 从"不出现"升级为显式 deny——只看 allow 段没有它、
+    # deny 段有它，⛔ 不能再对整条 argv 做 `not in`。
     assert "git push" not in joined
+    assert "Bash(git push:*)" in disallowed
     for required in (
-        "Read", "Edit", "Write", "Glob", "Grep",
-        "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)",
+        "Read", "Glob", "Grep",
+        # TD-48：Edit/Write/git add 按章程 §三 路径收窄（清单见 test_unpack_path_guard.py），
+        # 这里只守形状：`git commit` 只放行 `-m` 形式。
+        "Bash(git commit -m:*)", "Bash(git status:*)",
         "Bash(git diff:*)", "Bash(git log:*)",
         # I4：必须是本仓库唯一 canonical 的调法（venv 解释器 + PYTHONPATH=.），
         # ⛔ 不是裸 "python -m tools.liaison unpack-signal:*"——那条匹配不上拆件
@@ -129,7 +137,7 @@ def test_build_headless_argv_shape():
         "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal:*)",
         "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria:*)",
     ):
-        assert required in argv
+        assert required in allowed
 
 
 def test_default_budget_env_name_and_value():

@@ -47,21 +47,36 @@
 
 **为什么**：照搬 win 的串行原则免显式关联；零漏。「原状态原样接在后面」这个设计正是为还原而存在。**替代方案**「仅带附件」会漏掉她在群里直接文字回答决策点的情形；「仅私信」要维护 chatid 名单且她尚未私信过机器人。
 
-### D4 · 权限层：`acceptEdits` ＋ `allowedTools` 白名单，⛔ 不用 `--dangerously-skip-permissions`（答 Q3a）
+### D4 · 权限层：`acceptEdits` ＋ 路径限定 `allowedTools` ＋ 显式 `disallowedTools`，⛔ 不用 `--dangerously-skip-permissions`（答 Q3a；TD-48 `0917O` 收窄为写法 乙）
 
-起活 argv（`dispatch.py` 单点常量 `HEADLESS_ARGV_FIXED_PART`）：
+起活 argv（`dispatch.py` 单点常量 `HEADLESS_ARGV_FIXED_PART`，下面这块由该常量生成、逐字一致，
+`test_unpack_path_guard.py` 与 `test_build_headless_argv_shape` 守着）：
 
 ```
 claude -p --output-format text --permission-mode acceptEdits
-       --allowedTools Read Edit Write Glob Grep
-                      "Bash(git add:*)" "Bash(git commit:*)" "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)"
-                      "Bash(python -m tools.liaison unpack-signal:*)" "Bash(python -m tools.liaison criteria:*)"
+       --allowedTools
+                      Read Glob Grep "Edit(docs/跟进信/回件/**)" "Edit(docs/跟进信/README-跟进信清单.md)" "Edit(docs/跟进信/口径点台账.md)"
+                      "Edit(docs/session接力.md)" "Write(docs/跟进信/回件/**)" "Write(docs/跟进信/README-跟进信清单.md)" "Write(docs/跟进信/口径点台账.md)"
+                      "Write(docs/session接力.md)" "Bash(git add docs/跟进信/回件/:*)" "Bash(git add docs/跟进信/README-跟进信清单.md:*)"
+                      "Bash(git add docs/跟进信/口径点台账.md:*)" "Bash(git add docs/session接力.md:*)" "Bash(git commit -m:*)"
+                      "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison unpack-signal:*)"
+                      "Bash(PYTHONPATH=. tools/liaison/.venv/bin/python -m tools.liaison criteria:*)"
+       --disallowedTools
+                      "Edit(tools/**)" "Edit(app/**)" "Edit(scripts/**)" "Edit(tests/**)" "Edit(openspec/**)" "Edit(.claude/**)"
+                      "Edit(CLAUDE.md)" "Edit(data/**)" "Edit(.env*)" "Edit(docs/openers/**)" "Write(tools/**)"
+                      "Write(app/**)" "Write(scripts/**)" "Write(tests/**)" "Write(openspec/**)" "Write(.claude/**)"
+                      "Write(CLAUDE.md)" "Write(data/**)" "Write(.env*)" "Write(docs/openers/**)" "Bash(git add -A:*)"
+                      "Bash(git add .:*)" "Bash(git commit -a:*)" "Bash(git stash:*)" "Bash(git push:*)"
        --max-budget-usd $HR_LIAISON_UNPACK_BUDGET_USD
 ```
 
 cwd＝仓库根；prompt 走 stdin；stdout/stderr → `data/liaison/logs/unpack-headless/<UTC戳>.log`。
+`Edit`/`Write`/`git add` 放行的路径＝章程 §三 「只 `git add` 本轮明确写入的路径」四项
+（`dispatch.CHARTER_WRITABLE_PATHS`，测试从 SKILL.md 解析核对，⛔ 不另抄）；`git commit` 只放行 `-m` 形式。
 
-**为什么**：非交互模式下未放行的工具调用直接被拒 ⇒ `send-followup`（任何模式）、`git push`、`python -m tools.liaison` 的其它子命令（含会开库的 `queue`／`retention`）在**权限层**就走不通，不依赖章程文字。**已知边界**：`acceptEdits` 对文件编辑不按路径限制 ⇒ 红线 ②④⑥⑧（改代码／spec／白名单／skills）仍是提示词层守，见 Risks。**替代方案**照搬 win 的 `--dangerously-skip-permissions`：一次提示词失守＝可能对外发信，否决。
+**为什么**：非交互模式下未放行的工具调用直接被拒 ⇒ `send-followup`（任何模式）、`git push`、`python -m tools.liaison` 的其它子命令（含会开库的 `queue`／`retention`）在**权限层**就走不通，不依赖章程文字。
+**为什么要 deny 段**（2026-09-17 一次性仓实验）：`acceptEdits` 会自动接受项目内任何编辑，只把 allow 收窄到路径（写法 甲）改 `tools/x.py` 仍放行；加 `--disallowedTools` 后（写法 乙）Edit/Write 红线目录报「File is in a directory that is denied by your permission settings」，`git add -A`／`git commit -a` 报「Permission to use Bash with command … has been denied」，而 `docs/session接力.md` 的 Write／`git add`／`git commit -m` 照常放行——红线 ②④⑤⑧ 与并行四条从此在**权限层**守。
+**替代方案**照搬 win 的 `--dangerously-skip-permissions`：一次提示词失守＝可能对外发信，否决。
 
 ### D5 · 拆件会话在主工作区跑（答 Q4a）
 
@@ -125,7 +140,7 @@ cwd＝仓库根；prompt 走 stdin；stdout/stderr → `data/liaison/logs/unpack
 
 ## Risks / Trade-offs
 
-- [`acceptEdits` 不按路径限制编辑 ⇒ 红线 ②④⑥⑧ 只在提示词层] → 章程收口段要求会话最后一步 `git status --porcelain` 自检，越界路径不 add、并在接力文档登记「自检发现越界编辑 <路径>，未提交、待人处理」；tasks 加一条「越界编辑不入提交」的测试（对章程文本）与验收观察项。⚠️ 这是已知缺口，⛔ 不宣称机器守。
+- [`acceptEdits` 不按路径限制编辑 ⇒ 红线 ②④⑥⑧ 只在提示词层] → **已由权限层按路径收窄（0917O，写法 乙）**：Edit/Write/`git add` 只放行章程 §三 四个路径，红线目录与 `git add -A`／`git add .`／`git commit -a`／`git stash`／`git push` 显式 deny（一次性仓实验 ＋ `test_unpack_path_guard.py`）。**残余风险**：① deny 是枚举的，`docs/` 下清单外的文件（如 `docs/tech-debt.md`）在 `acceptEdits` 下仍可被编辑——但无法 `git add`（前缀不匹配）也无法 `commit -a`，只会留下工作区脏文件，仍靠章程收口段的 `git status --porcelain` 自检登记「越界编辑 <路径>，未提交、待人处理」；② `Bash(git commit -m:*)` 是前缀规则，`git commit -m t -a` 这种把 `-a` 放在后面的写法权限层拦不住，靠 ① 的"编辑本身被拒"兜底；③ 章程 §三 路径清单与 `CHARTER_WRITABLE_PATHS` 任一漂移由测试转红，⛔ 不宣称权限层能守清单以外的语义。
 - [launchd 环境下 `claude` 拿不到登录态 / PATH 无 claude] → D12 三级解析；登录态问题**只能真实起活实测**发现，tasks §5 强制一次真实起活并把日志前 20 行抄进验收记录。
 - [值守线程里做文件 I/O ＋ Popen 拖慢存活戳] → 台账是 KB 级、Popen 非阻塞，毫秒级；看门狗阈值 180 秒，无风险。
 - [桥与人工同时编辑台账] → 原子替换；人工那次会被覆盖或覆盖桥——两种都会被下一次对账发现（第九态存在但状态与事实不符）。不加锁是刻意的（Non-Goals）。

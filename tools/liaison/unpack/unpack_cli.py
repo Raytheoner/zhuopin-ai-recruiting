@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 
+from tools.liaison.unpack import charter
 from tools.liaison.unpack.dispatch import (
     BUDGET_ENV,
     DEFAULT_BUDGET_USD,
@@ -51,6 +52,15 @@ EXIT_BAD_ARGS = 2
 def _resolve_signal_path() -> Path:
     override = os.environ.get(SIGNAL_PATH_ENV)
     return Path(override) if override else DEFAULT_SIGNAL_PATH
+
+
+def _signal_relpath(signal_path: Path, repo_root: Path) -> str:
+    """与 `dispatch_wiring._resolve_signal_relpath` 同一解析（那个模块间接拉库依赖，
+    本模块 ⛔ 不 import 它，只能各持一份三行实现）。"""
+    try:
+        return str(signal_path.relative_to(repo_root))
+    except ValueError:
+        return str(signal_path)
 
 
 def build_unpack_signal_parser() -> argparse.ArgumentParser:
@@ -97,8 +107,13 @@ def build_unpack_dispatch_parser() -> argparse.ArgumentParser:
 
 def unpack_dispatch_main(argv: list[str]) -> int:
     """⚠️ 本命令的 `--force`/正常两条路径都不接 `bridge_dispatch`（Task 5）——
-    它们直接调 Task 4 的 `dispatch_headless_unpack`，且**没有章程**（验收用，
-    传一个最小占位 prompt 即可，spec 对这条命令行为的唯一要求是"起活"本身可控）。
+    它们直接调 Task 4 的 `dispatch_headless_unpack`。
+
+    TD-48（0917O，Shao Peishen 2026-09-17 答 `1a`）：`--force` **也带真章程**——
+    此前用占位 prompt，子会话没有章程红线却照常加载仓库根 CLAUDE.md，据此自发
+    改写并提交 `docs/session接力.md`（`0917K`/`0917N` 三次复现）。现在 prompt 与
+    真实起活走同一份 `charter.compute_prompt`，只是前言里的信件编号/msgid 标成
+    验收占位；缺章程 ⇒ 打印一行错误、退出码非 0、⛔ 不起进程。
     """
     from datetime import datetime, timezone
 
@@ -116,14 +131,28 @@ def unpack_dispatch_main(argv: list[str]) -> int:
         return 0
 
     now = datetime.now(timezone.utc)
+    try:
+        charter_text = charter.read_charter(REPO_ROOT)
+    except charter.CharterMissing as exc:
+        print(f"章程正本读不到，⛔ 不起进程：{exc}", file=sys.stderr)
+        return 1
+    signal_path = _resolve_signal_path()
+    prompt = charter.compute_prompt(
+        letter_number="（验收起活·无真实回件）",
+        msgid=f"FORCE-{now:%Y%m%dT%H%M%SZ}",
+        signal_relpath=_signal_relpath(signal_path, REPO_ROOT),
+        checkpoint_iso=now.isoformat(),
+        charter_text=charter_text,
+    )
+
     if args.force and DEFAULT_LOCK_PATH.exists():
         # 仅验收用：直接移走旧锁，⛔ 不是生产路径的一部分（生产路径靠 pid 判活，
         # 不需要人工清锁）。
         DEFAULT_LOCK_PATH.unlink()
 
     outcome = dispatch_headless_unpack(
-        charter_text="[unpack-dispatch --force] 验收占位：本次调用不携带真实章程",
-        prompt="[unpack-dispatch --force] 这是一次验收起活，不代表真实拆件任务。",
+        charter_text=charter_text,
+        prompt=prompt,
         log_dir=DEFAULT_LOG_DIR,
         lock_path=DEFAULT_LOCK_PATH,
         env=env,

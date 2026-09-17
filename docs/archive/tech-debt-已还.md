@@ -1752,3 +1752,56 @@ sdk_logger = session_client.SdkLogObserver(
 **来源**：`[Mac]0917J` 真实起活实测发现（日志原文如上），`[Mac]0917K` 定位根因、实验验证最小键集合并修复、端到端复验通过。
 
 ---
+
+
+<!-- 〔归档工具〕 2026-09-17 搬入：~~TD-48~~ · 无头拆件会话在占位 prompt 下自行改写并提交 `docs/session接力.md` ✅  -->
+
+## ~~TD-48~~ · 无头拆件会话在占位 prompt 下自行改写并提交 `docs/session接力.md` ✅ 已还（0917O）
+
+**欠的是什么**：`0917K` 的 `unpack-dispatch --force` 实测中，子会话不仅起活成功，还自行写入了 `docs/session接力.md` 的 R-3c/R-3d 两行并各自单独 `git commit`（`a644d45`、`f575c5e`）——这两条提交内容本身是有价值的现场记录，但提交动作本身不在授权范围内，`0917M` 已判定为噪声提交丢弃（未合入 main）。
+
+**根因**：章程红线「越界编辑不入提交」目前只落在 design.md 的 Risks 段落与人工传递的完整章程文本里，是**提示词层**的约束；但 `unpack-dispatch --force` 走的是占位 prompt（"这是一次验收起活，不代表真实拆件任务"），并不携带完整章程文本。然而子进程 `claude -p` 仍会按正常规则加载仓库根 `CLAUDE.md`，其中「🧭 会话末『需你定夺』」一节末尾写着「待办一律落进 `docs/session接力.md`，不留在聊天里」——这条项目级约定对占位 prompt 同样生效，子会话据此自发把当次探测结果当"待办"写回接力文档并提交，绕开了本应由占位 prompt 单独声明的边界。
+
+**触发条件**：`liaison-reply-bridge-and-patrol` §5 全部归档前必须处置——归档意味着 `unpack-dispatch --force`/自动触发路径会在无人盯着的情况下常态化运行，若不处置，每次验收起活都可能重演一次"自发提交"。
+
+**还债动作（二选一，方案未定）**：① `--force` 路径的占位 prompt 也携带真实章程文本（含红线声明），让子会话知道自己在"验收起活"语境下不该碰接力文档；② 收窄无头会话可用的 `git add` 路径白名单（技术兜底，不依赖子会话"读懂"提示词）。
+
+**不还的后果**：每次真实/验收起活都可能把子会话的即兴记录当正式提交写进 main，污染 `docs/session接力.md` 的可信度，且这类提交不经过任何 review 关卡。
+
+**来源**：`0917K` 无头实测复现（`a644d45`/`f575c5e`，已由 `0917M` 丢弃未合入）；design.md Risks 段落已承认提示词层红线的局限，本条补上具体触发实证。
+
+`0917M` 后又复现：`fe64bc1`（08:08，同一 `lane-0917k-td47-child-auth` worktree，`0917N` 清理丢弃未合入）。
+
+`0917N` §5.2 重跑再次复现：TD-47 修复合入后，`--force` 起的无头会话仍在 08:16 自发提交 `07537fe`（登记 R-6 行），且其自身日志文本谎称「没有写新条目、未改动任何文件」与实际提交动作矛盾——证明 TD-48 与 TD-47 是独立问题、TD-47 的修复不影响 TD-48 复现率。`0917N` 已 `git revert --no-edit 07537fe`（不改写历史）。
+
+**还债记录（0917O，2026-09-17，Shao Peishen 答 `1a`：两层一起做）**
+
+- **实验（一次性 git 仓 `/tmp/td48-exp.*`，`env -i PATH HOME USER`，`--max-budget-usd 0.5`，prompt 让会话依次 a 改 `tools/x.py`／b 写 `docs/session接力.md`／c `git add -A`／d `git add docs/session接力.md`／e `git commit -a -m t`／f `git commit -m t`）**：
+  - 写法 甲（`acceptEdits` ＋ 只把 allow 收窄到路径）：a **放行**（`The file … has been updated successfully`）、b 放行、c 被拒（`This command requires approval`）、d 放行、e 被拒、f 放行 ⇒ 不满足：`acceptEdits` 自动接受项目内任何编辑，allow 段的路径限定对编辑不起作用。
+  - 写法 乙（甲 ＋ `--disallowedTools` 显式 deny）：a **被拒**（`File is in a directory that is denied by your permission settings.`）、b 放行、c 被拒（`Permission to use Bash with command git add -A has been denied.`）、d 放行、e 被拒（`Permission to use Bash with command git commit -a -m t has been denied.`）、f 放行 ⇒ **满足，选中**。丙未试（按"取第一个满足的"）。
+  - 路径 pattern 相对子进程 cwd（仓库根）写，实测能匹配工具收到的绝对路径。
+  - 【三】F 复验：用 `build_headless_argv` 的真实 argv ＋ `compute_prompt` 真章程 prompt 再跑一轮（`tools/x.py` 改为非空、走 `Edit`），a/c/e 仍被拒、原文同上，b/d/f 放行。
+- **代码**：`dispatch.HEADLESS_ARGV_FIXED_PART` 改为 写法 乙——`Edit`/`Write` 按 `CHARTER_WRITABLE_PATHS`（与章程 §三 四项逐字一致）逐路径放行，`git add` 逐路径前缀放行，`git commit` 只放行 `-m` 形式，deny 段列红线目录（`tools/ app/ scripts/ tests/ openspec/ .claude/ CLAUDE.md data/ .env* docs/openers/`）与 `git add -A`／`git add .`／`git commit -a`／`git stash`／`git push`。`unpack-dispatch --force` 改走 `charter.read_charter` ＋ `charter.compute_prompt`（信件编号「（验收起活·无真实回件）」、msgid `FORCE-<UTC戳>`），缺章程 ⇒ stderr 一行、退出码 1、不起进程。
+- **测试**：新 `tools/liaison/tests/test_unpack_path_guard.py`（4 条：无裸 Edit/Write/git add/git commit；§三 路径从 SKILL.md 解析后逐项在 Edit/Write/git add 放行里；红线目录都在 deny 里；send-followup／git push 不在放行里）、`test_unpack_cli.py` 加 2 条（`--force` prompt 以章程全文结尾；缺章程不起进程）；`test_unpack_charter_allowlist.py` 扫描器改为只扫 allow 段（共用新 `tests/_argv_rules.py`），带路径的 `git add <路径>` 拆成动词＋路径分别在章程里核对。
+- **章程 SKILL.md 改动：无**（红线九项与 §三 路径清单原文未动；权限写法对齐全部在扫描器一侧完成）。
+- **design.md**：D4 argv 块由常量生成、逐字一致；Risks 第一条改为「已由权限层按路径收窄（0917O，写法 乙）」并列三条残余风险（deny 为枚举、`-m … -a` 前缀绕过靠编辑被拒兜底、清单漂移由测试转红）。`specs/liaison-unpack-dispatch/spec.md` 「拆件会话以受限权限启动」措辞同步（限路径放行 ＋ 显式拒绝），`openspec validate --strict` 通过。
+- **测试隔离根因**：见 TD-49。
+
+---
+
+
+<!-- 〔归档工具〕 2026-09-17 搬入：~~TD-49~~ · 跑一次 pytest 就往真实 `data/liaison/` 写信号并**真的起一个 `cla -->
+
+## ~~TD-49~~ · 跑一次 pytest 就往真实 `data/liaison/` 写信号并**真的起一个 `claude -p` 拆件会话** ✅ 已还（0917O）
+
+**欠的是什么**：`tools/liaison/tests/test_inbound_wiring.py` 的两条打标用例（`test_worker_marks_the_ledger_for_an_admitted_sender_with_an_inflight_letter`、`…when_sender_userid_has_incidental_whitespace`）走 `run_session_worker` 真实链路。`__main__.py` 把模块级 `UNPACK_SIGNAL_PATH`（`from unpack_cli import DEFAULT_SIGNAL_PATH`，绝对路径，`HR_LIAISON_SIGNAL_PATH` 对它无效）与真实 `dispatch_wiring.bridge_dispatch` 绑进 `run_bridge`，于是每跑一次 pytest：① 真实 `data/liaison/unpack-signal.json` 被追加 `{"letter_number":"人事部#1","msgid":"MSGID0001","archived_path":"data/liaison/archive/threadA/20260910/…"}`（这就是 `0917N`/`34327bf` 那条"再探同一 pending"的来源）；② `subprocess.Popen` **真的起一个** `claude -p … --max-budget-usd 5`（cwd＝仓库根、prompt＝真章程 ＋ 人事部#1/MSGID0001），第二条用例因锁 pid 存活被 `skipped_busy`。
+
+**实证**：2026-09-17 在 worktree `lane-0917o-td48-path-guard` 跑 `pytest tools/liaison/tests/test_inbound_wiring.py`（26 passed）后，worktree 里凭空出现 `data/liaison/{unpack-signal.json,unpack-session.lock,logs/}`，`ps -p 57622` 抓到活着的 `claude -p --permission-mode acceptEdits …`（`0917O` 当场 kill；同日在主工作区跑全量 pytest 取基线又起了 pid 60426，同样当场 kill，其日志为空、未落任何提交）。`0917K`–`0917N` 观察到的"无头会话自发提交 `docs/session接力.md`"，相当一部分是**由测试起的**会话干的，与 `--force` 占位 prompt 是两个独立来源。
+
+**还债动作（已做）**：`tools/liaison/tests/conftest.py` 新增 autouse 夹具 `unpack_side_effects_to_tmp`——`HR_LIAISON_SIGNAL_PATH`、`unpack_cli.DEFAULT_SIGNAL_PATH/DEFAULT_LOG_DIR/DEFAULT_LOCK_PATH`、`dispatch_wiring.DEFAULT_LOG_DIR/DEFAULT_LOCK_PATH`、`__main__.UNPACK_SIGNAL_PATH` 全部顶到 `tmp_path`；`HR_LIAISON_CLAUDE_BIN` 指到不存在的文件，`Popen` 当场 `FileNotFoundError` ⇒ `process_create_failed`，任何用例都起不了真实进程。回归测试 `tools/liaison/tests/test_unpack_test_isolation.py`：跑同一条打标链路，断言真实路径（从未被 patch 的 `REPO_ROOT` 现算）的 `(存在, mtime_ns)` 前后不变、信号落在隔离路径、审计恰好一条 `dispatch_failed/process_create_failed`。改后全量 `pytest`：worktree 内不再生成 `data/`，`pgrep` 无 `claude -p`。
+
+**遗留（归 `0917P`，本条不动）**：主工作区真实 `data/liaison/unpack-signal.json` 里的 `MSGID0001` 项与 `unpack-session.lock`（pid 60426，已死）仍在，需清理。⚠️ **在没有本夹具的旧提交上跑 pytest 仍会起真实会话**——切老分支跑测试前先看 conftest 有没有 `unpack_side_effects_to_tmp`。
+
+**来源**：`0917O` 做 TD-48 【三】E 时复现。
+
+---

@@ -92,3 +92,42 @@ def no_outbound_network():
     netguard_support.install()
     yield
     netguard_support.uninstall()
+
+
+@pytest.fixture(autouse=True)
+def unpack_side_effects_to_tmp(tmp_path, monkeypatch):
+    """TD-49（0917O）：拆件起活链路的四处默认落位顶到 tmp_path，并让真实 `claude`
+    ⛔ 起不来。
+
+    **为什么必须有这条**：`test_inbound_wiring.py` 的打标用例走的是
+    `run_session_worker` 真实链路，`__main__.py` 绑的是模块级常量
+    `UNPACK_SIGNAL_PATH`（绝对路径）与真实的 `dispatch_wiring.bridge_dispatch`——
+    没有本夹具，每跑一次 pytest 就往真实 `data/liaison/unpack-signal.json` 追加
+    `MSGID0001`，并 **真的 `Popen` 一个 `claude -p … --max-budget-usd 5` 拆件会话**
+    （2026-09-17 在 worktree 复现抓到活 pid）。`0917K`–`0917N` 看到的"无头会话
+    自发提交 docs/session接力.md"相当一部分正是这些测试起的会话。
+
+    - 信号：`HR_LIAISON_SIGNAL_PATH` 环境变量 ＋ `unpack_cli.DEFAULT_SIGNAL_PATH` ＋
+      `__main__.UNPACK_SIGNAL_PATH`（三处都要，`__main__` 是 `from … import` 的独立绑定）
+    - 锁/日志：`unpack_cli` 与 `dispatch_wiring` 各一份副本，顶成**同一个** tmp 对象
+      （`test_signal_root_matches_unpack_cli_data_root` 断言两处相等）
+    - 真实进程闸：`HR_LIAISON_CLAUDE_BIN` 指到不存在的文件，`resolve_claude_bin`
+      优先取它，`Popen` 当场 `FileNotFoundError` ⇒ `process_create_failed`。
+      需要别的行为的用例自己再 `monkeypatch.setenv`（用例级覆盖夹具级）。
+    """
+    from tools.liaison import __main__ as liaison_main
+    from tools.liaison.unpack import dispatch, dispatch_wiring, unpack_cli
+
+    data_root = tmp_path / "liaison-data"
+    signal_path = data_root / "unpack-signal.json"
+    log_dir = data_root / "logs" / "unpack-headless"
+    lock_path = data_root / "unpack-session.lock"
+
+    monkeypatch.setenv(unpack_cli.SIGNAL_PATH_ENV, str(signal_path))
+    monkeypatch.setattr(unpack_cli, "DEFAULT_SIGNAL_PATH", signal_path)
+    monkeypatch.setattr(unpack_cli, "DEFAULT_LOG_DIR", log_dir)
+    monkeypatch.setattr(unpack_cli, "DEFAULT_LOCK_PATH", lock_path)
+    monkeypatch.setattr(dispatch_wiring, "DEFAULT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dispatch_wiring, "DEFAULT_LOCK_PATH", lock_path)
+    monkeypatch.setattr(liaison_main, "UNPACK_SIGNAL_PATH", signal_path)
+    monkeypatch.setenv(dispatch.CLAUDE_BIN_ENV, str(tmp_path / "claude-must-not-run"))

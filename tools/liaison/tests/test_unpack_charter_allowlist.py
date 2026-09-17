@@ -7,26 +7,33 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
+from tools.liaison.tests._argv_rules import allowed_bash_prefixes
 from tools.liaison.unpack import charter
-from tools.liaison.unpack.dispatch import HEADLESS_ARGV_FIXED_PART
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: `HEADLESS_ARGV_FIXED_PART` 里 `Bash(<命令前缀>:*)` 形式的白名单项，取冒号前的
-#: 命令前缀本体（如 `git add`、`PYTHONPATH=. tools/liaison/.venv/bin/python -m
-#: tools.liaison unpack-signal`）。
-_BASH_PATTERN = re.compile(r"Bash\(([^:]+):\*\)")
+#: TD-48（0917O）之后 argv 同时带 `--disallowedTools`，⛔ 只扫 allow 段——deny 段
+#: 里的 `git push` 是期望存在的，不是"放行"。放行前缀可能带路径
+#: （`git add docs/跟进信/回件/`）或选项（`git commit -m`），见 `_charter_keywords`。
+_bash_command_prefixes = allowed_bash_prefixes
 
 
-def _bash_command_prefixes() -> list[str]:
-    return [
-        match.group(1)
-        for tok in HEADLESS_ARGV_FIXED_PART
-        if (match := _BASH_PATTERN.match(tok)) is not None
-    ]
+def _charter_keywords(prefix: str) -> list[str]:
+    """一条放行前缀在章程里必须逐字出现的关键词。
+    - 本服务子命令：取最后一段（`unpack-signal`／`criteria`）
+    - `git add <路径>`：动词 `git add` 与路径本身都得出现（路径与章程 §三 逐字一致）
+    - `git commit -m`：章程只写 `git commit`（`-m` 是权限层为排除 `-a` 而加的收窄）
+    - 其它：整个前缀
+    """
+    if "tools.liaison" in prefix:
+        return [prefix.split(" ")[-1]]
+    if prefix.startswith("git add "):
+        return ["git add", prefix[len("git add "):]]
+    if prefix == "git commit -m":
+        return ["git commit"]
+    return [prefix]
 
 
 #: ⚠️ 与 `HEADLESS_ARGV_FIXED_PART` 的 I4 修复对齐：`unpack-signal` 子命令的
@@ -96,6 +103,5 @@ def test_compute_prompt输出里命令也在白名单里放行() -> None:
 def test_白名单放行的每条命令章程里都有用途() -> None:
     text = charter.read_charter(REPO_ROOT)
     for prefix in _bash_command_prefixes():
-        # 命令前缀里挑最具辨识度的最后一段关键词做子串核对（如 "unpack-signal"、"criteria"、"git add"）
-        keyword = prefix.split(" ")[-1] if "tools.liaison" in prefix else prefix
-        assert keyword in text, f"白名单放行的命令 `{prefix}` 在章程里找不到用途说明（关键词 `{keyword}` 缺失）"
+        for keyword in _charter_keywords(prefix):
+            assert keyword in text, f"白名单放行的命令 `{prefix}` 在章程里找不到用途说明（关键词 `{keyword}` 缺失）"

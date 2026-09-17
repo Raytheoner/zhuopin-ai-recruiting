@@ -70,7 +70,7 @@
 
 ### Requirement: 拆件会话以受限权限启动
 
-拆件会话 SHALL 以本机 `claude` 命令行的非交互打印模式启动，工作目录为仓库根，prompt 经标准输入传入，标准输出与错误重定向到本次专属日志文件。会话 MUST 以「自动接受文件编辑、其它工具按白名单」的权限模式启动，MUST NOT 使用跳过全部权限确认的模式。白名单 SHALL 只放行：文件读写编辑、`git add` / `git commit` / `git status` / `git diff` / `git log`、本服务的 `unpack-signal` 与 `criteria` 子命令。会话 SHALL 带预算上限。
+拆件会话 SHALL 以本机 `claude` 命令行的非交互打印模式启动，工作目录为仓库根，prompt 经标准输入传入，标准输出与错误重定向到本次专属日志文件。会话 MUST 以「自动接受文件编辑、其它工具按白名单」的权限模式启动，MUST NOT 使用跳过全部权限确认的模式。白名单 SHALL 只放行：文件读取与检索、**限章程收口段列出路径**的文件编辑与写入、**限同一批路径**的 `git add`、`git commit -m` / `git status` / `git diff` / `git log`、本服务的 `unpack-signal` 与 `criteria` 子命令；并 SHALL 显式拒绝对章程红线目录（代码、spec、skills、CLAUDE.md、数据与配置）的编辑与写入，以及 `git add -A`、`git add .`、`git commit -a`、`git stash`、`git push`。会话 SHALL 带预算上限。
 
 #### Scenario: 启动参数
 
@@ -78,6 +78,8 @@
 - **THEN** 其命令行包含非交互打印模式与文本输出格式
 - **AND** 权限模式为自动接受编辑而非跳过全部确认
 - **AND** 工具白名单不含 `send-followup`、不含 `git push`
+- **AND** 文件编辑与 `git add` 的放行按章程收口段路径限定，不再裸放行
+- **AND** 红线目录的编辑与 `git add -A` / `git commit -a` / `git push` 出现在显式拒绝列表里
 - **AND** 命令行含预算上限参数
 
 #### Scenario: 二进制路径解析
