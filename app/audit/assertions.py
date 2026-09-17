@@ -104,19 +104,20 @@ ASSERTION_NO_AI_SCORE_REJECTION = "以 AI 评分为理由的拒绝记录数恒�
 def assert_no_ai_score_rejections(conn: sqlite3.Connection) -> AssertionResult:
     """合规红线「AI 只做排序推荐，不做自动淘汰」的机器判据。
 
-    三条分支，**处置各不相同**：
-      表不存在        → 通过，但 detail 明说"还没到能验证的时候"
-      表存在、缺列    → **失败**（fail-closed：验不了红线不算守住了红线）
-      表存在、有违例  → 失败，violations 带上违例行全文
+    自 m2-resume-parse-and-rank U1 起，rejection_record 已建表（M1 的"缺表
+    放行"过渡分支停用）。表不存在 MUST 判失败——m2-compliance-assertions
+    spec「拒绝记录表缺失即失败」：这不再是"还没到能验证的时候"，是"该在的
+    表不在"，fail-closed。
     """
     if not _table_exists(conn, REJECTION_TABLE):
         return AssertionResult(
             name=ASSERTION_NO_AI_SCORE_REJECTION,
-            ok=True,
+            ok=False,
+            violations=({"table": REJECTION_TABLE, "issue": "table_missing"},),
             detail=(
-                f"{REJECTION_TABLE} 表尚不存在（M1 现状）。"
-                "⚠️ 这个通过**不代表红线守住了**，只代表还没到能验证的时候——"
-                "M2 建表后本条自动开始真正生效。"
+                f"{REJECTION_TABLE} 表不存在。自 M2 U1 起本表应始终存在——"
+                "缺表意味着红线「AI 只做排序推荐，不做自动淘汰」完全没有机器守护，"
+                "fail-closed：验不了就算不通过。"
             ),
         )
 

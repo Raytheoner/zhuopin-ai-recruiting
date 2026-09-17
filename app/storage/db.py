@@ -255,6 +255,180 @@ CREATE TABLE IF NOT EXISTS hard_requirement (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (job_id, profile_version, field, operator, value)
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 14 张表属变更包 m2-resume-parse-and-rank（交付单元 U1）。全部新表，
+-- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
+-- "老库缺列"这一种情况，新表不需要它。.51 上 data/demo.db 既有表一行不改，
+-- 无数据迁移（design.md Migration Plan 第 1 条）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- 候选人：全局唯一、无状态（CLAUDE.md 数据模型要点「状态属于投递不属于候选人」，
+-- 状态挂在 application 上，这里不设任何状态列）。
+--
+-- 去重键是 (name, phone_hash)——design D11「候选人去重」：手机号本期只用于
+-- 去重，以哈希存储，明文不落库；phone_hash 允许 NULL（解析没能拿到手机号时），
+-- SQLite 的 UNIQUE 索引把多个 NULL 视为互不相等，多个"没手机号的李四"不会
+-- 被误合并成一个人——这是刻意的保守选择，宁可留重复候选人，也不错误合并。
+CREATE TABLE IF NOT EXISTS candidate (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    phone_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_name_phone
+    ON candidate (name, phone_hash);
+
+-- 简历文件记录。⛔ 刻意不设 candidate_id 列：上传时（U2 POST /resumes/upload）
+-- 只知道 job_id，候选人身份要等解析完成才能确定并去重创建 candidate 行。
+-- resume 与 candidate 的关联由 application（下方）一次性接起来，不在 resume
+-- 上留一个"上传时必为 NULL、解析后才回填"的悬空外键。
+--
+-- sample_class 的四个取值对应 resume-upload-and-gate spec「批量上传入口」：
+-- synthetic（U0 合成替身样本）/ anonymized（脱敏样本）/ departed（历史离职）/
+-- live（真实在招，受真实简历入库闸拦截，D2）。
+--
+-- status 三态对应 resume-parsing spec「扫描件与不可读文件」：pending（刚上传
+-- 未解析）/ parsed（解析完成）/ unreadable（识别后有效字符不足，进人工队列，
+-- MUST NOT 以空字段进入后续判定与排序）。
+--
+-- parsed_json 存 app/schemas/resume_fields.py::ResumeFields 的 model_dump_json()；
+-- parser_version 支持"同一份简历用新版本解析器重解析，新旧两版并存"
+-- （resume-parsing spec「解析留痕与版本」）——重解析在 U2 会插入**新的 resume
+-- 行**而不是覆盖本行，parser_version 是区分同一 content_sha256 下哪次解析
+-- 结果最新的依据。
+CREATE TABLE IF NOT EXISTS resume (
+    id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL REFERENCES job(id),
+    sample_class TEXT NOT NULL CHECK (
+        sample_class IN ('synthetic', 'anonymized', 'departed', 'live')
+    ),
+    file_name TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'parsed', 'unreadable')),
+    parsed_json TEXT,
+    parse_confidence REAL,
+    parser_version TEXT,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 重复上传去重（resume-upload-and-gate spec「同一文件重复上传」）：按
+-- (job_id, content_sha256) 唯一——同一文件传给不同岗位算两条独立记录
+-- （代表两次独立的投递意图），同一文件传给同一岗位两次算重复。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resume_job_content_hash
+    ON resume (job_id, content_sha256);
+
+CREATE INDEX IF NOT EXISTS idx_resume_job ON resume (job_id);
+
+-- 简历原文分片 + 偏移量（resume-parsing spec「原文分片与字段回指」），字段与
+-- app/parsing/spans.py::TextSpan(span_id, start, end, text) 一一对应，
+-- start/end 是全文字符偏移，text 是该分片原文（去空白后的非空行）。
+--
+-- 复合主键 (resume_id, span_id)：与 hard_requirement 表同一形态，天然键就是
+-- "这份简历的第几个分片"，不设代理主键。
+CREATE TABLE IF NOT EXISTS resume_text_span (
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    span_id INTEGER NOT NULL,
+    start INTEGER NOT NULL,
+    end INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (resume_id, span_id)
+);
+
+-- 阶段池：全局共享，stage_type 是语义标签（逻辑只认类型），name 是可自定义
+-- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行，id 与 stage_type 同名——
+-- 这三行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
+-- INSERT 新行（相同 stage_type、不同 id/name），本表结构不必改。
+CREATE TABLE IF NOT EXISTS stage (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    stage_type TEXT NOT NULL CHECK (stage_type IN ('initial', 'screening', 'rejected'))
+);
+
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('initial', '初筛', 'initial');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('screening', '评估中', 'screening');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('rejected', '已淘汰', 'rejected');
+
+-- 投递：独立实体，状态挂在这里而不是 candidate（CLAUDE.md 数据模型要点，
+-- Horilla 的坑）。resume_id 唯一——一条简历对应一次投递意图，1:1（design D11）。
+--
+-- kanban_state 现在就加列（不等 U5 再 ALTER TABLE）：U5 tasks 6.4「标记淘汰」
+-- 写 'pending_reject'，投递进入待确认清单但**不产生拒绝记录、阶段不变**
+-- （hard-requirement-screening spec「淘汰只由人确认并可申诉」的前置状态）。
+-- 现在没有写入方，必须可空——与 human_review.batch_id 同一手法。
+CREATE TABLE IF NOT EXISTS application (
+    id TEXT PRIMARY KEY NOT NULL,
+    candidate_id TEXT NOT NULL REFERENCES candidate(id),
+    job_id TEXT NOT NULL REFERENCES job(id),
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    current_stage_id TEXT NOT NULL REFERENCES stage(id),
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'rejected', 'withdrawn')),
+    kanban_state TEXT CHECK (kanban_state IS NULL OR kanban_state IN ('pending_reject')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_application_resume ON application (resume_id);
+CREATE INDEX IF NOT EXISTS idx_application_job ON application (job_id);
+CREATE INDEX IF NOT EXISTS idx_application_candidate ON application (candidate_id);
+
+-- 流转事实表：所有报表的基础（CLAUDE.md 数据模型要点）。actor_type 区分
+-- 人工流转与系统流转（申诉 overturned 恢复阶段、批量确认淘汰流转都会写这里）。
+-- from_stage_id 允许 NULL：投递创建时的第一条"进入 initial"没有"从哪来"。
+CREATE TABLE IF NOT EXISTS application_stage_history (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    from_stage_id TEXT REFERENCES stage(id),
+    to_stage_id TEXT NOT NULL REFERENCES stage(id),
+    actor_type TEXT NOT NULL CHECK (actor_type IN ('human', 'agent')),
+    actor TEXT,
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_stage_history_application
+    ON application_stage_history (application_id);
+
+-- 拒绝记录：淘汰事实的唯一落点（hard-requirement-screening spec「淘汰只由
+-- 人确认并可申诉」）。reason_type 的 CHECK 是合规红线「AI 只做排序推荐，
+-- 不做自动淘汰」在存储层的落点——⛔ 不得出现第三个取值，绕过应用层直接
+-- INSERT 'ai_score' 同样被拒。
+--
+-- decided_by 的 CHECK 与 human_review.reviewer 同一手法（trim 第二参数显式
+-- 列出空格/制表/换行/回车，SQLite 单参 trim() 只剥空格）：决策人为空的
+-- 拒绝记录等于没有人为这次淘汰负责，红线「淘汰必须有人工确认并留痕」不允许
+-- 这种记录存在。
+--
+-- appeal_status 状态机 none → requested → under_review → upheld | overturned
+-- （hard-requirement-screening spec「淘汰只由人确认并可申诉」），流转合法性
+-- 由应用层校验（U3 tasks 4.5），CHECK 只保证取值合法。
+--
+-- batch_id 支持批量确认（U5 tasks 6.5/6.6）共用同一批次标识，可空——单条
+-- 逐份确认（U5 tasks 6.3）不产生批次。
+CREATE TABLE IF NOT EXISTS rejection_record (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    reason_type TEXT NOT NULL CHECK (reason_type IN ('hard_rule', 'human_decision')),
+    rule_ref TEXT,
+    human_readable TEXT,
+    decided_by TEXT NOT NULL CHECK (
+        decided_by IS NOT NULL
+        AND trim(decided_by, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    batch_id TEXT,
+    appeal_status TEXT NOT NULL DEFAULT 'none' CHECK (
+        appeal_status IN ('none', 'requested', 'under_review', 'upheld', 'overturned')
+    ),
+    decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rejection_record_application
+    ON rejection_record (application_id);
+
+CREATE INDEX IF NOT EXISTS idx_rejection_record_batch
+    ON rejection_record (batch_id);
 """
 
 

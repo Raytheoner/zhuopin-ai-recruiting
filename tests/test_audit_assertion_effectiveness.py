@@ -31,7 +31,8 @@ from app.audit.assertions import (
 from app.audit.criteria import CRITERION_KEY_WHITELIST, RED_LINE_EXAMPLES
 from app.storage.db import get_connection, init_schema
 from tests.test_audit_assertions import (
-    create_rejection_table,
+    _ensure_application_exists,
+    insert_rejection_record,
     insert_run,
     insert_score,
 )
@@ -79,16 +80,24 @@ def test_rejection_constants_are_pinned_to_the_red_line_wording():
 def test_ai_score_rejection_is_detected(conn):
     """故意插一条 reason_type='ai_score' 的拒绝记录 → 断言必须失败。
 
-    这条记录代表的现实是"AI 自己把候选人淘汰了"，是本项目最重的一条红线。
-    断言在这里不红，红线就没有任何机器守护。
+    reason_type 现在有数据库 CHECK 挡着（Task 3 新增），要造出"CHECK 被绕过"
+    的违例场景必须先关掉它——这正是 design.md Risks「SQLite 的 CHECK 可以被
+    ignore_check_constraints 关掉，所以事后断言是 CHECK 之上的纵深防御」
+    要验证的那条：CHECK 挡住了应用层，Python 断言挡住"CHECK 被人为关掉"这种
+    更极端的情况。application_id 上还有真实外键，先用 _ensure_application_exists
+    把它指向的那条投递造出来，否则这条 INSERT 会撞 FOREIGN KEY constraint failed。
     """
-    create_rejection_table(conn)
-    conn.execute(
-        f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}) "
-        f"VALUES ('rej-bad', 'app-9', ?)",
-        (AI_SCORE_REASON,),
-    )
-    conn.commit()
+    _ensure_application_exists(conn, "app-9")
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    try:
+        conn.execute(
+            f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}, decided_by) "
+            f"VALUES ('rej-bad', 'app-9', ?, 'hr-1')",
+            (AI_SCORE_REASON,),
+        )
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA ignore_check_constraints = OFF")
 
     result = assert_no_ai_score_rejections(conn)
 
@@ -99,19 +108,9 @@ def test_ai_score_rejection_is_detected(conn):
 
 
 def test_ai_score_rejection_assertion_ignores_other_reasons(conn):
-    """反向对照：非 ai_score 的拒绝记录**不该**触发这条断言。
-
-    没有这条，一个"表里有任何行就报错"的假实现也能让上一条用例变红——
-    上一条就证明不了断言真的在看 reason_type。
-    """
-    create_rejection_table(conn)
-    for row_id, reason in (("r-1", "manual_review"), ("r-2", "candidate_withdrew")):
-        conn.execute(
-            f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}) "
-            f"VALUES (?, 'app-9', ?)",
-            (row_id, reason),
-        )
-    conn.commit()
+    """反向对照：非 ai_score 的拒绝记录**不该**触发这条断言。"""
+    for row_id, reason in (("r-1", "hard_rule"), ("r-2", "human_decision")):
+        insert_rejection_record(conn, row_id=row_id, reason_type=reason)
 
     assert assert_no_ai_score_rejections(conn).ok is True
 
@@ -284,12 +283,17 @@ def test_run_compliance_assertions_reports_every_broken_line_at_once(conn):
 
     短路会让一次修复只看到一条违例，第二条要等下一轮 CI 才现形。
     """
-    create_rejection_table(conn)
-    conn.execute(
-        f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}) "
-        f"VALUES ('rej-bad', 'app-9', ?)",
-        (AI_SCORE_REASON,),
-    )
+    _ensure_application_exists(conn, "app-9")
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    try:
+        conn.execute(
+            f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}, decided_by) "
+            f"VALUES ('rej-bad', 'app-9', ?, 'hr-1')",
+            (AI_SCORE_REASON,),
+        )
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA ignore_check_constraints = OFF")
     run_id = insert_run(conn)
     insert_score(
         conn, run_id=run_id, score_id="s-face",
@@ -311,12 +315,19 @@ def test_run_compliance_assertions_reports_every_broken_line_at_once(conn):
 
 
 def test_failing_assertion_always_carries_violations(conn):
-    """结构性守护：任何 ok=False 的结果都必须带 violations。
+    """结构性守护：任何 ok=False 的结果都必须带 violations。"""
+    _ensure_application_exists(conn, "app-9")
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    try:
+        conn.execute(
+            f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}, decided_by) "
+            f"VALUES ('rej-bad', 'app-9', ?, 'hr-1')",
+            (AI_SCORE_REASON,),
+        )
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA ignore_check_constraints = OFF")
 
-    ok=False 而 violations 为空的结果，人拿到手里没法往下查——CI 红了却
-    不知道红在哪一行，等价于没有断言。
-    """
-    create_rejection_table(conn, with_reason_column=False)
     results = run_compliance_assertions(conn)
 
     for result in results:
