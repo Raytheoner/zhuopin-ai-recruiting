@@ -264,3 +264,82 @@ def test_status_lives_on_application_not_candidate(conn):
     """CLAUDE.md 数据模型要点：不要合并 candidate 和 application，状态挂在投递上。"""
     assert "status" not in _columns(conn, "candidate")
     assert "status" in _columns(conn, "application")
+
+
+# ── rejection_record（tasks 2.3）─────────────────────────────────────────
+
+
+def test_rejection_record_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "rejection_record")
+    assert _columns(conn, "rejection_record") == {
+        "id", "application_id", "reason_type", "rule_ref", "human_readable",
+        "decided_by", "batch_id", "appeal_status", "decided_at",
+    }
+
+
+def test_rejection_record_reason_type_rejects_ai_score(conn):
+    """合规红线机器判据：直接 INSERT reason_type='ai_score' 必须被 CHECK 拒绝。"""
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO rejection_record (id, application_id, reason_type, decided_by) "
+            "VALUES ('rej-1', 'app-1', 'ai_score', 'hr-1')"
+        )
+
+
+@pytest.mark.parametrize("reason_type", ["hard_rule", "human_decision"])
+def test_rejection_record_reason_type_accepts_legal_values(conn, reason_type):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    conn.execute(
+        "INSERT INTO rejection_record (id, application_id, reason_type, decided_by) "
+        "VALUES (?, 'app-1', ?, 'hr-1')",
+        (f"rej-{reason_type}", reason_type),
+    )
+    conn.commit()
+
+
+def test_rejection_record_decided_by_cannot_be_blank(conn):
+    """淘汰必须有人工确认节点并留痕——决策人为空的留痕等于没留痕
+    （与 human_review.reviewer 同一 CHECK 手法）。"""
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO rejection_record (id, application_id, reason_type, decided_by) "
+            "VALUES ('rej-blank', 'app-1', 'hard_rule', '   ')"
+        )
+
+
+def test_rejection_record_appeal_status_defaults_none_and_check(conn):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.execute(
+        "INSERT INTO rejection_record (id, application_id, reason_type, decided_by) "
+        "VALUES ('rej-1', 'app-1', 'hard_rule', 'hr-1')"
+    )
+    conn.commit()
+    assert conn.execute(
+        "SELECT appeal_status FROM rejection_record WHERE id='rej-1'"
+    ).fetchone()[0] == "none"
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "UPDATE rejection_record SET appeal_status='approved' WHERE id='rej-1'"
+        )

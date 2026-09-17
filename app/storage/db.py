@@ -390,6 +390,45 @@ CREATE TABLE IF NOT EXISTS application_stage_history (
 
 CREATE INDEX IF NOT EXISTS idx_application_stage_history_application
     ON application_stage_history (application_id);
+
+-- 拒绝记录：淘汰事实的唯一落点（hard-requirement-screening spec「淘汰只由
+-- 人确认并可申诉」）。reason_type 的 CHECK 是合规红线「AI 只做排序推荐，
+-- 不做自动淘汰」在存储层的落点——⛔ 不得出现第三个取值，绕过应用层直接
+-- INSERT 'ai_score' 同样被拒。
+--
+-- decided_by 的 CHECK 与 human_review.reviewer 同一手法（trim 第二参数显式
+-- 列出空格/制表/换行/回车，SQLite 单参 trim() 只剥空格）：决策人为空的
+-- 拒绝记录等于没有人为这次淘汰负责，红线「淘汰必须有人工确认并留痕」不允许
+-- 这种记录存在。
+--
+-- appeal_status 状态机 none → requested → under_review → upheld | overturned
+-- （hard-requirement-screening spec「淘汰只由人确认并可申诉」），流转合法性
+-- 由应用层校验（U3 tasks 4.5），CHECK 只保证取值合法。
+--
+-- batch_id 支持批量确认（U5 tasks 6.5/6.6）共用同一批次标识，可空——单条
+-- 逐份确认（U5 tasks 6.3）不产生批次。
+CREATE TABLE IF NOT EXISTS rejection_record (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    reason_type TEXT NOT NULL CHECK (reason_type IN ('hard_rule', 'human_decision')),
+    rule_ref TEXT,
+    human_readable TEXT,
+    decided_by TEXT NOT NULL CHECK (
+        decided_by IS NOT NULL
+        AND trim(decided_by, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    batch_id TEXT,
+    appeal_status TEXT NOT NULL DEFAULT 'none' CHECK (
+        appeal_status IN ('none', 'requested', 'under_review', 'upheld', 'overturned')
+    ),
+    decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rejection_record_application
+    ON rejection_record (application_id);
+
+CREATE INDEX IF NOT EXISTS idx_rejection_record_batch
+    ON rejection_record (batch_id);
 """
 
 

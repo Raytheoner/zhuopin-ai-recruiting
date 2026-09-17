@@ -76,51 +76,75 @@ def insert_score(
             conn.execute("PRAGMA ignore_check_constraints = OFF")
 
 
-def create_rejection_table(conn: sqlite3.Connection, *, with_reason_column: bool = True) -> None:
-    """模拟 M2 才会建的 rejection_record。
+def _ensure_application_exists(conn: sqlite3.Connection, application_id: str) -> None:
+    """rejection_record.application_id 有真实外键，必须指向一条真实存在的投递。
+    INSERT OR IGNORE 让重复调用同一个 application_id 幂等，测试可以放心多次调用。"""
+    job_id = f"{application_id}-job"
+    candidate_id = f"{application_id}-cand"
+    resume_id = f"{application_id}-resume"
+    conn.execute(
+        "INSERT OR IGNORE INTO job (id, title, status) VALUES (?, 'x', 'approved')",
+        (job_id,),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO candidate (id, name) VALUES (?, 'x')", (candidate_id,)
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES (?, ?, 'synthetic', 'a.pdf', ?, 'hr-1')",
+        (resume_id, job_id, f"{application_id}-sha"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES (?, ?, ?, ?, 'initial')",
+        (application_id, candidate_id, job_id, resume_id),
+    )
+    conn.commit()
 
-    ⛔ 本单元不在 app/storage/db.py 里建这张表（Global Constraints 3）——
-    只有测试里临时建，用来验证"表存在"那条分支。
+
+def insert_rejection_record(
+    conn: sqlite3.Connection,
+    *,
+    row_id: str,
+    reason_type: str,
+    application_id: str = "app-9",
+    decided_by: str = "hr-1",
+) -> None:
+    """往真实的 rejection_record 表插一行（表由 init_schema() 建好，本函数不再建表）。
+
+    ⚠️ reason_type 必须是 CHECK 允许的取值（hard_rule / human_decision）；
+    要模拟"绕过应用层写入 ai_score"，调用方自己开 PRAGMA ignore_check_constraints
+    （见 tests/test_audit_assertion_effectiveness.py 里 insert_score 的
+    ignore_checks 同一手法）——本函数不做这件事，保持"只是插入"的单一职责。
     """
-    if with_reason_column:
-        conn.execute(
-            f"CREATE TABLE {REJECTION_TABLE} ("
-            f"  id TEXT PRIMARY KEY NOT NULL,"
-            f"  application_id TEXT,"
-            f"  {REJECTION_REASON_COLUMN} TEXT NOT NULL,"
-            f"  created_at TEXT NOT NULL DEFAULT (datetime('now'))"
-            f")"
-        )
-    else:
-        conn.execute(
-            f"CREATE TABLE {REJECTION_TABLE} ("
-            f"  id TEXT PRIMARY KEY NOT NULL,"
-            f"  application_id TEXT"
-            f")"
-        )
+    _ensure_application_exists(conn, application_id)
+    conn.execute(
+        f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}, decided_by) "
+        f"VALUES (?, ?, ?, ?)",
+        (row_id, application_id, reason_type, decided_by),
+    )
     conn.commit()
 
 
 # ── 6.1 ────────────────────────────────────────────────────────────────
 
-def test_ai_score_rejection_assertion_passes_when_table_absent(conn):
-    """M1 现状：表还没建。断言通过，但 detail 必须说清"这不是红线守住了"。"""
-    result = assert_no_ai_score_rejections(conn)
+def test_ai_score_rejection_assertion_fails_when_table_absent():
+    """M2 起：表本该在但不在 → 断言必须失败，⛔ 不再是"M1 现状放行"。
 
-    assert result.ok is True
-    assert result.violations == ()
-    # 判据不是"有没有 detail"，是"读的人能不能分辨这两种通过"。
+    用裸连接而不是 conn fixture——conn fixture 跑 init_schema() 后表总是
+    存在，这里要测的正是"表缺失"这个分支，必须绕开 init_schema()。
+    """
+    bare = sqlite3.connect(":memory:")
+
+    result = assert_no_ai_score_rejections(bare)
+
+    assert result.ok is False
+    assert result.violations != ()
     assert REJECTION_TABLE in result.detail
-    assert "尚不存在" in result.detail
 
 
 def test_ai_score_rejection_assertion_passes_on_clean_table(conn):
-    create_rejection_table(conn)
-    conn.execute(
-        f"INSERT INTO {REJECTION_TABLE} (id, application_id, {REJECTION_REASON_COLUMN}) "
-        f"VALUES ('rej-1', 'app-1', 'manual_review')"
-    )
-    conn.commit()
+    insert_rejection_record(conn, row_id="rej-1", reason_type="human_decision")
 
     result = assert_no_ai_score_rejections(conn)
 
@@ -128,15 +152,15 @@ def test_ai_score_rejection_assertion_passes_on_clean_table(conn):
     assert result.violations == ()
 
 
-def test_ai_score_rejection_assertion_fails_when_reason_column_missing(conn):
-    """表建了但没有 reason_type 列 → 判失败，⛔ 不判通过。
+def test_ai_score_rejection_assertion_fails_when_reason_column_missing():
+    """表建了但没有 reason_type 列 → 判失败，⛔ 不判通过。"""
+    bare = sqlite3.connect(":memory:")
+    bare.execute(
+        f"CREATE TABLE {REJECTION_TABLE} (id TEXT PRIMARY KEY, application_id TEXT)"
+    )
+    bare.commit()
 
-    验不了红线就不算守住了红线。判通过等于把"M2 建表时列名改了"这件事
-    静默折成"零违例"，而这正是本断言要防的那种解释歧义。
-    """
-    create_rejection_table(conn, with_reason_column=False)
-
-    result = assert_no_ai_score_rejections(conn)
+    result = assert_no_ai_score_rejections(bare)
 
     assert result.ok is False
     assert result.violations != ()
