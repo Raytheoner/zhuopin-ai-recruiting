@@ -19,6 +19,9 @@
   5. **定夺队列覆盖文本启发式（0917AQ，`scripts/dispatcher_answers.py`）**：待答／远期行所列任务 ⇒ 阻塞（类型取队列列）；
      已答行按 `ANSWER_MAP`（＋rules.md §7）解阻塞并生成 `answer:Q-xx` 任务；无映射 ⇒ 保持阻塞并入 `summary.缺任务映射`
      （`--register-unmapped` 登记进队列）；作废 ⇒ 完成。队列决定的 待开↔阻塞 轴写 `队列:` 字段，merge 不记 conflicts。
+  6. **拆段（0918C）**：plan 含「## 建议拆段点」⇒ 按节内列表项的 `Task a–b`（措辞不限）生成 `plan:<stem>/seg1..N`，segN 依赖 segN-1；
+     `### Task N: …（tasks 2.x）` 给出 Task→条目映射时，条目只依赖覆盖它的段，段内条目全勾 ⇒ 该段真身「完成」（台账不同记 conflicts）。
+     intent 的场景名取 frontmatter `场景` 原文（⛔ 不用正则从 `S-M3` 猜 `M3`）。
 
 条目字段（设计 §四 R3）：id／场景／阶段／依赖／触碰区／状态／阻塞类型／产出判据／来源（＋标题、单元）。
   阶段 ∈ {intent, grill, propose, plan, build, merge, release, acceptance, archive, gate, gap}
@@ -338,7 +341,12 @@ ITEM_RE = re.compile(r"^\s*- \[( |x|X)\]\s*(~~)?(\d+\.\d+[a-z]?(?:bis)?)\s*(.*)$
 CHAPTER_RE = re.compile(r"^## (\d+)\.\s*(.+)$")
 
 
-def parse_tasks(change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], unit_status: dict[str, str]) -> list[Entry]:
+def parse_tasks(
+    change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], unit_status: dict[str, str], seg_status: dict[str, str] | None = None
+) -> list[Entry]:
+    """`seg_status`（出参）：拆段 id → 「完成」／「待开」，只对能映射到本章条目的段写（映射见 PlanInfo.task_items）；
+    映射不到的段不写 ⇒ plan_entries 按「真身判不了」处理（台账状态静默优先）。"""
+    seg_status = {} if seg_status is None else seg_status
     scene = scene_of_change(change)
     chapters: list[dict] = []
     cur: dict | None = None
@@ -381,11 +389,19 @@ def parse_tasks(change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], 
         matched = [] if is_gate else _match_plans(plans, change, ch["unit_no"])
         seg_ids = [sid for p in matched for sid in p.segment_ids]
         checked_nos = {it["no"] for it in ch["items"] if it["checked"]}
+        live_nos = {it["no"] for it in live}
+        item_seg: dict[str, list[str]] = {}  # 条目号 → 覆盖它的拆段 id（0918C：段内条目只依赖本段）
         for p in matched:
             # 文件名 unit<N>-<k> 指向单条 N.k 的 plan：该项已勾即 plan 已执行；整单元 plan 看单元是否全勾
             sub = re.search(rf"unit{re.escape(ch['unit_no'])}-(\d+)(?!\d)", p.stem)
             sub_done = bool(sub) and f"{ch['num']}.{sub.group(1)}" in checked_nos
             unit_status[p.stem] = "完成" if (done or sub_done) else "待开"
+            for k, sid in enumerate(p.segment_ids, 1):
+                nos = [no for no in p.segment_items(k) if no in live_nos]
+                for no in nos:
+                    item_seg.setdefault(no, []).append(sid)
+                if nos:  # 段内条目全勾 ⇒ 该段合 main 已回勾（rules.md §2 build（拆段）判据），真身可判
+                    seg_status[sid] = "完成" if all(no in checked_nos for no in nos) else "待开"
         # 条目级：只是进度跟踪，不是调度单元——依赖它所属单元的 plan／拆段，避免被当成 ready
         item_deps_base: list[str] = [] if is_gate else (seg_ids if matched else [plan_id])
         if not is_gate and prev_unit:
@@ -398,6 +414,8 @@ def parse_tasks(change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], 
             block = infer_block(body)
             status = "阻塞" if block != "无" else "待开"
             deps: list[str] = list(item_deps_base)
+            if it["no"] in item_seg:  # 映射到具体拆段 ⇒ 只依赖本段（＋前一单元），⛔ 不等整份 plan 全部拆段
+                deps = item_seg[it["no"]] + ([prev_unit] if prev_unit else [])
             pm = re.search(r"前置[：:（(]\s*([^）)。]+)", body)
             if pm:
                 deps += [f"{change}/{n}" for n in re.findall(r"\d+\.\d+", pm.group(1))]
@@ -487,20 +505,53 @@ class PlanInfo:
     segments: list[tuple[int, int]]
     pending: list[str]
     paths: list[str]
+    task_items: dict[int, list[str]] = field(default_factory=dict)  # Task N → tasks.md 条目号（`### Task N: …（tasks 2.4）`）
 
     @property
     def segment_ids(self) -> list[str]:
         return [f"plan:{self.stem}/seg{k}" for k in range(1, len(self.segments) + 1)]
 
+    def segment_items(self, k: int) -> list[str]:
+        """第 k 段（1 起）覆盖的 tasks.md 条目号；映射缺失 ⇒ 空（真身判不了该段）。"""
+        a, b = self.segments[k - 1]
+        return sorted({no for n in range(a, b + 1) for no in self.task_items.get(n, [])})
+
+
+SEGMENT_RANGE_RE = re.compile(r"Task\s*(\d+)(?:\s*[–—-]\s*(\d+))?")
+SEGMENT_SECTION_RE = re.compile(r"^##\s*建议拆段点[^\n]*\n(.*?)(?=^#{2,3} |\Z)", re.M | re.S)  # 节到下一个 ##／### 为止
+TASK_HEAD_RE = re.compile(r"^### Task (\d+)\b[^\n]*?[（(]\s*tasks?\s+([^）)]*)", re.M)
+
+
+def parse_segments(text: str, task_count: int) -> list[tuple[int, int]]:
+    """拆段：优先读「## 建议拆段点」节里每个列表项的首个 `Task a–b`（措辞不限：「第 1 条：」「Segment A：」都算，0918C）；
+    无该节 ⇒ 兼容旧式全文 `第 N 条：Task a–b`；都没有 ⇒ 整份 plan 一段。"""
+    segments: list[tuple[int, int]] = []
+    sec = SEGMENT_SECTION_RE.search(text)
+    if sec:
+        for line in sec.group(1).splitlines():
+            if not re.match(r"\s*(?:[-*+]|\d+[.、])\s+", line):
+                continue
+            m = SEGMENT_RANGE_RE.search(line)
+            if m:
+                a = int(m.group(1))
+                segments.append((a, int(m.group(2)) if m.group(2) else a))
+    if not segments:
+        for m in re.finditer(r"第\s*(\d+)\s*条[：:]\s*Task\s*(\d+)\s*[–—-]\s*(\d+)", text):
+            segments.append((int(m.group(2)), int(m.group(3))))
+    if not segments and task_count:
+        segments = [(1, task_count)]
+    return segments
+
 
 def parse_plan(path: Path, rel: str) -> PlanInfo:
     text = path.read_text(encoding="utf-8")
     task_count = len(re.findall(r"^### Task \d+", text, flags=re.M))
-    segments: list[tuple[int, int]] = []
-    for m in re.finditer(r"第\s*(\d+)\s*条[：:]\s*Task\s*(\d+)\s*[–—-]\s*(\d+)", text):
-        segments.append((int(m.group(2)), int(m.group(3))))
-    if not segments and task_count:
-        segments = [(1, task_count)]
+    segments = parse_segments(text, task_count)
+    task_items: dict[int, list[str]] = {}
+    for m in TASK_HEAD_RE.finditer(text):
+        nos = re.findall(r"\d+\.\d+", m.group(2))
+        if nos:
+            task_items[int(m.group(1))] = nos
     pending: list[str] = []
     sec = re.search(r"^## 待裁决[^\n]*\n(.*?)(?=^## |\Z)", text, flags=re.M | re.S)
     if sec:
@@ -510,7 +561,7 @@ def parse_plan(path: Path, rel: str) -> PlanInfo:
     fs = re.search(r"^## 文件结构[^\n]*\n(.*?)(?=^## |\Z)", text, flags=re.M | re.S)
     if fs:
         paths = touch_paths(fs.group(1), ROOT)
-    return PlanInfo(stem=path.stem, rel=rel, task_count=task_count, segments=segments, pending=pending, paths=paths)
+    return PlanInfo(stem=path.stem, rel=rel, task_count=task_count, segments=segments, pending=pending, paths=paths, task_items=task_items)
 
 
 def _match_plans(plans: dict[str, PlanInfo], change: str, unit_no: str) -> list[PlanInfo]:
@@ -526,8 +577,10 @@ def _match_plans(plans: dict[str, PlanInfo], change: str, unit_no: str) -> list[
     return out
 
 
-def plan_entries(plans: dict[str, PlanInfo], unit_status: dict[str, str]) -> list[Entry]:
-    """每份 plan 一条 + 每个拆段一条 + 每条待裁决一条。plan 的场景按文件名前缀推。"""
+def plan_entries(plans: dict[str, PlanInfo], unit_status: dict[str, str], seg_status: dict[str, str] | None = None) -> list[Entry]:
+    """每份 plan 一条 + 每个拆段一条 + 每条待裁决一条。plan 的场景按文件名前缀推。
+    拆段状态：单元全勾 ⇒ 完成；否则能映射到条目的段按 `seg_status`（全勾 ⇒ 完成，truth_known）；映射不到 ⇒ 待开且真身判不了。"""
+    seg_status = {} if seg_status is None else seg_status
     out: list[Entry] = []
     for stem in sorted(plans):
         p = plans[stem]
@@ -542,19 +595,21 @@ def plan_entries(plans: dict[str, PlanInfo], unit_status: dict[str, str]) -> lis
         prev: str | None = None
         for k, (a, b) in enumerate(p.segments, 1):
             sid = f"plan:{stem}/seg{k}"
+            span = f"Task {a}–{b}" if a != b else f"Task {a}"
+            seg_done = done or seg_status.get(sid) == "完成"
             out.append(
                 Entry(
                     id=sid,
                     场景=scene,
                     阶段="build",
-                    标题=f"{name} Task {a}–{b}",
+                    标题=f"{name} {span}",
                     来源=p.rel,
                     依赖=[prev] if prev else [],
                     触碰区=p.paths,
-                    状态="完成" if done else "待开",
+                    状态="完成" if seg_done else "待开",
                     阻塞类型="无",
-                    产出判据=f"Task {a}–{b} 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`",
-                    truth_known=False,
+                    产出判据=f"{span} 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`",
+                    truth_known=seg_done,  # 段内条目全勾 ⇒ 真身可判「完成」（台账不同则记 conflicts）；未勾 ⇒ 是否在跑真身判不了，台账优先
                 )
             )
             prev = sid
@@ -775,9 +830,10 @@ def parse_intents(repo: Path, rel_dir: str, changes: set[str]) -> list[Entry]:
         text = p.read_text(encoding="utf-8")
         fm = _frontmatter(text)
         stem = p.stem[:-7] if p.stem.endswith("-intent") else p.stem
+        # 场景名 ＝ frontmatter `场景` 原文（requirement-grill 约定 ＝ 文件名 stem），缺字段才退到 stem。
+        # ⛔ 不再用 `\bM\d′?` 正则回退猜测——曾把 `S-M3` 判成 `M3`，与 `propose:S-M3` 重复生成 G1 行（Q-37，0918C）
         scene_name = fm.get("场景") or stem
-        m = re.search(r"\bM\d′?", scene_name) or re.search(r"\bM\d′?", stem)
-        scene = m.group(0) if m else scene_name
+        scene = scene_name
         rel = f"{rel_dir}/{p.name}"
         pending = _section(text, "待答题")
         unanswered = bool(UNANSWERED_RE.search(pending))
@@ -838,14 +894,15 @@ def generate(repo: Path) -> list[Entry]:
         for p in sorted(pdir.glob("*.md")):
             plans[p.stem] = parse_plan(p, f"{REL['plans']}/{p.name}")
     unit_status: dict[str, str] = {}
+    seg_status: dict[str, str] = {}
     cdir = repo / REL["changes"]
     if cdir.is_dir():
         for t in sorted(cdir.glob("*/tasks.md")):
             change = t.parent.name
             if change == "archive":
                 continue
-            entries += parse_tasks(change, t.read_text(encoding="utf-8"), f"{REL['changes']}/{change}/tasks.md", plans, unit_status)
-    entries += plan_entries(plans, unit_status)
+            entries += parse_tasks(change, t.read_text(encoding="utf-8"), f"{REL['changes']}/{change}/tasks.md", plans, unit_status, seg_status)
+    entries += plan_entries(plans, unit_status, seg_status)
     UNMATCHED_PLANS[:] = sorted(st for st, p in plans.items() if p.task_count and st not in unit_status)
     changes = {t.parent.name for t in cdir.glob("*/tasks.md") if t.parent.name != "archive"} if cdir.is_dir() else set()
     entries += parse_intents(repo, REL["intents"], changes)

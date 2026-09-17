@@ -575,3 +575,139 @@ def test_real_rules_file_names_visible_key_and_carries_the_block():
 
     rules = db.load_visible_rules(REPO)
     assert rules == db.load_visible_rules(REPO / "nonexistent-dir"), "rules.md 清单与内置默认必须一致（改一处要同步另一处）"
+
+
+# ── ⑤ 拆段识别（0918C）：「## 建议拆段点」按段生成 seg1..segN，段间串行、段内条目只依赖本段 ──
+
+TASKS_U1_SEGMENTED = """**进度：3/8**
+
+## 2. U1 数据模型
+
+- [x] 2.1 `app/storage/db.py` 新增 `candidate` 表
+- [x] 2.2 新增 `application`
+- [x] 2.3 新增 `rejection_record`
+- [ ] 2.4 新增 `resume_access_log`
+- [ ] 2.5 新增 `resume_embedding`
+- [ ] 2.6 `analysis_run` 增加 `run_type` 语义约定
+- [ ] 2.7 `tests/test_db_m2_schema.py` 老库升级回归
+- [ ] 2.8 `scripts/create_hr_account.py`
+"""
+
+# 措辞刻意用「Segment A：」而不是「第 1 条：」——真实计划 `2026-09-17-m2-resume-parse-and-rank-unit1-data-model.md`
+# 就是这种写法，旧正则 `第\\s*(\\d+)\\s*条` 不命中，8 个 Task 被压成单条 seg1（主航道停摆根因）。
+PLAN_U1_SEGMENTED = """# U1 数据模型 实现计划
+
+## 文件结构
+
+- `app/storage/db.py`
+- `tests/test_db_m2_schema.py`
+
+## 建议拆段点（`lane-dispatch`「长 run-build 拆段」，本计划 8 个 Task）
+
+- **Segment A：Task 1–3**（候选人/投递域）
+- **Segment B：Task 4–6**（留痕/校对/标记域）
+- **Segment C：Task 7–8**（跨库回归测试 + 建账号脚本）
+
+拆段交接只靠分支与 commit hash。
+
+## 前置
+
+### Task 1: `candidate`（tasks 2.1）
+### Task 2: `application`（tasks 2.2）
+### Task 3: `rejection_record` 建表（tasks 2.3 ＋ U7 任务 8.1，同一交付单元合并）
+### Task 4: `resume_access_log`（tasks 2.4）
+### Task 5: `resume_embedding`（tasks 2.5）
+### Task 6: `run_type` 约定（tasks 2.6）
+### Task 7: 老库升级回归（tasks 2.7 剩余部分）
+### Task 8: `scripts/create_hr_account.py`（tasks 2.8）
+"""
+
+U1_STEM = "2026-09-17-m2-resume-parse-and-rank-unit1-data-model"
+
+
+def make_segmented_repo(tmp: Path, tasks: str = TASKS_U1_SEGMENTED) -> Path:
+    repo = make_repo(tmp, with_plan=False)
+    (repo / "openspec/changes/m2-resume-parse-and-rank/tasks.md").write_text(tasks, encoding="utf-8")
+    (repo / f"docs/superpowers/plans/{U1_STEM}.md").write_text(PLAN_U1_SEGMENTED, encoding="utf-8")
+    return repo
+
+
+def test_segment_points_in_any_wording_yield_one_entry_per_segment_chained(tmp_path):
+    repo = make_segmented_repo(tmp_path)
+    run(repo)
+    doc = load(repo)
+    t = by_id(doc)
+    seg = [f"plan:{U1_STEM}/seg{k}" for k in (1, 2, 3)]
+    assert all(s in t for s in seg) and f"plan:{U1_STEM}/seg4" not in t
+    assert t[seg[0]]["标题"].endswith("Task 1–3") and t[seg[1]]["标题"].endswith("Task 4–6") and t[seg[2]]["标题"].endswith("Task 7–8")
+    # 段间依赖：segN 依赖 segN-1
+    assert t[seg[0]]["依赖"] == [] and t[seg[1]]["依赖"] == [seg[0]] and t[seg[2]]["依赖"] == [seg[1]]
+    # 段内条目只依赖本段（按 `### Task N: …（tasks 2.x）` 的映射），⛔ 不再依赖整份 plan 的全部拆段
+    for no, s in (("2.4", seg[1]), ("2.5", seg[1]), ("2.6", seg[1]), ("2.7", seg[2]), ("2.8", seg[2])):
+        deps = t[f"m2-resume-parse-and-rank/{no}"]["依赖"]
+        assert s in deps and not any(x in deps for x in seg if x != s), (no, deps)
+    # 段内条目全勾 ⇒ 该段真身「完成」；下一段进 ready、再下一段不进
+    assert t[seg[0]]["状态"] == "完成" and t[seg[1]]["状态"] == "待开" and t[seg[2]]["状态"] == "待开"
+    assert seg[1] in doc["summary"]["ready"] and seg[2] not in doc["summary"]["ready"]
+    assert seg[0] not in doc["summary"]["ready"]
+    # 单元级聚合条目依赖三段
+    assert set(seg) <= set(t["m2-resume-parse-and-rank/U1"]["依赖"])
+
+
+def test_segment_is_ready_while_its_items_are_unchecked_and_next_segment_waits(tmp_path):
+    repo = make_segmented_repo(tmp_path, TASKS_U1_SEGMENTED.replace("- [x]", "- [ ]").replace("进度：3/8", "进度：0/8"))
+    run(repo)
+    doc = load(repo)
+    t = by_id(doc)
+    seg1, seg2 = f"plan:{U1_STEM}/seg1", f"plan:{U1_STEM}/seg2"
+    assert t[seg1]["状态"] == "待开" and seg1 in doc["summary"]["ready"] and seg2 not in doc["summary"]["ready"]
+
+
+def test_segment_truth_done_by_checkboxes_records_conflict_against_ledger_running(tmp_path):
+    """段内条目全勾 ⇒ 真身「完成」可判；台账仍写「在跑」⇒ 记 conflicts、台账优先（合并不是覆盖）。
+    而映射不到条目的段（真身判不了）仍按 truth_known=False 静默以台账为准。"""
+    repo = make_segmented_repo(tmp_path)
+    run(repo)
+    path = repo / "docs/roadmap/任务台账.yaml"
+    doc = load(repo)
+    seg1 = f"plan:{U1_STEM}/seg1"
+    for x in doc["tasks"]:
+        if x["id"] == seg1:
+            x["状态"] = "在跑"
+            x["备注"] = "人工核实备注不得丢"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    run(repo)
+    t = by_id(load(repo))
+    assert t[seg1]["状态"] == "在跑" and t[seg1]["conflicts"]["状态"] == {"台账": "在跑", "真身": "完成"}
+    assert t[seg1]["备注"] == "人工核实备注不得丢"
+    assert t[seg1]["标题"].endswith("Task 1–3"), "已存在的 seg1 按新规则重算标题／依赖"
+
+
+def test_segmented_generation_is_idempotent(tmp_path):
+    repo = make_segmented_repo(tmp_path)
+    run(repo)
+    first = (repo / "docs/roadmap/任务台账.yaml").read_bytes()
+    run(repo)
+    assert first == (repo / "docs/roadmap/任务台账.yaml").read_bytes()
+
+
+# ── ⑥ 场景名（0918C，Q-37）：intent 的场景取 frontmatter `场景` 原文，⛔ 不用 `\\bM\\d′?` 正则猜 ──
+
+INTENT_S_M3 = "---\nstatus: 已确认（G1 Q-32）\n场景: S-M3\n---\n# S-M3 · intent\n\n## 目标\nx\n\n## 待答题\n"
+
+
+def test_intent_scene_is_frontmatter_verbatim_not_regex_guess(tmp_path):
+    repo = make_repo(tmp_path, with_plan=False)
+    (repo / "docs/roadmap/intents").mkdir(parents=True)
+    (repo / "docs/roadmap/intents/S-M3-intent.md").write_text(INTENT_S_M3, encoding="utf-8")
+    # 无 frontmatter 场景字段 ⇒ 退到文件名 stem（去 -intent），同样不猜
+    (repo / "docs/roadmap/intents/S-排期-intent.md").write_text("# 排期\n\n## 目标\nx\n", encoding="utf-8")
+    run(repo)
+    doc = load(repo)
+    t = by_id(doc)
+    assert "propose:S-M3" in t and "propose:M3" not in t
+    assert t["propose:S-M3"]["场景"] == "S-M3" and t["propose:S-M3"]["闸门"] == "G1 S-M3"
+    assert "propose:S-排期" in t and t["propose:S-排期"]["场景"] == "S-排期"
+    first = (repo / "docs/roadmap/任务台账.yaml").read_bytes()
+    run(repo)
+    assert first == (repo / "docs/roadmap/任务台账.yaml").read_bytes()

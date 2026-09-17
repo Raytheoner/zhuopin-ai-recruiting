@@ -1,11 +1,11 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 494
+  条目数: 496
   按状态:
-    待开: 279
-    在跑: 8
-    完成: 106
+    待开: 281
+    在跑: 6
+    完成: 108
     阻塞: 101
   阻塞·决策: 60
   阻塞·外部: 39
@@ -22,7 +22,7 @@ summary:
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
   - opener:[Mac]0903A
-  - propose:M3
+  - propose:S-M3
   - propose:S-Offer
   - propose:S-入职
   - propose:S-排期
@@ -30,6 +30,7 @@ summary:
   - relay:H-4
   - scene:M3
   ready:
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
   - channel-resume-intake/0.1
   - interview-scheduling/0.2
   - offer-generation/0.2
@@ -2690,7 +2691,7 @@ tasks:
   标题: 新增 `resume_access_log`（`accessor, resume_id, access_type, at`，无内容列）、`field_review_queue`（`resume_id, field, machine_valu
   单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
   依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2704,7 +2705,7 @@ tasks:
   标题: 新增 `resume_embedding`（`resume_id, model, dim, vector BLOB`）、`eval_sample` / `eval_annotation` / `eval_import_batch`（含「禁止
   单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
   依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2717,7 +2718,7 @@ tasks:
   标题: '`analysis_run` 增加 `run_type` 语义约定（`parse/rank`，可空列已存在的用 `prompt_version` 前缀区分，⛔ 不加列）；`criterion_score.evidence_ref` 的 JS'
   单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
   依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2731,7 +2732,7 @@ tasks:
   标题: '`tests/test_db_m2_schema.py`：新库建表齐全、老库（复制 `.51` 的 demo.db 结构）升级后既有表一行不改、全部 CHECK 反证'
   单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
   依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg3
   触碰区:
   - tests/test_db_m2_schema.py
   状态: 阻塞
@@ -2745,7 +2746,7 @@ tasks:
   标题: '`scripts/create_hr_account.py`（建账号，幂等：同用户名重复运行只更新口令并提示）'
   单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
   依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg3
   触碰区:
   - scripts/create_hr_account.py
   状态: 待开
@@ -2782,6 +2783,8 @@ tasks:
   - m2-resume-parse-and-rank/2.8
   - m2-resume-parse-and-rank/U1/plan
   - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg3
   触碰区:
   - app/storage/db.py
   - scripts/create_hr_account.py
@@ -3224,9 +3227,7 @@ tasks:
   单元: U0 模型对比定型（剩余项只前置 U4 召回精排；抽取模型已定型——本章在顺序链上排在 U3 之后、U4 之前，`0917BA`）
   依赖:
   - m2-resume-parse-and-rank/U3
-  - plan:2026-09-17-m2-unit0-model-comparison/seg1
   - plan:2026-09-17-m2-unit0-model-comparison/seg2
-  - plan:2026-09-17-m2-unit0-model-comparison/seg3
   触碰区:
   - scripts/gen_pilot_samples.py
   状态: 阻塞
@@ -6977,21 +6978,48 @@ tasks:
 - id: plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
   场景: M2
   阶段: build
-  标题: m2-resume-parse-and-rank-unit1-data-model Task 1–8
+  标题: m2-resume-parse-and-rank-unit1-data-model Task 1–3
   依赖: []
   触碰区: []
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–8 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-17-m2-resume-parse-and-rank-unit1-data-model.md
   可见: false
-  备注: dispatcher-20260917-233156 核实：生成器原判「Task 1–8」单段（触碰区空），未识别计划文件 61 行「## 建议拆段点」三段式（`本计划 8 个 Task` 措辞与 `m2-unit0-model-comparison` 的 `Task = 8 ≥ 5` 措辞不同，`scripts/dispatcher_backlog.py::parse_plan`
+  备注: 'dispatcher-20260917-233156 核实：生成器原判「Task 1–8」单段（触碰区空），未识别计划文件 61 行「## 建议拆段点」三段式（`本计划 8 个 Task` 措辞与 `m2-unit0-model-comparison` 的 `Task = 8 ≥ 5` 措辞不同，`scripts/dispatcher_backlog.py::parse_plan`
     的 `第\s*(\d+)\s*条` 正则未命中「Segment A：」措辞，回退成单段）；曾手工拆回 seg1/seg2/seg3 三条但被下一次生成器刷新静默覆盖（依赖／触碰区是计算字段，只有 备注／状态 跨刷新保留）——**手工拆段在本调度器架构下不持久，不再重复**。本条 ready 实际派发时 ⛔ 只派计划文件
     61 行 Segment A（Task 1–3），⛔ 不按标题字面派 Task 1–8；Segment A 完成合 main 后，下一次刷新本条仍会判「完成」不准确（真身判据是 Task 1–8 全跑完），需下一位处理者比对 plan 文件手动确认「Task 1–3 已合 main」后手工在本条追加 Segment
     B（Task 4–6） 的下一条待办，而非依赖生成器自动推进。根治需改 `parse_plan` 正则以识别「Segment [A-Z]：Task N–M」格式，属代码改动，不在本 docs-only 会话授权范围（见 SKILL.md 步骤⑦ 白名单），已记 `docs/session接力.md` 待排期 dispatcher-20260918-002608
     核验：`lanes-20260918-000218/results.tsv` 显示 0917BG OK（23 分钟）；分支 `lane-m2-u1-data-model` 确有 4 个 commit（`1351fc4`/`0915953`/`12a849f`/`d222c52`，对应 Task 1–3），但 `git
     cherry -v main lane-m2-u1-data-model` 全部是 `+`——尚未合 main，按 rules.md §2「build（拆段）」判据本段未完成。已按 0917BG 备注出号 `0918A`（M2·U1数据模型合并，编排文件已写、三道机器闸已过）派去合并＋回勾 tasks.md 2.1–2.3；Segment
     B（Task 4–6）待 0918A 收工核实真合 main 后再出号，⛔ 不在本次一并派发
+
+    0918C 核实（2026-09-18）：生成器已识别「Segment A/B/C」拆段（本条重算为 Task 1–3，seg2＝Task 4–6、seg3＝Task 7–8 自动生成，2.4–2.6 只依赖 seg2、2.7–2.8 只依赖 seg3）；`git cherry -v main lane-m2-u1-data-model`
+    无 `+`（合并 commit 906ee01）＋ tasks.md 2.1–2.3 已勾 ⇒ 按 rules.md §2 改判完成。上文「手工拆段不持久」「需手工追加 Segment B」两条处置已被生成器取代，不再适用'
+- id: plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit1-data-model Task 4–6
+  依赖:
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-17-m2-resume-parse-and-rank-unit1-data-model.md
+  可见: false
+- id: plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg3
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit1-data-model Task 7–8
+  依赖:
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: Task 7–8 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-17-m2-resume-parse-and-rank-unit1-data-model.md
+  可见: false
 - id: plan:2026-09-17-m2-unit0-model-comparison/seg1
   场景: M2
   阶段: build
@@ -7072,26 +7100,26 @@ tasks:
   来源: docs/superpowers/plans/2026-09-17-m2-unit0-model-comparison.md
   可见: false
   备注: 同上（0917AJ）
-- id: propose:M3
-  场景: M3
+- id: propose:S-M3
+  场景: S-M3
   阶段: propose
   标题: openspec-propose：S-M3（intent 定稿后）
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
-  闸门: G1 M3
+  闸门: G1 S-M3
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: 缺陷（2026-09-18 dispatcher 发现）：本条 id/场景本应是 `S-M3`，`scripts/dispatcher_backlog.py` 的 `parse_intents()` 用 `\bM\d′?` 正则从 `S-M3` 里误剥离出 `M3`，与真正已答的 `Q-32`（场景 `S-M3`，答复「定」）
-    形成重复 G1 行 `Q-37`（待答，卡在此处）。⛔ 调度器不改脚本；需一次 run-build 修正该正则（不匹配 `S-` 前缀场景名）后，此条会自动合并回 `propose:S-M3` 并随 Q-32 放行。修前 `tests/test_dispatcher_backlog.py::test_decision_queue_task_ids_exist_in_real_ledger`
-    会持续因 `Q-32` 引用 `propose:S-M3`（真实 id 是 `propose:M3`）而失败，非本次改动引入。
+  备注: 0918C 并入：前身 `propose:M3`（生成器 `parse_intents` 用 `\bM\d′?` 正则把 `S-M3` 误判成 `M3`，2026-09-18 已修，场景名改取 frontmatter `场景` 原文）。G1 已放行：Q-32（场景 S-M3，答「定」）与重复行 Q-37（答「定」，任务
+    id 已改指本条）均已答；0918B 已立包 `openspec/changes/voice-structured-interview/`（commit 4299785），本条真身完成。conflicts 若复现是 `scene_of_change()` 未把英文包名映射回场景名的已知生成器 bug（同 S-Offer
+    等四条），不影响本条状态，⛔ 无需改回
 - id: propose:S-Offer
   场景: S-Offer
   阶段: propose

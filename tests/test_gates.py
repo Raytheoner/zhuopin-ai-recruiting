@@ -247,7 +247,9 @@ def test_sweep_reports_and_only_appends_with_apply(queue: Path) -> None:
     assert queue.read_text(encoding="utf-8") == text
 
 
-INTENT = "---\nstatus: 草稿·待 G1\n场景: M3 实时语音面试\n---\n# M3 · intent\n\n## 目标\nx\n\n## 决策\n- D1\n\n## 待答题\n{pending}\n"
+# frontmatter `场景` ＝ 场景码（requirement-grill 约定，与文件名 stem 一致），生成器取原文作 id／闸门 subject，
+# ⛔ 不再从描述里用正则猜（0918C：曾把 `S-M3` 猜成 `M3`，重复生成 G1 行）
+INTENT = "---\nstatus: 草稿·待 G1\n场景: M3\n---\n# M3 实时语音面试 · intent\n\n## 目标\nx\n\n## 决策\n- D1\n\n## 待答题\n{pending}\n"
 
 
 @pytest.mark.parametrize(
