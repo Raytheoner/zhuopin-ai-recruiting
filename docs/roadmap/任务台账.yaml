@@ -3,9 +3,9 @@ version: 1
 summary:
   条目数: 402
   按状态:
-    待开: 218
+    待开: 215
     在跑: 7
-    完成: 103
+    完成: 106
     阻塞: 74
   阻塞·决策: 46
   阻塞·外部: 27
@@ -2677,48 +2677,6 @@ tasks:
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:8
   可见: false
   队列: Q-04 待答
-- id: m2-resume-parse-and-rank/2.1
-  场景: M2
-  阶段: build
-  标题: '`app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN synthetic/anonymized/departed/live——`syn'
-  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
-  依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
-  触碰区:
-  - app/storage/db.py
-  - scripts/gen_pilot_samples.py
-  状态: 待开
-  阻塞类型: 无
-  产出判据: '`app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN synthetic/anonymized/departed/live——`synthetic` 为合成替身样本（`scripts/gen_pilot_samples.py`），薄片期与脱敏样本同等可入库、`parser_version`、`'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:16
-  可见: false
-- id: m2-resume-parse-and-rank/2.2
-  场景: M2
-  阶段: build
-  标题: '新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` '
-  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
-  依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` CHECK IN human/agent）；测试：状态不挂在 `candidate`
-    上
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:17
-  可见: false
-- id: m2-resume-parse-and-rank/2.3
-  场景: M2
-  阶段: build
-  标题: 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('non
-  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
-  依赖:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('none','requested','under_review','upheld','overturned')`、`decided_by`、`batch_id`；反证
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:18
-  可见: false
 - id: m2-resume-parse-and-rank/2.4
   场景: M2
   阶段: build
@@ -2810,9 +2768,6 @@ tasks:
   标题: 2. U1 数据模型（ATS 域 ＋ 评分审计域接线）
   单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
   依赖:
-  - m2-resume-parse-and-rank/2.1
-  - m2-resume-parse-and-rank/2.2
-  - m2-resume-parse-and-rank/2.3
   - m2-resume-parse-and-rank/2.4
   - m2-resume-parse-and-rank/2.5
   - m2-resume-parse-and-rank/2.6
@@ -5712,6 +5667,9 @@ tasks:
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 M3
+  备注: 缺陷（2026-09-18 dispatcher 发现）：本条 id/场景本应是 `S-M3`，`scripts/dispatcher_backlog.py` 的 `parse_intents()` 用 `\bM\d′?` 正则从 `S-M3` 里误剥离出 `M3`，与真正已答的 `Q-32`（场景 `S-M3`，答复「定」）
+    形成重复 G1 行 `Q-37`（待答，卡在此处）。⛔ 调度器不改脚本；需一次 run-build 修正该正则（不匹配 `S-` 前缀场景名）后，此条会自动合并回 `propose:S-M3` 并随 Q-32 放行。修前 `tests/test_dispatcher_backlog.py::test_decision_queue_task_ids_exist_in_real_ledger`
+    会持续因 `Q-32` 引用 `propose:S-M3`（真实 id 是 `propose:M3`）而失败，非本次改动引入。
 - id: propose:S-Offer
   场景: S-Offer
   阶段: propose
@@ -6047,6 +6005,48 @@ tasks:
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:17
   队列: Q-07 已答
   备注: Q-07 已答 a：注册火山方舟＋阿里百炼由本人亲自办理并写 .env；key 到位前不可派车
+- id: m2-resume-parse-and-rank/2.1
+  场景: M2
+  阶段: build
+  标题: '`app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN synthetic/anonymized/departed/live——`syn'
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  触碰区:
+  - app/storage/db.py
+  - scripts/gen_pilot_samples.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN synthetic/anonymized/departed/live——`synthetic` 为合成替身样本（`scripts/gen_pilot_samples.py`），薄片期与脱敏样本同等可入库、`parser_version`、`'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:16
+  可见: false
+- id: m2-resume-parse-and-rank/2.2
+  场景: M2
+  阶段: build
+  标题: '新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` '
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` CHECK IN human/agent）；测试：状态不挂在 `candidate`
+    上
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:17
+  可见: false
+- id: m2-resume-parse-and-rank/2.3
+  场景: M2
+  阶段: build
+  标题: 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('non
+  单元: U1 数据模型（ATS 域 ＋ 评分审计域接线）
+  依赖:
+  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('none','requested','under_review','upheld','overturned')`、`decided_by`、`batch_id`；反证
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:18
+  可见: false
 - id: m2-resume-parse-and-rank/6.2
   场景: M2
   阶段: build
