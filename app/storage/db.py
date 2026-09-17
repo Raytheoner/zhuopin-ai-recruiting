@@ -255,6 +255,88 @@ CREATE TABLE IF NOT EXISTS hard_requirement (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (job_id, profile_version, field, operator, value)
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 14 张表属变更包 m2-resume-parse-and-rank（交付单元 U1）。全部新表，
+-- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
+-- "老库缺列"这一种情况，新表不需要它。.51 上 data/demo.db 既有表一行不改，
+-- 无数据迁移（design.md Migration Plan 第 1 条）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- 候选人：全局唯一、无状态（CLAUDE.md 数据模型要点「状态属于投递不属于候选人」，
+-- 状态挂在 application 上，这里不设任何状态列）。
+--
+-- 去重键是 (name, phone_hash)——design D11「候选人去重」：手机号本期只用于
+-- 去重，以哈希存储，明文不落库；phone_hash 允许 NULL（解析没能拿到手机号时），
+-- SQLite 的 UNIQUE 索引把多个 NULL 视为互不相等，多个"没手机号的李四"不会
+-- 被误合并成一个人——这是刻意的保守选择，宁可留重复候选人，也不错误合并。
+CREATE TABLE IF NOT EXISTS candidate (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    phone_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_name_phone
+    ON candidate (name, phone_hash);
+
+-- 简历文件记录。⛔ 刻意不设 candidate_id 列：上传时（U2 POST /resumes/upload）
+-- 只知道 job_id，候选人身份要等解析完成才能确定并去重创建 candidate 行。
+-- resume 与 candidate 的关联由 application（下方）一次性接起来，不在 resume
+-- 上留一个"上传时必为 NULL、解析后才回填"的悬空外键。
+--
+-- sample_class 的四个取值对应 resume-upload-and-gate spec「批量上传入口」：
+-- synthetic（U0 合成替身样本）/ anonymized（脱敏样本）/ departed（历史离职）/
+-- live（真实在招，受真实简历入库闸拦截，D2）。
+--
+-- status 三态对应 resume-parsing spec「扫描件与不可读文件」：pending（刚上传
+-- 未解析）/ parsed（解析完成）/ unreadable（识别后有效字符不足，进人工队列，
+-- MUST NOT 以空字段进入后续判定与排序）。
+--
+-- parsed_json 存 app/schemas/resume_fields.py::ResumeFields 的 model_dump_json()；
+-- parser_version 支持"同一份简历用新版本解析器重解析，新旧两版并存"
+-- （resume-parsing spec「解析留痕与版本」）——重解析在 U2 会插入**新的 resume
+-- 行**而不是覆盖本行，parser_version 是区分同一 content_sha256 下哪次解析
+-- 结果最新的依据。
+CREATE TABLE IF NOT EXISTS resume (
+    id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL REFERENCES job(id),
+    sample_class TEXT NOT NULL CHECK (
+        sample_class IN ('synthetic', 'anonymized', 'departed', 'live')
+    ),
+    file_name TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'parsed', 'unreadable')),
+    parsed_json TEXT,
+    parse_confidence REAL,
+    parser_version TEXT,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 重复上传去重（resume-upload-and-gate spec「同一文件重复上传」）：按
+-- (job_id, content_sha256) 唯一——同一文件传给不同岗位算两条独立记录
+-- （代表两次独立的投递意图），同一文件传给同一岗位两次算重复。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resume_job_content_hash
+    ON resume (job_id, content_sha256);
+
+CREATE INDEX IF NOT EXISTS idx_resume_job ON resume (job_id);
+
+-- 简历原文分片 + 偏移量（resume-parsing spec「原文分片与字段回指」），字段与
+-- app/parsing/spans.py::TextSpan(span_id, start, end, text) 一一对应，
+-- start/end 是全文字符偏移，text 是该分片原文（去空白后的非空行）。
+--
+-- 复合主键 (resume_id, span_id)：与 hard_requirement 表同一形态，天然键就是
+-- "这份简历的第几个分片"，不设代理主键。
+CREATE TABLE IF NOT EXISTS resume_text_span (
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    span_id INTEGER NOT NULL,
+    start INTEGER NOT NULL,
+    end INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (resume_id, span_id)
+);
 """
 
 

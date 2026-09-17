@@ -1,0 +1,161 @@
+"""M2 U1 数据模型：新库建表齐全、老库升级既有表不变、全部 CHECK 反证。
+
+本文件三段结构（随后续任务继续追加）：
+  ① 新库 fresh init_schema() 后逐表齐全 —— 本任务先写 candidate/resume/resume_text_span 三张
+  ② 老库（复制 .51 demo.db 结构）升级后既有表一行不改 —— Task 7 统一补
+  ③ 全部新增 CHECK 的反证（直接 INSERT，绕过应用层）—— 各表在各自任务里先写，Task 7 汇总检查覆盖面
+"""
+import sqlite3
+
+import pytest
+
+from app.storage.db import get_connection, init_schema
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+@pytest.fixture
+def conn(tmp_path):
+    c = get_connection(str(tmp_path / "m2.db"))
+    init_schema(c)
+    return c
+
+
+# ── candidate / resume / resume_text_span（tasks 2.1）───────────────────
+
+
+def test_candidate_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "candidate")
+    assert _columns(conn, "candidate") == {"id", "name", "phone_hash", "created_at"}
+
+
+def test_candidate_has_no_status_column(conn):
+    """CLAUDE.md 数据모델要점：상태는 지원서에 속하며 후보자에 속하지 않습니다."""
+    assert "status" not in _columns(conn, "candidate")
+    assert "current_stage_id" not in _columns(conn, "candidate")
+
+
+def test_candidate_unique_on_name_and_phone_hash(conn):
+    conn.execute(
+        "INSERT INTO candidate (id, name, phone_hash) VALUES ('c-1', '张三', 'hash-abc')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO candidate (id, name, phone_hash) VALUES ('c-2', '张三', 'hash-abc')"
+        )
+
+
+def test_candidate_allows_multiple_rows_with_null_phone_hash(conn):
+    """解析没能拿到手机号时 phone_hash 可空；SQLite 的 UNIQUE 把多个 NULL 视为互不相等，
+    这正是我们想要的行为——没有手机号就不该被强行合并成同一人。"""
+    conn.execute("INSERT INTO candidate (id, name, phone_hash) VALUES ('c-3', '李四', NULL)")
+    conn.execute("INSERT INTO candidate (id, name, phone_hash) VALUES ('c-4', '李四', NULL)")
+    conn.commit()
+    rows = conn.execute("SELECT COUNT(*) FROM candidate WHERE name='李四'").fetchone()[0]
+    assert rows == 2
+
+
+def test_resume_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "resume")
+    assert _columns(conn, "resume") == {
+        "id", "job_id", "sample_class", "file_name", "content_sha256",
+        "status", "parsed_json", "parse_confidence", "parser_version",
+        "uploaded_by", "uploaded_at",
+    }
+
+
+@pytest.mark.parametrize("bad_class", ["Live", "real", "", "LIVE "])
+def test_resume_sample_class_check_rejects_invalid_values(conn, bad_class):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+            "VALUES ('r-bad', 'j1', ?, 'a.pdf', 'sha-x', 'hr-1')",
+            (bad_class,),
+        )
+
+
+@pytest.mark.parametrize("good_class", ["synthetic", "anonymized", "departed", "live"])
+def test_resume_sample_class_check_accepts_all_four_values(conn, good_class):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    conn.commit()
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES (?, 'j1', ?, 'a.pdf', ?, 'hr-1')",
+        (f"r-{good_class}", good_class, f"sha-{good_class}"),
+    )
+    conn.commit()
+
+
+def test_resume_dedup_unique_index_on_job_and_content_hash(conn):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r-1', 'j1', 'synthetic', 'a.pdf', 'sha-same', 'hr-1')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+            "VALUES ('r-2', 'j1', 'synthetic', 'b.pdf', 'sha-same', 'hr-1')"
+        )
+
+
+def test_resume_same_content_hash_allowed_across_different_jobs(conn):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j2', '供应链总监', 'approved')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r-1', 'j1', 'synthetic', 'a.pdf', 'sha-same', 'hr-1')"
+    )
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r-2', 'j2', 'synthetic', 'a.pdf', 'sha-same', 'hr-1')"
+    )
+    conn.commit()
+
+
+def test_resume_status_check_accepts_three_values(conn):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    conn.commit()
+    for status in ("pending", "parsed", "unreadable"):
+        conn.execute(
+            "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, status, uploaded_by) "
+            "VALUES (?, 'j1', 'synthetic', 'a.pdf', ?, ?, 'hr-1')",
+            (f"r-{status}", f"sha-{status}", status),
+        )
+    conn.commit()
+
+
+def test_resume_text_span_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "resume_text_span")
+    assert _columns(conn, "resume_text_span") == {"resume_id", "span_id", "start", "end", "text"}
+
+
+def test_resume_text_span_primary_key_is_resume_and_span(conn):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r-1', 'j1', 'synthetic', 'a.pdf', 'sha-1', 'hr-1')"
+    )
+    conn.execute(
+        "INSERT INTO resume_text_span (resume_id, span_id, start, end, text) "
+        "VALUES ('r-1', 1, 0, 5, '张三简历')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO resume_text_span (resume_id, span_id, start, end, text) "
+            "VALUES ('r-1', 1, 10, 15, '重复的 span_id')"
+        )
