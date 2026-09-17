@@ -109,7 +109,17 @@ def test_answer_template_is_plain_fenced_block(text):
     assert re.search(r"\n```\nQ1a，Q2a，Q3a\n```", text)
 
 
-def test_no_timeout_default_and_diff_section(text):
-    assert "不设「超时按默认生效」" in text
+def test_timeout_default_migrated_and_diff_section(text):
+    """0917AU：Q-21 已答 a＝移植，「不设」旧措辞须清空，换成落地的超时默认规则。"""
+    assert "不设「超时按默认生效」" not in text
+    assert "⏸️ 默认项" in text
+    assert "15 分钟" in text
+    assert "超时按默认项生效（未获明确答复，<会话> <时刻>）" in text
     assert "## 九、与 Win 端正本差异" in text
     assert "criteria --add" in text, "专员部分须接 HR 口径点台账 CLI"
+
+
+def test_timeout_default_keeps_g1_gate_and_never_default_rule(text):
+    """超时默认只对 grill 单题生效，G1 intent 定稿人闸与判据/口径/阈值永不默认这两条既有铁律不能被顶掉。"""
+    assert "G1 intent 定稿人闸保留" in text
+    assert "判据／口径／阈值类永不默认生效" in text
