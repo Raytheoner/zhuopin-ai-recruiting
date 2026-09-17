@@ -37,6 +37,21 @@
 `FIELD_PATHS` 里；`thread_id` 因为要分叉，单独放 `THREAD_ID_PATHS_BY_CHATTYPE`。
 帧里 `chattype` 不是 `"single"`/`"group"` 之一（协议变了，或 SDK 表面变了）⇒ fail-closed，
 ⛔ 不猜、不用 `userid` 顶替（那会让两个不同群里的人共享同一个 `thread_id`）。
+
+## 四、附件句柄（2026-09-17 `[Mac]0917W`，**尚无真实文件帧依据 ⇒ 表留空，TD-51**）
+
+`msgtype` 为 `image`/`file`/`voice` 的帧带一个媒体项，取回字节要再走一次 SDK 下载
+（`aibot/client.py:304` `download_file(url, aes_key)`：先 HTTP GET 再 AES-256-CBC 解密，
+`aes_key` 按其 docstring「取自消息中 image.aeskey 或 file.aeskey」）。**句柄落在帧的哪个键**
+——`url`/`aeskey`/`filename` 各在哪——本仓库的值守日志与 `liaison_message` 表至今
+（2026-09-17）只见过 `msgtype=text` 的帧，⛔ 没有一条真实文件帧可核。win 端参照实现
+（`5-平台底座/wecom-aibot-service/aibot_service/frame_parsing.py`）读的是
+`body.file.{url,aeskey,filename,md5}`，只是**候选**，⛔ 未经本系统真实帧确认前不填表。
+
+⇒ `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` 与 `FIELD_PATHS` 同一纪律：表空即 fail-closed——
+`compute_attachment_ref` 对文件帧抛 `AttachmentFieldsUnverifiedError`，接线层
+（`__main__.handle_message_frame`）只记一行**无取值**的帧键结构、正文照常归档、附件不落盘。
+销账（TD-51）＝Shao Peishen／汤丽萍私信一个测试文件后，按日志里的帧键结构把三条路径填进表。
 """
 
 from __future__ import annotations
@@ -88,6 +103,19 @@ THREAD_ID_PATHS_BY_CHATTYPE: dict[str, tuple[str, ...]] = {
     "group": ("body", "chatid"),
 }
 
+#: 带媒体项的消息类型（`aibot/types.py:98-114`）。`mixed`（图文混排）刻意不在内：它的正文
+#: 是材料本身（`CONTENT_REQUIRED_MSGTYPES`），图片部分是否单独可下载没有任何依据。
+ATTACHMENT_MSGTYPES = frozenset({"image", "file", "voice"})
+
+#: 附件句柄的取值路径表：`msgtype` → {`download_url`（必需）, `aes_key`（可选）,
+#: `filename`（可选）} → 帧内路径。**现状为空**（模块 docstring 第四节，TD-51）：
+#: 无真实文件帧依据 ⇒ ⛔ 不猜。空表 ⇒ `compute_attachment_ref` 对文件帧 fail-closed。
+#: 填表时三条路径都要有真实帧键结构日志作依据，⛔ 不许只凭 SDK docstring 或 win 端代码抄。
+ATTACHMENT_FIELD_PATHS_BY_MSGTYPE: dict[str, dict[str, tuple[str, ...]]] = {}
+
+ATTACHMENT_REQUIRED_KEYS = ("download_url",)
+ATTACHMENT_OPTIONAL_KEYS = ("aes_key", "filename")
+
 
 class InboundFrameUnverifiedError(SdkSurfaceUnverifiedError):
     """帧映射对不上：要么表还没填（现状），要么真实帧与表不符（SDK/协议变了）。
@@ -109,6 +137,27 @@ class InboundFrameFields:
     sender_userid: str
     msgtype: str
     content: str
+
+
+class AttachmentFieldsUnverifiedError(InboundFrameUnverifiedError):
+    """附件句柄取不到：表没填（现状，TD-51）或真实帧与表不符。
+
+    继承 `InboundFrameUnverifiedError` 是为了让接线层用同一族 `except` 兜住；但**处置
+    不同**：主字段取不到 ⇒ 整条消息不落库；附件句柄取不到 ⇒ 正文照常归档、只是附件
+    不落盘（材料没丢在系统里，只是还留在企微侧，待办照样生成、人能去要）。
+    """
+
+
+@dataclass(frozen=True)
+class InboundAttachmentRef:
+    """帧里的附件**句柄**（⛔ 不是字节）：下载它是一次网络调用，只许在值守线程侧经
+    `InboundPorts.download` 发生。`aes_key`/`filename` 帧里没给就是 `None`——`filename`
+    可由下载响应头补（SDK `download_file` 会从 `Content-Disposition` 解出来）。"""
+
+    msgtype: str
+    download_url: str
+    aes_key: str | None
+    filename: str | None
 
 
 def _read_path(frame: Any, path: tuple[str, ...]) -> Any:
@@ -222,6 +271,55 @@ def compute_inbound_frame(frame: Any) -> InboundFrameFields:
         sender_userid=values["sender_userid"],
         msgtype=msgtype,
         content=content,
+    )
+
+
+def compute_attachment_ref(frame: Any, msgtype: str) -> InboundAttachmentRef | None:
+    """帧 → 附件句柄的纯映射。不带媒体项的 `msgtype` ⇒ `None`；带媒体项但表里没有这个
+    `msgtype`、或必需路径取不到 ⇒ 抛 `AttachmentFieldsUnverifiedError`，⛔ 绝不返回
+    一个猜出来的 URL——下载一个猜错的地址要么 404、要么把别的东西当材料落盘。
+
+    纯函数：不读文件、不读时钟、不记日志（工程铁律 2）。
+    """
+    if msgtype not in ATTACHMENT_MSGTYPES:
+        return None
+
+    paths = ATTACHMENT_FIELD_PATHS_BY_MSGTYPE.get(msgtype)
+    if not paths:
+        raise AttachmentFieldsUnverifiedError(
+            f"msgtype={msgtype} 的附件句柄（url/aeskey/filename）落在帧的哪个键上，没有真实"
+            "文件帧依据（frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE 里没有这一项，TD-51）。"
+            "按 TD-19 同一处置 fail-closed：正文照常归档，附件 ⛔ 不猜地址、不下载、不落盘。"
+        )
+
+    values: dict[str, str | None] = {}
+    missing: list[str] = []
+    for key in ATTACHMENT_REQUIRED_KEYS:
+        path = paths.get(key)
+        value = _read_path(frame, path) if path is not None else None
+        if not isinstance(value, str) or not value:
+            missing.append(
+                f"{key}（路径 {'.'.join(path) if path else '<表里没有>'} 取到 "
+                f"{type(value).__name__}）"
+            )
+        else:
+            values[key] = value
+    for key in ATTACHMENT_OPTIONAL_KEYS:
+        path = paths.get(key)
+        value = _read_path(frame, path) if path is not None else None
+        values[key] = value if isinstance(value, str) and value else None
+
+    if missing:
+        raise AttachmentFieldsUnverifiedError(
+            f"msgtype={msgtype} 的帧里取不到附件句柄，附件 ⛔ 不下载、不落盘（fail-closed）："
+            + "；".join(missing)
+        )
+
+    return InboundAttachmentRef(
+        msgtype=msgtype,
+        download_url=values["download_url"],
+        aes_key=values["aes_key"],
+        filename=values["filename"],
     )
 
 

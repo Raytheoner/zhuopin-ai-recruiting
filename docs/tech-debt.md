@@ -628,3 +628,38 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 **来源**：全分支 final review（opus，`[Mac]0916P`）逐条核实，均判 Minor、不阻塞合并。
 
 ---
+
+## TD-51 · 私信文件帧的附件句柄字段未经真实帧确认（附件映射表为空，fail-closed）
+
+**登记时间**：2026-09-17（`[Mac]0917W`，走 opener【二】第 3 条 fail-closed 支）
+**优先级裁定**：🔴 **业务链路阻塞项**——专员要回的是**文件**（判例批改表、评测集标注、历史岗位资料），
+表不填，文件永远进不了归档、拆件会话读不到材料。⛔ 但销账**只能**靠真实帧，不能靠猜。
+**触发条件／销账动作**：Shao Peishen 或汤丽萍**私信机器人一个测试文件**（xlsx/pdf 均可）→
+值守日志会打一行 `入站附件未落盘（附件字段映射未经真实文件帧确认，fail-closed…）｜帧结构（只有键名与类型，⛔ 无取值）：…`
+→ 按那一行的键结构把 `download_url`／`aes_key`／`filename` 三条路径填进
+`tools/liaison/frames.py::ATTACHMENT_FIELD_PATHS_BY_MSGTYPE`（每条注释写「依据：日志 文件:行」）→
+把 `test_production_attachment_table_is_empty_and_fails_closed_on_a_file_frame` 改成正向断言 →
+接 `InboundPorts.download` 的真实 SDK 适配器（见下）→ **重启值守服务**。
+
+**缺口（两半，同一次销账）**：
+1. **帧键未知**。本仓库值守日志（`data/liaison/logs/`）与 `liaison_message` 表至 2026-09-17 只见过
+   `msgtype=text` 的帧（4 条），归档目录只有 `正文.txt`。SDK `aibot/client.py:304`
+   `download_file(url, aes_key)` 的 docstring 说 aeskey「取自消息中 image.aeskey 或 file.aeskey」但没说
+   `url` 在哪；win 端参照 `5-平台底座/wecom-aibot-service/aibot_service/frame_parsing.py`（企业AI转型仓）
+   读的是 `body.file.{url,aeskey,filename,md5}`、且只处理 `file` 型——**候选，不是依据**。
+2. **真实下载口未接**。`__main__.InboundPorts.download` 默认 `None`（值守线程只记 WARNING）。接法：
+   SDK `download_file` 是协程、跑在主线程 `client.run()` 的事件循环里，值守线程须
+   `asyncio.run_coroutine_threadsafe(client.download_file(ref.download_url, ref.aes_key), loop).result(timeout)`
+   投过去；`loop` 可复用 `LoopStopper` 抓到的把手，`client` 要从 `make_sdk_connect` 的每次重建里拿最新的
+   （⛔ 不能缓存第一个——`_started` 闩锁，见 `make_sdk_connect` docstring）。⛔ 不在值守线程另起 loop、⛔ 不把库连接带过去。
+
+**已就位、不需再动的部分（0917W）**：`frames.compute_attachment_ref`（纯映射，表空即抛）→
+`inbound.fetch_inbound_attachment`（下载失败／空字节 ⇒ 告警＋不落盘，同 msgid 已归档 ⇒ 不重下载）→
+`archive.archive_message(attachment=…)`（已有，幂等）→ `bridge.resolve_reply_archive_relpath`
+（有附件用附件路径；重投改读台账 `attachments_json`，⛔ 不再落 `正文.txt`）→ 信号项 `archived_path` 指向附件文件。
+测试：`tools/liaison/tests/test_inbound_attachment_wiring.py`（15 条）＋ `test_unpack_bridge.py` 新增 2 条。
+
+**关联**：TD-41（0 字节附件）——本条在**下载侧**挡住空响应（`fetch_inbound_attachment`），TD-41 的
+「上游声明长度比对」仍待通道层拿到真实响应头后补；TD-22（`msgid` 含 `_`）——真实文件帧到达时一并核。
+
+---

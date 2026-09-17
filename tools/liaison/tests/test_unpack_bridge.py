@@ -250,6 +250,66 @@ def test_resolve_reply_archive_relpath_is_idempotent_on_repeated_calls(tmp_path)
     assert first == second
 
 
+def test_resolve_reply_archive_relpath_reads_the_ledger_on_replay(tmp_path, conn):
+    """0917W：重投时 `outcome.attachments` 不权威（`ArchiveOutcome` docstring），
+    桥改读台账 `attachments_json` 记的那份材料，⛔ 不落 `正文.txt`。"""
+    from tools.liaison.archive import ArchiveOutcome, InboundAttachment, archive_message
+    from tools.liaison.unpack.bridge import resolve_reply_archive_relpath
+
+    first = archive_message(
+        conn,
+        thread_id="ShaoPeiShen",
+        msgid="msg-4",
+        sender_userid="ShaoPeiShen",
+        received_at="2026-09-17T10:00:00+08:00",
+        msgtype="file",
+        attachment=InboundAttachment(filename="批改表.xlsx", payload=b"\x00\x01bytes"),
+        archive_root=tmp_path / "archive",
+    )
+    assert first.newly_archived and len(first.attachments) == 1
+
+    replay = ArchiveOutcome(msgid="msg-4", newly_archived=False, attachments=())
+    relpath = resolve_reply_archive_relpath(
+        replay,
+        thread_id="ShaoPeiShen",
+        msgid="msg-4",
+        received_at="2026-09-17T10:00:00+08:00",
+        content="",
+        archive_root=tmp_path / "archive",
+        conn=conn,
+    )
+    assert relpath == "data/liaison/archive/ShaoPeiShen/20260917/msg-4__批改表.xlsx"
+    assert sorted(p.name for p in (tmp_path / "archive").rglob("*") if p.is_file()) == ["msg-4__批改表.xlsx"]
+
+
+def test_resolve_reply_archive_relpath_replay_of_a_text_message_still_snapshots(tmp_path, conn):
+    """重投但台账里本来就没附件（纯文本）⇒ 仍走正文快照，与首投同一路径（幂等）。"""
+    from tools.liaison.archive import ArchiveOutcome, archive_message
+    from tools.liaison.unpack.bridge import resolve_reply_archive_relpath
+
+    archive_message(
+        conn,
+        thread_id="ShaoPeiShen",
+        msgid="msg-5",
+        sender_userid="ShaoPeiShen",
+        received_at="2026-09-17T10:00:00+08:00",
+        msgtype="text",
+        content="纯文本",
+        archive_root=tmp_path / "archive",
+    )
+    replay = ArchiveOutcome(msgid="msg-5", newly_archived=False, attachments=())
+    relpath = resolve_reply_archive_relpath(
+        replay,
+        thread_id="ShaoPeiShen",
+        msgid="msg-5",
+        received_at="2026-09-17T10:00:00+08:00",
+        content="纯文本",
+        archive_root=tmp_path / "archive",
+        conn=conn,
+    )
+    assert relpath == "data/liaison/archive/ShaoPeiShen/20260917/msg-5__正文.txt"
+
+
 def test_run_bridge_marks_and_records_all_side_effects(tmp_path, conn):
     from tools.liaison.unpack.bridge import run_bridge
 

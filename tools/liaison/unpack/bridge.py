@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import pathlib
@@ -210,6 +211,33 @@ ARCHIVE_ROOT_RELATIVE = "data/liaison/archive"
 _REPLY_SNAPSHOT_FILENAME = "正文.txt"
 
 
+def _recorded_attachment_relpath(conn: sqlite3.Connection | None, msgid: str) -> str | None:
+    """重投时从台账 `liaison_message.attachments_json` 读第一份材料的 `relative_path`。
+
+    `ArchiveOutcome` 的 docstring 说得明白：`outcome.attachments` **只在
+    `newly_archived is True` 时权威**。幂等命中时（同一 `msgid` 再投）接线层为了
+    不重复下载会传 `attachment=None`，`outcome.attachments` 于是是空的——但台账里
+    那一行记的仍是第一次落的那份文件。此时只有台账说了算，⛔ 不能拿空元组当"没附件"。
+    读不到（没传 `conn`、行不在、JSON 坏了、数组空）一律返回 `None`，交给正文快照分支。
+    """
+    if conn is None:
+        return None
+    row = conn.execute(
+        "SELECT attachments_json FROM liaison_message WHERE msgid = ?", (msgid,)
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        items = json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(items, list) or not items:
+        return None
+    first = items[0]
+    relative = first.get("relative_path") if isinstance(first, dict) else None
+    return relative if isinstance(relative, str) and relative else None
+
+
 def resolve_reply_archive_relpath(
     outcome: ArchiveOutcome,
     *,
@@ -218,19 +246,31 @@ def resolve_reply_archive_relpath(
     received_at: str,
     content: str,
     archive_root: pathlib.Path,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """算出（必要时落盘）"入信归档件"的仓库相对路径。
 
-    见本文件模块 docstring 引用的计划文档「与 design.md 现状偏离的实现说明·
-    偏离 1」：`outcome.attachments` 在当前系统里恒为空，本函数是让
-    「入信归档件的相对路径」这句 spec 契约在当前唯一会出现的场景（纯文本、
-    无附件）下也对应一个真实存在的文件，而不是编造的路径字符串。
-
-    有附件（`outcome.attachments` 非空）时直接用第一项的 `relative_path`，
-    ⛔ 不重复落盘——附件已经在 `archive_message()` 那一步落过了。
+    三条分支，按优先级：
+    1. **本次真落了附件**（`outcome.attachments` 非空）⇒ 直接用第一项的 `relative_path`，
+       ⛔ 不重复落盘——附件已经在 `archive_message()` 那一步落过了。
+       （2026-09-17 `[Mac]0917W` 起这一支会真的走到：`__main__.handle_message_frame`
+       经 `frames.compute_attachment_ref` → `inbound.fetch_inbound_attachment` 把帧里的
+       文件取回落盘；映射表未填时 fail-closed，见 `frames.py` 模块 docstring 第四节。）
+    2. **重投／幂等命中**（`newly_archived` 为假、`outcome.attachments` 因此不权威）⇒
+       读台账 `attachments_json` 里记的那份材料（`_recorded_attachment_relpath`），
+       ⛔ 不落正文快照——那会在附件旁边多出一份谁也不引用的 `正文.txt`，且让信号项的
+       `archived_path` 在重投时换成另一个文件。
+    3. **纯文本、无附件** ⇒ 把正文落成 `正文.txt`，让「入信归档件的相对路径」这句 spec
+       契约对应一个真实存在的文件，而不是编造的路径字符串（计划文档「偏离 1」）。
     """
+    recorded = None
+    if not outcome.attachments and not outcome.newly_archived:
+        recorded = _recorded_attachment_relpath(conn, msgid)
+
     if outcome.attachments:
         relative = outcome.attachments[0].relative_path
+    elif recorded is not None:
+        relative = recorded
     else:
         destination = compute_archive_path(
             thread_id=thread_id,
@@ -310,6 +350,7 @@ def run_bridge(
                 received_at=received_at,
                 content=content,
                 archive_root=archive_root,
+                conn=conn,
             )
             decision = compute_bridge_decision(
                 ledger_text,

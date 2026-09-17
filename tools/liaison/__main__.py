@@ -202,16 +202,24 @@ def apply_connection_event(svc: session.LiaisonSession, name: str, moment: datet
 
 @dataclass(frozen=True)
 class InboundPorts:
-    """入站处理要用到的四个外部落点。**默认值就是生产用的那一份。**
+    """入站处理要用到的五个外部落点。**默认值就是生产用的那一份。**
 
     `ledger_path`：回件桥（P0）改写的跟进信台账，⚠️ 与 `whitelist_path`
     同一纪律——⛔ 不许给它加环境变量开关，测试把它顶到 `tmp_path`。
+
+    `download`（2026-09-17 `[Mac]0917W`）：附件句柄 → `(bytes, filename|None)` 的下载口，
+    形状对齐 SDK `client.download_file`。**生产现状为 `None`**（TD-51）：帧里附件句柄的
+    键名尚无真实文件帧依据（`frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` 为空），接上
+    真实下载口也没有输入。接法（销账时做）：SDK 的 `download_file` 是协程、跑在主线程的
+    事件循环上，值守线程要用 `asyncio.run_coroutine_threadsafe(...).result(timeout)`
+    投过去，⛔ 不许在值守线程里另起 loop、也 ⛔ 不许把库连接带过去。
     """
 
     archive_root: Path = DEFAULT_ARCHIVE_ROOT
     whitelist_path: Path | None = None
     reply: Callable[[str, str], object] | None = None
     ledger_path: Path = LEDGER_PATH
+    download: inbound.AttachmentDownloader | None = None
 
 
 def handle_message_frame(
@@ -246,7 +254,31 @@ def handle_message_frame(
         )
         return False
 
+    # 附件句柄（0917W）：映射是纯函数，取不到 ⇒ 只记帧键结构（⛔ 无取值）、正文照常归档。
+    # 与上面主字段的处置**不同**：主字段取不到是整条不落库，附件取不到只是不落盘——
+    # 材料还在企微侧，待办照样生成、人能去要；整条拦在库外才是丢材料。
     try:
+        attachment_ref = frames.compute_attachment_ref(frame, fields.msgtype)
+    except frames.AttachmentFieldsUnverifiedError as exc:
+        logger.error(
+            "入站附件未落盘（附件字段映射未经真实文件帧确认，fail-closed；正文照常归档）：%s｜"
+            "帧结构（只有键名与类型，⛔ 无取值）：%s",
+            exc,
+            frames.describe_frame_shape(frame),
+        )
+        attachment_ref = None
+
+    try:
+        # 下载是网络调用，只在这条值守线程上发生，⛔ 不在 SDK 回调里做。
+        # `fetch_inbound_attachment` 永不上抛：失败 ⇒ 告警 ＋ None，正文照常归档。
+        attachment = inbound.fetch_inbound_attachment(
+            svc.conn,
+            attachment_ref,
+            thread_id=fields.thread_id,
+            msgid=fields.msgid,
+            download=ports.download,
+            alert_sink=svc.alert_sink,
+        )
         result = inbound.handle_inbound_message(
             svc.conn,
             thread_id=fields.thread_id,
@@ -255,10 +287,7 @@ def handle_message_frame(
             received_at=session.format_instant(moment),
             msgtype=fields.msgtype,
             content=fields.content,
-            # ⛔ 附件恒为 None：帧里的附件**句柄**要再走一次 SDK 下载才变成字节，
-            # 那是一次网络调用，且句柄落在哪个键同样未经真实帧确认。与映射一起
-            # 由 AT-1b 收口（已登记 TD）。⛔ 不许在这里猜一个 URL 去下载。
-            attachment=None,
+            attachment=attachment,
             archive_root=ports.archive_root,
             whitelist_path=ports.whitelist_path,
             reply=ports.reply,
