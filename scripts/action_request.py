@@ -8,7 +8,10 @@ Cowork 写 `<时间戳>.action`（JSON），`commit-launcher.sh` 先调本脚本
 白名单动作：
 - `send-followup`：`{"action":"send-followup","md":"docs/跟进信/<文件>.md","docx":"docs/跟进信/<文件>.docx"}`
   闸：md/docx 必须在 `docs/跟进信/` 下且存在；信件抬头编号在台账那一行的发送状态必须含「🆕 待发」
-  （Cowork 只在 Shao Peishen 明确回「发」之后才把状态改成 🆕 待发——这就是授权留痕）。
+  （Cowork 只在 Shao Peishen 明确回「发」之后才把状态改成 🆕 待发——这就是授权留痕）；
+  **再加在环闸门 G4**（0917AO，`scripts/gates.py`）：`docs/roadmap/定夺队列.md` 须有含该信件编号的
+  `【G4 发信】` 行且状态＝已答、答复含「发」，否则 rejected（原因写明缺 G4 放行）。两闸都过才调 CLI。
+  （`deploy-51` 动作尚不存在；加进来时同样接 G3：`gates.gate_state("G3", <场景>) == "已放行"` 才执行。）
   执行：`tools/liaison/.venv/bin/python -m tools.liaison send-followup --md … --docx … --send`（已测 CLI，负责回填台账）
 - `kickstart-liaison`：`{"action":"kickstart-liaison"}` → `launchctl kickstart -k gui/<uid>/com.zhuopin.hr.liaison`
 - `install-agent`（0917AK）：`{"action":"install-agent","script":"scripts/install_<名>.py"}`
@@ -38,6 +41,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from scripts import gates
+except ImportError:  # commit-launcher.sh 以文件路径直跑本脚本时 scripts/ 自己在 sys.path
+    import gates  # type: ignore[no-redef]
+
 DEFAULT_REPO = Path(os.environ.get("COMMIT_LAUNCHER_REPO", "/Users/paulshao/Projects/HumanResource"))
 # 与 lane-launcher.sh 同一并发判据。⛔ 不要用不带 .sh 的 `run-lanes`——会命中日志路径等无关进程。
 PGREP_PATTERN = os.environ.get("LANE_LAUNCHER_PGREP_PATTERN", r"run-lanes.*\.sh")
@@ -56,6 +64,7 @@ def configure(repo: Path) -> None:
     LEDGER = REPO / "docs/跟进信/README-跟进信清单.md"
     LAUNCH_DIR = REPO / ".claude/handoff/launch"
     QUEUE_DIR = LAUNCH_DIR / "queue"
+    gates.configure(REPO)
 
 
 configure(DEFAULT_REPO)
@@ -135,6 +144,9 @@ def handle_send_followup(req: dict) -> tuple[str, dict]:
         return "rejected", {"reason": f"台账里 {number} 行数={len(rows)}（须恰好 1 行）"}
     if "🆕 待发" not in rows[0].split("|")[-2]:
         return "rejected", {"reason": f"{number} 发送状态不是「🆕 待发」（未获授权或已发）"}
+    g4 = gates.gate_state("G4", number)
+    if g4 != "已放行":
+        return "rejected", {"reason": f"{number} 缺 G4 放行：定夺队列 {gates.gate_marker('G4', number)} 行 {g4}（须状态＝已答且答复含「发」）"}
     py = REPO / "tools/liaison/.venv/bin/python"
     cmd = [str(py), "-m", "tools.liaison", "send-followup", "--md", str(md.relative_to(REPO)), *cmd_docx, "--send"]
     env = {**os.environ, "PYTHONPATH": "."}

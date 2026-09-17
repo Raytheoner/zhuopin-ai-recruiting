@@ -427,10 +427,62 @@ def test_skill_frontmatter(skill_text: str) -> None:
         "⛔ 改 CLAUDE.md",
         "⛔ 真实简历",
         "写定夺队列，不猜",
+        # 0917AO 在环闸门
+        "⛔ 越闸",
+        "⛔ 调用 `send-followup` 动作",
+        "任何一行改为 `🆕 待发`",
+        "scripts/gates.py sweep --apply",
+        "scripts/gates.py open G<n> <subject>",
+        "--show gated",
     ],
 )
 def test_skill_contains_every_red_line(skill_text: str, red_line: str) -> None:
     assert red_line in skill_text, f"红线字样缺失：{red_line}"
+
+
+def test_skill_has_no_pending_send_exception_and_names_all_five_gates(skill_text: str) -> None:
+    """0917AO：删去「台账行已是 🆕 待发 ⇒ 可写 send-followup」例外；五个闸门都在红线里点名。"""
+    assert "唯一例外" not in skill_text
+    assert "无例外" in skill_text
+    red = skill_text.split("## 1. 红线", 1)[1].split("## 2.", 1)[0]
+    for g in ("G1 intent 定稿", "G2 design·spec 定稿", "G3 发布", "G4 发信", "G5 口径签认"):
+        assert g in red, f"红线缺闸门：{g}"
+    assert re.search(r"^\| ⑦ \| \*\*⛔ 越闸\*\*", red, re.M), "越闸须是独立一行红线 ⑦"
+
+
+RULES_GATE_MARKERS = [
+    "## 6. 在环闸门 G1–G5",
+    "| G1 intent 定稿 |",
+    "| G2 design／spec 定稿 |",
+    "| G3 发布 |",
+    "| G4 发信 |",
+    "| G5 口径签认 |",
+    "scripts/gates.py::gate_open(gate, subject) -> bool",
+    "不认台账状态自改",
+    "**到闸 G1「intent 定稿」**",
+    "**到闸 G2「design／spec 定稿」**",
+    "**到闸 G3「发布」**",
+    "**到闸 G4「发信」**",
+    "**到闸 G5「口径签认」**",
+    "| ⑤ | **闸门已放行**",
+    "⛔ 调度器永不调用发信动作",
+]
+
+
+@pytest.mark.parametrize("marker", RULES_GATE_MARKERS)
+def test_rules_wire_every_gate_into_stage_transitions(marker: str) -> None:
+    text = RULES.read_text(encoding="utf-8")
+    assert marker in text, f"rules.md 缺闸门接线字样：{marker}"
+
+
+def test_rules_gate_table_matches_gates_module() -> None:
+    """rules.md §6 的闸名与放行字样和 scripts/gates.py 的 GATES 一致（真源两处不许漂）。"""
+    from scripts import gates
+
+    text = RULES.read_text(encoding="utf-8").split("## 6. 在环闸门", 1)[1]
+    for gate, g in gates.GATES.items():
+        assert f"| {gate} {g['名']} |" in text, f"{gate} 名字漂了：{g['名']}"
+        assert f"「{g['字']}」" in text
 
 
 @pytest.mark.parametrize(

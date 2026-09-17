@@ -34,6 +34,12 @@ NEVER_MATCHES = f"zzz-no-such-process-{uuid.uuid4().hex}"
 LETTER = "# HR#3 · 第三封跟进信\n\n正文。\n"
 LEDGER_PENDING = "| 日期 | 编号 | 主题 | 发送状态 |\n|---|---|---|---|\n| 2026-09-17 | `HR#3` | 第三封 | 🆕 待发 |\n"
 LEDGER_SENT = LEDGER_PENDING.replace("🆕 待发", "✅ 已发 09-17")
+QUEUE_HEAD = (
+    "# 定夺队列\n\n## 一、待答\n\n| 编号 | 场景 | 阻塞类型 | 问题 | 选项与代价 | 推荐 | 来源 | 阻塞的任务 id | 状态 | 答复 |\n"
+    "|---|---|---|---|---|---|---|---|---|---|\n"
+)
+G4_ROW = "| Q-05 | M2 | 决策（G4 闸门） | 【G4 发信】`HR#3`：起草完 ｜ 产出 `docs/跟进信/HR-3.md` | (a) | 无默认 | s | — | {status} | {reply} |\n"
+G4_RELEASED = QUEUE_HEAD + G4_ROW.format(status="已答", reply="审核通过·发")
 
 
 @pytest.fixture
@@ -45,6 +51,8 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     (r / "docs" / "跟进信" / "HR-3.md").write_text(LETTER, encoding="utf-8")
     (r / "docs" / "跟进信" / "HR-3.docx").write_bytes(b"PK")
     (r / "docs" / "跟进信" / "README-跟进信清单.md").write_text(LEDGER_PENDING, encoding="utf-8")
+    (r / "docs" / "roadmap").mkdir(parents=True)
+    (r / "docs" / "roadmap" / "定夺队列.md").write_text(G4_RELEASED, encoding="utf-8")  # 0917AO：G4 已放行是「能发」的第二个前提
     (r / "scripts").mkdir()
     (r / "scripts" / "install_demo_agent.py").write_text("print('hi')\n", encoding="utf-8")
     ar.configure(r)
@@ -188,6 +196,43 @@ def test_send_followup_is_rejected_unless_ledger_says_pending(repo: Path, record
     assert o["rejected"] is not None and "🆕 待发" in o["rejected"]["reason"]
     assert recorder.calls == []
     assert_no_residue(repo, "20260917-171000")
+
+
+@pytest.mark.parametrize(
+    "queue_text,expect",
+    [
+        (None, "缺行"),  # 定夺队列文件不存在
+        (QUEUE_HEAD, "缺行"),  # 有文件无 G4 行
+        (QUEUE_HEAD + G4_ROW.format(status="待答", reply=""), "待答"),
+        (QUEUE_HEAD + G4_ROW.format(status="已答", reply="审核通过"), "已答·未放行"),  # 只审核通过、没说「发」
+        (QUEUE_HEAD + G4_ROW.format(status="已答", reply="不发"), "已答·未放行"),
+        (QUEUE_HEAD + G4_ROW.format(status="作废", reply=""), "作废"),
+        (QUEUE_HEAD + G4_ROW.format(status="已答", reply="发").replace("`HR#3`", "`HR#30`"), "缺行"),  # 别的信的放行不带开本信
+    ],
+)
+def test_send_followup_is_rejected_without_g4_release_even_if_ledger_pending(repo: Path, recorder: Recorder, queue_text, expect) -> None:
+    """0917AO 在环闸门 G4：台账「🆕 待发」之外，定夺队列须有含本信编号的 G4 行且已答含「发」；否则拒绝、不调 CLI。"""
+    q = repo / "docs" / "roadmap" / "定夺队列.md"
+    if queue_text is None:
+        q.unlink()
+    else:
+        q.write_text(queue_text, encoding="utf-8")
+    write_action(repo, "20260917-171050", {"action": "send-followup", "md": "docs/跟进信/HR-3.md"})
+    assert ar.main() == 0
+    o = outcomes(repo, "20260917-171050")
+    assert o["rejected"] is not None, o
+    assert "缺 G4 放行" in o["rejected"]["reason"] and expect in o["rejected"]["reason"]
+    assert recorder.calls == []
+    assert_no_residue(repo, "20260917-171050")
+
+
+def test_send_followup_g4_release_alone_is_not_enough_without_ledger_pending(repo: Path, recorder: Recorder) -> None:
+    """两闸独立：G4 放行了但台账不是「🆕 待发」照样拒。"""
+    (repo / "docs" / "跟进信" / "README-跟进信清单.md").write_text(LEDGER_SENT, encoding="utf-8")
+    write_action(repo, "20260917-171060", {"action": "send-followup", "md": "docs/跟进信/HR-3.md"})
+    assert ar.main() == 0
+    assert outcomes(repo, "20260917-171060")["rejected"] is not None
+    assert recorder.calls == []
 
 
 def test_send_followup_is_rejected_when_ledger_row_is_ambiguous(repo: Path, recorder: Recorder) -> None:

@@ -6,7 +6,7 @@ description: 任务驱动 workflow 的调度器（R2）。由事件（泳道批�
 # task-dispatcher · 调度器（R2）
 
 > 2026-09-17 `[Mac]0917AM` 写定；设计见 `docs/roadmap/任务驱动workflow设计.md` §四 R2。
-> 阶段推进规则的**真源是同目录 `rules.md`**（R4，`0917AL`）——ready 四判据、阶段完成判据、能开尽开上限、新场景发现、定夺队列契约都在那里，⛔ 本文件不复述、不改写；两处不一致以 `rules.md` 为准。
+> 阶段推进规则的**真源是同目录 `rules.md`**（R4，`0917AL`）——ready 五判据（含在环闸门）、阶段完成判据、能开尽开上限、新场景发现、定夺队列契约都在那里，⛔ 本文件不复述、不改写；两处不一致以 `rules.md` 为准。
 > 唤醒方式：`scripts/dispatcher_event.sh`（launchd `com.zhuopin.hr.task-dispatcher`，`scripts/install_task_dispatcher.py` 安装）以 Sonnet 起 `claude -p`，预算上限 $10，日志 `.claude/handoff/dispatcher/<ts>.log`。
 
 ## 0. 会话性质：无人在场
@@ -19,11 +19,12 @@ description: 任务驱动 workflow 的调度器（R2）。由事件（泳道批�
 | # | ⛔ 绝不做 | 判据 |
 |---|---|---|
 | ① | **⛔ 发版 `.51`**：不 ssh、不 `sync-to-server.sh`、不写 `deploy-51` 动作请求、不改 `docs/deploy-51-server.md` 的发版记录 | `.51` 发版属不可代项；台账 `release` 阶段只生成定夺队列一条「是否发版」（`rules.md` §2） |
-| ② | **⛔ 对外发信**：不写 `send-followup` 动作请求、不调 `tools.liaison send-followup --send`、不发企微私信／群消息 | **唯一例外**：跟进信台账 `docs/跟进信/README-跟进信清单.md` 该行发送状态**已是 `🆕 待发`**（那是 Shao Peishen 回「发」后 Cowork 落的授权留痕）⇒ 可写 `send-followup` 动作请求；状态不是 `🆕 待发` 一律不发 |
+| ② | **⛔ 对外发信**：⛔ 调用 `send-followup` 动作（不写 `send-followup` 动作请求、不调 `tools.liaison send-followup --send`、不发企微私信／群消息）；⛔ 把跟进信台账 `docs/跟进信/README-跟进信清单.md` 任何一行改为 `🆕 待发` | **无例外**（2026-09-17 `0917AO` 删去「台账行已是 🆕 待发」例外）：发信只由 Cowork 在本线收到 Shao Peishen 「发」（定夺队列 G4 行已答含「发」）后落 `🆕 待发` 并经动作通道执行；调度器到 G4 只追加定夺队列行（`rules.md` §6） |
 | ③ | **⛔ 改 `.claude/skills/` 其它 skill**：只读 `lane-dispatch`／`kickoff`／`run-build`／`spec-to-plan` 等，不改它们一个字；本 skill 自己的 `SKILL.md` 与 `rules.md` 也⛔ 不在无头会话里改（改规则由 Shao Peishen 派专门 opener） | `git status` 里出现 `.claude/skills/` 下的改动 ⇒ 本会话违规，`git checkout --` 撤回并在日志登记 |
 | ④ | **⛔ 改 CLAUDE.md**（含任何 `**/CLAUDE.md`） | 同上 |
 | ⑤ | **⛔ 真实简历**：不读、不拉、不处理 `data/`、`evalset/` 下任何真实简历；不为「真实简历数据处理范围」相关条目发车（台账里它们阻塞类型＝决策，本就不 ready；`rules.md` §1 ④ 复核） | M2 门槛「登录＋访问留痕」未就位前，真实简历处理范围属不可代项 |
 | ⑥ | **⛔ 替 Shao Peishen 拍任何不可代项**：合规红线七条变更或例外、候选人淘汰规则例外、候选人对外通道开关、真实简历处理范围、`.51` 发版、预算与外部采购 | 命中 ⇒ 定夺队列一条，台账条目 `阻塞类型＝决策` |
+| ⑦ | **⛔ 越闸**：G1 intent 定稿／G2 design·spec 定稿／G3 发布／G4 发信／G5 口径签认，闸门行未「已答＋放行字样」前，不为该 subject 的下一阶段发车、不改 intent `status`、不归档、不发信、不转口径点已签认 | 放行只认 `docs/roadmap/定夺队列.md`（`python3 scripts/gates.py open G<n> <subject>`），⛔ 不认聊天记忆、不认台账状态自改；`--show ready` 已把到闸未放行的条目剔除，⛔ 不手工把它们加回发车集。到闸 ⇒ `python3 scripts/gates.py sweep --apply` 追加行（去重）后停在该场景，其它场景照常能开尽开 |
 
 ## 2. 逐步执行（① → ⑨，按序做完再收工）
 
@@ -52,9 +53,17 @@ pgrep -f 'run-lanes.*\.sh' >/dev/null && ls -d .claude/handoff/lanes-*/ | while 
 # ⛔ 不用 results.tsv 判收敛（发车前就建好、逐条 append）；summary.txt 只在全部泳道 wait 完才写，缺它＝在跑，其块的触碰区算「在跑」
 ```
 
-对 `--show ready` 的每条再过 `rules.md` §1 四判据（尤其 ③ 触碰区不与在跑重叠、④ 不属不可代项）与 §3 上限（在跑 ≤ 3、单批 ≤ 6 条），得到本批发车集；聚合条目（`<change>/U<n>`、`change:*`、`scene:*`）永不发车。
+对 `--show ready` 的每条再过 `rules.md` §1 五判据（尤其 ③ 触碰区不与在跑重叠、④ 不属不可代项、⑤ 闸门已放行）与 §3 上限（在跑 ≤ 3、单批 ≤ 6 条），得到本批发车集；聚合条目（`<change>/U<n>`、`change:*`、`scene:*`）永不发车。
 本批发车集为空也**正常**（多数唤醒只是刷新台账与推进状态），⛔ 不为了「有事做」放宽判据。
 同时按 `rules.md` §2 逐阶段核「完成判据」：成立的把台账状态改「完成」并生成下一阶段条目；`rules.md` §4 三条新场景发现规则命中 ⇒ 只写定夺队列（⛔ 不启动）。
+**在环闸门**（`rules.md` §6）：
+
+```bash
+python3 scripts/gates.py sweep --apply        # 到闸（propose/plan/release 依赖已齐）而定夺队列缺行的 ⇒ 追加 G1/G2/G3 行（去重）；已有行只打印状态
+python3 scripts/dispatcher_backlog.py --show gated   # 停在闸前的条目清单（闸、subject、缺行|待答|已答·未放行|作废）
+```
+
+到闸条目在台账里是 `阻塞／决策` 带 `闸门:` 字段，⛔ 不手改回「待开」——放行后重跑生成器会自动改回。G4／G5 不由本步触发（G4 由起草方在信稿自检过后 `gates.py request G4 <编号>`，G5 由拆件会话追加）。
 
 ### ④ 写无头块（按 `lane-dispatch` skill 规则，⛔ 不改那个 skill）
 
@@ -88,7 +97,7 @@ pgrep -f 'run-lanes.*\.sh' >/dev/null && ls -d .claude/handoff/lanes-*/ | while 
 - 追加前 **先 grep**：`grep -n "<任务 id>" docs/roadmap/定夺队列.md`，已有 ⇒ 不重复入队（远期的移入待答即可）
 - 按 `rules.md` §5 契约写：编号 `Q-<两位递增>`（取现有最大 +1）／场景／阻塞类型／问题／`(a)/(b)` 各带代价／推荐或「无默认」／来源／阻塞的任务 id／状态＝待答／答复留空
 - 台账对应条目 `状态＝阻塞`、`阻塞类型＝决策|外部`
-- 处理 `decision-*` 事件时反向：定夺队列里状态「已答」且答复非空的行，把「阻塞的任务 id」对应台账条目 `阻塞类型` 改 `无`、`状态` 改 `待开`（答复为「作废」⇒ 状态改完成＋备注「作废：Q-xx」），再回到 ③ 重算 ready
+- 处理 `decision-*` 事件时反向：定夺队列里状态「已答」且答复非空的行，把「阻塞的任务 id」对应台账条目 `阻塞类型` 改 `无`、`状态` 改 `待开`（答复为「作废」⇒ 状态改完成＋备注「作废：Q-xx」），再回到 ③ 重算 ready。**闸门行**（问题列 `【G<n> …】`）⛔ 不手改台账：重跑 `python3 scripts/dispatcher_backlog.py` 即按 `gates.py` 判定改回；G1 放行还要把该 intent 的 frontmatter `status` 改「已确认（G1 Q-xx）」（只在此刻）
 
 ### ⑦ 文档改动经提交请求通道提交
 
@@ -143,3 +152,4 @@ mv .claude/handoff/events/<事件文件> .claude/handoff/events/processed/
 - ⛔ 不整读 `docs/roadmap/任务台账.yaml`、`docs/openers/OP-0820-全量编排.md`、`docs/session接力.md`（> 40 KB，先 grep 再分段 Read）
 - ⛔ 不在【设置】行给泳道／spec-to-plan／run-build 写 `模型: Opus`
 - ⛔ 不把泳道自报 `OPENER_DONE` 当作阶段完成（真身判据见 `rules.md` §2）
+- ⛔ 不越闸（红线 ⑦）：到闸只追加定夺队列行；放行与否只问 `scripts/gates.py`，⛔ 不凭「他上次说过」放行

@@ -8,7 +8,7 @@ description: 新场景开工前的需求收敛第一道把关（任务驱动 wor
 > **定位**：路线图／架构文档里的场景描述只是**需求概要**；从概要直接写 `openspec propose` 之间，此前 HR 仓库**没有任何机制**——M2 十题（`docs/roadmap/M2-需求树草稿.md` → `docs/roadmap/M2-intent.md`）是 Cowork 凭方法手跑的。本 skill 把那套方法落成正本。
 > **溯源**：Win 端（企业AI转型 `Raytheoner/zhuopin-ai-transformation`）`0-学习与工具/skills源码/zhuopin-需求grill/SKILL.md` v1.0 ＋ 判例批改法正本 `6-人才与组织/部门AI专员跟进/需求确认方式升级-判例批改法与微会机制-2026-07-25.md`（2026-09-17 经 `gh api` 取全文移植，⛔ 非凭印象仿写）。三条核心机制上游为 `mattpocock/skills` 的 `grilling`（MIT）。**本 skill 已内含全部机制，不依赖上游任何 skill、不跨仓库引用**（CLAUDE.md「企业AI转型只读参考、HR 侧自建实现」）。
 > **拍板**：Shao Peishen 2026-09-17 定「任务驱动 workflow 的第一棒 intent 采用 Win 端的需求收敛机制」（`docs/roadmap/任务驱动workflow设计.md` §一）。
-> **在 workflow 里的位置**：`场景 intent → grill → propose → plan → build → 合 main → 发布 → 业务验收(跟进信) → 回件 → 拆件 → 口径/新需求`。本 skill 产出的 intent 落档提交即产生事件，调度器按 R4 推到 **G1 闸门「intent 定稿」**：无未答题 ⇒ 写 `docs/roadmap/定夺队列.md`，Shao Peishen 答「定」后 ⇒ propose（`任务驱动workflow设计.md`「在环闸门」，2026-09-17 17:0x 定；⛔ 调度器与任何无头会话不可越过）。
+> **在 workflow 里的位置**：`场景 intent → grill → propose → plan → build → 合 main → 发布 → 业务验收(跟进信) → 回件 → 拆件 → 口径/新需求`。本 skill 的出口是 **G1 闸门「intent 定稿」**，⛔ 不是 propose：intent 落档状态字样为 `status: 草稿·待 G1`；**落档 ⇒ 定夺队列 G1**（`python3 scripts/gates.py request G1 <场景> --scene <场景> --artifact docs/roadmap/intents/<场景>-intent.md --tasks propose:<场景>`，去重；调度器 `sweep` 也会补），Shao Peishen 在该行答「定」后才 ⇒ propose（`任务驱动workflow设计.md`「在环闸门」，2026-09-17 17:0x 定；`0917AO` 接线；⛔ 调度器与任何无头会话不可越过，⛔ 不再写「落档即交调度器进 propose」——落档只到 G1）。
 
 ## 〇、先判该不该用
 
@@ -49,7 +49,7 @@ description: 新场景开工前的需求收敛第一道把关（任务驱动 wor
 | git 历史 | —（`git log` / `git show <hash>:<路径>`） | 某条陈述当时是否真的成立；台账与版本库口径不一致时以 `git show` 为准 |
 | 值守库 | —（`data/liaison/` 归档与 `liaison.db`，**只读**，不在版本库，以运行机为准） | 回件原文、归档件；⛔ 不写、不改信号 |
 
-**M3 · 前沿为空才算完。** 每一枝都走到、没有任何一处被默默假设，才算收敛；**且 Shao Peishen 在 G1 闸门答「定」（intent `status: 已确认`）前不得开工**。
+**M3 · 前沿为空才算完。** 每一枝都走到、没有任何一处被默默假设，才算收敛；**且 Shao Peishen 在 G1 闸门答「定」（定夺队列 `【G1 intent 定稿】` 行已答含「定」，intent `status` 才改「已确认」）前不得开工**——⛔ 越闸。
 
 ## 二、提问格式（＝本线「需你定夺」模板，不另起一套）
 
@@ -69,7 +69,7 @@ description: 新场景开工前的需求收敛第一道把关（任务驱动 wor
 Q1a，Q2a，Q3a
 ```
 
-🔴 **不设「超时按默认生效」**（与 Win 端正本差异 ①，**是否移植待 Shao Peishen 定，未定前不移植**）：Win 端那条的成立前提是「design 审这道人闸兜底」且明写「本 skill 以外的任何场合不得援引」，HR 侧对应的兜底是 G1「intent 定稿」——闸在，但把 Win 端拍板的规则直接搬进 HR 属口径变更，须他本人定。未定前：未答题一律保持未答，intent `status: 待确认`，G1 到闸条件「无未答题」不成立 ⇒ 调度器不写定夺、不接棒，等他回本线时 Cowork 第一件事重提。「不答」的后果是**停在原地**，不是错误继续发生——这正是 CLAUDE.md 允许留空默认项的那一种。
+🔴 **不设「超时按默认生效」**（与 Win 端正本差异 ①，**是否移植待 Shao Peishen 定，未定前不移植**）：Win 端那条的成立前提是「design 审这道人闸兜底」且明写「本 skill 以外的任何场合不得援引」，HR 侧对应的兜底是 G1「intent 定稿」——闸在，但把 Win 端拍板的规则直接搬进 HR 属口径变更，须他本人定。未定前：未答题一律保持未答，intent `status: 草稿·待 G1`，G1 到闸条件「无未答题」不成立 ⇒ 不写定夺队列 G1 行、不接棒，等他回本线时 Cowork 第一件事重提。「不答」的后果是**停在原地**，不是错误继续发生——这正是 CLAUDE.md 允许留空默认项的那一种。
 标「本项无默认，须你明确答复」的项（判据／口径／阈值、合规红线、对外通道、`.51` 发版、预算）**永不默认**。
 
 ## 三、🔴 接缝 1 · 分流判据（每一问都要过）
@@ -123,14 +123,14 @@ grill 收敛后，需求树的三种状态**直接映射**，不再重写一遍�
 | grill 树上的状态 | 去向 |
 |---|---|
 | 已 settled 的分支 | → intent「## 决策」D1…Dn → `design.md` 的 **Decisions** |
-| 仍 open、只有他能定的 | → intent 未答题（`status: 待确认`）→ `design.md` 的 **Open Questions** |
+| 仍 open、只有他能定的 | → intent 未答题（`status: 草稿·待 G1`，未清零不到闸）→ `design.md` 的 **Open Questions** |
 | 落「待专员」的 | → intent「## 待专员」（带口径点占位）→ **Open Questions 标「待专员」**，同时进跟进信 |
 
 🔴 **产出载体 ＝ `docs/roadmap/intents/<场景>-intent.md`**（格式对齐 `docs/roadmap/M2-intent.md`；M2 那份为历史件，留在原位不追改）。骨架如下，小节名逐字保留（机器闸 `tests/test_requirement_grill_skill.py` 认这些字样）：
 
 ```markdown
 ---
-status: 待确认            # Shao Peishen 确认后改 已确认；已确认才可 propose
+status: 草稿·待 G1        # 落档一律写这个；G1 放行（定夺队列该行已答「定」）后才改 已确认（G1 Q-xx），⛔ 无头会话不得自改
 场景: <场景名>
 grill会话: <会话/opener 编号>
 进入判例包的开放点数量: <N>
@@ -169,7 +169,7 @@ U0 … → U1 … → Un …
 | n | n（ⓐ… ⓑ… ⓒ…） | n |
 ```
 
-**落档与接棒**：intent 与需求树草稿写好后，经**提交通道**提交（Cowork 侧不自行 commit——列文件清单 ＋ 建议 commit message；CC 侧按并发协议只 add 本条路径）。提交完成即产生事件，调度器（`任务驱动workflow设计.md` R2/R4）读到 intent 无未答题 ⇒ 到 G1 闸门，写定夺队列「intent 定稿」并停在该场景；Shao Peishen 答「定」（或逐条改后「定」）⇒ `status: 已确认` ⇒ 起 propose。有未答题 ⇒ 未到闸，Cowork 在他回本线时重提未答题。「定稿」本身（状态字样、进下一阶段）**只在放行后发生**，⛔ 无头会话不得自改 `status`。
+**落档 ⇒ 定夺队列 G1**：intent（`status: 草稿·待 G1`）与需求树草稿写好后，经**提交通道**提交（Cowork 侧不自行 commit——列文件清单 ＋ 建议 commit message；CC 侧按并发协议只 add 本条路径），**同一收工里**追加定夺队列 G1 行：`python3 scripts/gates.py request G1 <场景> --scene <场景> --artifact docs/roadmap/intents/<场景>-intent.md --tasks propose:<场景>`（已有行不重复；调度器下次唤醒 `sweep --apply` 也会补——两者幂等）。停在该场景等 Shao Peishen 在那一行答「定」（或逐条改后「定」）⇒ `status: 已确认（G1 Q-xx）` ⇒ 调度器起 propose。有未答题 ⇒ 未到闸、⛔ 不追加 G1 行，Cowork 在他回本线时重提未答题。「定稿」本身（状态字样、进下一阶段）**只在放行后发生**，⛔ 无头会话不得自改 `status`，⛔ 不越闸。
 
 ## 五、接缝 3 · 两个受众的量级边界（必须写死）
 
@@ -201,7 +201,7 @@ U0 … → U1 … → Un …
 4. **算前沿**，每问过 §三 分流，按 §二 格式一轮问完 ＋ 一行答复模板，等他答。⛔ 无人值守场景不跑本 skill（它就是要人答）。
 5. **重算前沿**，重复 4，直到前沿为空。
 6. **收工产出**（合写进 `docs/roadmap/intents/<场景>-intent.md`）：决策 D1…Dn／建议交付单元／不做／不可代项／待专员（占位 ID）／M2 已自查的事实／§六 三列收工指标。
-7. **落档**：需求树草稿 ＋ intent 经提交通道提交；`status` 按他的确认如实写，⛔ 不得把「未答」写成「已确认」。
+7. **落档 ⇒ 定夺队列 G1**：需求树草稿 ＋ intent（`status: 草稿·待 G1`）经提交通道提交；未答题清零 ⇒ `scripts/gates.py request G1 <场景> …` 追加 G1 行。⛔ 不得把「草稿·待 G1」写成「已确认」——那是 G1 放行后的事。
 8. **待专员条目**交跟进信线成信（§三 链条），⛔ 本 skill 内不发信、不写口径点台账。
 
 ## 八、边界（如实知悉，别越）
@@ -215,12 +215,12 @@ U0 … → U1 … → Un …
 
 | # | Win 端正本 | HR 侧 | 理由 |
 |---|---|---|---|
-| ① | §二「超时生效」：答复模板发出 15 分钟无答复按默认项执行，design 审为兜底人闸 | **暂不移植，待 Shao Peishen 定**；未定前未答题保持未答，intent `status: 待确认`，G1 不到闸 | Win 端那条是 Shao Peishen 对 Win 端单独拍的（`OP-0909-Y`），并明写「本 skill 以外的任何场合不得援引」；HR 侧虽有 G1「intent 定稿」人闸可兜底，但移植与否属口径变更，⛔ 无头会话不替他拍。若他答「移植」：加回「⏸️ 默认项」行 ＋ 15 分钟规则 ＋ 落档措辞「超时按默认项生效（未获明确答复，<会话> <时刻>）」 |
+| ① | §二「超时生效」：答复模板发出 15 分钟无答复按默认项执行，design 审为兜底人闸 | **暂不移植，待 Shao Peishen 定**；未定前未答题保持未答，intent `status: 草稿·待 G1`，G1 不到闸 | Win 端那条是 Shao Peishen 对 Win 端单独拍的（`OP-0909-Y`），并明写「本 skill 以外的任何场合不得援引」；HR 侧虽有 G1「intent 定稿」人闸可兜底，但移植与否属口径变更，⛔ 无头会话不替他拍。若他答「移植」：加回「⏸️ 默认项」行 ＋ 15 分钟规则 ＋ 落档措辞「超时按默认项生效（未获明确答复，<会话> <时刻>）」 |
 | ② | 事实源：仓库文件／场景 CLAUDE.md／两份队列真身／`.51` 服务／ERP·SRM 真实数据／前置总表 | 换成 HR 版事实源清单表（§一） | 仓库结构不同；HR 侧无 ERP/SRM，值守库只读 |
 | ③ | 产出落 `4-数字员工/<部门>/<场景>/intent.md`，正文三节 §一事实／§二已定／§三待专员 | 落 `docs/roadmap/intents/<场景>-intent.md`，小节对齐 `docs/roadmap/M2-intent.md`（目标／决策／建议交付单元／不做／不可代项）＋ 待专员／已自查事实／收工指标 | 对齐 HR 既有 intent 与调度器 R4 的读取口径 |
 | ④ | 专员部分「落判例包待办，按判例批改法成包」（Win 端 followup-letter skill ＋ README 主表 ＋ 四个 CLI） | 接 HR 跟进信线：`决策点:` 字段 ⇒ `criteria --add` 口径点台账 ⇒ 回件桥／拆件 ⇒ 签认进定夺队列 ⇒ `--to 已签认 --evidence` | HR 不碰 Windows 侧那套（`README-跟进信清单.md` 抬头，2026-09-09 定） |
 | ⑤ | 提问格式带「⏸️ 默认项：若不答，我将按 (x) 执行」 | 去掉默认项行，加**一行答复模板**（无语言标签 fenced 代码块） | 同 ①；CLAUDE.md 会话末模板要求答复模板单独放代码块 |
-| ⑥ | 收工纪律：登记队列 §二 批次 ＋ sweep ＋ PowerShell 写后反查 | 经提交通道提交即产生事件交调度器 | HR 侧提交与事件机制不同 |
+| ⑥ | 收工纪律：登记队列 §二 批次 ＋ sweep ＋ PowerShell 写后反查 | 经提交通道提交 ＋ 追加定夺队列 G1 行（`scripts/gates.py request G1`）；下一棒在 G1 放行后才由调度器接 | HR 侧提交与事件机制不同，且出口是闸门不是 propose |
 | ⑦ | 判例批改法「15 分钟微会」「一线标注层加人」「看板行内反馈按钮」 | **不移植** | 与 HR 当前规模（单一专员汤丽萍）不匹配，无对应机制；需要时另立 |
 | ⑧ | 真实案例来源 ＝ ERP／看板／历史单据 | 脱敏或历史离职候选人简历、历史岗位 JD；真实在招简历受 M2 D2 合规闸约束 | PIPL／合规红线：M2 门槛未就位前不得处理真实简历 |
 | ⑨ | 「一信 ≤3 决策点」已取消的残留划掉段 | 直接写现口径「不设上限」，不保留划掉段 | 移植时无历史残留需要标注 |

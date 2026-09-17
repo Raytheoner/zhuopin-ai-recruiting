@@ -12,6 +12,10 @@
   2. **幂等**：同一仓库连跑两次，字节相同（正文不含时间戳；顺序全部确定）。
   3. **不可代项 ⇒ 阻塞类型「决策」**：🔴／不可代／Shao Peishen／待裁决 等标记一律判「决策」，
      调度器永远不会把它排进泳道。
+  4. **在环闸门（0917AO，`scripts/gates.py`）**：propose（G1）／plan（G2）／release（G3）条目在定夺队列
+     对应闸门行未「已答＋放行字样」前一律 `阻塞／决策` 并带 `闸门:` 字段；`compute_ready` 再按定夺队列复核一遍，
+     台账状态被手改成「待开」也放不过（口径：放行只认定夺队列，⛔ 不认台账状态自改）。
+     intent 落档（`docs/roadmap/intents/<场景>-intent.md`）⇒ 生成 `propose:<场景>` 条目；有未答题 ⇒ 阻塞／决策（先清题）。
 
 条目字段（设计 §四 R3）：id／场景／阶段／依赖／触碰区／状态／阻塞类型／产出判据／来源（＋标题、单元）。
   阶段 ∈ {intent, grill, propose, plan, build, merge, release, acceptance, archive, gate, gap}
@@ -34,6 +38,11 @@ from pathlib import Path
 
 import yaml
 
+try:
+    from scripts import gates
+except ImportError:  # `python3 scripts/dispatcher_backlog.py` 直跑时 scripts/ 自己在 sys.path
+    import gates  # type: ignore[no-redef]
+
 ROOT = Path(__file__).resolve().parent.parent
 UNMATCHED_PLANS: list[str] = []  # 本次运行未归属任何单元的 plan（只进摘要，不进台账）
 
@@ -43,6 +52,8 @@ REL = {
     "ledger": "docs/openers/号池台账.md",
     "changes": "openspec/changes",
     "plans": "docs/superpowers/plans",
+    "intents": "docs/roadmap/intents",
+    "queue": gates.QUEUE_REL,
     "out": "docs/roadmap/任务台账.yaml",
 }
 
@@ -75,6 +86,7 @@ class Entry:
     阻塞类型: str = "无"
     产出判据: str = ""
     truth_known: bool = True  # 真身能否独立判定状态；False ⇒ 台账状态无条件优先、不记 conflicts
+    闸门: str = ""  # "G2 <subject>"：到闸条目；状态的 待开↔阻塞 轴由定夺队列决定（gates.py），台账不记冲突
 
     def to_dict(self) -> dict:
         d = {
@@ -95,6 +107,8 @@ class Entry:
                 "来源": self.来源,
             }
         )
+        if self.闸门:
+            d["闸门"] = self.闸门
         return d
 
 
@@ -648,6 +662,92 @@ def parse_ledger(text: str, rel: str) -> list[Entry]:
     return out
 
 
+# ───────────────────────── intent 草稿 → propose 条目 ─────────────────────────
+
+FRONT_RE = re.compile(r"\A---\s*\n(.*?)\n---", re.S)
+UNANSWERED_RE = re.compile(r"^\s*(?:- \[ \]|- (?!\[x\])(?!\[X\]))\s*\S", re.M)
+
+
+def _frontmatter(text: str) -> dict[str, str]:
+    m = FRONT_RE.match(text)
+    if not m:
+        return {}
+    out: dict[str, str] = {}
+    for line in m.group(1).splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            out[k.strip()] = v.split("#", 1)[0].strip()
+    return out
+
+
+def _section(text: str, title: str) -> str:
+    m = re.search(rf"^##\s*{re.escape(title)}[^\n]*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+    return m.group(1) if m else ""
+
+
+def parse_intents(repo: Path, rel_dir: str, changes: set[str]) -> list[Entry]:
+    """`docs/roadmap/intents/<场景>-intent.md` ⇒ `propose:<场景>`。
+    有未答题（「## 待答题」节非空且有未勾条目）⇒ 阻塞／决策（grill 要他逐题答）；`status` 含「已确认」且
+    该场景已有 openspec 变更包 ⇒ 完成；否则待开——到不到 G1 由 apply_gates 按定夺队列判。"""
+    out: list[Entry] = []
+    d = repo / rel_dir
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("*.md")):
+        if p.name.lower() == "readme.md":
+            continue
+        text = p.read_text(encoding="utf-8")
+        fm = _frontmatter(text)
+        stem = p.stem[:-7] if p.stem.endswith("-intent") else p.stem
+        scene_name = fm.get("场景") or stem
+        m = re.search(r"\bM\d′?", scene_name) or re.search(r"\bM\d′?", stem)
+        scene = m.group(0) if m else scene_name
+        rel = f"{rel_dir}/{p.name}"
+        pending = _section(text, "待答题")
+        unanswered = bool(UNANSWERED_RE.search(pending))
+        has_pkg = any(scene_of_change(c) == scene for c in changes)
+        if "已确认" in fm.get("status", "") and has_pkg:
+            status, block = "完成", "无"
+        elif unanswered:
+            status, block = "阻塞", "决策"
+        else:
+            status, block = "待开", "无"
+        out.append(
+            Entry(
+                id=f"propose:{scene}",
+                场景=scene,
+                阶段="propose",
+                标题=f"openspec-propose：{scene_name}（intent 定稿后）",
+                来源=f"{rel}:1",
+                触碰区=[f"openspec/changes/"],
+                状态=status,
+                阻塞类型=block,
+                产出判据=(
+                    "G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，"
+                    "`openspec validate <pkg> --strict` 过"
+                    + ("；当前 intent 有未答题，先由 requirement-grill 在本线清题" if unanswered else "")
+                ),
+            )
+        )
+    return out
+
+
+def apply_gates(entries: list[Entry], queue_text: str) -> None:
+    """到闸条目：定夺队列未放行 ⇒ 阻塞／决策 并写 `闸门`；放行 ⇒ 待开／无（只动 待开↔阻塞 轴）。"""
+    for e in entries:
+        gs = gates.gate_for_task({"id": e.id, "阶段": e.阶段, "场景": e.场景})
+        if gs is None:
+            continue
+        gate, subject = gs
+        e.闸门 = f"{gate} {subject}"
+        if e.状态 != "待开":
+            continue  # 真身生成的条目只有 待开 会被闸拦；本就阻塞（如 intent 有未答题）或已完成的不动
+        state = gates.gate_state(gate, subject, text=queue_text)
+        if state != "已放行":
+            e.状态, e.阻塞类型 = "阻塞", "决策"
+            e.产出判据 = f"【{gate} 闸门·{state}】" + e.产出判据
+
+
 # ───────────────────────── 生成、合并、ready ─────────────────────────
 
 
@@ -671,6 +771,8 @@ def generate(repo: Path) -> list[Entry]:
             entries += parse_tasks(change, t.read_text(encoding="utf-8"), f"{REL['changes']}/{change}/tasks.md", plans, unit_status)
     entries += plan_entries(plans, unit_status)
     UNMATCHED_PLANS[:] = sorted(st for st, p in plans.items() if p.task_count and st not in unit_status)
+    changes = {t.parent.name for t in cdir.glob("*/tasks.md") if t.parent.name != "archive"} if cdir.is_dir() else set()
+    entries += parse_intents(repo, REL["intents"], changes)
     relay = repo / REL["relay"]
     if relay.exists():
         entries += parse_relay(relay.read_text(encoding="utf-8"), REL["relay"])
@@ -688,7 +790,13 @@ def generate(repo: Path) -> list[Entry]:
                 o.状态, o.阻塞类型 = e.状态, e.阻塞类型
         else:
             byid[e.id] = e
+    apply_gates(list(byid.values()), _queue_text(repo))
     return list(byid.values())
+
+
+def _queue_text(repo: Path) -> str:
+    q = repo / REL["queue"]
+    return q.read_text(encoding="utf-8") if q.is_file() else ""
 
 
 def load_existing(path: Path) -> dict[str, dict]:
@@ -708,7 +816,9 @@ def merge(existing: dict[str, dict], generated: list[Entry], resolve: str = "led
         if old:
             truth_status = d["状态"]
             ledger_status = old.get("状态", truth_status)
-            if ledger_status != truth_status and not e.truth_known:
+            if ledger_status != truth_status and e.闸门 and {ledger_status, truth_status} <= {"待开", "阻塞"}:
+                pass  # 到闸条目的 待开↔阻塞 由定夺队列决定（gates.py），台账手改不算数、不记冲突
+            elif ledger_status != truth_status and not e.truth_known:
                 d["状态"] = ledger_status  # 真身判不了（如拆段是否已跑），台账说了算，不记冲突
             elif ledger_status != truth_status:
                 if resolve == "truth":
@@ -735,8 +845,22 @@ def merge(existing: dict[str, dict], generated: list[Entry], resolve: str = "led
     return out
 
 
+_QUEUE_TEXT: str | None = None  # main/show 按 --repo 装入；None ⇒ 读 ROOT 下的定夺队列
+
+
+def set_queue_repo(repo: Path) -> None:
+    global _QUEUE_TEXT
+    _QUEUE_TEXT = _queue_text(repo)
+
+
+def gate_held(tasks: list[dict], ready: list[str]) -> list[tuple[str, str, str, str]]:
+    """ready 候选里到闸未放行的 (id, 闸, subject, 状态名)——按定夺队列现查，⛔ 不认台账状态。"""
+    text = _QUEUE_TEXT if _QUEUE_TEXT is not None else _queue_text(ROOT)
+    return gates.filter_ready(tasks, ready, text)[1]
+
+
 def compute_ready(tasks: list[dict]) -> tuple[list[str], list[str]]:
-    """ready ＝ 待开 ∧ 阻塞类型 无 ∧ 依赖全完成。返回 (ready ids, 未知依赖 ids)。"""
+    """ready ＝ 待开 ∧ 阻塞类型 无 ∧ 依赖全完成 ∧ 闸门已放行（gates.py 只读定夺队列）。返回 (ready ids, 未知依赖 ids)。"""
     byid = {t["id"]: t for t in tasks}
     ready: list[str] = []
     unknown: set[str] = set()
@@ -754,7 +878,8 @@ def compute_ready(tasks: list[dict]) -> tuple[list[str], list[str]]:
         if ok:
             ready.append(t["id"])
     ready.sort(key=lambda i: (SCENE_PRIORITY.get(byid[i]["场景"], 9), i))
-    return ready, sorted(unknown)
+    held = {h[0] for h in gate_held(tasks, ready)}
+    return [r for r in ready if r not in held], sorted(unknown)
 
 
 def summarize(tasks: list[dict]) -> dict:
@@ -766,6 +891,7 @@ def summarize(tasks: list[dict]) -> dict:
         "阻塞·外部": sum(1 for t in tasks if t.get("状态") == "阻塞" and t.get("阻塞类型") == "外部"),
         "conflicts": sorted(t["id"] for t in tasks if "conflicts" in t),
         "ready": ready,
+        "闸门待放行": [f"{tid} ← {g} `{sub}`（{st}）" for tid, g, sub, st in gates.at_gate(tasks, _QUEUE_TEXT if _QUEUE_TEXT is not None else _queue_text(ROOT)) if st != "已放行"],
         "未知依赖": unknown,
         "未归属plans": list(UNMATCHED_PLANS),
     }
@@ -794,11 +920,15 @@ def show(path: Path, what: str) -> int:
         picked = [t for t in tasks if t.get("状态") == "阻塞"]
     elif what == "running":
         picked = [t for t in tasks if t.get("状态") == "在跑"]
+    elif what == "gated":
+        held = {h[0]: h for h in gates.at_gate(tasks, _QUEUE_TEXT or "") if h[3] != "已放行"}
+        picked = [dict(t, 闸门状态=f"{held[t['id']][1]} `{held[t['id']][2]}` {held[t['id']][3]}") for t in tasks if t["id"] in held]
     else:
         picked = [t for t in tasks if "conflicts" in t]
     for t in picked:
         extra = f" 阻塞类型={t.get('阻塞类型')}" if what == "blocked" else ""
         extra += f" conflicts={t['conflicts']}" if what == "conflicts" else ""
+        extra += f" 闸门={t['闸门状态']}" if what == "gated" else ""
         print(f"{t['id']}\t{t.get('场景')}\t{t.get('阶段')}\t{t.get('状态')}{extra}\t{t.get('标题', '')[:80]}\t触碰区={','.join(t.get('触碰区', [])) or '-'}")
     print(f"# {what}: {len(picked)}")
     return 0
@@ -810,9 +940,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--resolve-conflicts", choices=("ledger", "truth"), default="ledger")
-    ap.add_argument("--show", choices=("ready", "blocked", "running", "conflicts"), default=None,
+    ap.add_argument("--show", choices=("ready", "blocked", "running", "conflicts", "gated"), default=None,
                     help="只读：按类打印现有台账里的条目（一行一条），不生成、不写盘；台账 > 40 KB，⛔ 不要整读")
     args = ap.parse_args(argv)
+    set_queue_repo(args.repo.resolve())
     if args.show:
         return show(args.out or ((args.repo.resolve()) / REL["out"]), args.show)
     repo = args.repo.resolve()

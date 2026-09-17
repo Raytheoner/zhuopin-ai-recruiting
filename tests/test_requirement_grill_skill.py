@@ -81,7 +81,18 @@ def test_output_path_and_intent_sections(text):
     assert "docs/roadmap/intents/<场景>-intent.md" in text
     for heading in ("## 目标", "## 决策", "## 建议交付单元", "## 不做", "## 不可代项", "## 待专员"):
         assert heading in text, f"intent 必备小节字样缺失：{heading}"
-    assert "status: 待确认" in text and "已确认" in text
+    # 0917AO 在环闸门：落档状态字样是「草稿·待 G1」，已确认只在 G1 放行后
+    assert "status: 草稿·待 G1" in text and "已确认" in text
+    assert "status: 待确认" not in text
+
+
+def test_exit_is_g1_gate_not_propose(text):
+    """0917AO：intent 落档 ⇒ 定夺队列 G1，⛔ 不再「落档即交调度器进 propose」。"""
+    assert "落档 ⇒ 定夺队列 G1" in text
+    assert "scripts/gates.py request G1" in text
+    assert "⛔ 越闸" in text
+    assert "落档即交调度器进 propose" not in text.replace("⛔ 不再写「落档即交调度器进 propose」", "")
+    assert "落档提交即产生事件交调度器" not in text
 
 
 def test_intent_sections_align_with_m2_intent():

@@ -274,14 +274,42 @@ def test_unit_with_plan_yields_segments_and_completed_plan_task(tmp_path):
     assert "m2-resume-parse-and-rank/1.7" in u0["依赖"] and u0["id"] not in doc["summary"]["ready"]
 
 
+G2_RELEASED = (
+    "# 定夺队列\n\n## 一、待答\n\n| 编号 | 场景 | 阻塞类型 | 问题 | 选项与代价 | 推荐 | 来源 | 阻塞的任务 id | 状态 | 答复 |\n"
+    "|---|---|---|---|---|---|---|---|---|---|\n"
+    "| Q-01 | M2 | 决策（G2 闸门） | 【G2 design／spec 定稿】`m2-resume-parse-and-rank`：x ｜ 产出 `openspec/changes/m2-resume-parse-and-rank/design.md` | (a) | 无默认 | s | `m2-resume-parse-and-rank/U0/plan` | 已答 | 定 |\n"
+)
+
+
 def test_unit_without_plan_makes_spec_to_plan_ready_after_previous_unit(tmp_path):
     repo = make_repo(tmp_path, with_plan=False)
+    # 0917AO 在环闸门：G2 未放行 ⇒ spec-to-plan 条目 阻塞／决策 带 闸门 字段，不 ready
+    run(repo)
+    doc = load(repo)
+    t = by_id(doc)
+    assert t["m2-resume-parse-and-rank/U0/plan"]["状态"] == "阻塞"
+    assert t["m2-resume-parse-and-rank/U0/plan"]["阻塞类型"] == "决策"
+    assert t["m2-resume-parse-and-rank/U0/plan"]["闸门"] == "G2 m2-resume-parse-and-rank"
+    assert t["m2-resume-parse-and-rank/U0/plan"]["产出判据"].startswith("【G2 闸门·缺行】")
+    assert "m2-resume-parse-and-rank/U0/plan" not in doc["summary"]["ready"]
+    assert any(s.startswith("m2-resume-parse-and-rank/U0/plan ← G2") for s in doc["summary"]["闸门待放行"])
+    # 台账被手改成 待开 也放不过（放行只认定夺队列）
+    (repo / "docs/roadmap/任务台账.yaml").write_text(
+        (repo / "docs/roadmap/任务台账.yaml").read_text(encoding="utf-8").replace("状态: 阻塞\n  阻塞类型: 决策\n  产出判据: 【G2", "状态: 待开\n  阻塞类型: 无\n  产出判据: 【G2"),
+        encoding="utf-8",
+    )
+    shown = run(repo, "--show", "ready").stdout
+    assert "m2-resume-parse-and-rank/U0/plan" not in shown
+    # G2 放行 ⇒ 待开、ready；台账原先的 阻塞 不记 conflicts（闸门轴以队列为准）
+    (repo / "docs/roadmap/定夺队列.md").write_text(G2_RELEASED, encoding="utf-8")
     run(repo)
     doc = load(repo)
     t = by_id(doc)
     assert t["m2-resume-parse-and-rank/U0/plan"]["阶段"] == "plan"
     assert t["m2-resume-parse-and-rank/U0/plan"]["状态"] == "待开"
+    assert "conflicts" not in t["m2-resume-parse-and-rank/U0/plan"]
     assert "m2-resume-parse-and-rank/U0/plan" in doc["summary"]["ready"]
+    assert doc["summary"]["闸门待放行"] == []
     # U1 的 plan 依赖 U0 完成 ⇒ 不 ready
     assert t["m2-resume-parse-and-rank/U1/plan"]["依赖"] == ["m2-resume-parse-and-rank/U0"]
     assert "m2-resume-parse-and-rank/U1/plan" not in doc["summary"]["ready"]
