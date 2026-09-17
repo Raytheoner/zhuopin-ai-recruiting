@@ -337,6 +337,59 @@ CREATE TABLE IF NOT EXISTS resume_text_span (
     text TEXT NOT NULL,
     PRIMARY KEY (resume_id, span_id)
 );
+
+-- 阶段池：全局共享，stage_type 是语义标签（逻辑只认类型），name 是可自定义
+-- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行，id 与 stage_type 同名——
+-- 这三行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
+-- INSERT 新行（相同 stage_type、不同 id/name），本表结构不必改。
+CREATE TABLE IF NOT EXISTS stage (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    stage_type TEXT NOT NULL CHECK (stage_type IN ('initial', 'screening', 'rejected'))
+);
+
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('initial', '初筛', 'initial');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('screening', '评估中', 'screening');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('rejected', '已淘汰', 'rejected');
+
+-- 投递：独立实体，状态挂在这里而不是 candidate（CLAUDE.md 数据模型要点，
+-- Horilla 的坑）。resume_id 唯一——一条简历对应一次投递意图，1:1（design D11）。
+--
+-- kanban_state 现在就加列（不等 U5 再 ALTER TABLE）：U5 tasks 6.4「标记淘汰」
+-- 写 'pending_reject'，投递进入待确认清单但**不产生拒绝记录、阶段不变**
+-- （hard-requirement-screening spec「淘汰只由人确认并可申诉」的前置状态）。
+-- 现在没有写入方，必须可空——与 human_review.batch_id 同一手法。
+CREATE TABLE IF NOT EXISTS application (
+    id TEXT PRIMARY KEY NOT NULL,
+    candidate_id TEXT NOT NULL REFERENCES candidate(id),
+    job_id TEXT NOT NULL REFERENCES job(id),
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    current_stage_id TEXT NOT NULL REFERENCES stage(id),
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'rejected', 'withdrawn')),
+    kanban_state TEXT CHECK (kanban_state IS NULL OR kanban_state IN ('pending_reject')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_application_resume ON application (resume_id);
+CREATE INDEX IF NOT EXISTS idx_application_job ON application (job_id);
+CREATE INDEX IF NOT EXISTS idx_application_candidate ON application (candidate_id);
+
+-- 流转事实表：所有报表的基础（CLAUDE.md 数据模型要点）。actor_type 区分
+-- 人工流转与系统流转（申诉 overturned 恢复阶段、批量确认淘汰流转都会写这里）。
+-- from_stage_id 允许 NULL：投递创建时的第一条"进入 initial"没有"从哪来"。
+CREATE TABLE IF NOT EXISTS application_stage_history (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    from_stage_id TEXT REFERENCES stage(id),
+    to_stage_id TEXT NOT NULL REFERENCES stage(id),
+    actor_type TEXT NOT NULL CHECK (actor_type IN ('human', 'agent')),
+    actor TEXT,
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_stage_history_application
+    ON application_stage_history (application_id);
 """
 
 

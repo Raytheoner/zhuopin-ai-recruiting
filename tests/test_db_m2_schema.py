@@ -159,3 +159,108 @@ def test_resume_text_span_primary_key_is_resume_and_span(conn):
             "INSERT INTO resume_text_span (resume_id, span_id, start, end, text) "
             "VALUES ('r-1', 1, 10, 15, '重复的 span_id')"
         )
+
+
+# ── application / stage / application_stage_history（tasks 2.2）─────────
+
+
+def _seed_job_candidate_resume(conn, job_id="j1", candidate_id="c1", resume_id="r1"):
+    conn.execute("INSERT INTO job (id, title, status) VALUES (?, '底层软件工程师', 'approved')", (job_id,))
+    conn.execute("INSERT INTO candidate (id, name) VALUES (?, '张三')", (candidate_id,))
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES (?, ?, 'synthetic', 'a.pdf', 'sha-1', 'hr-1')",
+        (resume_id, job_id),
+    )
+    conn.commit()
+
+
+def test_stage_table_preloads_three_rows(conn):
+    rows = dict(conn.execute("SELECT id, stage_type FROM stage").fetchall())
+    assert rows == {"initial": "initial", "screening": "screening", "rejected": "rejected"}
+
+
+def test_stage_type_check_rejects_unknown_type(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO stage (id, name, stage_type) VALUES ('offer', '发 offer', 'offer')"
+        )
+
+
+def test_application_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "application")
+    assert _columns(conn, "application") == {
+        "id", "candidate_id", "job_id", "resume_id", "current_stage_id",
+        "status", "kanban_state", "created_at",
+    }
+
+
+def test_application_resume_id_is_unique(conn):
+    """一条 resume 只能挂一条 application——1:1。"""
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+            "VALUES ('app-2', 'c1', 'j1', 'r1', 'initial')"
+        )
+
+
+def test_application_status_check(conn):
+    _seed_job_candidate_resume(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id, status) "
+            "VALUES ('app-bad', 'c1', 'j1', 'r1', 'initial', 'unknown_status')"
+        )
+
+
+def test_application_kanban_state_defaults_null_and_accepts_pending_reject(conn):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    assert conn.execute(
+        "SELECT kanban_state FROM application WHERE id='app-1'"
+    ).fetchone()[0] is None
+
+    conn.execute("UPDATE application SET kanban_state='pending_reject' WHERE id='app-1'")
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE application SET kanban_state='bogus' WHERE id='app-1'")
+
+
+def test_application_stage_history_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "application_stage_history")
+    assert _columns(conn, "application_stage_history") == {
+        "id", "application_id", "from_stage_id", "to_stage_id",
+        "actor_type", "actor", "occurred_at",
+    }
+
+
+def test_application_stage_history_actor_type_check(conn):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, to_stage_id, actor_type) "
+            "VALUES ('h-1', 'app-1', 'screening', 'system')"
+        )
+
+
+def test_status_lives_on_application_not_candidate(conn):
+    """CLAUDE.md 数据模型要点：不要合并 candidate 和 application，状态挂在投递上。"""
+    assert "status" not in _columns(conn, "candidate")
+    assert "status" in _columns(conn, "application")
