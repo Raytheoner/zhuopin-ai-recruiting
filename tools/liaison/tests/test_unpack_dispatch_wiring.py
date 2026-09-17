@@ -14,18 +14,27 @@ P2（`liaison-unpack-charter`）接入生产路径后，章程正文与 prompt �
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from tools.liaison import session
 from tools.liaison.storage import db as liaison_db
 from tools.liaison.storage.effects import EFFECT_NODE_TO_TABLE
 from tools.liaison.unpack import dispatch_wiring, unpack_cli
 from tools.liaison.unpack.dispatch import DispatchOutcome
 from tools.liaison.unpack.dispatch_wiring import bridge_dispatch
-from tools.liaison.unpack.signal import append_signal
+from tools.liaison.unpack.signal import append_signal, clear_signal_before, probe_signal
 
 NOW = datetime(2026, 9, 10, 14, 3, 0, tzinfo=timezone.utc)
+
+#: 95b4d15 记录的踩坑现场：CST、微秒恰好为 0。`datetime.isoformat()` 在
+#: `timespec="auto"` 下省略全零的微秒，而 `session.format_instant` 恒定带
+#: 微秒——同一个 `now` 因此格式化出两种不同长度的字符串，按字典序比较时
+#: 前者反而落在后者之前，`clear_signal_before` 的 `at >= checkpoint` 保留规则
+#: 就再也清不掉触发本轮的这一项。
+CHINA_TZ = timezone(timedelta(hours=8))
+TRIGGER_NOW = datetime(2026, 9, 17, 13, 45, 39, 0, tzinfo=CHINA_TZ)
 
 
 @pytest.fixture()
@@ -230,14 +239,14 @@ def test_prompt_is_built_from_charter_module_with_full_fields(conn, monkeypatch,
 
     bridge_dispatch(
         conn, thread_id="t1", msgid="m9", sender_userid="u1", letter_number=None,
-        now=NOW, repo_root=tmp_path,
+        now=NOW, repo_root=tmp_path, _clock=lambda: NOW,
     )
 
     prompt = captured["prompt"]
     assert prompt.startswith("# 拆件会话起活")
     assert "m9" in prompt
     assert "unpack-signal.json" in prompt
-    assert NOW.isoformat() in prompt
+    assert session.format_instant(NOW) in prompt
     assert "人事部#7" in prompt
     assert prompt.endswith(charter_text)
 
@@ -271,3 +280,47 @@ def test_prompt_letter_number_falls_back_when_signal_has_no_matching_entry(
 
     assert outcome.status == "started"
     assert "（未匹配）" in captured["prompt"]
+
+
+def test_checkpoint_is_strictly_after_this_signals_at_so_clear_actually_works(
+    conn, monkeypatch, tmp_path
+):
+    """95b4d15 记录的检查点边界坑的回归：前言里的「检查点时刻」与触发本轮的
+    这一项信号自身的 `at` 若来自同一个 `now`（哪怕格式对齐），`clear_signal_before`
+    的 `at >= checkpoint` 保留规则也会把这一项原地锁死——下一轮探测仍会拿到同一条
+    pending，永远清不掉。`bridge_dispatch` 必须给 checkpoint 一个严格晚于
+    `append_signal` 已落盘的这一项的时刻（`_clock` 参数，生产默认真实时钟，
+    本用例注入固定值以保证可复现）。"""
+    charter_text = "章程正文占位\n"
+    _write_charter(tmp_path, charter_text)
+
+    signal_path = tmp_path / "unpack-signal.json"
+    monkeypatch.setattr(unpack_cli, "DEFAULT_SIGNAL_PATH", signal_path)
+    monkeypatch.delenv(unpack_cli.SIGNAL_PATH_ENV, raising=False)
+    append_signal(
+        signal_path,
+        {
+            "letter_number": "人事部#7",
+            "msgid": "m11",
+            "archived_relpath": "x",
+            "at": session.format_instant(TRIGGER_NOW),
+        },
+    )
+
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
+        lambda **kwargs: DispatchOutcome(status="started", pid=1, log_path="x.log"),
+    )
+
+    checkpoint_moment = TRIGGER_NOW + timedelta(microseconds=1)
+    outcome = bridge_dispatch(
+        conn, thread_id="t1", msgid="m11", sender_userid="u1", letter_number=None,
+        now=TRIGGER_NOW, repo_root=tmp_path, _clock=lambda: checkpoint_moment,
+    )
+    assert outcome.status == "started"
+
+    checkpoint_text = session.format_instant(checkpoint_moment)
+    clear_signal_before(signal_path, checkpoint_text)
+    assert probe_signal(signal_path) is False, (
+        "checkpoint 必须严格晚于触发本轮的这一项，否则 clear 永远清不掉它"
+    )

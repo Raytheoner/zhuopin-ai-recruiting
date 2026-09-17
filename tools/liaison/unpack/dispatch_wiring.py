@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
+from tools.liaison import session
 from tools.liaison.storage import effects
 from tools.liaison.unpack import charter, unpack_cli
 from tools.liaison.unpack.dispatch import DispatchOutcome, dispatch_headless_unpack
@@ -99,9 +101,18 @@ def bridge_dispatch(
     letter_number: str | None,
     now: datetime,
     repo_root: Path = REPO_ROOT,
+    _clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> DispatchOutcome:
     """P0 `bridge.run_bridge` 的 `dispatch=` 注入点。**结果三态一律落一条审计**，
     审计写失败本身吞掉只记日志（spec 明写），⛔ 不让审计失败掩盖起活本身的结果。
+
+    `_clock`（95b4d15 记录的检查点边界坑修复）：前言里「检查点时刻」⛔ 不能沿用
+    `now`——`now` 与触发本轮的这一项信号自身的 `at` 同源（`bridge.py::
+    _emit_signal_and_dispatch` 用同一个 `now` 落 `at`），即便格式对齐，
+    `signal.clear_signal_before` 的 `at >= checkpoint` 保留规则也会把这一项原地
+    锁死、永远清不掉。本函数运行在 `append_signal` 已经落盘之后（`bridge.py` 先
+    落信号后调 `dispatch()`），所以取一次此刻的真实时钟就足以保证严格晚于
+    `at`。生产默认真实时钟，测试注入固定值以保证可复现。
     """
     if _prior_launch_already_recorded(conn, thread_id=thread_id, msgid=msgid):
         logger.warning(
@@ -126,7 +137,7 @@ def bridge_dispatch(
             ),
             msgid=msgid,
             signal_relpath=_resolve_signal_relpath(signal_path, repo_root),
-            checkpoint_iso=now.isoformat(),
+            checkpoint_iso=session.format_instant(_clock()),
             charter_text=charter_text,
         )
     outcome = dispatch_headless_unpack(

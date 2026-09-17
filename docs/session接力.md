@@ -349,7 +349,7 @@ SDD 台账（`.superpowers/sdd/2026-09-10-liaison-unpack-charter/progress.md`，
   【不做会怎样：`HR-G-01` 停留在「待专员」，误判该口径点尚无人回复；`人事部#1` 台账继续停在
   第九态"待拆件"，与已消化的回件状态不符】
 
-- 【谁做：Shao Peishen（或后续建造类 session）】【状态：待人】
+- 【谁做：Shao Peishen（或后续建造类 session）】【状态：已闭环（0917AG）】
   【判据：发现拆件章程 §一步骤 5 的用法本身有坑——前言给的「检查点时刻」与信号项自身的 `at`
   字段是同一个 `now`（`dispatch_wiring.py:129` 用 `now.isoformat()`，`bridge.py:467` 用
   `session.format_instant(now)`，两者对同一个 `now` 在微秒非零时格式化结果相同），而
@@ -359,7 +359,17 @@ SDD 台账（`.superpowers/sdd/2026-09-10-liaison-unpack-charter/progress.md`，
   （`...336711+08:00` → `...336712+08:00`）再清，验证有效（清后 `pending: []`）。这不是本会话
   可修的范围（红线②不改 `tools/`），需要建造类 session 判断是修 `dispatch_wiring.py` 的
   checkpoint 生成（改成晚于 append 的时刻）还是修 `signal.py` 的边界语义（改成 `at > checkpoint`
-  才保留），并补测试覆盖这个恰好相等的边界】
+  才保留），并补测试覆盖这个恰好相等的边界。
+  **0917AG 处理结果**：选了前者——`signal.py` 的 `at < checkpoint` 边界是 spec 逐字要求
+  （「只清除时刻早于检查点的项」），不能改。改 `dispatch_wiring.py::bridge_dispatch`：新增
+  `_clock` 参数（生产默认真实时钟 `datetime.now(timezone.utc)`，测试可注入固定值），
+  `checkpoint_iso` 改为 `session.format_instant(_clock())`——`bridge_dispatch` 运行在
+  `append_signal` 已落盘之后（`bridge.py::_emit_signal_and_dispatch` 先落信号再调
+  `dispatch()`），取一次此刻真实时钟即严格晚于触发本轮的这一项的 `at`，同时与 `at` 同口径
+  （`format_instant`）。新增回归用例
+  `tools/liaison/tests/test_unpack_dispatch_wiring.py::
+  test_checkpoint_is_strictly_after_this_signals_at_so_clear_actually_works`
+  复现踩坑现场（CST、微秒恰好为 0）并断言 `clear_signal_before` 用新 checkpoint 能真的清掉】
   【不做会怎样：下一轮真实回件到达、走到这一步时，若某会话照抄前言检查点字符串原样调用
   `--clear`，会陷入同一 msgid 无法清除、每轮都重新"探测到信号→处理→清不掉→再探测到"的空转；
   目前靠"手工微调时间戳"能绕过，但不是所有拆件会话都会想到这么做】
