@@ -452,9 +452,16 @@ Shao Peishen 能拍板。
 effect_log 同一事务提交"对它们无人验证过；一旦其中一个在提交前崩溃后重放，
 不会有任何测试事先发现——而这恰恰是本交付单元存在的全部意义要防的那类失败。
 
-## TD-13 · 丢弃岗位的两次删除之间没有原子性保护
+## TD-13 · 丢弃岗位的两次删除之间没有原子性保护 · ✅ 已还
 
-**登记**：2026-09-08，delivery unit 5.3（需求识别）终审 park 登记。**⚠️ 待 Shao Peishen 拍板。**
+**已还**：2026-09-17，定夺队列 Q-20 已答 a（方案 C）。`app/web/server.py` 的调用点
+`try/except` 住 `discard_thread_checkpoints` 的异常、按 ERROR 记日志（含 `exc_info`）、
+照常返回既有引导语；`job_discard.py` 内部不改。TDD 覆盖：
+`tests/test_web_api.py::test_off_topic_first_message_survives_checkpoint_discard_failure`
+先证明异常会冒穿到 500（RED），再验证 catch 后响应仍是 200 + 引导语 + 一条 ERROR
+日志（GREEN）。commit `2e857c6`（合入 main 后哈希不变，见下方选项 C 描述保留存档）。
+
+**登记**：2026-09-08，delivery unit 5.3（需求识别）终审 park 登记。
 
 **是什么**：`POST /api/jobs` 判定首轮不是用人需求时，`app/web/server.py` 的 `create_job`
 连着调两个函数把这一轮写下的东西抹掉：
