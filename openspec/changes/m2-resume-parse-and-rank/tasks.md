@@ -1,4 +1,4 @@
-**进度：0/69**（2026-09-17 `0917AD` 立包。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决，对应 `design.md` Open Questions；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支。涉及副作用的任务已逐条写幂等策略。）
+**进度：2/68**（2026-09-17 `0917AD` 立包；同日 `0917AF` 回填六问裁决：0.5／0.6 已定，8.7 移出本包留墓碑。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决，对应 `design.md` Open Questions（当前 0 条）；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支。涉及副作用的任务已逐条写幂等策略。）
 
 ## 0. 前置门槛（不写代码；任一未过则对应下游单元不得发车）
 
@@ -6,16 +6,16 @@
 - [ ] 0.2 🔴 **合规验收 #1 启动**（Shao Peishen 发起；PIA 报告 ＋ 候选人同意条款单列 AI 评估 ＋ 留存与删除策略；法务结论）。判据：三份文档落 `docs/compliance/` 并由本人签认。阻塞 U7 的 7.8 开闸
 - [ ] 0.3 🔴 **试运行岗位选定**（Shao Peishen 从 供应链总监／底层软件工程师／非标产品采购员 中选 1 个仍在招的）。判据：`intent.md` 末尾补一行「试运行岗位：<岗位> job_id=<…> profile_version=<n>」。阻塞 U6 的样本征集与 U7 试运行
 - [ ] 0.4 🔴 **评测集标注安排**（汤丽萍牵头；按 0.3 岗位分批 ≤20 份，脱敏或历史离职样本；模板由 6.1 提供）。判据：`人事部#2` 跟进信里有排期回复
-- [ ] 0.5 ⏸ 待 Shao Peishen 裁决 Q1（BGE-M3 运行位置）、Q2（扫描件引擎）——两者决定 U0 的冒烟清单。默认按推荐 (a)/(a) 准备冒烟脚本，⛔ 未答前不装 2 GB 依赖到 `.51`
-- [ ] 0.6 ⏸ 待 Shao Peishen 裁决 Q4（申诉由 HR 代登记）、Q5（bias 夹具另立包）、Q6（手机号哈希）、Q7（归档件留存 90 天）。未答前 tasks 按推荐项写，答复不同则用 `openspec-update-change` 回改 specs
+- [x] 0.5 ✅ 已裁决 2026-09-17（Shao Peishen 答 `1a，2a`）：Q1 BGE-M3 在 `.51` 本地 CPU 推理；Q2 扫描件用 PaddleOCR。U0 冒烟清单据此定（design D7／D14）
+- [x] 0.6 ✅ 已裁决 2026-09-17（Shao Peishen 答 `3是，4b，5是，6是`）：Q4 申诉由 HR 代登记、Q5 bias 夹具另立包（8.7 墓碑）、Q6 手机号哈希不落明文、Q7 归档件留存 90 天。specs 与推荐项一致，无需回改
 
 ## 1. U0 模型对比定型
 
-- [ ] 1.1 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、Q2 选定的 OCR 引擎、Q1 选定的 embedding 方案；记录可装性与体积到 `docs/m2-model-comparison.md`「环境」节。⏸ 依赖 0.5
+- [ ] 1.1 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence-transformers` 二选一按可装性定）；记录可装性与体积到 `docs/m2-model-comparison.md`「环境」节
 - [ ] 1.2 准备对比样本：从已有脱敏样本中取 ≥20 份（含 ≥3 份扫描件、≥3 份 Word），人工标注六字段与一次人工排序，存 `data/eval/m2-pilot/`（不进版本库，`.gitignore` 登记）
 - [ ] 1.3 扩展 `scripts/compare_models.py` 方法为 `scripts/compare_models_m2.py`：对每个候选模型跑「抽取 → 精排」，输出字段准确率、Spearman、Top-10 召回、span 可回溯率、P50/P95 延迟、每份成本
 - [ ] 1.4 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量
-- [ ] 1.5 对 embedding 方案（Q1 所选）测召回：以人工排序前 10 为真值，测 top-30 召回率与单份耗时
+- [ ] 1.5 对本地 CPU BGE-M3 测召回：以人工排序前 10 为真值，测 top-30 召回率与单份耗时
 - [ ] 1.6 写 `docs/m2-model-comparison.md`「决策」节：抽取模型、精排模型、embedding 方案、置信度阈值起步值（Q3）、扫描件路径；判据：每项都有数据支撑，模型标识非别名
 - [ ] 1.7 🔴 **定型确认**（Shao Peishen 签认 1.6 的决策节）。判据：文档末尾有「已确认 <日期>」
 
@@ -35,7 +35,7 @@
 - [ ] 3.1 `Settings.live_resume_intake_enabled` 默认 False；`is_live_resume_intake_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 鉴权可识别 AND 访问留痕探针；测试覆盖 spec 四个 Scenario（含"配置开但身份未知 ⇒ 关"）
 - [ ] 3.2 `AuthMiddleware.dispatch` 换成会话 cookie → `hr_account` 校验；`AuthContext` / `reviewer_of()` 签名不变；`/candidates* /resumes* /applications*` 未登录 401；登录页与登出接口；测试：`reviewer_of()` 返回真实用户名而非 `unknown:*`
 - [ ] 3.3 上传接口 `POST /resumes/upload`（多文件、`job_id`、`sample_class` 必填；类型白名单 pdf/docx；逐文件结果；`live` 且闸关 ⇒ 整批拒 + 留痕尝试不存内容）；幂等：文件内容 SHA-256 + `job_id` 唯一，重复返回既有 `resume_id` 不重解析
-- [ ] 3.4 文件 → 文本：文本型 PDF 直抽、Word 走 `python-docx`、扫描件走 Q2 引擎；有效字符 < 阈值 ⇒ `resume.status='unreadable'` 进人工队列；分片器产出 `resume_text_span`（按段落，带 offset）；测试三种文件各一
+- [ ] 3.4 文件 → 文本：文本型 PDF 直抽、Word 走 `python-docx`、扫描件走 PaddleOCR（design D14）；有效字符 < 阈值 ⇒ `resume.status='unreadable'` 进人工队列；分片器产出 `resume_text_span`（按段落，带 offset）；测试三种文件各一
 - [ ] 3.5 `ResumeFields` Pydantic schema（六字段 × `{value, confidence, spans[]}`，缺失 = `not_mentioned`）；`app/agents/resume_parser.py::compute_parse(text_spans) -> ResumeFields` 纯函数，走 LLM 网关 json_schema 路径，走 `AuditHook` 留痕（`prompt_version=parse-v1`）
 - [ ] 3.6 置信度合成：模型自报 × span 可定位性（`quote` 反查校正偏移，反查失败 ⇒ 无 span ⇒ 低置信度）；阈值读 `job.parse_confidence_threshold`（默认 Q3 值）
 - [ ] 3.7 LangGraph 节点 `effect_persist_parse`：写 `resume.parsed_json` ＋ `field_review_queue` 低置信度行；幂等键 `{application_id}:effect_persist_parse:{parser_version}`，`effect_log` 与业务写同事务；测试：节点重跑不产生第二份解析版本
@@ -50,11 +50,11 @@
 - [ ] 4.3 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version}`，同事务；重判（校对完成／画像升版）产生新一组 flags，旧组保留带版本；测试：重跑不重复、三种触发点各一
 - [ ] 4.4 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_rule` 必带 `rule_ref`；测试：传 `ai_score` 在应用层被拒，绕过应用层在 CHECK 被拒
 - [ ] 4.5 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_history(actor_type=human)`；幂等：同记录同目标状态重复提交无第二条流转；原拒绝记录不删
-- [ ] 4.6 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；⏸ Q4 答复为"开候选人入口"时本条改写（本包默认 HR 代登记）
+- [ ] 4.6 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 ✅ 已裁决 2026-09-17：HR 代候选人登记，本期不开候选人自助入口
 
 ## 5. U4 召回＋rubric 精排＋evidence span
 
-- [ ] 5.1 embedding 适配器（按 1.6 定型：本地 BGE-M3 或境内 API），接口 `embed(texts) -> vectors`；写 `resume_embedding`，幂等键 `{resume_id}:embed:{model}`；上传后离线批算，不在页面请求路径
+- [ ] 5.1 embedding 适配器（本地 CPU BGE-M3，Q1 已裁决；具体装包按 1.6 定型），接口 `embed(texts) -> vectors`；写 `resume_embedding`，幂等键 `{resume_id}:embed:{model}`；上传后离线批算，不在页面请求路径
 - [ ] 5.2 召回：岗位画像文本向量 vs 该岗全部通过／待决投递的简历向量，numpy cosine 取 top-K（`job.recall_top_k` 默认 30）；未召回投递标 `not_recalled`；测试：K 边界、空集、全量 100 份耗时 < 1s
 - [ ] 5.3 rubric 派生：从冻结画像生成 `scoring_criterion` 快照（维度 key 必在 `CRITERION_KEY_WHITELIST`）；软技能只进 rubric 不进规则；测试：白名单外 key 拒绝
 - [ ] 5.4 `app/agents/ranker.py::compute_rank(fields, spans, rubric) -> RankResult` 纯函数：输出 schema 每维 `{score, evidence:{span_id,start,end,quote}}` 强制；`quote` 反查校正偏移；任一维缺证据 ⇒ 整次不可用；走 `AuditHook`（`prompt_version=rank-v1`，`temperature=0`，rubric 快照）
@@ -79,7 +79,7 @@
 - [ ] 7.2 `scripts/eval_m2.py import <file> --job <id> --source <archive_path|local>`：逐行校验（必填列、类型、样本存在、类别非 live、≤20 行），任一失败整批拒并列出行；幂等：同批次重复导入不重复，值变化以最新为准保留历史；记录归档件路径 ↔ 批次
 - [ ] 7.3 指标计算 `scripts/eval_m2.py report --job <id>`：字段准确率（design D9 归一化口径）、Spearman、Top-10 召回、span 可回溯率；门槛与通过/不通过；样本 < 10 ⇒ "不足"；记录模型／prompt／解析器版本；只读（测试：跑前后业务表哈希一致）
 - [ ] 7.4 本地路径导入兜底（不依赖 G1 链路）：`--source local` 直接读文件；测试用 3 份合成样本跑通 import → report
-- [ ] 7.5 评测集目录 `data/eval/` 加 `.gitignore` 与 README（访问控制、留存期 Q7、禁止训练用途）；`tests/test_eval_no_training_use.py`：grep 训练／微调相关 import 不得出现在 `scripts/eval_m2.py`
+- [ ] 7.5 评测集目录 `data/eval/` 加 `.gitignore` 与 README（访问控制、留存期 90 天——Q7 已裁决、禁止训练用途）；`tests/test_eval_no_training_use.py`：grep 训练／微调相关 import 不得出现在 `scripts/eval_m2.py`
 - [ ] 7.6 🔴 **首批标注回件并导入**（汤丽萍标注；Shao Peishen 确认导入结果）。判据：`report` 输出非"样本不足"
 - [ ] 7.7 用全部已标注样本跑 `report`，结果落 `docs/m2-eval-report.md`；未达标项回到对应单元返工并登记
 
@@ -91,7 +91,7 @@
 - [ ] 8.4 新增断言「简历访问留痕不可缺」：表缺失判失败；被读取过的简历至少一条留痕；反证
 - [ ] 8.5 `-m compliance` 标记覆盖 8.1–8.4，CI 接入；`tests/test_audit_assertion_effectiveness.py` 扩展四条反证
 - [ ] 8.6 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
-- [ ] 8.7 ⏸ Q5 答 (a) 时：bias 回归夹具纳入本单元（改造 `re-cinq/hiring-bias`，盲筛对照轴）；答 (b) 时本条划掉留墓碑并另立包
+- ~~8.7 bias 回归夹具纳入本单元（改造 `re-cinq/hiring-bias`，盲筛对照轴）~~ ⚰️ 已移出本包，不是漏跑：Q5 裁决 2026-09-17 答 (b) 另立包（design D15；真实简历入库闸开启前做不了）
 - [ ] 8.8 🔴 **真实简历入库闸开启**（Shao Peishen 亲自改配置；前置：0.2 通过 + 3.2 上线 + 8.4 绿）。判据：`.51` 上 `live` 上传被接收且访问留痕可查
 - [ ] 8.9 🔴 **`.51` 发版决定**（Shao Peishen；含 U0 冒烟通过的新依赖、`sync-to-server.sh` 白名单更新）。判据：`docs/deploy-51-server.md` 记录本次发版与依赖
 - [ ] 8.10 试运行：0.3 选定岗位在闸开启后跑一批真实简历，用真实样本复算一次四项指标落 `docs/m2-eval-report.md`「真实样本」节；🔴 试运行期间的任何淘汰确认由 HR 执行、Shao Peishen 抽查留痕

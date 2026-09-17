@@ -52,7 +52,7 @@
 
 ### 决策 D3：评测集经跟进信线发、私信附件回件，导入格式由本包定义（对应 intent D3）
 
-**做法**：「判例批改表」是一份固定列的 xlsx 模板（样本标识、岗位、六字段人工值、人工排序名次、标注人、时刻），每批 ≤20 份；导入脚本 `scripts/eval_m2.py import <file>` 逐行校验、幂等入库；归档件路径与批次对应关系落表。
+**做法**：「判例批改表」是一份固定列的 xlsx 模板（样本标识、岗位、六字段人工值、人工排序名次、标注人、时刻），每批 ≤20 份；导入脚本 `scripts/eval_m2.py import <file>` 逐行校验、幂等入库；归档件路径与批次对应关系落表。归档件留存期：导入完成且指标落档后 **90 天**删除，以合规验收 #1 的留存策略为准（✅ 已裁决 2026-09-17，原 Q7）。
 
 **为什么**：≤20 份是汤丽萍单次能认真标完的量；模板固定列是让"回件能被机器读"而不是拆件会话猜格式。导入放本包而不放 liaison 包，因为格式随 M2 字段 schema 演进，归属应跟 schema 走。
 
@@ -66,7 +66,7 @@
 
 ### 决策 D5：置信度阈值是岗位级配置，低置信度字段"隔离"而不是"丢弃"（对应 intent D5）
 
-**做法**：`job.parse_confidence_threshold`（默认 0.7，U0 实测后定）；置信度来源 = 模型自报置信度 × span 可定位性（无 span 直接判低）。低于阈值 ⇒ 写 `field_review_queue` 一行；硬门槛引擎读取字段时先查队列，命中即 `skipped(待校对)`。校对完成 ⇒ 队列行关闭 ⇒ 重新触发该投递的判定。
+**做法**：`job.parse_confidence_threshold`（默认 **0.7 起步**，U0 实测后定——Q3 未向 Shao Peishen 提问，按推荐值起步，由 U0 数据定终值）；置信度来源 = 模型自报置信度 × span 可定位性（无 span 直接判低）。低于阈值 ⇒ 写 `field_review_queue` 一行；硬门槛引擎读取字段时先查队列，命中即 `skipped(待校对)`。校对完成 ⇒ 队列行关闭 ⇒ 重新触发该投递的判定。
 
 **为什么**：D5 的本意是"机器没把握就交给人"，不是"机器没把握就当没有"。隔离到队列同时保住两件事：不因低置信度值误判 fail（合规），也不因丢弃而漏掉可校对的信息（准确率）。
 
@@ -88,7 +88,7 @@
 
 **向量存储**（本包决定，不留 Open Question）：在 SQLite 上用进程内实现——向量以 BLOB 存 `resume_embedding` 表，召回时全量读入 numpy 算 cosine。单岗投递量 ≤ 低三位数、维度 1024，全量算是毫秒级。⛔ 不引入 pgvector / FAISS——那会把"换 Postgres"提前绑进本包。
 
-**BGE-M3 运行位置**：见 Open Questions Q1（本地 CPU vs 境内托管 API）——两者都满足"境内"，差别在 Windows 装包与延迟，U0 实测后定，不影响 spec。
+**BGE-M3 运行位置**（✅ 已裁决 2026-09-17，原 Q1）：**`.51` 本地 CPU 推理**，简历全文不离机。U0 只实测本地 CPU 的装包体积与召回耗时，⛔ 不再比选境内托管 API；实测过慢的处置是离线批跑＋登记技术债，切托管 API 须重新裁决（不可代：真实简历处理范围变更）。
 
 ### 决策 D8：沿用 M1 Web，四个新页面，无前端框架（对应 intent D8）
 
@@ -116,7 +116,7 @@
 
 **做法**：新表 `candidate`（全局唯一，无状态）、`resume`（一人多份，含 `parsed_json` / `parse_confidence` / `parser_version` / `sample_class`）、`resume_text_span`（分片 + offset）、`application`（`candidate_id + job_id + current_stage_id + status`）、`stage`（全局池 + `stage_type` 语义标签，M2 预置 `initial / screening / rejected`）、`application_stage_history`（`actor_type ∈ {human, agent}`）、`rejection_record`（`reason_type` CHECK IN `('hard_rule','human_decision')`，`rule_ref`，`appeal_status`）、`resume_access_log`、`field_review_queue`、`screening_flag`、`resume_embedding`、`eval_sample` / `eval_annotation` / `eval_import_batch`。全部 `CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`（新表不需要加列路径）。
 
-**候选人去重**：`candidate` 按（姓名 + 手机号哈希）唯一；手机号本期只用于去重，以哈希存储，明文不落库。
+**候选人去重**：`candidate` 按（姓名 + 手机号哈希）唯一；手机号本期只用于去重，以哈希存储，明文不落库（✅ 已裁决 2026-09-17，原 Q6；工作台看联系方式约面试属 M3，届时须纳入 PIA 范围再议）。
 
 **为什么**：状态挂在投递不挂在人（Horilla 的坑，CLAUDE.md 数据模型要点）；`rejection_record` 的 CHECK 是红线的存储层落点；手机号哈希是最小必要原则。
 
@@ -132,10 +132,24 @@
 
 **为什么**：工程铁律 1、2 的直接落地。批量确认跨 thread 是 M2 与 M1 最大的形态差异——M1 一岗一 thread，人工动作也在同一 thread；M2 一次确认涉及 N 个 thread，幂等必须按 `batch_id` 而不是按 thread。
 
+### 决策 D14：扫描件识别引擎 = PaddleOCR（✅ 已裁决 2026-09-17，原 Q2）
+
+**做法**：扫描型 PDF 走 PaddleOCR（Windows 可 pip 装、中文好）；文本型 PDF 直抽、Word 走 `python-docx`。U0 在 `.51` 同款 Windows venv 上做可装性冒烟与识别质量实测。
+
+**为什么**：MinerU 版面更好但依赖重，在无 Docker 的 Windows 上可装性风险高；扫描件在本项目样本里是少数，PaddleOCR 够用。
+
+**退路**：U0 冒烟装不上或识别质量不可用 ⇒ 一期扫描件进"不可读"人工队列并登记技术债——这是实施退路，⛔ 不是换 MinerU（换引擎须重新裁决）。
+
+### 决策 D15：bias 回归夹具另立包（✅ 已裁决 2026-09-17，原 Q5）
+
+**做法**：§6 清单项"改造 `re-cinq/hiring-bias` 纳入 CI，含盲筛对照轴"移出本包，另立 OpenSpec 变更包；本包 tasks 8.7 留墓碑。
+
+**为什么**：夹具需要真实分布样本才有意义，真实简历入库闸开启前做不了；绑进本包只会让 U7 悬空。
+
 ## Risks / Trade-offs
 
-- [PaddleOCR / MinerU 在 Windows 无 Docker 上装不上或体积过大] → U0 首日在 `.51` 同款 Windows 上做可装性冒烟；装不上则一期只收文本型 PDF/Word，扫描件进"不可读"人工队列，并登记技术债
-- [BGE-M3 本地 CPU 推理在 `.51` 上慢] → 召回段离线批跑（上传后一次算完存 `resume_embedding`），不在页面请求路径上；仍慢则切境内托管 API（Q1）
+- [PaddleOCR 在 Windows 无 Docker 上装不上或体积过大] → U0 首日在 `.51` 同款 Windows 上做可装性冒烟；装不上则一期只收文本型 PDF/Word，扫描件进"不可读"人工队列，并登记技术债（D14 退路）
+- [BGE-M3 本地 CPU 推理在 `.51` 上慢] → 召回段离线批跑（上传后一次算完存 `resume_embedding`），不在页面请求路径上；仍慢则登记技术债，⛔ 不自行切托管 API（D7 已裁决本地）
 - [LLM 给的 evidence 偏移对不上原文] → 输出 schema 同时要 `quote`，落库前用 `quote` 在分片里反查校正偏移；反查失败判该次评分不可用。U0 把"span 可回溯率"列为模型对比指标之一
 - [G1 附件链路迟迟不通，评测集回不来] → U6 的导入脚本同时支持从本地路径导入（Shao Peishen 拿到文件后手工放入），⛔ 不因链路未通阻塞 U6 代码
 - [合规验收 #1 未过，只能用脱敏样本，与真实简历分布有偏] → 验收指标在脱敏集上算；试运行前在闸开启后用真实样本复算一次并落档
@@ -153,12 +167,12 @@
 
 ## Open Questions
 
-以下均为 intent 未覆盖、须新下判断的点。⛔ 本包不自行拍板，逐条在 tasks 相应位置标 ⏸ 待 Shao Peishen 裁决。每条附推荐，供他改字母即答。
+> 2026-09-17 13:3x Shao Peishen 对 `docs/roadmap/M2-intent.md`「立包后裁决」六题答 `1a，2a，3是，4b，5是，6是`（六题对应本节 Q1／Q2／Q4／Q5／Q6／Q7；Q3 未提问，按推荐起步）。已裁决条目已回填至 Decisions 相应位置，本节只留裁决记录。**当前待裁决条数：0。**
 
-- **Q1 BGE-M3 运行位置**：(a) `.51` 本地 CPU 推理（无外部依赖，装包约 2 GB，首批 200 份约分钟级）；(b) 境内托管 embedding API（快、无装包，多一个供应商账号与账单）。推荐 (a)，理由：简历全文不离开 `.51`，合规解释最简单。
-- **Q2 扫描件识别引擎**：(a) PaddleOCR（Windows 可 pip 装，中文好）；(b) MinerU（版面更好，依赖重）；(c) 一期不做扫描件，进"不可读"队列。推荐 (a)，U0 冒烟装不上则退到 (c)。
-- **Q3 置信度阈值默认值**：U0 实测后定，spec 只要求"岗位级可配"。推荐先按 0.7 起步。
-- **Q4 申诉登记人**：spec 已按"HR 代候选人登记"写（不开候选人自助入口）。是否接受？推荐是——候选人对外通道是不可代项，本包不开。
-- **Q5 bias 回归夹具**（§6 清单项"改造 `re-cinq/hiring-bias` 纳入 CI，含盲筛对照轴"）intent 未提。(a) 纳入本包 U7；(b) 另立包。推荐 (b)——夹具需要真实分布样本才有意义，闸开启前做不了。
-- **Q6 手机号处理**：design D11 按"只用于去重、哈希存储、明文不落库"写。若 HR 需要在工作台看到联系方式以便约面试，则需明文存储并纳入 PIA 范围。推荐本期哈希（M2 不做外发与约面），M3 再议。
-- **Q7 评测集归档件留存期**：spec 要求"有明确策略"。推荐：导入完成且指标落档后 90 天删除，与合规验收 #1 的留存策略对齐后以后者为准。
+- **Q1 BGE-M3 运行位置**：✅ 已裁决 2026-09-17：(a) `.51` 本地 CPU 推理，简历全文不离机 → D7
+- **Q2 扫描件识别引擎**：✅ 已裁决 2026-09-17：(a) PaddleOCR；U0 冒烟装不上则退到"不可读"队列，⛔ 不换 MinerU → D14
+- **Q3 置信度阈值默认值**：未向 Shao Peishen 提问（属实施参数，可代）。按推荐 **0.7 起步**，U0 实测后定终值，spec 只要求"岗位级可配" → D5
+- **Q4 申诉登记人**：✅ 已裁决 2026-09-17：是——HR 代候选人登记，本期不开候选人自助入口 → Non-Goals、`hard-requirement-screening` spec
+- **Q5 bias 回归夹具**：✅ 已裁决 2026-09-17：(b) 另立包 → D15、tasks 8.7 墓碑、proposal「不做」
+- **Q6 手机号处理**：✅ 已裁决 2026-09-17：是——只用于去重、哈希存储、明文不落库；M3 再议明文 → D11
+- **Q7 评测集归档件留存期**：✅ 已裁决 2026-09-17：是——导入完成且指标落档后 90 天删除，与合规验收 #1 留存策略对齐后以后者为准 → D3
