@@ -17,7 +17,7 @@
 - [ ] 1.4 对 ≥3 个境内 LLM（含 M1 已定的 DeepSeek）跑 1.3，模型标识取 API 响应 `model` 字段；实测 json_schema / json_object 支持与 evidence 位置质量 ⏸ 留步：仅 DeepSeek 两款有 key 实跑（20/20，数据见 docs/m2-model-comparison.md）；doubao/qwen 缺 ARK_API_KEY/DASHSCOPE_API_KEY（外部采购，Shao Peishen）
 - [x] 1.5 对本地 CPU BGE-M3 测召回：以人工排序前 10 为真值，测 top-30 召回率与单份耗时（Mac CPU 合成样本：单份 ~58 ms、recall@10=40%、n=20 故 top-30 无意义；.51 Windows CPU 与真实样本复算见留步）
 - [ ] 1.6 写 `docs/m2-model-comparison.md`「决策」节：抽取模型、精排模型、embedding 方案、置信度阈值起步值（Q3）、扫描件路径；判据：每项都有数据支撑，模型标识非别名 ⏸ 留步：决策节已建、抽取/精排/阈值三行待真实脱敏样本数据
-- [ ] 1.7 🔴 **定型确认**（Shao Peishen 签认 1.6 的决策节）。判据：文档末尾有「已确认 <日期>」
+- [ ] 1.7 🔴 **定型确认**（Shao Peishen 签认 1.6 的决策节）。判据：文档末尾有「已确认 <日期>」 ⏸ 2026-09-17 部分确认：抽取模型＝deepseek-flash（1.7b）；其余行待真实脱敏样本复算后签
 
 ## 2. U1 数据模型（ATS 域 ＋ 评分审计域接线）
 

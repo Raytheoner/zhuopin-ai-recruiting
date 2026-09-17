@@ -133,7 +133,7 @@ OcrUnavailable: PaddleOCR/PyMuPDF 未安装: No module named 'paddleocr'
 
 | 项 | 结论 | 数据支撑 |
 |---|---|---|
-| 抽取模型 | 待数据（合成样本上 deepseek-pro／deepseek-flash 字段准确率均 100%，无法区分优劣；真实脱敏样本复算后定。flash 在延迟/成本侧明显更快——解析 P50 1835 ms vs pro 43915 ms——仅作为参考信号，不作结论） | 见「对比结果」节字段准确率表与延迟列 |
+| 抽取模型 | **deepseek-flash**（响应侧 `model`＝`deepseek-flash`，fingerprint `aeb56401ca74e127821c4f9126dcb669`；请求侧配置 `deepseek-v4-flash`）——Shao Peishen 2026-09-17 答 1.7(b) 先定本行；真实脱敏样本到位后复算，字段准确率显著劣于 pro 则回本线重议 | 合成样本 pro／flash 字段准确率均 100%；解析 P50 flash 1835 ms vs pro 43915 ms |
 | 精排模型 | 待数据（Spearman pro 0.24 / flash 0.26，Top-10 召回 pro 60.0% / flash 70.0%，均未达 D9 门槛 ≥0.70 / ≥85%；合成样本的「设计排序」与 LLM 精排口径存在差异，需在真实脱敏样本上复算） | 见「对比结果」节表首「门槛（D9）」行对照 |
 | embedding 方案 | `.51` 本地 CPU BGE-M3（已裁决，D7）；装包体积：torch 587 MB + FlagEmbedding 2.1 MB（依赖链约 1 GB 量级）+ 权重缓存 4.3 GB（可用 `allow_patterns` 限至约 2.3 GB）；单份耗时：Mac M-series CPU 单份 ~58 ms、画像 ~205 ms；recall@10（合成样本，n=20）= 40.0%，仅记录不作结论 | 见「BGE-M3 本地 CPU 召回」节 |
 | 置信度阈值起步值（Q3） | 0.7（推荐起步）；终值：待真实脱敏样本复算（合成样本 evidence 可定位率 100%、字段准确率 100%，区分度不足，无法给出比 0.7 更细的终值） | 见「对比结果」节 evidence 可定位率与逐字段准确率表 |
@@ -154,3 +154,5 @@ OcrUnavailable: PaddleOCR/PyMuPDF 未安装: No module named 'paddleocr'
 ## 已确认
 
 （Shao Peishen 签认后填：已确认 YYYY-MM-DD）
+
+- 部分确认 2026-09-17（Shao Peishen 答 1.7 选 b）：仅「抽取模型＝deepseek-flash」一行定型；精排模型、置信度阈值终值待真实脱敏样本（历史离职候选人简历脱敏，裁决 2a）复算后再签；embedding 与扫描件路径沿用已裁决 D7／D14。全表签认前 1.7 不勾。

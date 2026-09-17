@@ -40,9 +40,23 @@
 - **R1 发车排队**：`lane-launcher.sh` 遇占用 ⇒ 请求移入 `launch/queue/`；`run-lanes.sh` 收敛末尾写 `.claude/handoff/events/lanes-done-<批次>`；事件监听器出队下一条。
 - **R2 调度器**：`.claude/handoff/events/` 下出现事件文件 ⇒ launchd 起一个无头 CC 会话（Sonnet，单实例锁，预算上限）执行 skill `task-dispatcher`：读 R3 台账＋仓库真身 → 计算 ready 集（前置已合 main、非决策/外部阻塞、触碰区不与在跑泳道重叠）→ 按 lane-dispatch 规则写块、登记号池、dry-run、写 launch request → 更新台账状态 → 需人的写 R5。事件来源：泳道批次收敛、提交通道完成一次「定夺答复」提交、拆件会话收口、每日一次日历兜底（09:00，防事件丢失）。
 - **R3 任务台账** `docs/roadmap/任务台账.yaml`：每条 `id / 场景 / 阶段 / 依赖 / 触碰区 / 状态(待开|在跑|完成|阻塞) / 阻塞类型(决策|外部|无) / 产出判据`；初始由调度器从路线图＋各 openspec tasks.md＋plans 生成，之后以台账为准、真身核对。
-- **R4 阶段推进规则**（调度器内置）：intent 有且无未答题 ⇒ propose；包 validate 过且无 Open Questions ⇒ spec-to-plan（逐单元）；plan Task≥5 ⇒ 拆段 run-build；单元合 main ⇒ 下一单元；全部单元合 main ⇒ 发布定夺（R5）；发布后 ⇒ 起草验收跟进信（待你审进 R5）；回件拆件 ⇒ 口径签认定夺（R5）或新需求 ⇒ intent。
+- **R4 阶段推进规则**（调度器内置）：intent 有且无未答题 ⇒ **G1 定夺「intent 定稿」**，答复后 ⇒ propose；包 validate 过且无 Open Questions ⇒ **G2 定夺「design／spec 定稿」**，答复后 ⇒ spec-to-plan（逐单元）；plan Task≥5 ⇒ 拆段 run-build；单元合 main ⇒ 下一单元；全部单元合 main ⇒ 发布定夺（R5）；发布后 ⇒ 起草验收跟进信（待你审进 R5）；回件拆件 ⇒ 口径签认定夺（R5）或新需求 ⇒ intent。
 - **R5 定夺队列** `docs/roadmap/定夺队列.md`：`编号 / 场景 / 问题 / 选项与代价 / 推荐 / 来源 / 阻塞了哪些任务`；Cowork 在本线收到答复 ⇒ 写回并经提交通道提交 ⇒ 触发 R2。
 
 ## 五、执行
 
 一条批次「任务驱动自转」：泳道甲 R1＋动作通道 TDD（`scripts/`、`docs/openers/lane-launcher.sh`、事件监听器）；泳道乙 R2–R5（新 skill `task-dispatcher`、`docs/roadmap/任务台账.yaml` 初始生成、`定夺队列.md`、调度器 LaunchAgent 安装器——安装经动作通道 `install-agent` 执行，不需要人开终端）。改 `run-lanes.sh` 只允许在收敛末尾加一行写事件文件，超出即停。
+
+## 在环闸门（Shao Peishen 2026-09-17 17:0x 定，⛔ 调度器与任何无头会话不可越过）
+
+自动化只推进两个闸门之间的活；到闸门一律写定夺队列并停在该场景（其它场景照常能开尽开）。放行判据只认 `docs/roadmap/定夺队列.md` 对应行「状态＝已答」且答复为放行字样，⛔ 不认聊天记忆、不认台账状态自改。
+
+| 闸 | 何时到闸 | 放行字样 | 放行后 |
+|---|---|---|---|
+| G1 intent 定稿 | grill 产出 `docs/roadmap/intents/<场景>-intent.md` 且无未答题 | 「定」（或逐条改后「定」） | propose |
+| G2 design／spec 定稿 | 包 `openspec validate` 过、无 Open Questions | 「定」 | spec-to-plan → build |
+| G3 发布 | 场景全部单元合 main | 「发」 | 动作通道 `deploy-51`（后续）或无头 `.51` 发版 |
+| G4 发信 | 跟进信 md＋docx 起草完、自检过 | 先「审核通过」再「发」（可同条答复） | Cowork 经动作通道 `send-followup`；⛔ 调度器永不调用发信动作 |
+| G5 口径签认 | 回件拆件判为口径点 | 「签」 | 口径点台账转已签认 |
+
+intent／design／spec 在闸前允许无头会话起草与修订；「定稿」本身（状态字样、归档、进下一阶段）只在放行后发生。
