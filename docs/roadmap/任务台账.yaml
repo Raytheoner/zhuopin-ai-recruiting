@@ -3,14 +3,15 @@ version: 1
 summary:
   条目数: 195
   按状态:
-    待开: 66
-    在跑: 9
-    完成: 81
-    阻塞: 39
+    待开: 65
+    在跑: 5
+    完成: 87
+    阻塞: 38
   阻塞·决策: 20
   阻塞·外部: 17
   conflicts:
   - m1-intake-quality-fixes/8.9
+  - m1-intake-quality-fixes/U8/plan
   - m1-job-profile-intake/1.5b
   - m1-job-profile-intake/1.7
   - m1-job-profile-intake/5.6
@@ -21,8 +22,7 @@ summary:
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
   - relay:H-4
-  ready:
-  - m1-intake-quality-fixes/U8/plan
+  ready: []
   闸门待放行:
   - answer:Q-12 ← G3 `.51`（待答）
   - answer:Q-14 ← G3 `.51`（待答）
@@ -707,13 +707,17 @@ tasks:
   - m1-intake-quality-fixes/U7
   触碰区:
   - docs/superpowers/plans/*-m1-intake-quality-fixes-unit8-*.md
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m1-intake-quality-fixes/tasks.md
   闸门: G2 m1-intake-quality-fixes
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
   备注: 0917 dispatcher 核实：delivery-units.md §「G·真实会话回放验证与上线」明写"性质与前五个单元不同，不建议当成一份 TDD plan 跑 run-build"——8.1 已单独完成，8.2-8.8 已完成（发版/文档回填），唯一剩项 8.9 是归档顺序提醒（阻塞·外部，见同 id
-    8.9 条），不是代码工作。⛔ 不派 spec-to-plan，否则会对已完成的工作重新生成实现计划。台账生成器不读 delivery-units.md，此依赖手工标注，每次刷新会被判 conflicts（真身=待开）
+    8.9 条），不是代码工作。⛔ 不派 spec-to-plan，否则会对已完成的工作重新生成实现计划。台账生成器不读 delivery-units.md，此依赖手工标注，每次刷新会被判 conflicts（真身=待开）。0917 第二次核实：上次核实只写了备注、忘了把状态从待开改完成，导致仍被判 ready 并险些误派——本次改状态为完成
 - id: m1-intake-quality-fixes/U8
   场景: M1
   阶段: build
@@ -1120,16 +1124,15 @@ tasks:
   - m1-job-profile-intake/U8
   - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
   触碰区: []
-  状态: 阻塞
+  状态: 完成
   阻塞类型: 无
   产出判据: 端到端测试：从企微发起到 JD 产出的完整链路
   来源: openspec/changes/m1-job-profile-intake/tasks.md:398
   conflicts:
     状态:
-      台账: 阻塞
+      台账: 完成
       真身: 待开
-  备注: 0917 dispatcher 核实：本条原文起点写死「从企微发起」，tasks.md:449-465 已记录移出至 hr-wecom-aibot-liaison，真正等价的端到端验证是该包 8.6（单机灰度），8.6 仍阻塞/决策未完成；依赖字段每次生成会被覆盖、加依赖不持久，故直接标状态=阻塞防止被当独立
-    build 任务误派车重做「从企微发起」的测试，此条会持续显示 conflicts（真身待开），下次核对时先查 hr-wecom-aibot-liaison/8.6 是否已完成
+  备注: 0917 dispatcher 核实：tasks.md:399 该条标「⤷ 已移出到阶段二·企微通道，Web 通道等价链路已由 tests/test_web_api.py 覆盖」，与 1.5b/1.7/5.6/6.8 同一模式（已移出不算欠账），按同一判据标完成，解除对 U9 的误阻塞（U9 仍被 9.1 外部输入正确阻塞）
 - id: m1-job-profile-intake/U9/plan
   场景: M1
   阶段: plan
@@ -2706,7 +2709,7 @@ tasks:
   依赖: []
   触碰区:
   - docs/compliance/
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: '`docs/compliance/` 下三份草稿（PIA／候选人同意条款单列 AI 评估／留存与删除策略）落档、标注「草稿·待签认」；定夺队列追加 G5 类签认行（`gates.py request G5 合规验收#1 …`，阻塞的任务 id＝`m2-resume-parse-and-rank/0.2`）；⛔
     不代签、不对外发送'
@@ -2759,7 +2762,7 @@ tasks:
   依赖: []
   触碰区:
   - 06-企业AI转型资产借鉴清单.md
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: '`06-企业AI转型资产借鉴清单.md` 的 3.3、9.1、9.2、9.3 标题与末尾清单对应项标「⚰️ 作废（Q-17a）」并写去向，⛔ 不删原文'
   来源: docs/roadmap/定夺队列.md:33 Q-17a
@@ -2787,7 +2790,7 @@ tasks:
   - app/web/server.py
   - docs/tech-debt.md
   - tests/test_web_api.py
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: '`tests/test_web_api.py` 新增用例：checkpointer 删除抛异常时接口仍返回引导语且日志含 ERROR；`docs/tech-debt.md` TD-13 销账'
   来源: docs/roadmap/定夺队列.md:36 Q-20a
@@ -2801,7 +2804,7 @@ tasks:
   触碰区:
   - .claude/skills/requirement-grill/SKILL.md
   - tests/test_requirement_grill_skill.py
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: SKILL.md 含「⏸️ 默认项」行与 15 分钟规则、落档措辞「超时按默认项生效（未获明确答复，<会话> <时刻>）」，并保留 G1 intent 定稿人闸与「判据／口径／阈值类永不默认生效」；`tests/test_requirement_grill_skill.py` 覆盖
   来源: docs/roadmap/定夺队列.md:37 Q-21a
