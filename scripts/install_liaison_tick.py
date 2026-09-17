@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""装 Mac 侧调度 tick 的 LaunchAgent（幂等）：每 5 分钟跑一次 `python -m tools.liaison tick`。
+"""装 Mac 侧调度 tick 的 LaunchAgent（幂等）：每日 09:00、14:00 各跑一次 `python -m tools.liaison tick`。
 
 为什么是 launchd 而不是进程内定时（TD-11）：
     提醒必须是"进程重启也不丢"的调度。sleep 循环／后台线程活不过一次重启，等于把
-    "没做"标成"做完了"。launchd `StartInterval` 由操作系统保证：tick 是一次性进程，
-    跑完即退，下一次由系统再拉起；tick 自身幂等（三类扫描各带幂等键），多跑无害。
+    "没做"标成"做完了"。launchd `StartCalendarInterval` 由操作系统保证：tick 是一次性进程，
+    跑完即退，下一次由系统按日历再拉起；tick 自身幂等（两类扫描各带幂等键），多跑无害。
+
+为什么是日历时点而不是 `StartInterval` 轮询（0917AE，Shao Peishen 2026-09-17 裁决）：
+    tick 只剩两类**时间事件**——跟进信超期、观察窗到期——都按自然日判，一天看两眼足够。
+    泳道结果已由 run-lanes.sh 收敛时直接 `owner-notify` 入队（0917Y，事件驱动），
+    每 300 秒扫一遍 handoff 目录的轮询没有存在理由。⛔ 不要把 `StartInterval` 加回来。
+    机器在时点上没开机／睡眠：launchd 会在下次醒来时补跑一次错过的日历触发（合并成一次），
+    tick 幂等，补跑无害。
 
     装 LaunchAgent 属安全配置变更，和改 settings.json 同类——⛔ Claude 不代做，
     由 Shao Peishen 本人跑一次。
@@ -35,12 +42,13 @@ from pathlib import Path
 
 LABEL = "com.zhuopin.hr.liaison-tick"
 
-#: 两次 tick 之间的间隔（秒）。5 分钟：跟进信／观察窗按天判，泳道批次收敛后 5 分钟内
-#: 知道足够；再密只是白读文件。
-START_INTERVAL_SECONDS = 300
+#: 每日触发时点（本机本地时间，(小时, 分钟)）。可调：改这里即可，plist 与测试跟着走。
+#: 09:00 ＝ 上班先看一眼昨夜到期的；14:00 ＝ 午后再看一眼上午推送满天数的。
+#: 跟进信／观察窗都按自然日判（CST），一天两眼足够；⛔ 不用 StartInterval 轮询（见模块 docstring）。
+CALENDAR_SLOTS: tuple[tuple[int, int], ...] = ((9, 0), (14, 0))
 
 # launchd 不继承登录 shell 的环境，默认 PATH 极简。tick 本身只用 venv 里的 python，
-# 但 `compute_lane_digest` 之外将来若有子进程（git 等）就靠这份 PATH。
+# 但将来若有子进程（git 等）就靠这份 PATH。
 # 🔴 ⛔ 不许留字面量 `~`：plist **不做波浪号展开**，`~/.local/bin` 会被当成一个
 #    名字里真带 `~` 的相对目录，等价于没写——而且不报错（scripts/install_lane_launcher.py 同源）。
 PATH_ENTRIES = (
@@ -76,9 +84,9 @@ def log_dir(root: Path) -> Path:
 def build_plist(root: Path, home: Path) -> dict:
     """算出 LaunchAgent 的 plist 字典。纯函数：不建目录、不碰 launchctl。
 
-    单独提出来是为了可测——四个必带键（StartInterval / AbandonProcessGroup /
-    EnvironmentVariables.PATH / WorkingDirectory）缺了都"不报错只不工作"，
-    断言见 tests/test_install_liaison_tick.py。
+    单独提出来是为了可测——四个必带键（StartCalendarInterval / AbandonProcessGroup /
+    EnvironmentVariables.PATH / WorkingDirectory）缺了都"不报错只不工作"，`StartInterval`
+    残留则是"两种触发并存、又变回轮询"，断言见 tests/test_install_liaison_tick.py。
     """
     logs = log_dir(root)
     return {
@@ -86,8 +94,9 @@ def build_plist(root: Path, home: Path) -> dict:
         "ProgramArguments": [str(venv_python(root)), "-m", "tools.liaison", "tick"],
         # 装好立刻跑一次，让安装当场自证；tick 幂等，多跑无害。
         "RunAtLoad": True,
-        # 定时由 launchd 保证。⛔ 不设 KeepAlive：tick 正常退出后 KeepAlive 会立刻再拉起，等价于忙循环。
-        "StartInterval": START_INTERVAL_SECONDS,
+        # 定时由 launchd 保证：按日历、多个时点写成数组。⛔ 不设 KeepAlive：tick 正常退出后
+        # KeepAlive 会立刻再拉起，等价于忙循环。⛔ 不设 StartInterval：那是轮询（0917AE 去掉）。
+        "StartCalendarInterval": [{"Hour": hour, "Minute": minute} for hour, minute in CALENDAR_SLOTS],
         # `python -m tools.liaison` 靠 cwd 进 sys.path。launchd 默认 cwd 是 `/`，不钉死就 import 不到 tools 包。
         "WorkingDirectory": str(root),
         # tick 退出后 launchd 认为这条 job 结束、回收**整个进程组**（SIGKILL）。tick 当前不开子进程，
@@ -103,6 +112,10 @@ def build_plist(root: Path, home: Path) -> dict:
     }
 
 
+def _render_slots() -> str:
+    return "、".join(f"{hour:02d}:{minute:02d}" for hour, minute in CALENDAR_SLOTS)
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
@@ -110,7 +123,7 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="install_liaison_tick.py",
-        description="装／重装 Mac 侧调度 tick 的 LaunchAgent（每 300 秒跑一次 python -m tools.liaison tick）。",
+        description="装／重装 Mac 侧调度 tick 的 LaunchAgent（每日 09:00、14:00 各跑一次 python -m tools.liaison tick）。",
     )
     parser.add_argument("--print", action="store_true", help="只打印将写入的 plist，不写文件、不碰 launchctl")
     return parser
@@ -135,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # 无害预检：解释器不在就退回人工并说明，⛔ 不写一份必然起不来的 plist
-    # （那种 plist 的症状是 err 日志里每 5 分钟一条 "No such file"，而 launchctl 一切正常）。
+    # （那种 plist 的症状是 err 日志里每个时点一条 "No such file"，而 launchctl 一切正常）。
     python = venv_python(root)
     if not python.exists():
         print(
@@ -163,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"仓库：      {root}")
     print(f"解释器：    {python}")
     print(f"plist：     {plist_path} （{'覆盖写入' if existed else '新建'}）")
-    print(f"间隔：      {START_INTERVAL_SECONDS} 秒")
+    print(f"时点：      每日 {_render_slots()}")
     print(f"bootout：   rc={boot_out.returncode} {boot_out.stderr.strip()}")
     print(f"bootstrap： rc={boot_in.returncode} {boot_in.stderr.strip()}")
 
@@ -178,11 +191,11 @@ def main(argv: list[str] | None = None) -> int:
     print("状态（launchctl print 摘要）：")
     for line in status.stdout.splitlines():
         stripped = line.strip()
-        if stripped.startswith(("state =", "path =", "program =", "last exit code =", "run interval =")):
+        if stripped.startswith(("state =", "path =", "program =", "last exit code =")):
             print(f"  {stripped}")
 
     print()
-    print("✅ 装好了。此后每 5 分钟自动跑一次 tick，只入队；私信由值守服务本体发。")
+    print(f"✅ 装好了。此后每日 {_render_slots()} 各自动跑一次 tick，只入队；私信由值守服务本体发。")
     print(f"   日志：{log_dir(root) / 'tick.out.log'}  /  {log_dir(root) / 'tick.err.log'}")
     print(f"   手动跑一次：cd {root} && {python} -m tools.liaison tick")
     return 0

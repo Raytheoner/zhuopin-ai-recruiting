@@ -1,7 +1,9 @@
 """`scripts/install_liaison_tick.py` 生成的 LaunchAgent（0917AA）——Mac 侧调度 tick 的 plist 契约。
 
-tick 由 launchd `StartInterval` 每 5 分钟拉起一次 `python -m tools.liaison tick`，跑完即退。
-这里钉住的四项都属于「错了不报错」：
+tick 由 launchd `StartCalendarInterval` 按日历拉起 `python -m tools.liaison tick`（0917AE 起：
+每日 09:00、14:00 两个时点；此前是 `StartInterval` 300 秒轮询，泳道结果改由 run-lanes.sh 事件入队
+后轮询没有存在理由），跑完即退。这里钉住的几项都属于「错了不报错」：
+- `StartInterval` 残留 ⇒ 两种触发并存，tick 又变回 5 分钟轮询；
 - `AbandonProcessGroup` 缺失 ⇒ tick 退出时 launchd 连坐 SIGKILL 它开的子进程（0909Y 实测）；
 - `EnvironmentVariables.PATH` 缺失或带字面量 `~` ⇒ launchd 的极简 PATH 找不到工具，且 plist 不展开波浪号；
 - `WorkingDirectory` 不是仓库根 ⇒ `python -m tools.liaison` import 不到 tools 包；
@@ -39,8 +41,15 @@ def test_build_plist_runs_the_tick_subcommand_with_the_liaison_venv(tmp_path: Pa
     ]
 
 
-def test_build_plist_fires_every_300_seconds(plist: dict) -> None:
-    assert plist["StartInterval"] == 300
+def test_build_plist_fires_on_calendar_not_on_interval(plist: dict) -> None:
+    """0917AE：按日历触发（每日 09:00、14:00），⛔ 不再有 StartInterval 轮询。"""
+    assert "StartInterval" not in plist, "StartInterval 残留 ⇒ 又变回 5 分钟轮询"
+    slots = plist["StartCalendarInterval"]
+    assert isinstance(slots, list) and len(slots) == 2
+    assert slots == [{"Hour": 9, "Minute": 0}, {"Hour": 14, "Minute": 0}]
+    assert slots == [
+        {"Hour": h, "Minute": m} for h, m in install_liaison_tick.CALENDAR_SLOTS
+    ], "plist 的时点必须与 CALENDAR_SLOTS 常量一致（常量可调，plist 跟着走）"
     # ⛔ 不是常驻进程：KeepAlive 会让 launchd 在 tick 正常退出后立刻再拉起，等价于忙循环。
     assert "KeepAlive" not in plist
 
@@ -95,7 +104,9 @@ def test_print_mode_writes_nothing_and_calls_no_launchctl(tmp_path: Path, monkey
     assert install_liaison_tick.main(["--print"]) == 0
     out = capsys.readouterr().out
     parsed = plistlib.loads(out.encode("utf-8"))
-    assert parsed["StartInterval"] == 300 and parsed["AbandonProcessGroup"] is True
+    assert "StartInterval" not in parsed and "StartInterval" not in out
+    assert parsed["StartCalendarInterval"] == [{"Hour": 9, "Minute": 0}, {"Hour": 14, "Minute": 0}]
+    assert parsed["AbandonProcessGroup"] is True
     assert not (tmp_path / "LaunchAgents").exists()
     assert not (tmp_path / "data").exists()
 

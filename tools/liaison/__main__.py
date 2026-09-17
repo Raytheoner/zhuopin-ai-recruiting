@@ -623,9 +623,10 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "owner-notify
     raise SystemExit(owner_notify.owner_notify_main(sys.argv[2:]))
 
 # ── 0917AA·Mac 侧调度 tick 子命令 ─────────────────────────────────────────
-# ⛔ 又一段**纯插入**：既有入口一字节未动。tick 由 launchd 每 5 分钟拉起一次，只写发件箱
-# （泳道结果／跟进信超期／观察窗到期），不建连接、不需要企微凭据，必须短路在 main() 的
-# load_credentials() 之前——否则没配 BOT_ID 的机器上 tick 每 5 分钟报一次"缺凭据"。
+# ⛔ 又一段**纯插入**：既有入口一字节未动。tick 由 launchd 按日历（每日 09:00、14:00）拉起，只写发件箱
+# （跟进信超期／观察窗到期；泳道结果由 run-lanes.sh 事件入队，0917AE 起不再轮询），不建连接、
+# 不需要企微凭据，必须短路在 main() 的 load_credentials() 之前——否则没配 BOT_ID 的机器上
+# tick 每个时点报一次"缺凭据"。
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "tick":
     from tools.liaison.tick import tick_main
 

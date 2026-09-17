@@ -1,24 +1,25 @@
-"""Mac 侧调度 tick（0917AA，G4）：`python -m tools.liaison tick`。
+"""Mac 侧调度 tick（0917AA，G4；0917AE 去轮询）：`python -m tools.liaison tick`。
 
-**一次性进程**：由 launchd `StartInterval`（`scripts/install_liaison_tick.py`，300 秒）拉起，
-跑一遍、退出。⛔ 不是 sleep 循环、⛔ 不开后台线程——TD-11 的口径是"进程一重启就没了的
-东西不算调度"，所以调度权交给操作系统，本模块只负责"这一次该做什么"。
+**一次性进程**：由 launchd `StartCalendarInterval` 按日历拉起（`scripts/install_liaison_tick.py`，
+每日 09:00、14:00 两个时点），跑一遍、退出。⛔ 不是 sleep 循环、⛔ 不开后台线程——TD-11 的口径是
+"进程一重启就没了的东西不算调度"，所以调度权交给操作系统，本模块只负责"这一次该做什么"。
 
-每次做三件事，**全部只入队**（写 `owner_notify_outbox`，由值守服务进程私信本人）：
-1. **泳道结果**：`.claude/handoff/lanes-*/summary.txt` 存在 ⇒ 批次已收敛 ⇒
-   `compute_lane_digest` ⇒ 入队。只看回看窗内（`LANE_LOOKBACK_DAYS`）的批次，
-   首次安装不会把几十个历史批次一口气私信出去。幂等键＝批次目录名（与 `run-lanes.sh` 收敛时自己那条
-   `owner-notify --dedupe-key lanes-<STAMP>` **同一把键**，两条路不会各发一次）。
-2. **跟进信超期提醒**：台账里「✅ 已推送 <日期>」起头、交期列没写「不催」的行，
+**只处理时间事件**（Shao Peishen 2026-09-17 裁决：事件驱动替代轮询），**全部只入队**
+（写 `owner_notify_outbox`，由值守服务进程私信本人）：
+1. **跟进信超期提醒**：台账里「✅ 已推送 <日期>」起头、交期列没写「不催」的行，
    推送满 3 天、满 7 天各提醒一次。幂等键＝`followup:<编号>:<第几次>`（TD-11：
    键里必须含"第几次"，否则调度器重跑会重复发）。⛔ 只提醒本人，⛔ 不给专员发。
-3. **观察窗到期**：读观察窗文档的「到期：YYYY-MM-DD」，到期当天（或之后首次跑到）
+2. **观察窗到期**：读观察窗文档的「到期：YYYY-MM-DD」，到期当天（或之后首次跑到）
    入队一次。幂等键＝`observation:<文件名>:<到期日>`。解析失败 ⇒ 记告警、跳过。
 
-三类扫描各自 try/except：一类炸了只记进 `TickReport.warnings`，⛔ 不拖死另外两类。
+泳道结果 ⛔ 不在这里：`run-lanes.sh` 收敛时直接 `owner-notify --dedupe-key lanes-<STAMP>` 入队
+（0917Y，事件驱动），本模块不再轮询 `.claude/handoff`。守护断言：
+tests/test_tick.py::test_tick_does_not_poll_lane_batches。
+
+两类扫描各自 try/except：一类炸了只记进 `TickReport.warnings`，⛔ 不拖死另一类。
 
 分层（工程铁律 2 的形状）：`compute_*` 是纯函数（吃文本、吃 `today`，不碰文件与时钟），
-`scan_*` 负责读文件并调 `effect_enqueue_owner_notify`，`run_tick` 串三段，`tick_main`
+`scan_*` 负责读文件并调 `effect_enqueue_owner_notify`，`run_tick` 串两段，`tick_main`
 是唯一读真实时钟、真实路径的地方。
 
 ⛔ 本模块不 import aibot、不碰 `SdkSendPort`、不调 `drain`——发送是值守线程的事。
@@ -38,7 +39,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from tools.liaison import logsetup
-from tools.liaison.lane_digest import compute_lane_digest
 from tools.liaison.owner_notify import OWNER_NOTIFY_THREAD_ID
 from tools.liaison.session import CHINA_TZ
 from tools.liaison.storage import db as liaison_db
@@ -51,19 +51,6 @@ EXIT_BAD_ARGS = 2
 
 #: tools/liaison/tick.py → parents[0]=liaison, [1]=tools, [2]=仓库根
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-#: run-lanes.sh 的批次目录名形状（`LOGDIR="$REPO/.claude/handoff/lanes-$STAMP"`）。
-#: 同目录下还有 `launch/`、服务器取证 `.log` 等，⛔ 不能拿"是个目录"当判据。
-LANE_BATCH_GLOB = "lanes-*"
-#: 批次收敛的判据文件：run-lanes.sh 只在末尾 `tee "$LOGDIR/summary.txt"`，跑到一半没有它。
-LANE_SUMMARY_NAME = "summary.txt"
-LANE_RESULTS_NAME = "results.tsv"
-#: 批次目录名里的时间戳：`lanes-YYYYMMDD-HHMMSS`。对不上形状的目录不是 run-lanes 写的，跳过。
-_LANE_STAMP_RE = re.compile(r"^lanes-(\d{8})-\d{6}$")
-#: 只看最近这几天收敛的批次（按目录名日期，含今天）。首次装 tick 时 handoff 下已有
-#: 几十个历史批次（2026-09-17 实数 37 个带 summary.txt），不设回看窗会一口气私信几十条。
-#: 历史批次不入队也不记告警——它们早已在看护报告里收过口。
-LANE_LOOKBACK_DAYS = 1
 
 #: 跟进信提醒的两个时点（自然日）。第 1 次＝满 3 天，第 2 次＝满 7 天。
 #: 判据是 `days >= 阈值`（不是 `==`）：机器那天没开机也不该把这一次永远漏掉，
@@ -81,9 +68,8 @@ _DUE_RE = re.compile(r"到期[：:]\s*(\d{4}-\d{2}-\d{2})")
 
 @dataclass(frozen=True)
 class TickPaths:
-    """tick 读的三个真源。默认值见 `default_paths()`；单测整份替换成 tmp 路径。"""
+    """tick 读的两个真源。默认值见 `default_paths()`；单测整份替换成 tmp 路径。"""
 
-    handoff_root: Path
     ledger_path: Path
     observation_path: Path
 
@@ -91,7 +77,6 @@ class TickPaths:
 def default_paths() -> TickPaths:
     """仓库真源路径。独立成函数是为了让 `tick_main` 的单测能 monkeypatch 整份。"""
     return TickPaths(
-        handoff_root=REPO_ROOT / ".claude" / "handoff",
         ledger_path=REPO_ROOT / "docs" / "跟进信" / "README-跟进信清单.md",
         observation_path=REPO_ROOT / "docs" / "findings" / "2026-09-17-值守通道一周观察窗.md",
     )
@@ -99,7 +84,7 @@ def default_paths() -> TickPaths:
 
 @dataclass(frozen=True)
 class Reminder:
-    """一条待入队的提醒：幂等键 ＋ 正文。三类扫描的公共输出形状。"""
+    """一条待入队的提醒：幂等键 ＋ 正文。两类扫描的公共输出形状。"""
 
     dedupe_key: str
     body: str
@@ -212,54 +197,6 @@ def _enqueue(conn: sqlite3.Connection, reminder: Reminder, report: TickReport) -
         report.enqueued.append(reminder.dedupe_key)
 
 
-def compute_lane_batch_date(dir_name: str) -> dt.date | None:
-    """`lanes-20260917-101500` → 2026-09-17；形状不对或日期非法 ⇒ None。**纯函数**。"""
-    match = _LANE_STAMP_RE.match(dir_name)
-    if match is None:
-        return None
-    try:
-        return dt.datetime.strptime(match.group(1), "%Y%m%d").date()
-    except ValueError:
-        return None
-
-
-def compute_lane_batch_in_window(dir_name: str, *, today: dt.date) -> bool:
-    """批次是否落在回看窗内（今天往前 LANE_LOOKBACK_DAYS 天，含今天）。**纯函数**。"""
-    stamp = compute_lane_batch_date(dir_name)
-    return stamp is not None and 0 <= (today - stamp).days <= LANE_LOOKBACK_DAYS
-
-
-def scan_lane_batches(
-    conn: sqlite3.Connection, handoff_root: Path, *, today: dt.date, report: TickReport
-) -> None:
-    """回看窗内、已收敛且尚未通知过的批次 ⇒ 入队。"已通知过"由 effect 的幂等键说了算。"""
-    if not handoff_root.is_dir():
-        return
-    for batch in sorted(handoff_root.glob(LANE_BATCH_GLOB)):
-        if not batch.is_dir() or not (batch / LANE_SUMMARY_NAME).is_file():
-            continue
-        if not compute_lane_batch_in_window(batch.name, today=today):
-            continue
-        # 先查一眼发件箱，省得每 5 分钟把历史批次的 results.tsv 全部重读一遍。
-        # 这只是省 IO，⛔ 不是幂等防线——防线是下面 effect 的 effect_log 键。
-        exists = conn.execute(
-            "SELECT 1 FROM owner_notify_outbox WHERE dedupe_key = ?", (batch.name,)
-        ).fetchone()
-        if exists is not None:
-            report.skipped.append(batch.name)
-            continue
-        results = batch / LANE_RESULTS_NAME
-        body = compute_lane_digest(
-            results.read_text(encoding="utf-8") if results.is_file() else "",
-            (batch / LANE_SUMMARY_NAME).read_text(encoding="utf-8"),
-            batch_label=batch.name,
-        )
-        if not body.strip():
-            report.warnings.append(f"批次 {batch.name} 摘要为空，跳过")
-            continue
-        _enqueue(conn, Reminder(dedupe_key=batch.name, body=body), report)
-
-
 def scan_followup_reminders(
     conn: sqlite3.Connection, ledger_path: Path, *, today: dt.date, report: TickReport
 ) -> None:
@@ -290,17 +227,16 @@ def scan_observation_window(
 
 
 def run_tick(conn: sqlite3.Connection, *, paths: TickPaths, today: dt.date) -> TickReport:
-    """跑一遍三类扫描。一类抛异常只记告警，其余照跑。"""
+    """跑一遍两类扫描。一类抛异常只记告警，另一类照跑。"""
     report = TickReport()
     steps = (
-        ("泳道结果", lambda: scan_lane_batches(conn, paths.handoff_root, today=today, report=report)),
         ("跟进信超期", lambda: scan_followup_reminders(conn, paths.ledger_path, today=today, report=report)),
         ("观察窗到期", lambda: scan_observation_window(conn, paths.observation_path, today=today, report=report)),
     )
     for name, step in steps:
         try:
             step()
-        except Exception as exc:  # noqa: BLE001 —— 见 docstring：一类失败不拖死其余两类
+        except Exception as exc:  # noqa: BLE001 —— 见 docstring：一类失败不拖死另一类
             logger.error("tick 扫描「%s」失败", name, exc_info=True)
             report.warnings.append(f"{name}扫描失败：{exc}")
     return report
@@ -319,7 +255,7 @@ def render_report(report: TickReport) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(
         prog="python -m tools.liaison tick",
-        description="一次性调度 tick：扫泳道结果／跟进信超期／观察窗到期，只入队，跑完即退。无参数。",
+        description="一次性调度 tick：扫跟进信超期／观察窗到期两类时间事件，只入队，跑完即退。无参数。",
     )
 
 

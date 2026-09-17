@@ -332,6 +332,11 @@ test_approving_into_a_closed_switch_leaves_its_own_trail`（不同原因两条�
 ⛔ 没有 sleep 循环、没有后台线程。**`.51` 侧 M1 挂起提醒（第 1 天 / 第 3 天，tasks 6.8
 与 5.6）仍欠**——Windows 计划任务 ＋ 同一 `effect_*` 形状，随下一次发版做。⛔ 本条不销账。
 
+**修订（2026-09-17，`0917AE`，裁决 Shao Peishen「事件驱动替代轮询」）**：tick 改由 launchd
+`StartCalendarInterval` 每日 09:00、14:00 拉起（⛔ 不再 `StartInterval` 300 秒轮询），只剩两类
+**时间事件**（跟进信超期／观察窗到期）；泳道结果改走 `run-lanes.sh` 收敛时的 `owner-notify` 事件入队
+（0917Y），tick 里的轮询扫描已删。
+
 ---
 
 ## TD-JD-1｜JD 溯源用的是闭集术语词表
