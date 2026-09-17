@@ -92,7 +92,7 @@
 
 ### 决策 D8：沿用 M1 Web，四个新页面，无前端框架（对应 intent D8）
 
-**做法**：`app/web/static/` 新增 4 个页面（候选人列表／字段校对／复核／批量确认），FastAPI 路由挂在 `root_path` 下，接口与资源一律相对路径（部署约束 1）。字段校对页的原文高亮用 `resume_text_span` 的偏移直接切字符串。
+**做法**：`app/web/static/` 新增 6 个页面——可见薄片（U2.5）先出 3 个：上传入口／解析结果列表／字段校对；其余 3 个（候选人列表／复核／批量确认）在 U5 其余——FastAPI 路由挂在 `root_path` 下，接口与资源一律相对路径（部署约束 1）。字段校对页的原文高亮用 `resume_text_span` 的偏移直接切字符串。
 
 **为什么**：M1 的 Web 已在 `.51` 门户挂载并验证过路径前缀；企微卡片承载不了"看原文＋逐字段校对"这种密度的交互，D8 明确不做。
 
@@ -114,7 +114,7 @@
 
 ### 决策 D11：ATS 域数据模型按 §2.1 落，`application` 与 `candidate` 分开
 
-**做法**：新表 `candidate`（全局唯一，无状态）、`resume`（一人多份，含 `parsed_json` / `parse_confidence` / `parser_version` / `sample_class`）、`resume_text_span`（分片 + offset）、`application`（`candidate_id + job_id + current_stage_id + status`）、`stage`（全局池 + `stage_type` 语义标签，M2 预置 `initial / screening / rejected`）、`application_stage_history`（`actor_type ∈ {human, agent}`）、`rejection_record`（`reason_type` CHECK IN `('hard_rule','human_decision')`，`rule_ref`，`appeal_status`）、`resume_access_log`、`field_review_queue`、`screening_flag`、`resume_embedding`、`eval_sample` / `eval_annotation` / `eval_import_batch`。全部 `CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`（新表不需要加列路径）。
+**做法**：新表 `candidate`（全局唯一，无状态）、`resume`（一人多份，含 `parsed_json` / `parse_confidence` / `parser_version` / `sample_class ∈ {synthetic, anonymized, departed, live}`——`synthetic` 是 U0 合成替身样本，薄片期与脱敏样本同等可入库，`live` 仍受 D2 闸）、`resume_text_span`（分片 + offset）、`application`（`candidate_id + job_id + current_stage_id + status`）、`stage`（全局池 + `stage_type` 语义标签，M2 预置 `initial / screening / rejected`）、`application_stage_history`（`actor_type ∈ {human, agent}`）、`rejection_record`（`reason_type` CHECK IN `('hard_rule','human_decision')`，`rule_ref`，`appeal_status`）、`resume_access_log`、`field_review_queue`、`screening_flag`、`resume_embedding`、`eval_sample` / `eval_annotation` / `eval_import_batch`。全部 `CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`（新表不需要加列路径）。
 
 **候选人去重**：`candidate` 按（姓名 + 手机号哈希）唯一；手机号本期只用于去重，以哈希存储，明文不落库（✅ 已裁决 2026-09-17，原 Q6；工作台看联系方式约面试属 M3，届时须纳入 PIA 范围再议）。
 
@@ -146,6 +146,30 @@
 
 **为什么**：夹具需要真实分布样本才有意义，真实简历入库闸开启前做不了；绑进本包只会让 U7 悬空。
 
+## 交付单元与顺序（2026-09-17 `0917BA` 可见薄片重排，依据路线图第七节）
+
+**原则**：Shao Peishen 2026-09-17 21:3x 定「人事部可见优先」——让人事部尽快在 `.51` 页面上看到新东西。因此从 M2 提前切出一个**可见薄片**（U2.5）排在硬门槛与精排之前；薄片的 design／tasks 重排须过 G2（本节即 G2 审阅对象，人话说明见 `docs/roadmap/M2-可见薄片重排说明.md`）。
+
+| 顺序 | 单元（tasks.md 章） | 内容 | 前置 | 人事部可见 |
+|---|---|---|---|---|
+| 1 | U1 数据模型（第 2 章） | ATS 域＋审计域建表。薄片必需子集＝2.1／2.2／2.4／2.5 的 `hr_account`／2.7／2.8；其余表建表成本低，同一 plan 一次做完，⛔ 不拆单元 | G2 放行 | 否（地基） |
+| 2 | U2 上传与解析（第 3 章） | 登录、上传接口、文件→文本、六字段抽取（**抽取模型＝deepseek-flash，1.7 已定型行**）、置信度、校对接口、访问留痕 | U1 | 是（接口层） |
+| 3 | **U2.5 可见薄片（第 9 章）** | 上传入口页＋解析结果列表页＋字段校对页（逐字段 evidence 高亮＋校对确认）＋薄片 e2e＋HR 操作说明。只收 `sample_class ∈ {synthetic, anonymized, departed}`，真实简历入库闸保持关闭（D2 不变） | U2 | **是——人事部第一眼看到的东西** |
+| 4 | U3 硬门槛（第 4 章） | 纯函数标记、申诉状态机 | U2.5 | 否 |
+| 5 | U0 模型对比定型·剩余项（第 1 章） | 1.2 真实脱敏样本、1.6 精排／embedding／阈值终值、1.7 其余行签认。⚠️ 抽取模型行已定型，不在此等 | U3（顺序链位置；实际卡在 Q-06 真实样本与 1.7 签认） | 否 |
+| 6 | U4 召回＋精排（第 5 章） | BGE-M3 召回、rubric 精排、evidence span 落库 | U0 剩余项 | 否 |
+| 7 | U5 工作台·其余（第 6 章） | 候选人列表（分数排序）、复核页、批量确认、流程挂起、全链路 e2e | U4 | 是 |
+| 8 | U6 评测集与指标（第 7 章） | 导入、四项指标 | U5；0.1／0.4 外部输入 | 否 |
+| 9 | U7 合规断言与入库闸（第 8 章） | 断言、闸开启（🔴 本人）、发版（🔴 G3） | U6；0.2 | 是（开闸后） |
+
+**为什么 U0 剩余项后移**：U0 未闭合的三项（真实脱敏样本、精排模型与阈值终值、定型签认其余行）全是 U4 精排的输入，而薄片只需要"抽取模型"这一行——它 2026-09-17 已由 Shao Peishen 部分确认为 deepseek-flash。把 U0 留在链首会让薄片无限期等 Q-06；后移后 U1→U2→U2.5 在 G2 放行后即可连续开工。章号 1 与 1.x 编号不改，只改物理顺序（台账生成器按物理顺序建 `prev_unit` 链）。
+
+**LLM 供应商口径**（路线图第七节第 2 条）：近期 M2 全程只用 DeepSeek（抽取 deepseek-flash 已定型；精排在 DeepSeek 两款里定）。tasks 1.4「≥3 家」改为「DeepSeek 两款先行，第 3／4 家后补（非阻塞）」并按新口径完成；火山方舟／阿里百炼的对比作为不计进度的后补项，前置 Q-07 拿到 key，⛔ 不阻塞任何单元、不改已定型的抽取模型。
+
+**薄片不做的事**（防止 G2 审阅时误以为有）：不评分、不排序、不执行硬门槛、不淘汰、不收 `live` 样本、不开候选人入口。人事部看到的是"传进去 → 解析出六字段 → 每个字段能点回原文 → 我确认或改掉"。
+
+**发版**：薄片合 main 后可先发一次（闸关、只收 `synthetic/anonymized/departed`，供人事部熟悉），仍是 G3 不可代项，由 Shao Peishen 拍「发」（Migration Plan 4 同步改）。
+
 ## Risks / Trade-offs
 
 - [PaddleOCR 在 Windows 无 Docker 上装不上或体积过大] → U0 首日在 `.51` 同款 Windows 上做可装性冒烟；装不上则一期只收文本型 PDF/Word，扫描件进"不可读"人工队列，并登记技术债（D14 退路）
@@ -162,7 +186,7 @@
 1. U1 新表全部 `CREATE TABLE IF NOT EXISTS`，`.51` 上 `demo.db` 既有表一行不改，无数据迁移
 2. `hr_account` 表由 `scripts/create_hr_account.py` 建账号；上线前为每位 HR 建一个
 3. 新依赖先在 Windows 冒烟（U0），`requirements.txt` 变更与 `sync-to-server.sh` 白名单同步
-4. 发版顺序：U1–U5 合并后可先发一次（闸关、只收脱敏样本，供 HR 熟悉工作台）；U7 合并且合规验收 #1 通过后才由 Shao Peishen 决定开闸
+4. 发版顺序：**U1→U2→U2.5 可见薄片合并后即可先发一次**（闸关、只收 `synthetic/anonymized/departed`，供人事部熟悉上传与校对；🔴 G3 由 Shao Peishen 拍「发」）；U3–U5 合并后再发一次；U7 合并且合规验收 #1 通过后才由 Shao Peishen 决定开闸
 5. 回滚：开关关回即停收真实简历；新表不删（含留痕），代码回退到上一版
 
 ## Open Questions

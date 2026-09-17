@@ -6,7 +6,7 @@
 
 ### Requirement: 批量上传入口
 
-系统 SHALL 在 Web 工作台提供简历批量上传入口，接受 PDF 与 Word（`.docx`）文件，一次上传 MUST 支持多文件，并 MUST 要求上传者在提交时指定目标岗位（已冻结画像的岗位）与**样本类别**（`anonymized` 脱敏样本 / `departed` 历史离职候选人 / `live` 真实在招）。
+系统 SHALL 在 Web 工作台提供简历批量上传入口，接受 PDF 与 Word（`.docx`）文件，一次上传 MUST 支持多文件，并 MUST 要求上传者在提交时指定目标岗位（已冻结画像的岗位）与**样本类别**（`synthetic` 合成替身样本 / `anonymized` 脱敏样本 / `departed` 历史离职候选人 / `live` 真实在招）。
 
 系统 MUST 拒绝上述之外的文件类型，并对每个文件单独给出接收／拒收结果，单个文件失败 MUST NOT 影响同批其他文件。
 
@@ -44,7 +44,7 @@
 
 #### Scenario: 闸关闭时上传脱敏样本
 
-- **WHEN** 入库闸关闭，HR 以样本类别 `anonymized` 或 `departed` 上传
+- **WHEN** 入库闸关闭，HR 以样本类别 `synthetic`（合成替身）、`anonymized` 或 `departed` 上传
 - **THEN** 正常接收
 
 #### Scenario: 闸开启但登录身份不可识别

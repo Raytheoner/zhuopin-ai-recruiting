@@ -46,7 +46,16 @@
 ## 3. 能开尽开的上限与排序
 
 - **max-parallel 3**：同时在跑的泳道（含正在收敛的批次）≤ 3；**单批 ≤ 6 条**块（含串行段），超出留到下一事件。
-- **排序**：场景优先级 M0 > M1 > M2 > M3（M0′ 归 M0；「构建自动化」条目与 M0 同级——它们决定所有场景的吞吐）；同场景按阶段先后（gate → plan → build 段号 → merge → archive）；同阶段按 id 字典序。`compute_ready` 已按此排序输出。
+- **排序**：**就绪集内最高排序键＝「人事部可见」**（2026-09-17 `0917BA`，路线图第七节 Shao Peishen 定：让人事部尽快看到新东西）；其次场景优先级 M0 > M1 > M2 > M3（M0′ 归 M0；「构建自动化」条目与 M0 同级——它们决定所有场景的吞吐）；同场景按阶段先后（gate → plan → build 段号 → merge → archive）；同阶段按 id 字典序。`compute_ready` 已按此排序输出（`--show ready` 行尾 `可见=✓`）。⛔ 可见只改**就绪集内**的次序：§1 五条判据（依赖、闸门、触碰区…）一条都不因此放宽。
+- **「人事部可见」判据**：条目的产出会改变 `.51` 页面上人事部可见／可用的内容。台账每条带 `可见: true|false`（`scripts/dispatcher_backlog.py::mark_visible`）：① 触碰区命中前缀、或 id 命中正则 ⇒ 可见；② 同一变更包同一章（单元）任一条目可见 ⇒ 该章条目／`U<n>/plan`／单元／其拆段全部可见。清单真源是下面这个块（生成器逐字读；文件缺失时用 `VISIBLE_DEFAULT` 兜底，两处必须一致，有测试把关）：
+
+```visible-rules
+path: app/web/                                   # 页面、静态资源、模板（app/web/static/ 一并命中）
+id: ^m1-[^/]+/9\.\d+$                            # M1 9.x 验收（画像质量验收、端到端、试点）
+id: ^m2-resume-parse-and-rank/(3|6|9)\.\d+$      # M2 U2 上传与解析（3.x）、U2.5 可见薄片（9.x）、U5 工作台（6.x）
+```
+
+  改清单只改本块（`path:` 前缀 ／ `id:` 正则，`#` 后是注释）；⛔ 不在 SKILL.md 里复述。
 - **触碰区重叠即同泳道串行、零重叠才跨泳道并行**（`lane-dispatch` ② 规则原文）。历来最热：`app/agents/intake_agent.py`、`app/graph/nodes.py`、`tools/liaison/__main__.py`、`docs/session接力.md`、`docs/openers/号池台账.md`——碰它们的一律串行。
 - **发车器被占**（`lane-launcher.sh` 拒绝）⇒ 写入 `launch/queue/`（R1，`0917AK`），⛔ 不重试轰炸、不等人。
 - **模型**：泳道默认 Sonnet；只有 propose／design／需求收敛、疑难状态机或并发调试的 opener 才标 `｜ 模型: Opus`（CLAUDE.md 模型分级）。

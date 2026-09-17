@@ -60,6 +60,7 @@ REL = {
     "plans": "docs/superpowers/plans",
     "intents": "docs/roadmap/intents",
     "queue": gates.QUEUE_REL,
+    "rules": ".claude/skills/task-dispatcher/rules.md",
     "out": "docs/roadmap/任务台账.yaml",
 }
 
@@ -68,6 +69,69 @@ BLOCK = ("决策", "外部", "无")
 
 # 场景优先级（opener：M0>M1>M2>M3；M0′ 归 M0）
 SCENE_PRIORITY = {"M0": 0, "M0′": 0, "M1": 1, "M2": 2, "M3": 3}
+
+# 「人事部可见」清单（0917BA，路线图第七节）：条目产出会改变 `.51` 页面上人事部可见／可用的内容。
+# 真源是 rules.md §3 的 ```visible-rules 块（path: 触碰区前缀 ／ id: 条目 id 正则）；本常量只是文件缺失时的兜底，
+# 两处必须一致（tests/test_dispatcher_backlog.py 有断言）。同一章（单元）任一条目可见 ⇒ 该章 plan／单元／拆段全部可见。
+VISIBLE_DEFAULT = (
+    "path: app/web/",
+    "id: ^m1-[^/]+/9\\.\\d+$",
+    "id: ^m2-resume-parse-and-rank/(3|6|9)\\.\\d+$",
+)
+VISIBLE_BLOCK_RE = re.compile(r"^```visible-rules[^\n]*\n(.*?)^```", re.M | re.S)
+
+
+@dataclass(frozen=True)
+class VisibleRules:
+    paths: tuple[str, ...]
+    ids: tuple[str, ...]
+
+    def matches(self, task_id: str, paths: list[str]) -> bool:
+        if any(re.search(pat, task_id) for pat in self.ids):
+            return True
+        return any(p.startswith(prefix) for p in paths for prefix in self.paths)
+
+
+def parse_visible_rules(lines: list[str]) -> VisibleRules:
+    paths: list[str] = []
+    ids: list[str] = []
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("path:"):
+            paths.append(line[len("path:"):].strip())
+        elif line.startswith("id:"):
+            ids.append(line[len("id:"):].strip())
+    return VisibleRules(paths=tuple(paths), ids=tuple(ids))
+
+
+def load_visible_rules(repo: Path) -> VisibleRules:
+    """读 rules.md 的 ```visible-rules 块；文件或块缺失 ⇒ 内置默认（与 rules.md 同内容）。"""
+    f = repo / REL["rules"]
+    if f.is_file():
+        m = VISIBLE_BLOCK_RE.search(f.read_text(encoding="utf-8"))
+        if m:
+            return parse_visible_rules(m.group(1).splitlines())
+    return parse_visible_rules(list(VISIBLE_DEFAULT))
+
+
+def mark_visible(entries: list["Entry"], rules: VisibleRules) -> None:
+    """① 按 id 正则／触碰区前缀打底；② 同一变更包同一章（`单元`）传播；③ 单元可见 ⇒ 其依赖里的拆段 `plan:*/seg*` 可见。"""
+    byid = {e.id: e for e in entries}
+    for e in entries:
+        e.可见 = rules.matches(e.id, e.触碰区)
+    groups: dict[tuple[str, str], list[Entry]] = {}
+    for e in entries:
+        if e.单元:
+            groups.setdefault((e.id.split("/", 1)[0], e.单元), []).append(e)
+    for members in groups.values():
+        if any(m.可见 for m in members):
+            for m in members:
+                m.可见 = True
+    for e in entries:
+        if e.可见 and e.单元:
+            for dep in e.依赖:
+                if dep.startswith("plan:") and "/seg" in dep and dep in byid:
+                    byid[dep].可见 = True
 
 # 决策关键词：命中即「决策」（不可代项，调度器永不排进泳道）
 DECISION_KEYS = ("🔴", "不可代", "Shao Peishen", "待你", "待裁决", "本人签认", "本人拍板", "本人配置", "预算", "采购")
@@ -94,6 +158,7 @@ class Entry:
     truth_known: bool = True  # 真身能否独立判定状态；False ⇒ 台账状态无条件优先、不记 conflicts
     闸门: str = ""  # "G2 <subject>"：到闸条目；状态的 待开↔阻塞 轴由定夺队列决定（gates.py），台账不记冲突
     队列: str = ""  # "Q-02 已答 a"／"Q-01 待答"／"Q-11 作废"：定夺队列决定了本条的 待开↔阻塞 轴（dispatcher_answers），台账不记冲突
+    可见: bool = False  # 「人事部可见」：产出会改变 `.51` 页面上人事部可见／可用的内容（rules.md ```visible-rules），就绪集内最高排序键
 
     def to_dict(self) -> dict:
         d = {
@@ -112,6 +177,7 @@ class Entry:
                 "阻塞类型": self.阻塞类型,
                 "产出判据": self.产出判据,
                 "来源": self.来源,
+                "可见": bool(self.可见),
             }
         )
         if self.闸门:
@@ -282,8 +348,8 @@ def parse_tasks(change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], 
             if cm:
                 num = int(cm.group(1))
                 title = cm.group(2).strip()
-                um = re.search(r"\bU(\d+)\b", title)
-                unit_no = int(um.group(1)) if um else num
+                um = re.search(r"\bU(\d+(?:\.\d+)?)(?!\.?\d)", title)
+                unit_no = um.group(1) if um else str(num)  # 允许 U2.5 这类插入单元（0917BA 可见薄片）
                 cur = {"num": num, "title": title, "unit_no": unit_no, "items": []}
                 chapters.append(cur)
             else:
@@ -317,7 +383,7 @@ def parse_tasks(change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], 
         checked_nos = {it["no"] for it in ch["items"] if it["checked"]}
         for p in matched:
             # 文件名 unit<N>-<k> 指向单条 N.k 的 plan：该项已勾即 plan 已执行；整单元 plan 看单元是否全勾
-            sub = re.search(rf"unit{ch['unit_no']}-(\d+)(?!\d)", p.stem)
+            sub = re.search(rf"unit{re.escape(ch['unit_no'])}-(\d+)(?!\d)", p.stem)
             sub_done = bool(sub) and f"{ch['num']}.{sub.group(1)}" in checked_nos
             unit_status[p.stem] = "完成" if (done or sub_done) else "待开"
         # 条目级：只是进度跟踪，不是调度单元——依赖它所属单元的 plan／拆段，避免被当成 ready
@@ -335,7 +401,7 @@ def parse_tasks(change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], 
             pm = re.search(r"前置[：:（(]\s*([^）)。]+)", body)
             if pm:
                 deps += [f"{change}/{n}" for n in re.findall(r"\d+\.\d+", pm.group(1))]
-            for u in re.findall(r"阻塞 U(\d+)", body):
+            for u in re.findall(r"阻塞 U(\d+(?:\.\d+)?)", body):
                 gate_blocks.setdefault(f"{change}/U{u}", []).append(item_id)
             entries.append(
                 Entry(
@@ -447,14 +513,15 @@ def parse_plan(path: Path, rel: str) -> PlanInfo:
     return PlanInfo(stem=path.stem, rel=rel, task_count=task_count, segments=segments, pending=pending, paths=paths)
 
 
-def _match_plans(plans: dict[str, PlanInfo], change: str, unit_no: int) -> list[PlanInfo]:
-    """文件名含 unit<N>（后面不跟数字）且含变更包全名或其首段前缀（如 m2-unit0）的 plan，按名排序。"""
+def _match_plans(plans: dict[str, PlanInfo], change: str, unit_no: str) -> list[PlanInfo]:
+    """文件名含 unit<N>（后面不跟数字或小数点——`unit2` ⛔ 不吃 `unit2.5`）且含变更包全名或其首段前缀（如 m2-unit0）的 plan，按名排序。"""
     prefix = change.split("-")[0]
+    u = re.escape(str(unit_no))
     out = []
     for stem in sorted(plans):
-        if not re.search(rf"unit{unit_no}(?!\d)", stem):
+        if not re.search(rf"unit{u}(?!\.?\d)", stem):
             continue
-        if change in stem or re.search(rf"(?<![\w]){re.escape(prefix)}-unit{unit_no}(?!\d)", stem):
+        if change in stem or re.search(rf"(?<![\w]){re.escape(prefix)}-unit{u}(?!\.?\d)", stem):
             out.append(plans[stem])
     return out
 
@@ -804,6 +871,7 @@ def generate(repo: Path) -> list[Entry]:
     global ANSWER_REPORT
     ANSWER_REPORT = answers.apply_answers(merged, queue_text, new_entry=Entry)  # 先按队列定 待开↔阻塞，再过闸门
     apply_gates(merged, queue_text)
+    mark_visible(merged, load_visible_rules(repo))
     return merged
 
 
@@ -873,7 +941,8 @@ def gate_held(tasks: list[dict], ready: list[str]) -> list[tuple[str, str, str, 
 
 
 def compute_ready(tasks: list[dict]) -> tuple[list[str], list[str]]:
-    """ready ＝ 待开 ∧ 阻塞类型 无 ∧ 依赖全完成 ∧ 闸门已放行（gates.py 只读定夺队列）。返回 (ready ids, 未知依赖 ids)。"""
+    """ready ＝ 待开 ∧ 阻塞类型 无 ∧ 依赖全完成 ∧ 闸门已放行（gates.py 只读定夺队列）。返回 (ready ids, 未知依赖 ids)。
+    排序（rules.md §3）：就绪集内「人事部可见」最先，其次场景优先级，再 id 字典序——可见只改就绪集内的次序，⛔ 不越依赖、不越闸门。"""
     byid = {t["id"]: t for t in tasks}
     ready: list[str] = []
     unknown: set[str] = set()
@@ -890,7 +959,7 @@ def compute_ready(tasks: list[dict]) -> tuple[list[str], list[str]]:
                 ok = False
         if ok:
             ready.append(t["id"])
-    ready.sort(key=lambda i: (SCENE_PRIORITY.get(byid[i]["场景"], 9), i))
+    ready.sort(key=lambda i: (not byid[i].get("可见", False), SCENE_PRIORITY.get(byid[i]["场景"], 9), i))
     held = {h[0] for h in gate_held(tasks, ready)}
     return [r for r in ready if r not in held], sorted(unknown)
 
@@ -943,6 +1012,7 @@ def show(path: Path, what: str) -> int:
         extra = f" 阻塞类型={t.get('阻塞类型')}" if what == "blocked" else ""
         extra += f" conflicts={t['conflicts']}" if what == "conflicts" else ""
         extra += f" 闸门={t['闸门状态']}" if what == "gated" else ""
+        extra += " 可见=✓" if t.get("可见") else ""
         print(f"{t['id']}\t{t.get('场景')}\t{t.get('阶段')}\t{t.get('状态')}{extra}\t{t.get('标题', '')[:80]}\t触碰区={','.join(t.get('触碰区', [])) or '-'}")
     print(f"# {what}: {len(picked)}")
     return 0
