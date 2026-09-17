@@ -1,13 +1,13 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 214
+  条目数: 215
   按状态:
-    待开: 71
+    待开: 80
     在跑: 6
     完成: 91
-    阻塞: 46
-  阻塞·决策: 28
+    阻塞: 38
+  阻塞·决策: 20
   阻塞·外部: 17
   conflicts:
   - m1-intake-quality-fixes/8.9
@@ -27,10 +27,17 @@ summary:
   - propose:S-入职 入职流程
   - propose:S-排期 面试排期
   - propose:S-渠道 渠道对接与简历自动汇总
+  - propose:波次0-grill首轮汇总
   - relay:H-4
-  ready: []
+  ready:
+  - answer:Q-07
+  - m2-resume-parse-and-rank/U1/plan
   闸门待放行:
-  - m2-resume-parse-and-rank/U1/plan ← G2 `m2-resume-parse-and-rank`（待答）
+  - propose:M3 ← G1 `M3`（缺行）
+  - propose:S-Offer ← G1 `S-Offer`（待答）
+  - propose:S-入职 ← G1 `S-入职`（待答）
+  - propose:S-排期 ← G1 `S-排期`（待答）
+  - propose:S-渠道 ← G1 `S-渠道`（待答）
   未知依赖: []
   未归属plans:
   - 2026-08-06-m1-chapter0-demo
@@ -58,7 +65,6 @@ summary:
   - 2026-09-10-liaison-unpack-charter
   - 2026-09-10-liaison-unpack-dispatch
   缺任务映射:
-  - Q-07
   - Q-27
 tasks:
 - id: scene:M0
@@ -1428,13 +1434,14 @@ tasks:
   依赖: []
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit1-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit1 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   闸门: G2 m2-resume-parse-and-rank
   队列: Q-18 已答 b
+  备注: 0917BE 已派（task-dispatcher·lanes-done-20260917-225628，G2 已放行），opener 见 docs/openers/OP-0820-全量编排.md
 - id: m2-resume-parse-and-rank/U1
   场景: M2
   阶段: build
@@ -1615,9 +1622,9 @@ tasks:
   - m2-resume-parse-and-rank/U1
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit2-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit2 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: true
   闸门: G2 m2-resume-parse-and-rank
@@ -1732,9 +1739,9 @@ tasks:
   - m2-resume-parse-and-rank/U2
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit2.5-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit2.5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2.5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: true
   闸门: G2 m2-resume-parse-and-rank
@@ -1857,9 +1864,9 @@ tasks:
   - m2-resume-parse-and-rank/U2.5
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit3-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit3 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   闸门: G2 m2-resume-parse-and-rank
@@ -2092,9 +2099,9 @@ tasks:
   - m2-resume-parse-and-rank/U0
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit4-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit4 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit4 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   闸门: G2 m2-resume-parse-and-rank
@@ -2231,9 +2238,9 @@ tasks:
   - m2-resume-parse-and-rank/U4
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit5-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: true
   闸门: G2 m2-resume-parse-and-rank
@@ -2372,9 +2379,9 @@ tasks:
   - m2-resume-parse-and-rank/U5
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit6-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit6 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit6 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   闸门: G2 m2-resume-parse-and-rank
@@ -2550,9 +2557,9 @@ tasks:
   - m2-resume-parse-and-rank/U6
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit7-*.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·待答】docs/superpowers/plans/ 下存在文件名含 unit7 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  状态: 待开
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit7 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   闸门: G2 m2-resume-parse-and-rank
@@ -2871,7 +2878,7 @@ tasks:
   - openspec/changes/
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  产出判据: 【G1 闸门·缺行】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 M3
@@ -2884,7 +2891,7 @@ tasks:
   - openspec/changes/
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-Offer-intent.md:1
   可见: false
   闸门: G1 S-Offer
@@ -2897,7 +2904,7 @@ tasks:
   - openspec/changes/
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-入职-intent.md:1
   可见: false
   闸门: G1 S-入职
@@ -2910,7 +2917,7 @@ tasks:
   - openspec/changes/
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-排期-intent.md:1
   可见: false
   闸门: G1 S-排期
@@ -2923,23 +2930,10 @@ tasks:
   - openspec/changes/
   状态: 阻塞
   阻塞类型: 决策
-  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  产出判据: 【G1 闸门·待答】G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-渠道-intent.md:1
   可见: false
   闸门: G1 S-渠道
-- id: propose:波次0-grill首轮汇总
-  场景: 波次0-grill首轮汇总
-  阶段: propose
-  标题: openspec-propose：波次0-grill首轮汇总（intent 定稿后）
-  依赖: []
-  触碰区:
-  - openspec/changes/
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
-  来源: docs/roadmap/intents/波次0-grill首轮汇总.md:1
-  可见: false
-  闸门: G1 波次0-grill首轮汇总
 - id: relay:R-6
   场景: M0
   阶段: build
@@ -3034,6 +3028,19 @@ tasks:
   可见: false
   队列: Q-02 已答 a
   备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AT，task-dispatcher·answers-mapped-20260917-190659 发车
+- id: answer:Q-07
+  场景: M2
+  阶段: build
+  标题: 后补（非阻塞）：注册火山方舟（ARK_API_KEY）＋阿里百炼（DASHSCOPE_API_KEY）并补对比表第 3／4 家
+  依赖: []
+  触碰区:
+  - docs/m2-model-comparison.md
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 两家 API key 写入 `.env`、`docs/m2-model-comparison.md` 补齐第 3／4 家对比数据；⛔ 不阻塞 1.4 主线
+  来源: docs/roadmap/定夺队列.md:23 Q-07
+  可见: false
+  队列: Q-07 已答
 - id: answer:Q-12
   场景: '.51'
   阶段: release
@@ -3332,6 +3339,23 @@ tasks:
   来源: docs/roadmap/intents/S-渠道-intent.md:1
   可见: false
   闸门: G1 S-渠道 渠道对接与简历自动汇总
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 来源已消失或已勾选
+- id: propose:波次0-grill首轮汇总
+  场景: 波次0-grill首轮汇总
+  阶段: propose
+  标题: openspec-propose：波次0-grill首轮汇总（intent 定稿后）
+  依赖: []
+  触碰区:
+  - openspec/changes/
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过；当前 intent 有未答题，先由 requirement-grill 在本线清题
+  来源: docs/roadmap/intents/波次0-grill首轮汇总.md:1
+  可见: false
+  闸门: G1 波次0-grill首轮汇总
   conflicts:
     状态:
       台账: 阻塞
