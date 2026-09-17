@@ -5,10 +5,10 @@ summary:
   按状态:
     待开: 66
     在跑: 5
-    完成: 89
-    阻塞: 37
+    完成: 90
+    阻塞: 36
   阻塞·决策: 18
-  阻塞·外部: 18
+  阻塞·外部: 17
   conflicts:
   - m1-intake-quality-fixes/8.9
   - m1-intake-quality-fixes/U8/plan
@@ -21,7 +21,6 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
-  - m2-resume-parse-and-rank/1.1
   - relay:H-4
   ready:
   - answer:Q-14
@@ -2826,16 +2825,13 @@ tasks:
   - plan:2026-09-17-m2-unit0-model-comparison/seg3
   触碰区:
   - docs/m2-model-comparison.md
-  状态: 阻塞
-  阻塞类型: 外部
+  状态: 完成
+  阻塞类型: 无
   产出判据: 在 `.51` 同款 Windows venv 上冒烟安装：`python-docx`、PDF 文本抽取库、PaddleOCR（Q2 已裁决）、本地 CPU BGE-M3（Q1 已裁决，`FlagEmbedding` 或 `sentence-transformers` 二选一按可装性定）；记录可装性与体积到
-    `docs/m2-model-comparison.md`「环境」节 ⏸ 留步：.51 W
+    `docs/m2-model-comparison.md`「环境」节
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:14
-  队列: Q-08 待答
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
+  队列: Q-08 待答（任务已跑完，队列行留存待 Cowork 正式收口）
+  备注: 0917 dispatcher 核实：0917AX 已在 Mac＋`.51` 隔离 venv 两侧跑完冒烟并回勾 tasks.md:14 [x]；Q-08 队列行未动，留给答复流程正式关闭
 - id: opener:[Mac]0917AK
   场景: 构建自动化
   阶段: build
