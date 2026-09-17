@@ -3,8 +3,8 @@ version: 1
 summary:
   条目数: 402
   按状态:
-    待开: 216
-    在跑: 7
+    待开: 215
+    在跑: 8
     完成: 106
     阻塞: 73
   阻塞·决策: 45
@@ -21,13 +21,14 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
+  - opener:[Mac]0903A
+  - propose:M3
   - propose:S-Offer
   - propose:S-入职
   - propose:S-排期
   - propose:S-渠道
   - relay:H-4
   ready:
-  - propose:M3
   - channel-resume-intake/0.1
   - interview-scheduling/0.2
   - offer-generation/0.2
@@ -5664,11 +5665,14 @@ tasks:
   - openspec/changes/
   状态: 在跑
   阻塞类型: 无
-  派发: task-dispatcher·decision-20260918-070856，opener 0918B（docs/openers/OP-0820-全量编排.md）
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 M3
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
   备注: 缺陷（2026-09-18 dispatcher 发现）：本条 id/场景本应是 `S-M3`，`scripts/dispatcher_backlog.py` 的 `parse_intents()` 用 `\bM\d′?` 正则从 `S-M3` 里误剥离出 `M3`，与真正已答的 `Q-32`（场景 `S-M3`，答复「定」）
     形成重复 G1 行 `Q-37`（待答，卡在此处）。⛔ 调度器不改脚本；需一次 run-build 修正该正则（不匹配 `S-` 前缀场景名）后，此条会自动合并回 `propose:S-M3` 并随 Q-32 放行。修前 `tests/test_dispatcher_backlog.py::test_decision_queue_task_ids_exist_in_real_ledger`
     会持续因 `Q-32` 引用 `propose:S-M3`（真实 id 是 `propose:M3`）而失败，非本次改动引入。
@@ -5815,18 +5819,6 @@ tasks:
   可见: false
   队列: Q-11 作废
   备注: 作废：Q-11（0917R findings 已更正——两份答复单为 Cowork 所写并经本人审核，非拆件越界；人事部#1 已闭环）
-- id: opener:[Mac]0903A
-  场景: 构建自动化
-  阶段: build
-  标题: '`.51` §5-3 四步验证重跑结果'
-  依赖: []
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: ⏸ 仍未闭合：路径订正有效（`.venv` 确认存在），但真因是 `.51` 部署代码落后于功能开发进度——`app\config.py` 停在 08-19（34 行），功能 08-27 才落地（`4890fab`/`eb338b0`/`49c5e4c`），`app\audit\` 整包缺失。产线开关已独立确认为
-    `false`（安全）。U5 接线前需 Shao Peishen 决定是否执行 `.
-  来源: docs/openers/号池台账.md:31
-  可见: false
 - id: answer:Q-02
   场景: M2
   阶段: build
@@ -6063,6 +6055,22 @@ tasks:
   产出判据: 字段校对页：左原文右六字段，置信度与来源高亮（按 span offset 切字符串）；队列字段醒目；提交走 3.10
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:68
   备注: dispatcher-20260917-233156 核实：本条已被 `0917BA` 移入第 9 章 9.3（可见薄片），tasks.md:83 留墓碑「已移入 9.3，不是漏跑」；`m2-resume-parse-and-rank/9.3` 已是台账独立条目，本条判超越（不再发车）
+- id: opener:[Mac]0903A
+  场景: 构建自动化
+  阶段: build
+  标题: '`.51` §5-3 四步验证重跑结果'
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: ⏸ 仍未闭合：路径订正有效（`.venv` 确认存在），但真因是 `.51` 部署代码落后于功能开发进度——`app\config.py` 停在 08-19（34 行），功能 08-27 才落地（`4890fab`/`eb338b0`/`49c5e4c`），`app\audit\` 整包缺失。产线开关已独立确认为
+    `false`（安全）。U5 接线前需 Shao Peishen 决定是否执行 `.
+  来源: docs/openers/号池台账.md:31
+  可见: false
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 来源已消失或已勾选
 - id: opener:[Mac]0917AK
   场景: 构建自动化
   阶段: build
