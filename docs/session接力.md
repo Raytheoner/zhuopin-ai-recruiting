@@ -166,6 +166,10 @@ AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性�
 
 ## 二、下一步
 
+### 🆕 2026-09-17 `0917BF` 四场景立包完成（G1 Q-33–36 放行后，无头单条串行）
+- 四包已立并过 `openspec validate --strict`：`interview-scheduling`（4 能力／42 条／🔴 6／OQ 8）、`offer-generation`（4 新能力＋`outbound-approval-gate` delta 增 `offer_letter`／40 条／🔴 4／OQ 7）、`onboarding-flow`（4 能力／34 条／🔴 6／OQ 7）、`channel-resume-intake`（4 能力／28 条／🔴 4／OQ 7）。四份 intent `status` 已改「已确认（G1 Q-xx）」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/interview-scheduling/proposal.md`）
+- 【谁做】task-dispatcher【状态】待 G2（四包 design 各留 7–8 条 Open Questions，全部是「待专员」＋外部依赖原样转入，不阻塞 spec-to-plan）【判据】Shao Peishen 在定夺队列对四包 G2 答「定」后派 spec-to-plan【不做会怎样】四包停在 propose，波次 5 无法开工。路线图 §二 无四场景行，按 opener 预案跳过不新建
+
 ### 🆕 2026-09-17 `0917Y` G3 泳道结果私信本人——代码已合，待重启值守服务后观察首条真发
 
 裁决 1a（只私信本人、⛔ 不进群）已做成结构：`owner_notify_outbox` 发件箱 ＋ `python -m tools.liaison owner-notify` 入队 CLI ＋ 值守线程空闲 tick 消费（`owner_notify.py`）；`run-lanes.sh` 收敛后自动入队 `lanes-<STAMP>`。收件人只从 `config/whitelist.yaml` 按 `name == 邵培申` 解析，无收件人参数。发送口 = SDK `client.send_message(userid, markdown)`（1.0.2 表面只读核过，**未真发过**）。
