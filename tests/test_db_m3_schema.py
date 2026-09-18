@@ -610,3 +610,106 @@ def test_interview_turn_follow_up_of_points_to_another_turn(conn):
         "SELECT follow_up_of FROM interview_turn WHERE id='turn-2'"
     ).fetchone()
     assert row[0] == "turn-1"
+
+
+# ── interview_recording_deletion / interview_access_log（tasks 2.5）─────
+
+
+def test_interview_recording_deletion_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "interview_recording_deletion")
+    assert _columns(conn, "interview_recording_deletion") == {
+        "session_id", "deleted_at", "scope", "reason", "actor",
+    }
+
+
+def test_interview_recording_deletion_session_id_is_unique(conn):
+    """interview-recording-retention spec「重复扫描」：已删除的场次再次被
+    扫描到不产生新的删除留痕。"""
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    conn.execute(
+        "INSERT INTO interview_recording_deletion (session_id, scope, reason, actor) "
+        "VALUES ('sess-1', 'recording+transcript', 'expired', 'system')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_recording_deletion (session_id, scope, reason, actor) "
+            "VALUES ('sess-1', 'recording+transcript', 'expired', 'system')"
+        )
+
+
+def test_interview_recording_deletion_reason_check_rejects_unknown_value(conn):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_recording_deletion (session_id, scope, reason, actor) "
+            "VALUES ('sess-1', 'recording', 'user_request', 'system')"
+        )
+
+
+@pytest.mark.parametrize("reason", ["expired", "withdrawn", "terminated"])
+def test_interview_recording_deletion_reason_check_accepts_three_values(conn, reason):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    conn.execute(
+        "INSERT INTO interview_recording_deletion (session_id, scope, reason, actor) "
+        "VALUES ('sess-1', 'recording', ?, 'hr-1')",
+        (reason,),
+    )
+    conn.commit()
+
+
+def test_interview_recording_deletion_actor_cannot_be_blank(conn):
+    """删除动作必须有执行者——空 actor 等于没留痕（与 human_review.reviewer
+    同一 CHECK 手法）。"""
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_recording_deletion (session_id, scope, reason, actor) "
+            "VALUES ('sess-1', 'recording', 'expired', '   ')"
+        )
+
+
+def test_interview_access_log_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "interview_access_log")
+    assert _columns(conn, "interview_access_log") == {
+        "id", "accessor", "session_id", "access_type", "at",
+    }
+
+
+def test_interview_access_log_has_no_content_columns(conn):
+    """interview-recording-retention spec「访问留痕」：留痕 MUST 不含录音或
+    转写内容。"""
+    cols = _columns(conn, "interview_access_log")
+    assert not ({"text", "content", "transcript", "audio"} & cols)
+
+
+def test_interview_access_log_accessor_cannot_be_blank(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_access_log (id, accessor, session_id, access_type) "
+            "VALUES ('log-1', '  ', 'sess-x', 'recording_playback')"
+        )
+
+
+@pytest.mark.parametrize(
+    "access_type", ["recording_playback", "transcript_view", "scorecard_view", "export"]
+)
+def test_interview_access_log_access_type_accepts_four_values(conn, access_type):
+    conn.execute(
+        "INSERT INTO interview_access_log (id, accessor, session_id, access_type) "
+        "VALUES (?, 'interviewer-1', 'sess-x', ?)",
+        (f"log-{access_type}", access_type),
+    )
+    conn.commit()
+
+
+def test_interview_access_log_access_type_rejects_unknown_value(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_access_log (id, accessor, session_id, access_type) "
+            "VALUES ('log-bad', 'interviewer-1', 'sess-x', 'preview')"
+        )

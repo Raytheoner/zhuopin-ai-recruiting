@@ -791,6 +791,44 @@ CREATE TABLE IF NOT EXISTS interview_turn (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_turn_session_seq
     ON interview_turn (session_id, seq);
+
+-- 录音删除留痕（interview-recording-retention spec「到期自动删除并留痕」
+-- 「候选人撤回或终止」）。session_id 直接做主键：一个场次的录音只彻底删除
+-- 一次，重复扫描不产生第二行（spec「重复扫描」场景，删除动作本身幂等）。
+-- actor 的 CHECK 与 human_review.reviewer 同一手法：trim 第二参数显式列出
+-- 空格/制表/换行/回车（SQLite 单参 trim() 只剥空格）——空执行者等于没留痕。
+CREATE TABLE IF NOT EXISTS interview_recording_deletion (
+    session_id TEXT PRIMARY KEY NOT NULL REFERENCES interview_session(id),
+    deleted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    scope TEXT NOT NULL,
+    reason TEXT NOT NULL CHECK (reason IN ('expired', 'withdrawn', 'terminated')),
+    actor TEXT NOT NULL CHECK (
+        actor IS NOT NULL AND trim(actor, ' ' || char(9) || char(10) || char(13)) != ''
+    )
+);
+
+-- 录音/转写/ScoreCard 访问留痕（interview-recording-retention spec「访问
+-- 留痕」；interview-scorecard spec「面试官视图与回放」「一致性评估的数据
+-- 导出」）。⛔ session_id 上刻意不加外键——与 resume_access_log 同一形态：
+-- 留痕表按事件记事实，把它的可写性绑在业务表上会让"留痕写不进去"变成
+-- "读取整个失败"，而 spec 明确"留痕写入失败 MUST 读取失败"，这条约束该由
+-- 应用层的写入顺序保证（先留痕后返回内容），不该由外键去意外触发。
+-- 无内容列（spec「留痕 MUST 不含录音或转写内容」）。access_type 四态对应
+-- spec 里明确的四种读取入口：录音回放/查看转写/查看 ScoreCard/导出一致性
+-- 评估包。accessor 的 CHECK 与 resume_access_log.accessor 同一手法。
+CREATE TABLE IF NOT EXISTS interview_access_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL CHECK (
+        accessor IS NOT NULL AND trim(accessor, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    session_id TEXT NOT NULL,
+    access_type TEXT NOT NULL CHECK (
+        access_type IN ('recording_playback', 'transcript_view', 'scorecard_view', 'export')
+    ),
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_access_log_session ON interview_access_log (session_id);
 """
 
 
