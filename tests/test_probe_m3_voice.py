@@ -354,6 +354,179 @@ def test_probe_p2_funasr_blocks_when_no_chunk_ever_produces_text(tmp_path: Path)
     assert "首字延迟" in result.blocking_reason
 
 
+def test_probe_p3_cosyvoice_blocks_when_repo_path_missing(tmp_path: Path):
+    from types import SimpleNamespace
+
+    from scripts.probe_m3_voice import probe_p3_cosyvoice
+
+    args = SimpleNamespace(
+        target="dev-machine",
+        cosyvoice_repo_path=str(tmp_path / "does-not-exist"),
+        model_dir=str(tmp_path / "model"),
+    )
+    result = probe_p3_cosyvoice(args)
+    assert result.conclusion == "阻塞"
+    assert "cosyvoice_repo_path" in result.blocking_reason
+
+
+def test_probe_p3_cosyvoice_blocks_when_module_not_importable(tmp_path: Path):
+    """repo_path exists but doesn't contain an actual `cosyvoice` package (e.g. clone
+    incomplete or deps not installed) — a real import failure, no mocking needed.
+    """
+    from types import SimpleNamespace
+
+    from scripts.probe_m3_voice import probe_p3_cosyvoice
+
+    repo_path = tmp_path / "CosyVoice"
+    repo_path.mkdir()
+
+    args = SimpleNamespace(
+        target="dev-machine",
+        cosyvoice_repo_path=str(repo_path),
+        model_dir=str(tmp_path / "model"),
+    )
+    result = probe_p3_cosyvoice(args)
+    assert result.conclusion == "阻塞"
+    assert "不可导入" in result.blocking_reason
+
+
+@contextlib.contextmanager
+def _patch_cosyvoice_module(cosyvoice_class):
+    """Inject a fake `cosyvoice.cli.cosyvoice` module tree into sys.modules so
+    `from cosyvoice.cli.cosyvoice import CosyVoice` inside probe_p3_cosyvoice resolves
+    to our fake class without needing a real clone/install on disk. Unlike funasr's
+    AutoModel (see _patch_auto_model docstring), this is an entirely fake module with
+    no lazy __getattr__ machinery to fight, so a plain sys.modules injection is enough.
+    """
+    import sys
+    import types
+
+    cli_pkg = types.ModuleType("cosyvoice.cli")
+    cosyvoice_cli_mod = types.ModuleType("cosyvoice.cli.cosyvoice")
+    cosyvoice_cli_mod.CosyVoice = cosyvoice_class
+    cosyvoice_pkg = types.ModuleType("cosyvoice")
+    cosyvoice_pkg.cli = cli_pkg
+
+    fake_modules = {
+        "cosyvoice": cosyvoice_pkg,
+        "cosyvoice.cli": cli_pkg,
+        "cosyvoice.cli.cosyvoice": cosyvoice_cli_mod,
+    }
+    with patch.dict(sys.modules, fake_modules):
+        yield
+
+
+def _p3_args(tmp_path: Path, *, model_dir_exists: bool = True):
+    from types import SimpleNamespace
+
+    repo_path = tmp_path / "CosyVoice"
+    repo_path.mkdir(exist_ok=True)
+    model_dir = tmp_path / "model"
+    if model_dir_exists:
+        model_dir.mkdir(exist_ok=True)
+    return SimpleNamespace(
+        target="dev-machine",
+        cosyvoice_repo_path=str(repo_path),
+        model_dir=str(model_dir),
+    )
+
+
+def test_probe_p3_cosyvoice_blocks_when_model_dir_missing(tmp_path: Path):
+    from scripts.probe_m3_voice import probe_p3_cosyvoice
+
+    class _FakeCosyVoice:
+        def __init__(self, model_dir):
+            pass
+
+    with _patch_cosyvoice_module(_FakeCosyVoice):
+        args = _p3_args(tmp_path, model_dir_exists=False)
+        result = probe_p3_cosyvoice(args)
+
+    assert result.conclusion == "阻塞"
+    assert "模型权重目录" in result.blocking_reason
+
+
+def test_probe_p3_cosyvoice_success_path_computes_first_frame_latency(tmp_path: Path):
+    from scripts.probe_m3_voice import probe_p3_cosyvoice
+
+    class _FakeCosyVoice:
+        def __init__(self, model_dir):
+            self.sample_rate = 22050
+
+        def inference_sft(self, text, spk_id, stream=True):
+            yield {"tts_speech": "frame-1"}
+            yield {"tts_speech": "frame-2"}
+
+    with _patch_cosyvoice_module(_FakeCosyVoice):
+        args = _p3_args(tmp_path)
+        result = probe_p3_cosyvoice(args)
+
+    assert result.conclusion == "通过"
+    assert result.blocking_reason is None
+    assert isinstance(result.metrics["first_frame_latency_ms"], (int, float))
+    assert result.metrics["first_frame_latency_ms"] >= 0
+    assert result.metrics["sample_rate"] == 22050
+    assert result.metrics["total_frames"] == 2
+
+
+def test_probe_p3_cosyvoice_blocks_when_chunk_missing_tts_speech(tmp_path: Path):
+    from scripts.probe_m3_voice import probe_p3_cosyvoice
+
+    class _FakeCosyVoice:
+        def __init__(self, model_dir):
+            pass
+
+        def inference_sft(self, text, spk_id, stream=True):
+            yield {"tts_speech": None}
+
+    with _patch_cosyvoice_module(_FakeCosyVoice):
+        args = _p3_args(tmp_path)
+        result = probe_p3_cosyvoice(args)
+
+    assert result.conclusion == "阻塞"
+    assert "tts_speech" in result.blocking_reason
+
+
+def test_probe_p3_cosyvoice_blocks_when_no_chunks_produced(tmp_path: Path):
+    from scripts.probe_m3_voice import probe_p3_cosyvoice
+
+    class _FakeCosyVoice:
+        def __init__(self, model_dir):
+            pass
+
+        def inference_sft(self, text, spk_id, stream=True):
+            return iter([])
+
+    with _patch_cosyvoice_module(_FakeCosyVoice):
+        args = _p3_args(tmp_path)
+        result = probe_p3_cosyvoice(args)
+
+    assert result.conclusion == "阻塞"
+    assert "未产出任何分片" in result.blocking_reason
+
+
+def test_probe_p3_cosyvoice_blocks_on_model_or_inference_failure_instead_of_raising(tmp_path: Path):
+    """Model construction (weight load / device init) and streaming inference can both
+    fail for real-world reasons (OOM, corrupt weights, version mismatch). Mirrors the
+    probe_p1_livekit/probe_p2_funasr regression tests: any such failure must become a
+    阻塞 ProbeResult, not an uncaught exception, otherwise main() never reaches
+    write_result() and docs/m3-voice-probe.md is left stale.
+    """
+    from scripts.probe_m3_voice import probe_p3_cosyvoice
+
+    class _FakeCosyVoiceRaisesOnInit:
+        def __init__(self, model_dir):
+            raise RuntimeError("boom: model load failed")
+
+    with _patch_cosyvoice_module(_FakeCosyVoiceRaisesOnInit):
+        args = _p3_args(tmp_path)
+        result = probe_p3_cosyvoice(args)
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "boom" in result.blocking_reason
+
+
 def test_probe_p2_funasr_blocks_on_model_or_io_failure_instead_of_raising(tmp_path: Path):
     """Important #1 fix regression test: AutoModel construction (the exact call the
     brief says triggers a first-time ModelScope download and should be judged 阻塞

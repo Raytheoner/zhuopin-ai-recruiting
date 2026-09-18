@@ -419,6 +419,115 @@ def _add_p2_arguments(sub: argparse.ArgumentParser) -> None:
 probe_p2_funasr.__wrapped_add_arguments__ = _add_p2_arguments  # type: ignore[attr-defined]
 
 
+@register("p3-cosyvoice")
+def probe_p3_cosyvoice(args: argparse.Namespace) -> ProbeResult:
+    started = time.monotonic()
+    fp = env_fingerprint(target=args.target)
+    repo_path = Path(args.cosyvoice_repo_path)
+    if not repo_path.exists():
+        return ProbeResult(
+            item="P3",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=(
+                f"cosyvoice_repo_path {repo_path} 不存在——需先按 "
+                "docs/m3-voice-probe-cosyvoice-install.md 克隆官方仓库并装依赖"
+            ),
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    sys.path.insert(0, str(repo_path))
+    sys.path.insert(0, str(repo_path / "third_party" / "Matcha-TTS"))
+    try:
+        from cosyvoice.cli.cosyvoice import CosyVoice  # noqa: PLC0415
+    except Exception as exc:
+        return ProbeResult(
+            item="P3",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=f"cosyvoice 包不可导入: {type(exc).__name__}: {exc}",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    model_dir = Path(args.model_dir)
+    if not model_dir.exists():
+        return ProbeResult(
+            item="P3",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=f"cosyvoice 可导入，但模型权重目录 {model_dir} 不存在（需先 ModelScope snapshot_download）",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    # 模型构建（触发权重加载/显卡初始化）与流式推理调用都可能因显存不足、权重损坏、
+    # 依赖版本不匹配等原因失败。任何一步异常都要落成「阻塞」结论而不是穿透
+    # probe_p3_cosyvoice，否则 main() 走不到 write_result，docs/m3-voice-probe.md
+    # 不会更新，操作者只看到裸 traceback——与 probe_p1_livekit/probe_p2_funasr 的
+    # 既有模式一致（2026-09-18 task-review 对 P2 的发现同样适用于本探针）。
+    try:
+        model = CosyVoice(str(model_dir))
+        sample_text = "你好，欢迎参加本次结构化面试，第一个问题是请简单介绍你的项目经验。"
+        stream_started = time.monotonic()
+        first_frame_latency_ms: float | None = None
+        frame_count = 0
+        missing_tts_speech = False
+        for chunk in model.inference_sft(sample_text, "中文女", stream=True):
+            if first_frame_latency_ms is None:
+                first_frame_latency_ms = (time.monotonic() - stream_started) * 1000
+            frame_count += 1
+            if chunk.get("tts_speech") is None:
+                missing_tts_speech = True
+                break
+    except Exception as exc:  # noqa: BLE001 — 模型加载/流式推理的任何失败都要转成
+        # 阻塞结论而不是让异常穿透 probe_p3_cosyvoice。
+        return ProbeResult(
+            item="P3",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=f"模型加载/流式推理失败: {type(exc).__name__}: {exc}",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    if missing_tts_speech:
+        return ProbeResult(
+            item="P3",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason="inference_sft 流式返回的分片缺少 tts_speech 字段，接口形状与预期不符",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    if first_frame_latency_ms is None:
+        return ProbeResult(
+            item="P3",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason="inference_sft(stream=True) 未产出任何分片",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    return ProbeResult(
+        item="P3",
+        env_fingerprint=fp,
+        conclusion="通过",
+        metrics={
+            "first_frame_latency_ms": round(first_frame_latency_ms),
+            "sample_rate": getattr(model, "sample_rate", "unknown"),
+            "total_frames": frame_count,
+        },
+        duration_ms=(time.monotonic() - started) * 1000,
+    )
+
+
+def _add_p3_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("--target", default="dev-machine")
+    sub.add_argument("--cosyvoice-repo-path", default="data/m3-voice-probe/CosyVoice")
+    sub.add_argument("--model-dir", default="data/m3-voice-probe/CosyVoice/pretrained_models/CosyVoice-300M-SFT")
+
+
+probe_p3_cosyvoice.__wrapped_add_arguments__ = _add_p3_arguments  # type: ignore[attr-defined]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M3 语音链路技术探针")
     parser.add_argument("--json", type=Path, default=None, help="额外把结果写成 JSON 文件")
