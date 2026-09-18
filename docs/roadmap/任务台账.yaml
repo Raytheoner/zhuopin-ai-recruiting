@@ -3,8 +3,8 @@ version: 1
 summary:
   条目数: 496
   按状态:
-    待开: 281
-    在跑: 6
+    待开: 280
+    在跑: 7
     完成: 108
     阻塞: 101
   阻塞·决策: 60
@@ -30,7 +30,6 @@ summary:
   - relay:H-4
   - scene:M3
   ready:
-  - plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg2
   - channel-resume-intake/0.1
   - interview-scheduling/0.2
   - offer-generation/0.2
@@ -7008,7 +7007,8 @@ tasks:
   产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-17-m2-resume-parse-and-rank-unit1-data-model.md
   可见: false
-  备注: 0918 dispatcher（lanes-done-20260918-073309）核实 seg1 已合main、本条 ready；OP-0820 里已有现成 0918B（「M2U1第二三段与收口」，含 Segment B Task4-6 ＋ Segment C Task7-8）尚未发车（无对应 lanes-*/results.tsv），未新写重复 opener，经 launch-lanes --only 0918B 派发，分支 lane-m2-u1-data-model
+  备注: 0918 dispatcher（lanes-done-20260918-073309）核实 seg1 已合main、本条 ready；OP-0820 里已有现成 0918B（「M2U1第二三段与收口」，含 Segment B Task4-6 ＋ Segment C Task7-8）尚未发车（无对应 lanes-*/results.tsv），未新写重复
+    opener，经 launch-lanes --only 0918B 派发，分支 lane-m2-u1-data-model
 - id: plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg3
   场景: M2
   阶段: build
@@ -7260,7 +7260,7 @@ tasks:
   阻塞类型: 无
   产出判据: 【作废：Q-11】拆件子会话（上条 `d703cd3`）运行期间在 `docs/跟进信/` 下新建了两份章程外文件—— `人事部-汤丽萍-答复单-2026-09-17-人事部#1决策点a.md`／`.docx`（拟发给汤丽萍的答复单草稿， 子会话最终自述完全未提及此事）；`--dry-run` 已确认 `allowedTools`
     无任何 `Write(...)` 路径约束， 是一次真实的越界写入（非 dry-ru
-  来源: docs/session接力.md:338
+  来源: docs/session接力.md:339
   可见: false
   队列: Q-11 作废
   备注: 作废：Q-11（0917R findings 已更正——两份答复单为 Cowork 所写并经本人审核，非拆件越界；人事部#1 已闭环）
