@@ -241,3 +241,84 @@ def open_invite(conn: sqlite3.Connection, token: str) -> str:
 
     effect_open_invite(conn, thread_id=session_id, business_key="open", session_id=session_id)
     return session_id
+
+
+# ── 4.3：续入令牌 ───────────────────────────────────────────────
+
+MAX_RESUME_ISSUANCES = 3
+
+
+class ResumeTokenLimitExceededError(Exception):
+    """续入令牌签发次数已达上限（tasks 4.3：一次性、上限 3 次）。"""
+
+
+def resume_issuance_count(conn: sqlite3.Connection, session_id: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM interview_invite_event WHERE session_id = ? AND event_type = 'resume_issued'",
+        (session_id,),
+    ).fetchone()
+    return row[0]
+
+
+def compute_new_resume_token(conn: sqlite3.Connection, *, session_id: str) -> tuple[str, str]:
+    """纯计算：生成续入令牌明文与哈希。不写库；上限校验在这里抛出——签发
+    次数是只读查询，不需要等到 effect 节点才发现超限。"""
+    if resume_issuance_count(conn, session_id) >= MAX_RESUME_ISSUANCES:
+        raise ResumeTokenLimitExceededError(
+            f"场次 {session_id!r} 续入令牌已达上限 {MAX_RESUME_ISSUANCES} 次"
+        )
+    token = generate_invite_token()
+    token_hash = _hash_token(token)
+    return token, token_hash
+
+
+@idempotent_effect("effect_issue_resume_token")
+def effect_issue_resume_token(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, token_hash: str
+) -> None:
+    """business_key = token_hash。旧续入令牌（若有）同样被覆盖作废——同一
+    场次同一时刻只有一枚有效续入令牌，与主令牌同一手法。"""
+    conn.execute(
+        "UPDATE interview_session SET resume_token_hash = ? WHERE id = ?", (token_hash, session_id)
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) "
+        "VALUES (?, ?, 'resume_issued', ?)",
+        (str(uuid.uuid4()), session_id, token_hash),
+    )
+
+
+@idempotent_effect("effect_consume_resume_token")
+def effect_consume_resume_token(conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str) -> None:
+    """一次性消费：清空 resume_token_hash，场次回到 in_progress。
+    business_key 由调用方传 token_hash——同一枚令牌只能被消费一次，
+    第二次打开同一 token 时 open_resume() 在查找阶段就已经因
+    resume_token_hash 已被清空而查不到 session，不会重复走到这里。"""
+    conn.execute(
+        "UPDATE interview_session SET resume_token_hash = NULL, status = 'in_progress' WHERE id = ?",
+        (session_id,),
+    )
+
+
+def open_resume(conn: sqlite3.Connection, token: str) -> tuple[str, int]:
+    """L4 编排：校验续入令牌并返回 (session_id, next_seq)。next_seq = 该场次
+    已落库 interview_turn 的最大 seq + 1（没有 turn 时为 1）——⛔ 不重复
+    出题：出题内容仍是冻结快照里原来的题，本函数只决定从第几题继续
+    （与 5.9 联动，本单元只交付这个查询本身）。"""
+    token_hash = _hash_token(token)
+    row = conn.execute(
+        "SELECT id, status FROM interview_session WHERE resume_token_hash = ?", (token_hash,)
+    ).fetchone()
+    if row is None:
+        raise InviteTokenInvalidError("续入令牌无效")
+    session_id, status = row
+    if status not in ("interrupted", "in_progress"):
+        raise InviteTokenInvalidError("续入令牌已失效")
+
+    turn_row = conn.execute(
+        "SELECT MAX(seq) FROM interview_turn WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    next_seq = (turn_row[0] or 0) + 1
+
+    effect_consume_resume_token(conn, thread_id=session_id, business_key=token_hash, session_id=session_id)
+    return session_id, next_seq

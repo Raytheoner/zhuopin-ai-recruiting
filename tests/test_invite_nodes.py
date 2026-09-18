@@ -266,3 +266,82 @@ class TestOpenInvite:
             "SELECT status FROM interview_session WHERE id = ?", (session_id,)
         ).fetchone()[0]
         assert status == "pending"  # 过期打开不改变场次状态
+
+
+from app.graph.invite_nodes import (
+    MAX_RESUME_ISSUANCES,
+    ResumeTokenLimitExceededError,
+    compute_new_resume_token,
+    effect_issue_resume_token,
+    open_resume,
+)
+
+
+class TestResumeToken:
+    def test_issue_and_open_resume_returns_next_seq_one_when_no_turns(self, conn):
+        session_id = _new_pending_session(conn)
+        conn.execute("UPDATE interview_session SET status = 'interrupted' WHERE id = ?", (session_id,))
+        conn.commit()
+
+        token, token_hash = compute_new_resume_token(conn, session_id=session_id)
+        effect_issue_resume_token(
+            conn, thread_id=session_id, business_key=token_hash,
+            session_id=session_id, token_hash=token_hash,
+        )
+
+        opened_id, next_seq = open_resume(conn, token)
+        assert opened_id == session_id
+        assert next_seq == 1
+
+    def test_open_resume_skips_already_answered_turns(self, conn):
+        session_id = _new_pending_session(conn)
+        conn.execute(
+            "INSERT INTO prep_question (id, snapshot_id, seq, dimension, difficulty, text, rubric_json, follow_ups_json, rationale, origin) "
+            "VALUES ('q1', 'snap-app1-1', 1, 'd', 'easy', 'text', '{}', '[]', '', 'ai')"
+        )
+        conn.execute(
+            "INSERT INTO interview_turn (id, session_id, seq, question_id, question_text, answer_mode) "
+            "VALUES ('t1', ?, 1, 'q1', 'text', 'text')",
+            (session_id,),
+        )
+        conn.execute("UPDATE interview_session SET status = 'interrupted' WHERE id = ?", (session_id,))
+        conn.commit()
+
+        token, token_hash = compute_new_resume_token(conn, session_id=session_id)
+        effect_issue_resume_token(
+            conn, thread_id=session_id, business_key=token_hash,
+            session_id=session_id, token_hash=token_hash,
+        )
+        _, next_seq = open_resume(conn, token)
+        assert next_seq == 2  # 不重复出第 1 题
+
+    def test_resume_token_is_one_time_use(self, conn):
+        session_id = _new_pending_session(conn)
+        conn.execute("UPDATE interview_session SET status = 'interrupted' WHERE id = ?", (session_id,))
+        conn.commit()
+        token, token_hash = compute_new_resume_token(conn, session_id=session_id)
+        effect_issue_resume_token(
+            conn, thread_id=session_id, business_key=token_hash,
+            session_id=session_id, token_hash=token_hash,
+        )
+        open_resume(conn, token)
+
+        from app.graph.invite_nodes import InviteTokenInvalidError
+
+        with pytest.raises(InviteTokenInvalidError):
+            open_resume(conn, token)
+
+    def test_resume_issuance_capped_at_max(self, conn):
+        session_id = _new_pending_session(conn)
+        conn.execute("UPDATE interview_session SET status = 'interrupted' WHERE id = ?", (session_id,))
+        conn.commit()
+
+        for _ in range(MAX_RESUME_ISSUANCES):
+            token, token_hash = compute_new_resume_token(conn, session_id=session_id)
+            effect_issue_resume_token(
+                conn, thread_id=session_id, business_key=token_hash,
+                session_id=session_id, token_hash=token_hash,
+            )
+
+        with pytest.raises(ResumeTokenLimitExceededError):
+            compute_new_resume_token(conn, session_id=session_id)
