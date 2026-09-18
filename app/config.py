@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     # 文件就够（Shao Peishen 2026-08-26 拍板：允许热改、不重启生效）。
     candidate_outbound_switch_file: str = "data/candidate_outbound.switch"
 
+    # 真实简历入库闸（design D2）。默认关闭；每次上传时求值，⛔ 不缓存——
+    # 唯一合法入口是 app/storage/live_resume_gate.py 的
+    # is_live_resume_intake_enabled()，业务代码不得直接读这个字段。
+    live_resume_intake_enabled: bool = False
+
+    # 上传文件落盘目录（U2 tasks 3.3/3.4）。相对路径按进程工作目录解析，
+    # 与 db_path 同一约定。
+    resume_storage_dir: str = "data/resumes"
+
     def validate_model_version(self) -> None:
         if self.llm_model == "latest" or self.llm_model.endswith(":latest"):
             raise ValueError(
