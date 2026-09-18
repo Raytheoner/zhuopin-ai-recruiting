@@ -343,3 +343,140 @@ def test_rejection_record_appeal_status_defaults_none_and_check(conn):
         conn.execute(
             "UPDATE rejection_record SET appeal_status='approved' WHERE id='rej-1'"
         )
+
+
+# ── resume_access_log / field_review_queue / screening_flag（tasks 2.4）─
+
+
+def test_resume_access_log_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "resume_access_log")
+    assert _columns(conn, "resume_access_log") == {
+        "id", "accessor", "resume_id", "access_type", "accessed_at",
+    }
+
+
+def test_resume_access_log_has_no_content_columns(conn):
+    """spec「简历访问留痕」：留痕记录 MUST NOT 包含简历内容本身。"""
+    cols = _columns(conn, "resume_access_log")
+    assert not ({"text", "content", "parsed_json"} & cols)
+
+
+def test_resume_access_log_accessor_cannot_be_blank(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO resume_access_log (id, accessor, resume_id, access_type) "
+            "VALUES ('log-1', '  ', 'r-x', 'raw_text')"
+        )
+
+
+@pytest.mark.parametrize("access_type", ["raw_text", "spans", "parsed_result", "download"])
+def test_resume_access_log_access_type_accepts_four_values(conn, access_type):
+    conn.execute(
+        "INSERT INTO resume_access_log (id, accessor, resume_id, access_type) "
+        "VALUES (?, 'hr-1', 'r-x', ?)",
+        (f"log-{access_type}", access_type),
+    )
+    conn.commit()
+
+
+def test_resume_access_log_access_type_rejects_unknown_value(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO resume_access_log (id, accessor, resume_id, access_type) "
+            "VALUES ('log-bad', 'hr-1', 'r-x', 'preview')"
+        )
+
+
+def test_field_review_queue_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "field_review_queue")
+    assert _columns(conn, "field_review_queue") == {
+        "id", "resume_id", "field", "machine_value", "confidence",
+        "status", "reviewed_by", "reviewed_at", "human_value", "created_at",
+    }
+
+
+def test_field_review_queue_status_check(conn):
+    _seed_job_candidate_resume(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO field_review_queue (id, resume_id, field, status) "
+            "VALUES ('q-1', 'r1', 'years_of_experience', 'closed')"
+        )
+
+
+def test_field_review_queue_rejects_second_pending_row_for_same_field(conn):
+    """结构性幂等guard：同一简历同一字段不该同时有两条待校对行。"""
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO field_review_queue (id, resume_id, field) VALUES ('q-1', 'r1', 'years_of_experience')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO field_review_queue (id, resume_id, field) VALUES ('q-2', 'r1', 'years_of_experience')"
+        )
+
+
+def test_screening_flag_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "screening_flag")
+    assert _columns(conn, "screening_flag") == {
+        "id", "application_id", "profile_version", "rule_ref",
+        "verdict", "reason", "evidence_ref", "created_at",
+    }
+
+
+def test_screening_flag_verdict_check(conn):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO screening_flag "
+            "(id, application_id, profile_version, rule_ref, verdict) "
+            "VALUES ('sf-1', 'app-1', 1, 'edu-gte-bachelor', 'maybe')"
+        )
+
+
+def test_screening_flag_fail_requires_evidence_ref(conn):
+    """工程铁律 4：每条 fail 标记必须带 evidence_ref，为空不允许写入。"""
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO screening_flag "
+            "(id, application_id, profile_version, rule_ref, verdict, evidence_ref) "
+            "VALUES ('sf-1', 'app-1', 1, 'edu-gte-bachelor', 'fail', NULL)"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO screening_flag "
+            "(id, application_id, profile_version, rule_ref, verdict, evidence_ref) "
+            "VALUES ('sf-2', 'app-1', 1, 'edu-gte-bachelor', 'fail', '   ')"
+        )
+
+
+def test_screening_flag_pass_and_skipped_allow_null_evidence(conn):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.commit()
+    conn.execute(
+        "INSERT INTO screening_flag "
+        "(id, application_id, profile_version, rule_ref, verdict) "
+        "VALUES ('sf-pass', 'app-1', 1, 'edu-gte-bachelor', 'pass')"
+    )
+    conn.execute(
+        "INSERT INTO screening_flag "
+        "(id, application_id, profile_version, rule_ref, verdict) "
+        "VALUES ('sf-skip', 'app-1', 1, 'years-gte-3', 'skipped')"
+    )
+    conn.commit()

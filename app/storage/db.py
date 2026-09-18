@@ -429,6 +429,89 @@ CREATE INDEX IF NOT EXISTS idx_rejection_record_application
 
 CREATE INDEX IF NOT EXISTS idx_rejection_record_batch
     ON rejection_record (batch_id);
+
+-- 简历访问留痕（resume-upload-and-gate spec「简历访问留痕」）。⛔ resume_id
+-- 上刻意不加外键——与 human_review.job_id、effect_log.thread_id 同一形态：
+-- 留痕表按事件记事实，把它的可写性绑在业务表上，"留痕写不进去"就会变成
+-- "读取整个失败"，而 spec 明确"留痕写入失败 MUST 读取失败"——这条约束应该
+-- 由应用层的写入顺序保证（先留痕后返回内容），不该由外键去意外触发。
+--
+-- 无内容列（spec「留痕记录 MUST NOT 包含简历内容本身」）：只有访问者/简历
+-- 标识/时刻/类型四列。
+--
+-- accessor 的 CHECK 与 human_review.reviewer / rejection_record.decided_by
+-- 同一手法：空访问者等于没有留痕。
+--
+-- access_type 四态对应 resume-parsing 管线的四种读取入口（tasks 3.9）：
+-- raw_text（原文）/ spans（分片）/ parsed_result（解析结果）/ download（下载）。
+CREATE TABLE IF NOT EXISTS resume_access_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL CHECK (
+        accessor IS NOT NULL
+        AND trim(accessor, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    resume_id TEXT NOT NULL,
+    access_type TEXT NOT NULL CHECK (
+        access_type IN ('raw_text', 'spans', 'parsed_result', 'download')
+    ),
+    accessed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_access_log_resume ON resume_access_log (resume_id);
+
+-- 人工校对队列（resume-parsing spec「字段级置信度与人工校对队列」）。一条
+-- pending 行代表"这个字段机器没把握，等人校对"；校对完成后本行 status 改为
+-- reviewed 并落 human_value/reviewed_by/reviewed_at（U2 tasks 3.10），⛔ 不产生
+-- 第二条行——校对动作 MUST 幂等。
+--
+-- 部分唯一索引（WHERE status='pending'）是这条幂等性的结构性第二道防线：
+-- 同一简历同一字段最多同时存在一条 pending 行，⛔ 不会出现两条队列行互相
+-- 矛盾地等待同一个字段被校对。
+CREATE TABLE IF NOT EXISTS field_review_queue (
+    id TEXT PRIMARY KEY NOT NULL,
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    field TEXT NOT NULL,
+    machine_value TEXT,
+    confidence REAL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'reviewed')),
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    human_value TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_field_review_queue_resume ON field_review_queue (resume_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_field_review_queue_pending_unique
+    ON field_review_queue (resume_id, field)
+    WHERE status = 'pending';
+
+-- 硬门槛标记（hard-requirement-screening spec「逐条判定只标记不淘汰」）。
+-- verdict 三态：pass / fail / skipped。fail 必带 evidence_ref 的 CHECK 是
+-- 工程铁律 4「每条 criterion_score 必须有 evidence_ref」在硬门槛标记这一侧
+-- 的对应落点——fail 标记同样是"判定"，同样不能没有依据（spec「每条 fail
+-- 标记带原文依据」：回指为空的 fail 标记 MUST NOT 写入）。pass/skipped 不要求
+-- evidence_ref：pass 代表满足、skipped 代表跳过判定，两者都不是"依据某处原文
+-- 判定不符合"，不适用同一约束。
+CREATE TABLE IF NOT EXISTS screening_flag (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    profile_version INTEGER NOT NULL,
+    rule_ref TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('pass', 'fail', 'skipped')),
+    reason TEXT,
+    evidence_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (
+        verdict != 'fail'
+        OR (
+            evidence_ref IS NOT NULL
+            AND trim(evidence_ref, ' ' || char(9) || char(10) || char(13)) != ''
+        )
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_screening_flag_application ON screening_flag (application_id);
 """
 
 
