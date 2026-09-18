@@ -118,12 +118,28 @@ class TurnOutcome(NamedTuple):
     is_job_related: bool
 
 
-def _render_index(root_path: str) -> str:
+def _substitute_base_href(html: str, root_path: str) -> str:
     """把 <!--BASE_HREF--> 占位符换成真实 <base href>，让前端相对路径请求
-    在任意挂载前缀下都能解析到正确的地址。root_path="" 时挂域根。"""
-    html = INDEX_TEMPLATE_PATH.read_text(encoding="utf-8")
+    在任意挂载前缀下都能解析到正确的地址。root_path="" 时挂域根。
+
+    这是 5 个静态页面路由（index/login/upload/resume_list/resume_review）
+    共用的唯一替换点（finding 4）：Task 2 review 时标注"第 4 个页面出现时才
+    值得抽"，Task 3/4 分别新增了第 4、5 个，触发条件已满足。纯重构，行为与
+    抽取前逐字一致。
+    """
     base_href = f"{root_path}/" if root_path else "/"
     return html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">')
+
+
+def _render_index(root_path: str) -> str:
+    html = INDEX_TEMPLATE_PATH.read_text(encoding="utf-8")
+    return _substitute_base_href(html, root_path)
+
+
+def _render_static_page(filename: str, root_path: str) -> HTMLResponse:
+    """`STATIC_DIR/filename` 读文件 + 替换 <!--BASE_HREF--> + 包装 HTMLResponse。"""
+    html = (STATIC_DIR / filename).read_text(encoding="utf-8")
+    return HTMLResponse(_substitute_base_href(html, root_path))
 
 
 def create_app(
@@ -201,27 +217,19 @@ def create_app(
 
     @router.get("/login")
     def login_page():
-        html = (STATIC_DIR / "login.html").read_text(encoding="utf-8")
-        base_href = f"{root_path}/" if root_path else "/"
-        return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
+        return _render_static_page("login.html", root_path)
 
     @router.get("/resumes/upload")
     def upload_page():
-        html = (STATIC_DIR / "upload.html").read_text(encoding="utf-8")
-        base_href = f"{root_path}/" if root_path else "/"
-        return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
+        return _render_static_page("upload.html", root_path)
 
     @router.get("/jobs/{job_id}/resumes")
     def resume_list_page(job_id: str):
-        html = (STATIC_DIR / "resume_list.html").read_text(encoding="utf-8")
-        base_href = f"{root_path}/" if root_path else "/"
-        return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
+        return _render_static_page("resume_list.html", root_path)
 
     @router.get("/resumes/{resume_id}/review")
     def resume_review_page(resume_id: str):
-        html = (STATIC_DIR / "resume_review.html").read_text(encoding="utf-8")
-        base_href = f"{root_path}/" if root_path else "/"
-        return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
+        return _render_static_page("resume_review.html", root_path)
 
     def _response_payload(message) -> dict:
         """
