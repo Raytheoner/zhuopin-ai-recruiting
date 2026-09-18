@@ -1,18 +1,16 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 508
+  条目数: 534
   按状态:
-    待开: 238
-    在跑: 9
-    完成: 175
+    待开: 240
+    在跑: 7
+    完成: 201
     阻塞: 86
-  阻塞·决策: 48
+  阻塞·决策: 50
   阻塞·外部: 35
   conflicts:
   - channel-resume-intake/0.1
-  - interview-scheduling/U1/plan
-  - interview-scheduling/U2/plan
   - m1-intake-quality-fixes/8.9
   - m1-intake-quality-fixes/U8/plan
   - m1-job-profile-intake/1.5b
@@ -33,24 +31,16 @@ summary:
   - relay:AT-4
   - relay:H-4
   - relay:R-10
-  - relay:R-13
-  - relay:R-14
   - relay:R-6
   ready:
   - interview-scheduling/0.2
-  - interview-scheduling/1.1
-  - interview-scheduling/1.2
-  - interview-scheduling/1.3
-  - interview-scheduling/1.4
-  - interview-scheduling/1.5
-  - interview-scheduling/1.6
-  - interview-scheduling/1.7
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
+  - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
   - offer-generation/U1/plan ← G2 `offer-generation`（已答·未放行）
   - onboarding-flow/U1/plan ← G2 `onboarding-flow`（已答·未放行）
   未知依赖: []
@@ -805,6 +795,8 @@ tasks:
   依赖:
   - hr-wecom-aibot-liaison/U1/plan
   - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg3
   触碰区:
   - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
   - tools/liaison/README.md
@@ -838,6 +830,7 @@ tasks:
   - hr-wecom-aibot-liaison/U1
   - hr-wecom-aibot-liaison/U2/plan
   - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg2
   触碰区:
   - app/storage/db.py
   状态: 完成
@@ -869,6 +862,7 @@ tasks:
   - hr-wecom-aibot-liaison/U2
   - hr-wecom-aibot-liaison/U3/plan
   - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg2
   触碰区:
   - tools/liaison/config/whitelist.yaml
   状态: 完成
@@ -900,6 +894,7 @@ tasks:
   - hr-wecom-aibot-liaison/U3
   - hr-wecom-aibot-liaison/U4/plan
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg2
   触碰区: []
   状态: 完成
   阻塞类型: 无
@@ -930,6 +925,7 @@ tasks:
   - hr-wecom-aibot-liaison/U4
   - hr-wecom-aibot-liaison/U5/plan
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg2
   触碰区: []
   状态: 完成
   阻塞类型: 无
@@ -960,6 +956,7 @@ tasks:
   - hr-wecom-aibot-liaison/U5
   - hr-wecom-aibot-liaison/U6/plan
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg2
   触碰区: []
   状态: 完成
   阻塞类型: 无
@@ -990,6 +987,7 @@ tasks:
   - hr-wecom-aibot-liaison/U6
   - hr-wecom-aibot-liaison/U7/plan
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg2
   触碰区:
   - docs/findings/2026-09-09-aibot-wsclient-表面实测.md
   - docs/tech-debt.md
@@ -1007,7 +1005,9 @@ tasks:
   - hr-wecom-aibot-liaison/8.6
   - hr-wecom-aibot-liaison/U7
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
   触碰区:
   - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
   状态: 阻塞
@@ -1025,7 +1025,9 @@ tasks:
   依赖:
   - hr-wecom-aibot-liaison/U7
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
   触碰区: []
   状态: 阻塞
   阻塞类型: 外部
@@ -1041,7 +1043,9 @@ tasks:
   依赖:
   - hr-wecom-aibot-liaison/U7
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
   触碰区: []
   状态: 阻塞
   阻塞类型: 外部
@@ -1078,7 +1082,9 @@ tasks:
   - hr-wecom-aibot-liaison/U7
   - hr-wecom-aibot-liaison/U8/plan
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
   - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
   触碰区:
   - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
   - tools/liaison/launchd/com.zhuopin.hr.liaison.plist
@@ -1174,9 +1180,7 @@ tasks:
   标题: '`app/storage/db.py` 新增 `interviewer`（`account_id` 唯一外键 `hr_account`、姓名、部门、可面岗位 JSON、启用状态）、`interviewer_availability`（`in'
   单元: U1 面试域模型
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
+  - interview-scheduling/U1/plan
   触碰区:
   - app/storage/db.py
   状态: 待开
@@ -1191,9 +1195,7 @@ tasks:
   标题: 新增 `interview_slot`（`application_id, round, start_at, end_at, mode CHECK IN onsite/phone/online, location_or_link, statu
   单元: U1 面试域模型
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
+  - interview-scheduling/U1/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1207,9 +1209,7 @@ tasks:
   标题: 新增 `interview_invitation_draft`（`slot_id, version, template_version, body, ai_generated BOOL, authorship_marked_by, auth
   单元: U1 面试域模型
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
+  - interview-scheduling/U1/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1223,9 +1223,7 @@ tasks:
   标题: 新增 `candidate_contact`（`application_id` 唯一、`phone_enc BLOB`、`email_enc BLOB`、`registered_by`、`registered_at`、`source CHE
   单元: U1 面试域模型
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
+  - interview-scheduling/U1/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1239,9 +1237,7 @@ tasks:
   标题: '`stage` 预置行追加 `interview`（`stage_type=interview`，幂等插入：已存在跳过）；测试：M2 预置三行不变、`interview` 行存在且唯一'
   单元: U1 面试域模型
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
+  - interview-scheduling/U1/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1254,9 +1250,7 @@ tasks:
   标题: '`tests/test_db_interview_schema.py`：新库建表齐全；复制 M2 结构的老库升级后既有表一行不改；全部 CHECK 反证（非法 status／mode／kind 被拒）'
   单元: U1 面试域模型
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
+  - interview-scheduling/U1/plan
   触碰区:
   - tests/test_db_interview_schema.py
   状态: 待开
@@ -1270,9 +1264,7 @@ tasks:
   标题: 面试官名单维护接口 `GET/POST/PATCH /interviewers`（HR 角色）；幂等：同 `account_id` 重复创建返回既有记录；测试：非 HR 角色 403
   单元: U1 面试域模型
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
+  - interview-scheduling/U1/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1288,15 +1280,11 @@ tasks:
   触碰区:
   - docs/superpowers/plans/*-interview-scheduling-unit1-*.md
   状态: 阻塞
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit1 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 完成
 - id: interview-scheduling/U1
   场景: interview-scheduling
   阶段: build
@@ -1311,9 +1299,6 @@ tasks:
   - interview-scheduling/1.6
   - interview-scheduling/1.7
   - interview-scheduling/U1/plan
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg3
   触碰区:
   - app/storage/db.py
   - tests/test_db_interview_schema.py
@@ -1329,7 +1314,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区:
   - app/agents/conflict_check.py
   状态: 待开
@@ -1345,7 +1330,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1359,7 +1344,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1374,7 +1359,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1388,7 +1373,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1402,7 +1387,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区:
   - tests/test_interview_history_invariant.py
   状态: 待开
@@ -1417,7 +1402,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1431,7 +1416,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1445,7 +1430,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - interview-scheduling/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1462,15 +1447,11 @@ tasks:
   触碰区:
   - docs/superpowers/plans/*-interview-scheduling-unit2-*.md
   状态: 阻塞
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  阻塞类型: 决策
+  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 完成
 - id: interview-scheduling/U2
   场景: interview-scheduling
   阶段: build
@@ -1490,7 +1471,6 @@ tasks:
   - interview-scheduling/2.9
   - interview-scheduling/U1
   - interview-scheduling/U2/plan
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区:
   - app/agents/conflict_check.py
   - tests/test_interview_history_invariant.py
@@ -2331,6 +2311,7 @@ tasks:
   - m1-job-profile-intake/U1
   - m1-job-profile-intake/U2/plan
   - plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg1
+  - plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg2
   触碰区:
   - app/llm/gateway.py
   - docs/m1-model-comparison.md
@@ -2414,6 +2395,7 @@ tasks:
   依赖:
   - m1-job-profile-intake/U4
   - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
+  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg2
   触碰区: []
   状态: 完成
   阻塞类型: 外部
@@ -2450,6 +2432,7 @@ tasks:
   - m1-job-profile-intake/U4
   - m1-job-profile-intake/U5/plan
   - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
+  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg2
   触碰区:
   - app/agents/ecu_knowledge.py
   - app/agents/intake_agent.py
@@ -2478,6 +2461,8 @@ tasks:
   依赖:
   - m1-job-profile-intake/U5
   - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg2
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg3
   触碰区: []
   状态: 完成
   阻塞类型: 无
@@ -2514,6 +2499,8 @@ tasks:
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6/plan
   - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg2
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg3
   触碰区:
   - app/graph/build.py
   - app/schemas/job_profile.py
@@ -2555,6 +2542,7 @@ tasks:
   - m1-job-profile-intake/U6
   - m1-job-profile-intake/U7/plan
   - plan:2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export/seg1
+  - plan:2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export/seg2
   触碰区:
   - app/agents/jd_agent.py
   - app/web/server.py
@@ -2589,6 +2577,7 @@ tasks:
   - m1-job-profile-intake/U7
   - m1-job-profile-intake/U8/plan
   - plan:2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue/seg1
+  - plan:2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue/seg2
   触碰区: []
   状态: 完成
   阻塞类型: 无
@@ -2789,6 +2778,9 @@ tasks:
   - m2-resume-parse-and-rank/U1
   - m2-resume-parse-and-rank/U2/plan
   - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg2
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg3
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg4
   触碰区:
   - app/agents/resume_parser.py
   状态: 完成
@@ -2822,6 +2814,7 @@ tasks:
   - m2-resume-parse-and-rank/U2
   - m2-resume-parse-and-rank/U2.5/plan
   - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg2
   触碰区:
   - docs/m2-visible-slice-guide.md
   - scripts/create_hr_account.py
@@ -2857,6 +2850,8 @@ tasks:
   - m2-resume-parse-and-rank/U2.5
   - m2-resume-parse-and-rank/U3/plan
   - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg2
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg3
   触碰区:
   - app/agents/hard_requirement_screening.py
   - app/storage/rejection.py
@@ -5076,6 +5071,8 @@ tasks:
   单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg2
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg3
   - voice-structured-interview/U0/plan
   触碰区:
   - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
@@ -5128,6 +5125,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区:
   - app/agents/interview_prep.py
@@ -5143,6 +5142,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区: []
   状态: 待开
@@ -5157,6 +5158,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区: []
   状态: 待开
@@ -5171,6 +5174,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区: []
   状态: 待开
@@ -5186,6 +5191,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区: []
   状态: 待开
@@ -5201,6 +5208,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区: []
   状态: 阻塞
@@ -5215,6 +5224,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区: []
   状态: 待开
@@ -5228,7 +5239,7 @@ tasks:
   标题: prep e2e 测试：合成画像＋M2 合成样本评分 → 生成 → 确认页改一题 → 冻结 → 开场校验通过；断言 `PrepInput` 不含身份字段
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
-  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/U1
   触碰区: []
   状态: 待开
@@ -5260,6 +5271,8 @@ tasks:
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
   - voice-structured-interview/3.1
   - voice-structured-interview/3.2
   - voice-structured-interview/3.3
@@ -6195,35 +6208,83 @@ tasks:
 - id: plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
   场景: M1
   阶段: build
-  标题: m1-job-profile-intake-unit6-approval-checkpoint Task 1–9
+  标题: m1-job-profile-intake-unit6-approval-checkpoint Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint.md
   可见: true
   备注: 合 main：be6322a feat(m1-intake) 交付单元 6；剩 6.8 归 TD-11
+- id: plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg2
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit6-approval-checkpoint Task 4–6
+  依赖:
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint.md
+  可见: true
+- id: plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg3
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit6-approval-checkpoint Task 7–9
+  依赖:
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 7–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint.md
+  可见: true
 - id: plan:2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export/seg1
   场景: M1
   阶段: build
-  标题: m1-job-profile-intake-unit7-jd-grounding-and-export Task 1–5
+  标题: m1-job-profile-intake-unit7-jd-grounding-and-export Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export.md
+  可见: true
+- id: plan:2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export/seg2
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit7-jd-grounding-and-export Task 4–5
+  依赖:
+  - plan:2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit7-jd-grounding-and-export.md
   可见: true
 - id: plan:2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue/seg1
   场景: M1
   阶段: build
-  标题: m1-job-profile-intake-unit8-web-list-detail-queue Task 1–5
+  标题: m1-job-profile-intake-unit8-web-list-detail-queue Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue.md
+  可见: false
+- id: plan:2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue/seg2
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit8-web-list-detail-queue Task 4–5
+  依赖:
+  - plan:2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit8-web-list-detail-queue.md
   可见: false
 - id: plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
@@ -6240,45 +6301,105 @@ tasks:
 - id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 1–7
+  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 4–6
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg3
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 7
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
   可见: false
 - id: plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 1–6
+  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 4–6
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency.md
   可见: false
 - id: plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 1–5
+  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 4–5
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist.md
   可见: false
 - id: plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg1
   场景: M1
   阶段: build
-  标题: m1-job-profile-intake-unit2-gateway-fallback-and-retry Task 1–6
+  标题: m1-job-profile-intake-unit2-gateway-fallback-and-retry Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry.md
+  可见: false
+- id: plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg2
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit2-gateway-fallback-and-retry Task 4–6
+  依赖:
+  - plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry.md
   可见: false
 - id: plan:2026-09-08-m1-job-profile-intake-unit4-4-idempotency-suite/seg1
@@ -6295,78 +6416,162 @@ tasks:
 - id: plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
   场景: M1
   阶段: build
-  标题: m1-job-profile-intake-unit5-3-intent-recognition Task 1–6
+  标题: m1-job-profile-intake-unit5-3-intent-recognition Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition.md
+  可见: true
+- id: plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg2
+  场景: M1
+  阶段: build
+  标题: m1-job-profile-intake-unit5-3-intent-recognition Task 4–6
+  依赖:
+  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition.md
   可见: true
 - id: plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 1–6
+  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive.md
   可见: false
 - id: plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 1–6
+  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue.md
   可见: false
 - id: plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 1–6
+  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify.md
   可见: false
 - id: plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 1–6
+  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle.md
   可见: false
 - id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 1–5
+  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 4–5
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention.md
   可见: false
 - id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
   场景: M0
   阶段: build
-  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 1–4
+  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–4 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 4
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging.md
   可见: false
 - id: plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
@@ -6500,48 +6705,144 @@ tasks:
 - id: plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   场景: M2
   阶段: build
-  标题: m2-resume-parse-and-rank-unit2-upload-and-parsing Task 1–10
+  标题: m2-resume-parse-and-rank-unit2-upload-and-parsing Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–10 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing.md
+  可见: false
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg2
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit2-upload-and-parsing Task 4–6
+  依赖:
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing.md
+  可见: false
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg3
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit2-upload-and-parsing Task 7–9
+  依赖:
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 7–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing.md
+  可见: false
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg4
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit2-upload-and-parsing Task 10
+  依赖:
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg3
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 10 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing.md
   可见: false
 - id: plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   场景: M2
   阶段: build
-  标题: m2-resume-parse-and-rank-unit2.5-visible-slice Task 1–6
+  标题: m2-resume-parse-and-rank-unit2.5-visible-slice Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice.md
   可见: false
   备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg2
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit2.5-visible-slice Task 4–6
+  依赖:
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice.md
+  可见: false
 - id: plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
   场景: M2
   阶段: build
-  标题: m2-resume-parse-and-rank-unit3-hard-requirement-screening Task 1–9
+  标题: m2-resume-parse-and-rank-unit3-hard-requirement-screening Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening.md
   可见: false
   备注: dispatcher_event-lanes-done-20260918-135326 派 0918X/Y/Z（run-build，无「## 建议拆段点」节，按每 3 Task 一段拆 3 条同泳道串行，分支 lane-m2-u3-hard-requirement-screening），号池台账已登记；事件 lanes-done-20260918-142227
     核验合 main 且 tasks.md 4.1-4.6 全勾，判「完成」
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg2
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit3-hard-requirement-screening Task 4–6
+  依赖:
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening.md
+  可见: false
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg3
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit3-hard-requirement-screening Task 7–9
+  依赖:
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 7–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening.md
+  可见: false
 - id: plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
   场景: 构建自动化
   阶段: build
-  标题: voice-structured-interview-unit0-probe Task 1–7
+  标题: voice-structured-interview-unit0-probe Task 1–3
   依赖: []
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  产出判据: Task 1–7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit0-probe.md
+  可见: false
+- id: plan:2026-09-18-voice-structured-interview-unit0-probe/seg2
+  场景: 构建自动化
+  阶段: build
+  标题: voice-structured-interview-unit0-probe Task 4–6
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit0-probe.md
+  可见: false
+- id: plan:2026-09-18-voice-structured-interview-unit0-probe/seg3
+  场景: 构建自动化
+  阶段: build
+  标题: voice-structured-interview-unit0-probe Task 7
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit0-probe.md
   可见: false
 - id: plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
@@ -6583,13 +6884,51 @@ tasks:
 - id: plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   场景: 构建自动化
   阶段: build
-  标题: voice-structured-interview-unit2-prep-question-engine Task 1–9
+  标题: voice-structured-interview-unit2-prep-question-engine Task 1–3
   依赖: []
-  触碰区: []
-  状态: 待开
+  触碰区:
+  - app/llm/gateway.py
+  - app/audit/hook.py
+  - app/schemas/job_profile.py
+  - app/storage/db.py
+  状态: 在跑
   阻塞类型: 无
-  产出判据: Task 1–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit2-prep-question-engine.md
+  可见: false
+  备注: 0918 dispatcher 派车（0918AJ，task-dispatcher·lanes-done-20260918-180916）；⚠️ 本计划 Task 编号从 0 起，台账标题「Task
+    1–3」是位置序，实际对应文档 Task 0/1/2，opener 正文已按真实编号写死
+- id: plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  场景: 构建自动化
+  阶段: build
+  标题: voice-structured-interview-unit2-prep-question-engine Task 4–6
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  触碰区:
+  - app/agents/interview_prep.py
+  - app/graph/interview_prep_nodes.py
+  - app/graph/build.py
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit2-prep-question-engine.md
+  可见: false
+  备注: 0918 dispatcher 派车（0918AK，task-dispatcher·lanes-done-20260918-180916，前置 0918AJ）；同泳道串行同分支，与 seg1 同批写死
+- id: plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg3
+  场景: 构建自动化
+  阶段: build
+  标题: voice-structured-interview-unit2-prep-question-engine Task 7–9
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg2
+  触碰区:
+  - app/web/server.py
+  - app/web/static/interview_prep_review.html
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: Task 7–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`；本段含全分支收口（final
+    review／合 main／回勾 tasks.md 3.1–3.8）
+  来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit2-prep-question-engine.md
+  备注: 0918 dispatcher 派车（0918AL，task-dispatcher·lanes-done-20260918-180916，前置 0918AK）；同泳道串行同分支，与 seg1 同批写死
   可见: false
 - id: propose:S-M3
   场景: S-M3
@@ -7573,18 +7912,15 @@ tasks:
   依赖: []
   触碰区:
   - scripts/dispatcher_backlog.py
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: _match_plans() 对 change="interview-scheduling" 取 prefix="interview"，正则 `(?<![\w])interview-unit1(?!\.?\d)` 命中 `2026-09-18-voice-structured-interview-unit1-data-model`（该文件名内部子串
     `...structured-interview-unit1-data-model` 的 `-` 满足非单词边界），导致 interview-scheduling/U1/plan 被误判「完成」、interview-scheduling/1.1–1.7 依赖被错接到该外部 plan 的 seg1–3 从而假阳性 ready；需收紧前缀回退匹配（如要求
     prefix 后立即衔接 change 全名的其余部分，或限定只在 change 本身不含连字符时才用 prefix 回退）＋ 补回归测试固定此用例，并重跑 dispatcher_backlog.py 核对 interview-scheduling/U1/plan 与 1.1–1.7 状态改回正确值
   来源: 0918 dispatcher 复核 ready 集时手工发现（interview-scheduling/1.1–1.7 与 interview-scheduling/U1/plan 的 conflicts）
   可见: false
-  备注: 0918 dispatcher 发现；已并 relay:R-14 合派 0918AI（task-dispatcher·lanes-done-20260918-172527）；修复前 interview-scheduling/1.1–1.7 ⛔ 不得当真 ready 派车，即便 --show ready 仍会列出
-  conflicts:
-    状态:
-      台账: 在跑
-      真身: 来源已消失或已勾选
+  备注: 0918 dispatcher 发现；已并 relay:R-14 合派 0918AI（task-dispatcher·lanes-done-20260918-172527）；0918 dispatcher 复核：0918AI 收口证据 `git rev-list --count main..branch`=0，已
+    ff push 到 origin/main（含 commit 5c8ed9c，当前 main HEAD 已含此提交），R-13/R-14 均已修复并合入，判「完成」
 - id: relay:R-14
   场景: 构建自动化
   阶段: build
@@ -7592,19 +7928,15 @@ tasks:
   依赖: []
   触碰区:
   - scripts/dispatcher_backlog.py
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: 'parse_segments()（scripts/dispatcher_backlog.py:521-543）第 541-542 行 `if not segments and task_count: segments = [(1, task_count)]`——没有「## 建议拆段点」节、且文本里也没有可解析的
     `Task a–b` 列表项时，直接把 1..task_count 全部塞进一个 segment；实测 `2026-09-18-voice-structured-interview-unit2-prep-question-engine.md`（9 个 Task、无「建议拆段点」节）被生成为单条 `plan:.../seg1`（标题「Task
     1–9」），与 rules.md §2 build 阶段判据「Task ≥ 5 ⇒ …无拆段节 ⇒ 每 3 Task 一段」不符；需改 fallback 为按 3 个一段切分（`range(1, task_count+1, 3)`），并补回归测试固定「无建议拆段点节 + 9 Task」用例 ⇒ 应生成 seg1(1-3)/seg2(4-6)/seg3(7-9)'
   来源: 0918 dispatcher 派车前核 plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1 时手工发现
   可见: false
-  备注: 0918 dispatcher 发现；已并 relay:R-13 合派 0918AI（task-dispatcher·lanes-done-20260918-172527）；修复前 plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
-    ⛔ 不当真 ready 派车（会把 9 个 Task 塞进一条泳道，且合并后台账会误判整个 U2 单元完成）
-  conflicts:
-    状态:
-      台账: 在跑
-      真身: 来源已消失或已勾选
+  备注: 0918 dispatcher 发现；已并 relay:R-13 合派 0918AI（task-dispatcher·lanes-done-20260918-172527）；0918 dispatcher 复核：0918AI 收口证据 `git rev-list --count main..branch`=0，已
+    ff push 到 origin/main（含 commit 5c8ed9c，当前 main HEAD 已含此提交），R-13/R-14 均已修复并合入，判「完成」
 - id: relay:R-6
   场景: M0
   阶段: build
