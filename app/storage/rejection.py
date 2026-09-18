@@ -7,8 +7,11 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
+
+logger = logging.getLogger(__name__)
 
 _VALID_REASON_TYPES = frozenset({"hard_rule", "human_decision"})
 
@@ -74,7 +77,22 @@ def write_rejection(
         # 隐式打开的事务里，不回滚的话会被之后任何一次*不相关*的
         # conn.commit() 悄悄落盘——拒绝记录有了、流转事实表却没有，
         # 精确审计链出现窟窿（这正是本子系统存在的目的）。
-        conn.rollback()
+        #
+        # 回滚自己也可能失败（同 idempotency.py 的理由：例如事务已被另一个
+        # 持有者结束）。这个次生异常⛔不得替换掉原始异常（调用方要看到的是
+        # 写入失败的真实原因，不是"rollback 炸了"），但也不能静默——回滚失败
+        # 意味着上面那半截写入仍挂在未提交事务里，记 ERROR 留下痕迹。
+        try:
+            conn.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "rollback failed while cleaning up after write_rejection "
+                "raised for application_id=%s; the partial write was NOT "
+                "undone and may be silently committed by a later, unrelated "
+                "effect",
+                application_id,
+                exc_info=rollback_exc,
+            )
         raise
     conn.commit()
     return rejection_id

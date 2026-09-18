@@ -83,9 +83,14 @@ def _overlay_reviewed_fields(
     原有的机器抽取分片，不臆造新偏移量——fail 判定的 evidence_ref 因此仍
     指向原始简历原文，这是已知的可接受限制，不在本次修复范围内解决。
     """
+    # ORDER BY reviewed_at ASC：同一字段可能有多条 reviewed 行（重解析后再次
+    # 判低置信度、又被再次校对），循环按升序遍历、后写的覆盖先写的，保证
+    # 最终落在 data[field_name] 里的是"最近一次人工修正"，不受插入顺序/主键
+    # 顺序摆布（原查询没有 ORDER BY 时结果顺序未定义）。
     reviewed_rows = conn.execute(
         "SELECT field, human_value FROM field_review_queue "
-        "WHERE resume_id = ? AND status = 'reviewed'",
+        "WHERE resume_id = ? AND status = 'reviewed' "
+        "ORDER BY reviewed_at ASC",
         (resume_id,),
     ).fetchall()
     if not reviewed_rows:

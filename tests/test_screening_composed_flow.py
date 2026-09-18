@@ -128,7 +128,7 @@ def test_review_correction_produces_new_verdict_and_stays_idempotent(screening_c
         json={"human_value": "6"},
     )
     assert review_resp.status_code == 200
-    assert review_resp.json() == {"ok": True, "already_reviewed": False}
+    assert review_resp.json() == {"ok": True, "already_reviewed": False, "screening_status": "ok"}
 
     # 4. 校对完成后必须产生新的一组标记（Fix 1：business_key 判别符生效，
     #    不会被上传时那组的 effect_key 短路掉），且判定用的是修正后的值
@@ -148,3 +148,47 @@ def test_review_correction_produces_new_verdict_and_stays_idempotent(screening_c
         f"/api/applications/{application_id}/screening-flags"
     ).json()["flags"]
     assert len(flags_after_repeat) == 2
+
+
+def test_review_with_non_numeric_value_defers_screening_instead_of_500(
+    screening_client, monkeypatch
+):
+    """final review 修复项：field_review_queue.human_value 是自由文本
+    （FieldReviewRequest.human_value 没有做数字校验），但
+    _overlay_reviewed_fields 对 years_of_experience 无条件 float(human_value)。
+    HR 直接调 API 传一个非纯数字的值（如"6年"）会让 queue_reapplication_screening
+    在校对结果已经 commit 之后才抛出 ValueError——路由必须像上传/重解析路由
+    一样 try/except 兜住，返回 200 + screening_status="deferred"，⛔ 不能让
+    已经成功的校对提交因为重判失败而被 FastAPI 翻译成 500。"""
+    client, conn = screening_client
+    monkeypatch.setattr("app.web.server.compute_parse", _fake_compute_parse)
+
+    files = [
+        ("files", ("a.docx", _docx_bytes(["张三，2年工作经验。" * 6]),
+                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+    ]
+    resp = client.post(
+        "/api/resumes/upload",
+        data={"job_id": "j1", "sample_class": "synthetic"},
+        files=files,
+    )
+    resume_id = resp.json()["results"][0]["resume_id"]
+
+    review_resp = client.post(
+        f"/api/resumes/{resume_id}/fields/years_of_experience/review",
+        json={"human_value": "6年"},
+    )
+    assert review_resp.status_code == 200
+    body = review_resp.json()
+    assert body["ok"] is True
+    assert body["already_reviewed"] is False
+    assert body["screening_status"] == "deferred"
+
+    # 校对结果本身必须已经落库——这是本修复要保护的东西：重判失败不能
+    # 回滚/掩盖已经成功的人工校对提交。
+    row = conn.execute(
+        "SELECT status, human_value FROM field_review_queue "
+        "WHERE resume_id = ? AND field = 'years_of_experience'",
+        (resume_id,),
+    ).fetchone()
+    assert row == ("reviewed", "6年")

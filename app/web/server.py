@@ -1354,7 +1354,9 @@ def create_app(
                 (resume_id, field),
             ).fetchone()
             if already_reviewed is not None and already_reviewed[0] == req.human_value:
-                return {"ok": True, "already_reviewed": True}
+                # 重判在这个分支里根本没有再跑一次，谈不上失败——标 "ok" 只是
+                # 让响应形状与另外两个返回路径一致，不代表本次调用真的重判过。
+                return {"ok": True, "already_reviewed": True, "screening_status": "ok"}
             raise HTTPException(status_code=404, detail="该字段没有待校对记录")
 
         reviewer = reviewer_of(request)
@@ -1364,8 +1366,17 @@ def create_app(
             (req.human_value, reviewer, row[0]),
         )
         conn.commit()
-        queue_reapplication_screening(conn, resume_id)
-        return {"ok": True, "already_reviewed": False}
+        screening_status = "deferred"
+        try:
+            queue_reapplication_screening(conn, resume_id)
+            screening_status = "ok"
+        except Exception:
+            logger.exception(
+                "resume_id=%s field=%s 字段校对后重判失败，校对结果已入库，"
+                "留待人工/后续触发重判",
+                resume_id, field,
+            )
+        return {"ok": True, "already_reviewed": False, "screening_status": screening_status}
 
     @router.get("/health")
     def health() -> dict:

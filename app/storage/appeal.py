@@ -8,8 +8,11 @@ appeal_status 原地更新。
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
+
+logger = logging.getLogger(__name__)
 
 _LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
     "none": frozenset({"requested"}),
@@ -95,7 +98,21 @@ def transition_appeal(
         # 同 rejection.py::write_rejection 的理由：conn 是全应用共享的单连接，
         # 写到一半失败会把前面几条语句留在隐式打开的事务里，被之后任何一次
         # *不相关*的 conn.commit() 悄悄落盘，精确审计链出现窟窿。
-        conn.rollback()
+        #
+        # 回滚自己也可能失败（同 idempotency.py 的理由）。次生异常⛔不得替换
+        # 掉原始异常，但也不能静默——回滚失败意味着上面那半截写入仍挂在
+        # 未提交事务里，记 ERROR 留下痕迹。
+        try:
+            conn.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "rollback failed while cleaning up after transition_appeal "
+                "raised for rejection_record_id=%s; the partial write was NOT "
+                "undone and may be silently committed by a later, unrelated "
+                "effect",
+                rejection_record_id,
+                exc_info=rollback_exc,
+            )
         raise
 
     conn.commit()
