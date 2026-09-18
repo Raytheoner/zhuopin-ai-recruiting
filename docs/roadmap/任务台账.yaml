@@ -1,11 +1,11 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 498
+  条目数: 499
   按状态:
     待开: 266
     在跑: 8
-    完成: 132
+    完成: 133
     阻塞: 92
   阻塞·决策: 52
   阻塞·外部: 38
@@ -22,7 +22,6 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
-  - m2-resume-parse-and-rank/U2.5/plan
   - opener:[Mac]0903A
   - propose:S-M3
   - propose:S-Offer
@@ -2770,7 +2769,7 @@ tasks:
   单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
   依赖:
   - m2-resume-parse-and-rank/U2
-  - m2-resume-parse-and-rank/U2.5/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2785,7 +2784,7 @@ tasks:
   单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
   依赖:
   - m2-resume-parse-and-rank/U2
-  - m2-resume-parse-and-rank/U2.5/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2800,7 +2799,7 @@ tasks:
   单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
   依赖:
   - m2-resume-parse-and-rank/U2
-  - m2-resume-parse-and-rank/U2.5/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2815,7 +2814,7 @@ tasks:
   单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
   依赖:
   - m2-resume-parse-and-rank/U2
-  - m2-resume-parse-and-rank/U2.5/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2829,7 +2828,7 @@ tasks:
   单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
   依赖:
   - m2-resume-parse-and-rank/U2
-  - m2-resume-parse-and-rank/U2.5/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   触碰区:
   - docs/m2-visible-slice-guide.md
   - scripts/create_hr_account.py
@@ -2848,17 +2847,14 @@ tasks:
   - m2-resume-parse-and-rank/U2
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit2.5-*.md
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit2.5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: true
   闸门: G2 m2-resume-parse-and-rank
-  conflicts:
-    状态:
-      台账: 在跑
-      真身: 待开
-  备注: 0918R（task-dispatcher·lanes-done-20260918-100256）
+  备注: 0918R（task-dispatcher·lanes-done-20260918-100256）；dispatcher_event-20260918-124739 核实：plan 文件 2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice.md 含
+    6 个 Task 且含 Global Constraints，判据成立，改台账状态=完成
 - id: m2-resume-parse-and-rank/U2.5
   场景: M2
   阶段: build
@@ -2872,6 +2868,7 @@ tasks:
   - m2-resume-parse-and-rank/9.5
   - m2-resume-parse-and-rank/U2
   - m2-resume-parse-and-rank/U2.5/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   触碰区:
   - docs/m2-visible-slice-guide.md
   - scripts/create_hr_account.py
@@ -6886,6 +6883,18 @@ tasks:
   产出判据: Task 1–10 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing.md
   可见: false
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit2.5-visible-slice Task 1–6
+  依赖: []
+  触碰区: []
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice.md
+  可见: true
+  备注: 0918S/0918T（task-dispatcher·lanes-done-20260918-122929）
 - id: plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
   场景: 构建自动化
   阶段: build
