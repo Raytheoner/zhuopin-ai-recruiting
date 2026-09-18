@@ -345,30 +345,48 @@ def probe_p2_funasr(args: argparse.Namespace) -> ProbeResult:
 
     import soundfile as sf  # noqa: PLC0415
 
-    model = funasr.AutoModel(model="paraformer-zh-streaming", device="cpu")
-    audio, _sr = sf.read(str(audio_path), dtype="float32")
-    chunk_size = [0, 10, 5]
-    chunk_stride = chunk_size[1] * 960
-    cache: dict = {}
-    n_chunks = (len(audio) - 1) // chunk_stride + 1
+    # 这一段是本探针存在的意义所在的"资源可能不可用"三件套：模型构建触发 ModelScope
+    # 首次下载（无网络/被墙会抛异常）、soundfile 读取依赖系统级 libsndfile（缺失会抛
+    # 异常）、generate 调用本身可能因显存/依赖版本不匹配等原因失败。任何一步异常都要
+    # 落成「阻塞」结论而不是穿透 write_result()，否则操作者只看到裸 traceback、
+    # docs/m3-voice-probe.md 也不会有这一行——与 probe_p1_livekit 的既有模式一致。
+    try:
+        model = funasr.AutoModel(model="paraformer-zh-streaming", device="cpu")
+        audio, _sr = sf.read(str(audio_path), dtype="float32")
+        chunk_size = [0, 10, 5]
+        chunk_stride = chunk_size[1] * 960
+        cache: dict = {}
+        n_chunks = (len(audio) - 1) // chunk_stride + 1
 
-    first_text_latency_ms: float | None = None
-    call_latencies_ms: list[float] = []
-    chunk_started = time.monotonic()
-    for i in range(n_chunks):
-        chunk = audio[i * chunk_stride : (i + 1) * chunk_stride]
-        call_start = time.monotonic()
-        res = model.generate(
-            input=chunk,
-            cache=cache,
-            is_final=(i == n_chunks - 1),
-            chunk_size=chunk_size,
-            encoder_chunk_look_back=4,
-            decoder_chunk_look_back=1,
+        first_text_latency_ms: float | None = None
+        call_latencies_ms: list[float] = []
+        chunk_started = time.monotonic()
+        for i in range(n_chunks):
+            chunk = audio[i * chunk_stride : (i + 1) * chunk_stride]
+            call_start = time.monotonic()
+            res = model.generate(
+                input=chunk,
+                cache=cache,
+                is_final=(i == n_chunks - 1),
+                chunk_size=chunk_size,
+                encoder_chunk_look_back=4,
+                decoder_chunk_look_back=1,
+            )
+            call_latencies_ms.append((time.monotonic() - call_start) * 1000)
+            if first_text_latency_ms is None and res and res[0].get("text"):
+                first_text_latency_ms = (time.monotonic() - chunk_started) * 1000
+    except Exception as exc:  # noqa: BLE001 — 模型下载/加载/推理的任何失败都要转成
+        # 阻塞结论而不是让异常穿透 probe_p2_funasr，否则 main() 走不到 write_result，
+        # docs/m3-voice-probe.md 不会更新，操作者只看到裸 traceback。
+        return ProbeResult(
+            item="P2",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=(
+                f"模型加载/音频读取/流式推理失败: {type(exc).__name__}: {exc}"
+            ),
+            duration_ms=(time.monotonic() - started) * 1000,
         )
-        call_latencies_ms.append((time.monotonic() - call_start) * 1000)
-        if first_text_latency_ms is None and res and res[0].get("text"):
-            first_text_latency_ms = (time.monotonic() - chunk_started) * 1000
 
     if first_text_latency_ms is None:
         return ProbeResult(

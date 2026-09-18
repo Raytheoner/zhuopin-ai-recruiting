@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import json
 import shutil
@@ -254,3 +255,127 @@ def test_probe_p2_funasr_blocks_when_module_missing(tmp_path: Path):
 
     assert result.conclusion == "阻塞"
     assert "funasr" in result.blocking_reason
+
+
+@contextlib.contextmanager
+def _patch_auto_model(replacement):
+    """funasr.AutoModel is a lazy module export — plain `getattr(funasr, "AutoModel")`
+    (which is exactly what `mock.patch("funasr.AutoModel", ...)` and
+    `monkeypatch.setattr` both do internally to save the original value before
+    patching) triggers funasr's real import machinery and raises
+    `ModuleNotFoundError: FunASR requires PyTorch before using AutoModel` in any venv
+    that has funasr installed but not torch (this venv, verified during Task 3's real
+    Step 9 pip install: torch is not among funasr's declared dependencies and wasn't
+    pulled in). So `mock.patch`/`monkeypatch.setattr` can't be used here — we set/clear
+    the module `__dict__` entry directly, which bypasses `__getattr__` entirely for
+    subsequent normal attribute lookups (`funasr.AutoModel(...)` inside
+    probe_p2_funasr finds the real dict entry before ever falling through to
+    `__getattr__`).
+    """
+    import funasr
+
+    had_real = "AutoModel" in funasr.__dict__
+    previous = funasr.__dict__.get("AutoModel")
+    funasr.__dict__["AutoModel"] = replacement
+    try:
+        yield
+    finally:
+        if had_real:
+            funasr.__dict__["AutoModel"] = previous
+        else:
+            del funasr.__dict__["AutoModel"]
+
+
+def test_probe_p2_funasr_success_path_computes_latency_metrics(tmp_path: Path):
+    """Exercises the chunking loop, first_text_latency_ms computation, and the
+    _percentile-based metrics wiring — the actual reason this probe exists. Fakes
+    funasr.AutoModel (see _patch_auto_model docstring for why mock.patch can't be
+    used) and soundfile.read (a real, non-lazy installed package; ordinary
+    mock.patch works fine on it) so the test doesn't need a real model download or a
+    real audio file.
+    """
+    import numpy as np
+    from types import SimpleNamespace
+
+    from scripts.probe_m3_voice import probe_p2_funasr
+
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"fake-wav-bytes")  # only existence is checked before sf.read is (mocked) called
+
+    fake_audio = np.zeros(96000, dtype="float32")
+
+    class _FakeModel:
+        def generate(self, **kwargs):
+            return [{"text": "识别结果"}]
+
+    with (
+        _patch_auto_model(lambda **kw: _FakeModel()),
+        patch("soundfile.read", return_value=(fake_audio, 16000)),
+    ):
+        args = SimpleNamespace(target="dev-machine", audio_path=str(audio_path))
+        result = probe_p2_funasr(args)
+
+    assert result.conclusion == "通过"
+    assert result.blocking_reason is None
+    assert isinstance(result.metrics["first_text_latency_ms"], (int, float))
+    assert isinstance(result.metrics["chunk_call_p50_ms"], (int, float))
+    assert isinstance(result.metrics["chunk_call_p95_ms"], (int, float))
+    assert result.metrics["first_text_latency_ms"] >= 0
+    assert result.metrics["chunk_call_p50_ms"] >= 0
+    assert result.metrics["chunk_call_p95_ms"] >= 0
+
+
+def test_probe_p2_funasr_blocks_when_no_chunk_ever_produces_text(tmp_path: Path):
+    """The 'ran all chunks but got no text' branch — distinct from the module-missing
+    and missing-sample branches, and from the try/except around model/IO failures.
+    """
+    import numpy as np
+    from types import SimpleNamespace
+
+    from scripts.probe_m3_voice import probe_p2_funasr
+
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"fake-wav-bytes")
+
+    fake_audio = np.zeros(96000, dtype="float32")
+
+    class _FakeModelNoText:
+        def generate(self, **kwargs):
+            return [{"text": ""}]
+
+    with (
+        _patch_auto_model(lambda **kw: _FakeModelNoText()),
+        patch("soundfile.read", return_value=(fake_audio, 16000)),
+    ):
+        args = SimpleNamespace(target="dev-machine", audio_path=str(audio_path))
+        result = probe_p2_funasr(args)
+
+    assert result.conclusion == "阻塞"
+    assert "首字延迟" in result.blocking_reason
+
+
+def test_probe_p2_funasr_blocks_on_model_or_io_failure_instead_of_raising(tmp_path: Path):
+    """Important #1 fix regression test: AutoModel construction (the exact call the
+    brief says triggers a first-time ModelScope download and should be judged 阻塞
+    if that download is blocked/no network) must not let an exception propagate past
+    probe_p2_funasr — otherwise main() never reaches write_result() and
+    docs/m3-voice-probe.md is left stale while the operator sees a raw traceback.
+    Mirrors the existing probe_p1_livekit connect-failure regression test.
+    """
+    from types import SimpleNamespace
+
+    from scripts.probe_m3_voice import probe_p2_funasr
+
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"fake-wav-bytes")
+
+    def _raise_auto_model(**kwargs):
+        raise RuntimeError("boom: ModelScope download blocked")
+
+    with _patch_auto_model(_raise_auto_model):
+        args = SimpleNamespace(target="dev-machine", audio_path=str(audio_path))
+        result = probe_p2_funasr(args)
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "boom" in result.blocking_reason
