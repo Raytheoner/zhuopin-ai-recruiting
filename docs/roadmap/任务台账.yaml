@@ -3,8 +3,8 @@ version: 1
 summary:
   条目数: 534
   按状态:
-    待开: 228
-    在跑: 7
+    待开: 217
+    在跑: 18
     完成: 214
     阻塞: 85
   阻塞·决策: 50
@@ -32,12 +32,6 @@ summary:
   - relay:H-4
   - relay:R-10
   - relay:R-6
-  - voice-structured-interview/U3/plan
-  ready:
-  - interview-scheduling/0.2
-  - offer-generation/0.2
-  - offer-generation/0.5
-  - onboarding-flow/0.2
   - voice-structured-interview/4.1
   - voice-structured-interview/4.10
   - voice-structured-interview/4.11
@@ -49,6 +43,12 @@ summary:
   - voice-structured-interview/4.7
   - voice-structured-interview/4.8
   - voice-structured-interview/4.9
+  - voice-structured-interview/U3/plan
+  ready:
+  - interview-scheduling/0.2
+  - offer-generation/0.2
+  - offer-generation/0.5
+  - onboarding-flow/0.2
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -5174,11 +5174,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 令牌签发：32 字节随机、库存哈希、`invite_expires_at` 岗位级配置默认 7 天；`effect_issue_invite`（幂等键 `{session_id}:effect_issue_invite:{token_hash}`）；同一场次重复签发 ⇒ 旧令牌作废并留痕
   来源: openspec/changes/voice-structured-interview/tasks.md:45
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.2
   场景: voice-structured-interview
   阶段: build
@@ -5188,11 +5193,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 令牌校验端点：首次打开置 `used_at`；重复／过期 ⇒ 统一失效页（不泄露场次信息）＋留痕；测试三种路径
   来源: openspec/changes/voice-structured-interview/tasks.md:46
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.3
   场景: voice-structured-interview
   阶段: build
@@ -5202,11 +5212,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 续入令牌：中断时签发 `resume_token`（一次性、上限 3 次、随场次过期）；测试续入不重复出题（与 5.9 联动）
   来源: openspec/changes/voice-structured-interview/tasks.md:47
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.4
   场景: voice-structured-interview
   阶段: build
@@ -5216,12 +5231,17 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '`effect_deliver_invitation`：调 `deliver_candidate_message(type=''interview_invitation'')`，草稿带 AI 生成标识；总开关关 ⇒ 返回「人工转达」并把链接展示在 HR 工作台；幂等键 `{session_id}:effect_deliver_invitation:{draft_id}`；反证测试：代码中不得
     impo'
   来源: openspec/changes/voice-structured-interview/tasks.md:48
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.5
   场景: voice-structured-interview
   阶段: build
@@ -5232,11 +5252,16 @@ tasks:
   - voice-structured-interview/U3/plan
   触碰区:
   - config/consent/ai_interview-v1.md
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '同意条款文件 `config/consent/ai_interview-v1.md`、`identity_check-v1.md`（占位文本，标「待法务 #2 定稿」）；版本号解析与展示；升版后新场次用新版本、旧记录不变'
   来源: openspec/changes/voice-structured-interview/tasks.md:49
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.6
   场景: voice-structured-interview
   阶段: build
@@ -5246,11 +5271,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 同意页（候选人端）：两个独立勾选、告知留存期限／AI 只作参考／可申请人工面试；提交写两条 `interview_consent`；任一拒绝 ⇒ 场次 `abandoned`＋留痕＋HR 工作台提示改约；幂等键 `{session_id}:effect_record_consent:{kind}:{version}`
   来源: openspec/changes/voice-structured-interview/tasks.md:50
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.7
   场景: voice-structured-interview
   阶段: build
@@ -5260,11 +5290,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 验证码：6 位、5 分钟、错 5 次锁场次（`status=locked`＋留痕）；通过写 `phone_verified_at`＋`identity_check(result=skipped)`；幂等键 `{session_id}:effect_verify_phone:{attempt_no}`
   来源: openspec/changes/voice-structured-interview/tasks.md:51
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.8
   场景: voice-structured-interview
   阶段: build
@@ -5274,11 +5309,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 验证码送达：短信通道未配置 ⇒ 候选人请求时生成并在 HR 工作台展示（展示留痕）；配置了 ⇒ `effect_send_verification_code` 节点（⏸ 门禁口径 OQ-10 未定前该节点只留接口、默认不启用）
   来源: openspec/changes/voice-structured-interview/tasks.md:52
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.9
   场景: voice-structured-interview
   阶段: build
@@ -5288,11 +5328,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '真实候选人开闸：`Settings.live_interview_enabled` 默认 `False`，每次签发求值，AND 合规验收 #2 签认文件存在；关闭时只允许 `sample_class=internal_sim`；测试：关闭时签发 live 被拒并留痕'
   来源: openspec/changes/voice-structured-interview/tasks.md:53
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.10
   场景: voice-structured-interview
   阶段: build
@@ -5302,11 +5347,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 手机号来源接线：`live` 场次从 `candidate-contact-vault` 读（vault 开关关 ⇒ 签发被拒）；`internal_sim` 场次不经 vault；本包任何表不存明文手机号（grep 断言）
   来源: openspec/changes/voice-structured-interview/tasks.md:54
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/4.11
   场景: voice-structured-interview
   阶段: build
@@ -5316,11 +5366,16 @@ tasks:
   - voice-structured-interview/U2
   - voice-structured-interview/U3/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: HR 签发页（Web）：选投递（须有 frozen 快照）→ 签发 → 展示链接／验证码（人工转达模式）→ 状态；e2e：签发 → 打开 → 双同意 → 验证码 → 场次 `pending→in_progress` 前置校验通过
   来源: openspec/changes/voice-structured-interview/tasks.md:55
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0919 dispatcher 派车（dispatcher-20260919-065303），泳道「语音面试包U3建造」0919A-D 四段串行，分支 lane-voice-interview-u3-invite-consent
 - id: voice-structured-interview/U3/plan
   场景: voice-structured-interview
   阶段: plan
@@ -6935,8 +6990,8 @@ tasks:
   触碰区:
   - docs/deploy-51-server.md
   状态: 完成
-  阻塞类型: 无
-  产出判据: 随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 上该表建表语句含跨字段 CHECK，发版记录落 `docs/deploy-51-server.md`
+  阻塞类型: 决策
+  产出判据: 【G3 闸门·待答】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 上该表建表语句含跨字段 CHECK，发版记录落 `docs/deploy-51-server.md`
   来源: docs/roadmap/定夺队列.md:28 Q-12a
   可见: false
   闸门: G3 .51
@@ -6950,8 +7005,8 @@ tasks:
   - docs/audit-and-outbound-ops.md
   - docs/deploy-51-server.md
   状态: 在跑
-  阻塞类型: 无
-  产出判据: 随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
+  阻塞类型: 决策
+  产出判据: 【G3 闸门·待答】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
   来源: docs/roadmap/定夺队列.md:30 Q-14a
   可见: false
   闸门: G3 .51
