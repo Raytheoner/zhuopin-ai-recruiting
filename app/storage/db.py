@@ -918,7 +918,7 @@ def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def apply_column_migrations(conn: sqlite3.Connection) -> list[str]:
     """
-    幂等加列：逐列独立判断、缺哪列补哪列，返回本次真的加上的列名。
+    幂等加列：逐列独立判断、缺哪列补哪列，返回本次真的加上的列（格式 table.column）。
 
     逐列独立是刻意的（design.md 风险表「服务器 SQLite 加列失败或部分成功」）：
     一列失败不影响其余列，重跑一次会把上次没加上的补齐。
