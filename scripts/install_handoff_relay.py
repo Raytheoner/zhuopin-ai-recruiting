@@ -58,10 +58,15 @@ def watch_dir_path(repo_root: Path) -> Path:
     return repo_root / "handoff-inbox"
 
 
+def log_path(repo_root: Path) -> Path:
+    # ⛔ 不落 handoff-inbox/ 内部：扫描器会把自己的 launchd 日志当成投递件，
+    # 每轮拒收又立刻被 launchd 重建，陷入无限循环（0918Q D1 实证）。
+    return repo_root / "logs" / "handoff-relay.launchd.log"
+
+
 def build_plist(repo_root: Path, home: Path) -> dict:
     """算出 LaunchAgent 的 plist 字典。纯函数：不建目录、不碰 launchctl（可测）。"""
     watch_dir = watch_dir_path(repo_root)
-    log_path = watch_dir / "launchd.log"
     return {
         "Label": LABEL,
         "ProgramArguments": ["/bin/bash", str(launcher_path(repo_root))],
@@ -69,8 +74,8 @@ def build_plist(repo_root: Path, home: Path) -> dict:
         "RunAtLoad": False,
         "WatchPaths": [str(watch_dir)],
         "StartInterval": FALLBACK_INTERVAL_SECONDS,
-        "StandardOutPath": str(log_path),
-        "StandardErrorPath": str(log_path),
+        "StandardOutPath": str(log_path(repo_root)),
+        "StandardErrorPath": str(log_path(repo_root)),
         "WorkingDirectory": str(repo_root),
         # 缺这项时 launcher 一退出，launchd 就 SIGKILL 整个进程组（0909Y 实证同类问题）。
         "AbandonProcessGroup": True,
@@ -108,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     watch_dir = watch_dir_path(repo)
     watch_dir.mkdir(parents=True, exist_ok=True)
     (watch_dir / "rejected").mkdir(parents=True, exist_ok=True)
+    log_path(repo).parent.mkdir(parents=True, exist_ok=True)
 
     agents_dir = Path.home() / "Library" / "LaunchAgents"
     agents_dir.mkdir(parents=True, exist_ok=True)

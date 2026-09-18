@@ -160,23 +160,41 @@ def test_event_bad_name_rejected(repo: Path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_fresh_file_skipped_not_touched(repo: Path):
+def test_fresh_but_stable_file_moved_after_double_sample(repo: Path):
+    """0918Q D2：新鲜文件若两次采样稳定（没人在改），当场搬，不用等到下一轮。"""
     path = drop(repo, "commit-20260918-093000.request", json.dumps({"message": "m", "paths": ["docs/x.md"]}), age_seconds=1.0)
-    outcomes = relay.run(repo)  # 默认 min_age=30s
-    assert outcomes == [("commit-20260918-093000.request", "skipped")]
+    entry = repo / "handoff-inbox/commit-20260918-093000.request"
+    sleeps: list[float] = []
+    outcome = relay.process_one(repo, entry, min_age_seconds=5.0, sample_interval_seconds=1.5, sleep=sleeps.append)
+    assert outcome == "moved"
+    assert sleeps == [1.5]  # 真做了一次采样等待，不是绕过
+    assert not path.exists()
+    assert (repo / ".claude/handoff/commit/20260918-093000.request").is_file()
+
+
+def test_fresh_and_still_changing_file_skipped_not_touched(repo: Path):
+    """采样间隙文件仍在变化（还没写完）⇒ 本轮跳过、原地不动，留到下一轮。"""
+    path = drop(repo, "commit-20260918-093000.request", json.dumps({"message": "m", "paths": ["docs/x.md"]}), age_seconds=1.0)
+    entry = repo / "handoff-inbox/commit-20260918-093000.request"
+
+    def sleep_and_mutate(seconds: float) -> None:
+        path.write_text(json.dumps({"message": "m2", "paths": ["docs/x.md"]}), encoding="utf-8")
+
+    outcome = relay.process_one(repo, entry, min_age_seconds=5.0, sample_interval_seconds=1.5, sleep=sleep_and_mutate)
+    assert outcome == "skipped"
     assert path.exists()  # 原地未动
     assert not (repo / ".claude/handoff/commit").exists() or not any((repo / ".claude/handoff/commit").iterdir())
     assert not (repo / "handoff-inbox/rejected/commit-20260918-093000.request").exists()
 
 
-def test_fresh_file_processed_next_round_once_aged(repo: Path):
-    drop(repo, "commit-20260918-093000.request", json.dumps({"message": "m", "paths": ["docs/x.md"]}), age_seconds=1.0)
-    assert relay.run(repo) == [("commit-20260918-093000.request", "skipped")]
-    # 下一轮：把 mtime 拨回 40 秒前，模拟「时间已过去」
-    path = repo / "handoff-inbox/commit-20260918-093000.request"
-    old = time.time() - 40.0
-    os.utime(path, (old, old))
-    assert relay.run(repo) == [("commit-20260918-093000.request", "moved")]
+def test_aged_file_moved_without_sampling(repo: Path):
+    """mtime 已过 min_age ⇒ 不做双采样、直接搬（sleep 不被调用）。"""
+    drop(repo, "commit-20260918-093000.request", json.dumps({"message": "m", "paths": ["docs/x.md"]}), age_seconds=40.0)
+    entry = repo / "handoff-inbox/commit-20260918-093000.request"
+    calls: list[float] = []
+    outcome = relay.process_one(repo, entry, min_age_seconds=5.0, sample_interval_seconds=1.5, sleep=calls.append)
+    assert outcome == "moved"
+    assert calls == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -202,6 +220,24 @@ def test_relay_log_and_gitkeep_ignored(repo: Path):
     (repo / "handoff-inbox" / "relay.log").write_text("stale\n", encoding="utf-8")
     outcomes = relay.run(repo)
     assert outcomes == []
+
+
+def test_own_log_and_junk_silently_skipped_no_reject_no_log_line(repo: Path):
+    """0918Q D1：relay.log／任意 *.log／.gitkeep／.DS_Store／子目录一律静默略过——
+    不产生 rejected/ 文件、不写日志行（防中继自身日志被当投递件反复拒收）。"""
+    inbox = repo / "handoff-inbox"
+    (inbox / "relay.log").write_text("stale\n", encoding="utf-8")
+    (inbox / "launchd.log").write_text("stray\n", encoding="utf-8")
+    (inbox / ".gitkeep").write_text("", encoding="utf-8")
+    (inbox / ".DS_Store").write_bytes(b"\x00\x01")
+    (inbox / "some-subdir").mkdir()
+    (inbox / "some-subdir" / "inner.request").write_text("{}", encoding="utf-8")
+
+    outcomes = relay.run(repo)
+
+    assert outcomes == []
+    assert not (inbox / "rejected").exists() or not any((inbox / "rejected").iterdir())
+    assert not (inbox / "relay.log").exists() or "REJECTED" not in (inbox / "relay.log").read_text(encoding="utf-8")
 
 
 def test_run_creates_inbox_and_rejected_dirs(tmp_path: Path):

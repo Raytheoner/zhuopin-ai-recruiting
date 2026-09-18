@@ -21,18 +21,25 @@
     launch-<ts>[-<来源>].request  → .claude/handoff/launch/<ts>[-<来源>].request
     event-<事件名>                 → .claude/handoff/events/<事件名>
 
+跳过（不当投递件、不移入 rejected、不写日志——`relay.log` 自身、`*.log`、`.gitkeep`、
+    `.DS_Store`、任何目录）：中继自身产物或环境杂物，防止把自己的 launchd 日志当投递件
+    反复拒收（0918Q D1）。
+
 校验（任一条不过 ⇒ 移入 `handoff-inbox/rejected/`，`relay.log` 追加一行）：
     1. 文件名只含 `[A-Za-z0-9_.-]`，⛔ 含 `/`、`..` 一律拒；前缀须是 commit-/launch-/event- 之一。
-    2. mtime 距今 < 30 秒 ⇒ 本轮跳过不搬（防半截文件），下一轮再看，⛔ 不算拒收、不记日志。
+    2. mtime 距今 < 5 秒 ⇒ 当场两次采样确认（隔 1.5 秒读一次 `(size, mtime)`）：两次相同即
+       视为写入已完成，本轮直接搬；仍在变化则跳过，留到下一轮，⛔ 不算拒收、不记日志
+       （0918Q D2：避免恒等到下一个 300 秒兜底点才搬）。
     3. commit 类：内容须是合法 JSON 对象；若含 `paths`，逐条过
        `scripts.commit_request.validate_path`（与提交通道同一份实现）。
     4. launch 类：整行（去掉尾部换行）须精确匹配 `^--full-auto --yes --only [0-9A-Za-z]+(,[0-9A-Za-z]+)*$`。
     5. event 类：文件须是 0 字节。
 
-单测注入口：`HANDOFF_RELAY_REPO`（仓库根）、`HANDOFF_RELAY_MIN_AGE_SECONDS`（默认 30）。
-生产由 launchd 直接调用，两者都不设——路径一律用 `Path(__file__).resolve().parents[1]`
-（脚本自身位置的上一级），⛔ 不用 `os.getcwd()`、⛔ 不用 `git rev-parse --show-toplevel`：
-装成 launchd 任务后必须指向**主检出**，而不是任何 worktree。
+单测注入口：`HANDOFF_RELAY_REPO`（仓库根）、`HANDOFF_RELAY_MIN_AGE_SECONDS`（默认 5）、
+`HANDOFF_RELAY_SAMPLE_INTERVAL_SECONDS`（默认 1.5）。生产由 launchd 直接调用，三者都不设
+——路径一律用 `Path(__file__).resolve().parents[1]`（脚本自身位置的上一级），⛔ 不用
+`os.getcwd()`、⛔ 不用 `git rev-parse --show-toplevel`：装成 launchd 任务后必须指向
+**主检出**，而不是任何 worktree。
 """
 
 from __future__ import annotations
@@ -54,7 +61,7 @@ except ImportError:  # 以文件路径直跑本脚本时 scripts/ 自己在 sys.
 INBOX_DIRNAME = "handoff-inbox"
 REJECTED_DIRNAME = "rejected"
 LOG_FILENAME = "relay.log"
-IGNORED_NAMES = frozenset({LOG_FILENAME, ".gitkeep"})
+IGNORED_NAMES = frozenset({LOG_FILENAME, ".gitkeep", ".DS_Store"})
 
 CHANNEL_SUBDIR = {
     "commit": Path(".claude") / "handoff" / "commit",
@@ -69,7 +76,8 @@ LAUNCH_NAME_RE = re.compile(rf"^{_TS}(?:-{_SOURCE})?\.request$")
 EVENT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 LAUNCH_ARGS_RE = re.compile(r"^--full-auto --yes --only [0-9A-Za-z]+(,[0-9A-Za-z]+)*$")
 
-DEFAULT_MIN_AGE_SECONDS = 30.0
+DEFAULT_MIN_AGE_SECONDS = 5.0
+DEFAULT_SAMPLE_INTERVAL_SECONDS = 1.5
 
 
 @dataclass(frozen=True)
@@ -168,23 +176,54 @@ def log(repo: Path, line: str) -> None:
         f.write(f"[{ts}] {line}\n")
 
 
+def _is_ignored(entry: Path) -> bool:
+    """跳过中继自身产物与目录——不当投递件看，也不写 REJECTED 日志（0918Q D1）。"""
+    if entry.is_dir():
+        return True
+    name = entry.name
+    return name in IGNORED_NAMES or name.endswith(".log")
+
+
 def _candidates(inbox: Path) -> list[Path]:
     return sorted(
         p for p in inbox.iterdir()
-        if p.is_file() and p.name not in IGNORED_NAMES
+        if p.is_file() and not _is_ignored(p)
     )
 
 
-def process_one(repo: Path, entry: Path, min_age_seconds: float) -> str:
+def _is_stable(entry: Path, sample_interval_seconds: float, sleep) -> bool:
+    """两次采样 `(size, mtime)` 相隔 `sample_interval_seconds` 若相同即视为写入已完成。
+
+    `FileNotFoundError`（文件在采样间隙被搬走）不在此处捕获，交给调用方统一按
+    「抢输」处理。
+    """
+    before = entry.stat()
+    sleep(sample_interval_seconds)
+    after = entry.stat()
+    return (before.st_size, before.st_mtime) == (after.st_size, after.st_mtime)
+
+
+def process_one(
+    repo: Path,
+    entry: Path,
+    min_age_seconds: float,
+    sample_interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
+    sleep=time.sleep,
+) -> str:
     """返回 "skipped" / "moved" / "rejected" / "claimed-elsewhere"（供单测断言）。
 
     launchd 的 WatchPaths 与 300 秒 `StartInterval` 兜底可能前后脚重叠触发；本函数不做
     独占认领（不像 commit_request.py 有 `.claiming` 改名），只在文件已被另一实例先一步
     `os.replace` 掉时把 `FileNotFoundError` 当作正常的「抢输」处理，⛔ 不重试、不报错退出。
+
+    防半截文件不再靠固定静默期硬等——mtime 距今 < `min_age_seconds` 时，当场做一次
+    两次采样确认（`sample_interval_seconds` 间隔），采样期间文件仍在变化才跳过、
+    留到下一轮；采样稳定即视为写入已完成，本轮直接搬（0918Q D2：避免恒等到下一个
+    300 秒兜底点才搬）。
     """
     try:
         age = time.time() - entry.stat().st_mtime
-        if age < min_age_seconds:
+        if age < min_age_seconds and not _is_stable(entry, sample_interval_seconds, sleep):
             return "skipped"
 
         result = classify_and_validate(
@@ -208,21 +247,28 @@ def process_one(repo: Path, entry: Path, min_age_seconds: float) -> str:
         return "claimed-elsewhere"
 
 
-def run(repo: Path, min_age_seconds: float = DEFAULT_MIN_AGE_SECONDS) -> list[tuple[str, str]]:
+def run(
+    repo: Path,
+    min_age_seconds: float = DEFAULT_MIN_AGE_SECONDS,
+    sample_interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
+) -> list[tuple[str, str]]:
     """扫一遍 `handoff-inbox/`，返回 [(文件名, 结果), ...]（供单测断言）。"""
     inbox = inbox_dir(repo)
     inbox.mkdir(parents=True, exist_ok=True)
     rejected_dir(repo).mkdir(parents=True, exist_ok=True)
     outcomes: list[tuple[str, str]] = []
     for entry in _candidates(inbox):
-        outcomes.append((entry.name, process_one(repo, entry, min_age_seconds)))
+        outcomes.append((entry.name, process_one(repo, entry, min_age_seconds, sample_interval_seconds)))
     return outcomes
 
 
 def main() -> int:
     repo = Path(os.environ.get("HANDOFF_RELAY_REPO", str(default_repo_root())))
     min_age = float(os.environ.get("HANDOFF_RELAY_MIN_AGE_SECONDS", str(DEFAULT_MIN_AGE_SECONDS)))
-    run(repo, min_age)
+    sample_interval = float(
+        os.environ.get("HANDOFF_RELAY_SAMPLE_INTERVAL_SECONDS", str(DEFAULT_SAMPLE_INTERVAL_SECONDS))
+    )
+    run(repo, min_age, sample_interval)
     return 0
 
 
