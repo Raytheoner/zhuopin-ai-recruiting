@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +16,7 @@ from scripts.probe_m3_voice import (
     upsert_markdown_row,
     write_result,
 )
+from scripts.probe_m3_voice import _resolve_livekit_binary, _validate_network_label
 
 
 def test_env_fingerprint_contains_platform_python_and_target():
@@ -147,3 +150,30 @@ def test_upsert_with_metrics_containing_pipes():
     rows = [ln for ln in doc.splitlines() if ln.startswith("| P1 |")]
     assert len(rows) == 1, "Should have exactly one row after second upsert (overwritten)"
     assert "阻塞" in rows[0]
+
+
+def test_validate_network_label_accepts_known_values():
+    assert _validate_network_label("company-wifi") == "company-wifi"
+    assert _validate_network_label("phone-4g") == "phone-4g"
+
+
+def test_validate_network_label_rejects_unknown():
+    with pytest.raises(ValueError, match="network-label"):
+        _validate_network_label("random-guess")
+
+
+def test_resolve_livekit_binary_prefers_explicit_path(tmp_path: Path):
+    fake_bin = tmp_path / "livekit-server"
+    fake_bin.write_text("#!/bin/sh\n")
+    fake_bin.chmod(0o755)
+    assert _resolve_livekit_binary(str(fake_bin)) == str(fake_bin)
+
+
+def test_resolve_livekit_binary_falls_back_to_which():
+    with patch("shutil.which", return_value="/opt/homebrew/bin/livekit-server"):
+        assert _resolve_livekit_binary(None) == "/opt/homebrew/bin/livekit-server"
+
+
+def test_resolve_livekit_binary_returns_none_when_missing():
+    with patch("shutil.which", return_value=None):
+        assert _resolve_livekit_binary(None) is None

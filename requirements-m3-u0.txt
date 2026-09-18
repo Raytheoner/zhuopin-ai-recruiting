@@ -1,0 +1,4 @@
+# M3 U0 语音探针专用依赖（tasks 1.1）。⛔ 不并入 requirements.txt——探针结论决定 live 段
+# 做不做之前，这些包不该出现在生产依赖表里。版本 2026-09-18 从 PyPI 元数据核实。
+livekit-api==1.2.1
+livekit==1.1.19

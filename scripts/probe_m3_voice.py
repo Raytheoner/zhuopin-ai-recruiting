@@ -11,7 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import shutil
+import subprocess
 import sys
+import threading
+import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -131,6 +136,150 @@ def register(name: str) -> Callable:
         return fn
 
     return deco
+
+
+_VALID_NETWORK_LABELS = frozenset({"company-wifi", "phone-4g", "target-machine-lan"})
+
+
+def _validate_network_label(label: str) -> str:
+    if label not in _VALID_NETWORK_LABELS:
+        raise ValueError(
+            f"--network-label 只能是 {sorted(_VALID_NETWORK_LABELS)}，收到: {label!r}"
+        )
+    return label
+
+
+def _resolve_livekit_binary(explicit_path: str | None) -> str | None:
+    if explicit_path:
+        return explicit_path
+    return shutil.which("livekit-server")
+
+
+@register("p1-livekit")
+def probe_p1_livekit(args: argparse.Namespace) -> ProbeResult:
+    started = time.monotonic()
+    fp = env_fingerprint(target=args.target, extra=_validate_network_label(args.network_label))
+    binary = _resolve_livekit_binary(args.livekit_bin)
+    if binary is None:
+        return ProbeResult(
+            item="P1",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason="livekit-server 二进制未找到（Mac 用 `brew install livekit`；"
+            "Linux 目标机从 GitHub release 的 linux_amd64 tarball 解压后用 --livekit-bin 指定路径）",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    proc = subprocess.Popen(
+        [binary, "--dev"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    # livekit-server --dev 在真实连接场景下会持续写 stdout/stderr 日志；如果没有
+    # 消费者持续读取，一旦超过 OS 管道缓冲区（macOS 上约 64KB）子进程的日志写入会
+    # 阻塞，进而拖住它处理新连接的 goroutine，导致 SDK 端「signal timeout」——
+    # 这是实测踩到的真坑（2026-09-18），不是网络/环境问题。用后台线程持续排空，
+    # 只保留最后 200 行供早退出时诊断用。
+    _tail: deque[str] = deque(maxlen=200)
+
+    def _drain_stdout() -> None:
+        if proc.stdout is None:
+            return
+        for line in proc.stdout:
+            _tail.append(line)
+
+    drain_thread = threading.Thread(target=_drain_stdout, daemon=True)
+    drain_thread.start()
+    try:
+        time.sleep(2.0)  # 给单节点起服务的时间；--dev 模式本地启动通常 <1s
+        if proc.poll() is not None:
+            output = "".join(_tail)
+            return ProbeResult(
+                item="P1",
+                env_fingerprint=fp,
+                conclusion="阻塞",
+                blocking_reason=f"livekit-server --dev 启动后立即退出，exit={proc.returncode}，输出: {output[-500:]}",
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+
+        from livekit import api, rtc  # noqa: PLC0415 — 重依赖，惰性导入避免拖慢其他子命令
+
+        room_name = "probe-p1"
+        token_a = (
+            api.AccessToken("devkey", "secret")
+            .with_identity("probe-a")
+            .with_grants(api.VideoGrants(room_join=True, room=room_name))
+            .to_jwt()
+        )
+        token_b = (
+            api.AccessToken("devkey", "secret")
+            .with_identity("probe-b")
+            .with_grants(api.VideoGrants(room_join=True, room=room_name))
+            .to_jwt()
+        )
+
+        received: list[bytes] = []
+
+        async def _run() -> None:
+            room_a = rtc.Room()
+            room_b = rtc.Room()
+
+            def _on_data(packet: rtc.DataPacket) -> None:
+                received.append(packet.data)
+
+            room_b.on("data_received", _on_data)
+            await room_a.connect("ws://127.0.0.1:7880", token_a)
+            await room_b.connect("ws://127.0.0.1:7880", token_b)
+            await room_a.local_participant.publish_data(b"probe-ping", reliable=True)
+            for _ in range(20):
+                if received:
+                    break
+                await asyncio_sleep(0.2)
+            await room_a.disconnect()
+            await room_b.disconnect()
+
+        import asyncio
+        from asyncio import sleep as asyncio_sleep
+
+        asyncio.run(_run())
+
+        if not received:
+            return ProbeResult(
+                item="P1",
+                env_fingerprint=fp,
+                conclusion="阻塞",
+                blocking_reason="两个 SDK 客户端建连成功但数据通道 20 次轮询（4s）内未收到消息",
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+
+        return ProbeResult(
+            item="P1",
+            env_fingerprint=fp,
+            conclusion="通过",
+            metrics={
+                "livekit_version": args.livekit_version_hint or "unknown",
+                "two_client_data_channel": True,
+                "turn_evaluated": False,
+            },
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _add_p1_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("--target", default="dev-machine")
+    sub.add_argument("--network-label", default="company-wifi")
+    sub.add_argument("--livekit-bin", default=None)
+    sub.add_argument("--livekit-version-hint", default=None)
+
+
+probe_p1_livekit.__wrapped_add_arguments__ = _add_p1_arguments  # type: ignore[attr-defined]
 
 
 def main(argv: list[str] | None = None) -> int:
