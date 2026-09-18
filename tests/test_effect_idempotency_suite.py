@@ -61,6 +61,7 @@ from app.graph.nodes import (
     effect_request_revision,
 )
 from app.graph.resume_nodes import effect_persist_parse
+from app.graph.screening_nodes import compute_screen, effect_persist_flags
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
 from app.schemas.resume_fields import (
@@ -95,6 +96,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_mark_needs_manual",
         "effect_deliver_manual_handoff",
         "effect_persist_parse",
+        "effect_persist_flags",
     }
 )
 
@@ -311,6 +313,8 @@ def test_no_duplicate_effect_node_name_literals():
 
 _JOB = "job-4-4"
 _RESUME = "resume-4-4"
+_CANDIDATE = "candidate-4-4"
+_APPLICATION = "application-4-4"
 _TS = "2026-09-08T02:00:00+00:00"
 _LABEL = AI_LABEL_TEMPLATE.format(generated_at=_TS)
 _AI_BODY = f"【AI 生成】本文案由系统基于岗位画像自动生成，生成时间 {_TS}。很遗憾……"
@@ -401,6 +405,35 @@ def _seed_resume(conn: sqlite3.Connection) -> None:
         "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
         "VALUES (?, ?, 'synthetic', 'a.pdf', 'hash1', 'alice')",
         (_RESUME, _JOB),
+    )
+    conn.commit()
+
+
+def _seed_screening(conn: sqlite3.Connection) -> None:
+    """`effect_persist_flags` 的种子：job/candidate/resume/application 四张表
+    最小闭环 + 一条不会触发 `verdict='fail'` 的 blocking 规则（fail 需要
+    非空 evidence_ref，pass 不需要，seed 越简单越好）。"""
+    conn.execute(
+        "INSERT INTO job (id, title, status) VALUES (?, '嵌入式工程师', 'drafting')",
+        (_JOB,),
+    )
+    conn.execute("INSERT INTO candidate (id, name) VALUES (?, '张三')", (_CANDIDATE,))
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, "
+        "uploaded_by, status, parsed_json, parser_version) "
+        "VALUES (?, ?, 'synthetic', 'a.pdf', 'hash1', 'alice', 'parsed', ?, 'v1')",
+        (_RESUME, _JOB, _resume_fields().model_dump_json()),
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES (?, ?, ?, ?, 'initial')",
+        (_APPLICATION, _CANDIDATE, _JOB, _RESUME),
+    )
+    conn.execute(
+        "INSERT INTO hard_requirement "
+        "(job_id, profile_version, field, operator, value, blocking, human_readable) "
+        "VALUES (?, 1, 'experience_years', 'gte', '3', 1, '经验≥3年')",
+        (_JOB,),
     )
     conn.commit()
 
@@ -755,6 +788,23 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             # 版本时它会真的增长，重复生效也会真的撞主键。
             count_business_rows=lambda conn: conn.execute(
                 "SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = ?", (_RESUME,)
+            ).fetchone()[0],
+        ),
+        "effect_persist_flags": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_screening,
+            invoke=lambda conn: effect_persist_flags(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="1:v1:0",
+                application_id=_APPLICATION,
+                profile_version=1,
+                verdicts=compute_screen(
+                    conn, resume_id=_RESUME, job_id=_JOB, profile_version=1
+                ),
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM screening_flag WHERE application_id = ?", (_APPLICATION,)
             ).fetchone()[0],
         ),
     }
