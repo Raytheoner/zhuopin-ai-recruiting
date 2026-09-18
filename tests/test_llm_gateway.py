@@ -696,3 +696,11 @@ def test_call_sites_that_pass_no_audit_context_still_work():
     gateway.extract_structured(system_prompt="sys", user_prompt="user", schema=Point)
 
     assert seen[0]["audit_context"] is None
+
+
+def test_model_property_exposes_configured_model():
+    gateway = LLMGateway(
+        api_key="x", base_url="https://example.invalid", model="deepseek-chat",
+        supports_json_schema=False, client=object(),
+    )
+    assert gateway.model == "deepseek-chat"

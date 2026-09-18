@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -7,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
@@ -15,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
 from app.agents.jd_grounding import verify_jd_grounding
+from app.agents.resume_parser import compute_parse
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.jd_nodes import (
@@ -32,18 +34,22 @@ from app.graph.nodes import (
     effect_request_revision,
     revision_count,
 )
+from app.graph.resume_nodes import effect_persist_parse
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
-from app.storage.auth_session import create_session, delete_session
-from app.storage.hr_account import verify_password
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
     RequestIdMiddleware,
     unhandled_exception_handler,
 )
+from app.parsing.extract_text import UnsupportedFileType
+from app.parsing.resume_ingest import ingest_resume_text
 from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.storage import job_queries
+from app.storage.auth_session import create_session, delete_session
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
+from app.storage.hr_account import verify_password
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
+from app.storage.live_resume_gate import is_live_resume_intake_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -850,6 +856,127 @@ def create_app(
             if latest
             else None,
         }
+
+    _VALID_SAMPLE_CLASSES = {"synthetic", "anonymized", "departed", "live"}
+
+    @router.post("/api/resumes/upload")
+    def upload_resumes(
+        request: Request,
+        job_id: str = Form(...),
+        sample_class: str = Form(...),
+        files: list[UploadFile] = File(...),
+    ):
+        if sample_class not in _VALID_SAMPLE_CLASSES:
+            raise HTTPException(status_code=422, detail="sample_class 取值非法")
+        job = conn.execute("SELECT id FROM job WHERE id = ?", (job_id,)).fetchone()
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+
+        uploader = reviewer_of(request)
+        results = []
+
+        if sample_class == "live":
+            gate_open = is_live_resume_intake_enabled(auth=request.state.auth, conn=conn)
+            if not gate_open:
+                for f in files:
+                    results.append({
+                        "file_name": f.filename,
+                        "status": "rejected",
+                        "reason": "真实简历入库闸未开启",
+                    })
+                logger.warning(
+                    "闸关闭时的 live 上传尝试：uploader=%s job_id=%s file_count=%d",
+                    uploader, job_id, len(files),
+                )
+                return {"results": results}
+
+        for f in files:
+            results.append(_ingest_one_resume(job_id=job_id, sample_class=sample_class,
+                                               uploaded_by=uploader, upload=f))
+        return {"results": results}
+
+    def _ingest_one_resume(*, job_id: str, sample_class: str, uploaded_by: str,
+                            upload: UploadFile) -> dict:
+        suffix = Path(upload.filename or "").suffix.lower()
+        content = upload.file.read()
+        if suffix not in (".pdf", ".docx"):
+            return {"file_name": upload.filename, "status": "rejected",
+                    "reason": "不支持的类型"}
+
+        content_hash = hashlib.sha256(content).hexdigest()
+        dup = conn.execute(
+            "SELECT id FROM resume WHERE job_id = ? AND content_sha256 = ?",
+            (job_id, content_hash),
+        ).fetchone()
+        if dup is not None:
+            return {"file_name": upload.filename, "status": "duplicate",
+                    "resume_id": dup[0]}
+
+        resume_id = str(uuid.uuid4())
+        stored_path = _resume_storage_dir / f"{resume_id}{suffix}"
+        stored_path.write_bytes(content)
+
+        conn.execute(
+            "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, "
+            "uploaded_by) VALUES (?, ?, ?, ?, ?, ?)",
+            (resume_id, job_id, sample_class, upload.filename, content_hash, uploaded_by),
+        )
+        conn.commit()
+
+        ingest_result = ingest_resume_text(stored_path)
+        if not ingest_result.readable:
+            conn.execute(
+                "UPDATE resume SET status = 'unreadable' WHERE id = ?", (resume_id,)
+            )
+            conn.commit()
+            return {"file_name": upload.filename, "status": "accepted",
+                    "resume_id": resume_id, "parse_status": "unreadable"}
+
+        conn.execute(
+            "UPDATE resume SET raw_text = ? WHERE id = ?",
+            (ingest_result.raw_text, resume_id),
+        )
+        for span in ingest_result.spans:
+            conn.execute(
+                "INSERT INTO resume_text_span (resume_id, span_id, start, end, text) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (resume_id, span.span_id, span.start, span.end, span.text),
+            )
+        conn.commit()
+
+        threshold_row = conn.execute(
+            "SELECT parse_confidence_threshold FROM job WHERE id = ?", (job_id,)
+        ).fetchone()
+        confidence_threshold = threshold_row[0] if threshold_row else 0.7
+
+        try:
+            fields, meta = compute_parse(
+                gateway,
+                spans=ingest_result.spans,
+                audit_context={"thread_id": resume_id, "node": "compute_parse", "job_id": job_id},
+            )
+        except Exception:
+            logger.exception("resume_id=%s 抽取失败，简历留在 pending，可稍后重解析", resume_id)
+            return {"file_name": upload.filename, "status": "accepted",
+                    "resume_id": resume_id, "parse_status": "parse_failed"}
+
+        parser_version = "v1"
+        application_id = effect_persist_parse(
+            conn,
+            thread_id=resume_id,
+            business_key=parser_version,
+            resume_id=resume_id,
+            job_id=job_id,
+            fields=fields,
+            parser_version=parser_version,
+            model_configured=gateway.model,
+            model_response=meta.response_model,
+            prompt_version="parse-v1",
+            confidence_threshold=confidence_threshold,
+        )
+        return {"file_name": upload.filename, "status": "accepted",
+                "resume_id": resume_id, "application_id": application_id,
+                "parse_status": "parsed"}
 
     @router.get("/health")
     def health() -> dict:
