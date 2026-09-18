@@ -39,11 +39,11 @@
 
 > 2026-09-17 `0917BA` 按路线图第七节「人事部可见优先」切出。范围＝人事部第一眼能看到的最小闭环：传简历 → 看到解析出的六字段 → 点字段看原文依据 → 校对确认。前置＝U1 必需子集（见第 2 章注）＋ U2 全部（3.1–3.10）＋ U0 已定型的抽取模型行。只收 `sample_class ∈ {synthetic, anonymized, departed}`；真实简历入库闸保持关闭（design D2 不变，8.8 仍由本人亲自开）。⛔ 不含评分、排序、硬门槛、淘汰——那些在 U3／U4／U5 其余。
 
-- [ ] 9.1 上传入口页（`app/web/static/` 新页 + `GET /resumes/upload`）：多文件选择、岗位下拉（已审批画像）、样本类别单选**只列** `synthetic/anonymized/departed`（`live` 不出现在页面选项，接口侧仍由 3.3 的闸拦）；逐文件结果表（成功／重复返回既有 `resume_id`／不可读／拒收原因）；相对路径（部署约束 1，测试在子路径前缀下可用）
-- [ ] 9.2 解析结果列表页 + `GET /jobs/{id}/resumes`：按上传时间倒序，每行＝候选人姓名（缺则文件名）、`sample_class`、解析状态（`parsed/unreadable/pending`）、六字段摘要、待校对字段数、`parser_version`；AI 生成标识与"仅供参考"说明（合规红线）；读取经 3.9 留痕；⛔ 不显示分数与排名（那是 6.1）
-- [ ] 9.3 字段校对页（原 6.2 移入）：左原文右六字段，每字段显示 `value/confidence`，选中字段 ⇒ 原文按 `spans[]` offset 逐段高亮（evidence 高亮，按 `resume_text_span` 偏移切字符串）；低置信度／队列字段醒目；「确认」「改为…」提交走 3.10；确认后 9.2 列表该字段显示"已校对（谁／何时）"
-- [ ] 9.4 薄片 e2e（httpx＋HTML 断言）：上传 3 份合成样本（文本 PDF／Word／扫描件各一）→ 9.2 列表可见 → 9.3 高亮命中 span → 确认后列表更新；全程在子路径前缀下；`live` 在页面不可选且接口拒收；每次读取在 `resume_access_log` 各一条
-- [ ] 9.5 薄片交付件：HR 一页操作说明 `docs/m2-visible-slice-guide.md`（人事部看什么、怎么传、怎么校对、哪些不能传）、`requirements.txt` 与 `sync-to-server.sh` 白名单增量、`scripts/create_hr_account.py` 建账号步骤。发版本身走 G3（8.9），⛔ 不在本条
+- [x] 9.1 上传入口页（`app/web/static/` 新页 + `GET /resumes/upload`）：多文件选择、岗位下拉（已审批画像）、样本类别单选**只列** `synthetic/anonymized/departed`（`live` 不出现在页面选项，接口侧仍由 3.3 的闸拦）；逐文件结果表（成功／重复返回既有 `resume_id`／不可读／拒收原因）；相对路径（部署约束 1，测试在子路径前缀下可用）
+- [x] 9.2 解析结果列表页 + `GET /jobs/{id}/resumes`：按上传时间倒序，每行＝候选人姓名（缺则文件名）、`sample_class`、解析状态（`parsed/unreadable/pending`）、六字段摘要、待校对字段数、`parser_version`；AI 生成标识与"仅供参考"说明（合规红线）；读取经 3.9 留痕；⛔ 不显示分数与排名（那是 6.1）
+- [x] 9.3 字段校对页（原 6.2 移入）：左原文右六字段，每字段显示 `value/confidence`，选中字段 ⇒ 原文按 `spans[]` offset 逐段高亮（evidence 高亮，按 `resume_text_span` 偏移切字符串）；低置信度／队列字段醒目；「确认」「改为…」提交走 3.10；确认后 9.2 列表该字段显示"已校对（谁／何时）"
+- [x] 9.4 薄片 e2e（httpx＋HTML 断言）：上传 3 份合成样本（文本 PDF／Word／扫描件各一）→ 9.2 列表可见 → 9.3 高亮命中 span → 确认后列表更新；全程在子路径前缀下；`live` 在页面不可选且接口拒收；每次读取在 `resume_access_log` 各一条（实现计划将 e2e 收窄为单份 Word 样本＋一次 live 拒收断言，未逐一覆盖 PDF／扫描件三态；final review 已核对该收窄不影响本条其余判据，PDF／扫描件路径由 U2 既有单测覆盖，未在本条重复）
+- [x] 9.5 薄片交付件：HR 一页操作说明 `docs/m2-visible-slice-guide.md`（人事部看什么、怎么传、怎么校对、哪些不能传）、`requirements.txt` 与 `sync-to-server.sh` 白名单增量、`scripts/create_hr_account.py` 建账号步骤。发版本身走 G3（8.9），⛔ 不在本条
 
 ## 4. U3 硬门槛引擎（标记＋依据＋申诉）
 

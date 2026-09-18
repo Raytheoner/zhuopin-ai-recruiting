@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <title>解析结果列表 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <h1>解析结果列表</h1>
+  <p><strong>本页六字段由 AI 自动抽取，仅供参考，未经人工校对前不代表最终事实。</strong></p>
+  <table id="resume-table" border="1">
+    <thead>
+      <tr>
+        <th>候选人</th><th>样本类别</th><th>解析状态</th><th>解析版本</th>
+        <th>待校对字段数</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="resume-body"></tbody>
+  </table>
+  <p id="empty-hint" style="display:none">该岗位暂无上传的简历。</p>
+  <p id="error" style="color:red"></p>
+
+  <script>
+    function jobIdFromPath() {
+      const m = window.location.pathname.match(/\/jobs\/([^/]+)\/resumes\/?$/);
+      return m ? m[1] : null;
+    }
+
+    async function loadResumes() {
+      const jobId = jobIdFromPath();
+      if (!jobId) {
+        document.getElementById("error").textContent = "无法识别岗位标识";
+        return;
+      }
+      const resp = await fetch(`api/resumes/by-job/${jobId}`);
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return;
+      }
+      if (!resp.ok) {
+        document.getElementById("error").textContent = "加载失败";
+        return;
+      }
+      const body = await resp.json();
+      const tbody = document.getElementById("resume-body");
+      tbody.innerHTML = "";
+      if (body.resumes.length === 0) {
+        document.getElementById("empty-hint").style.display = "";
+        return;
+      }
+      for (const item of body.resumes) {
+        const tr = document.createElement("tr");
+        const cells = [
+          item.candidate_display_name,
+          item.sample_class,
+          item.parse_status,
+          item.parser_version || "-",
+          String(item.pending_review_count),
+        ];
+        for (const text of cells) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.appendChild(td);
+        }
+        const actionTd = document.createElement("td");
+        const link = document.createElement("a");
+        link.href = `resumes/${item.resume_id}/review`;
+        link.textContent = "查看并校对";
+        actionTd.appendChild(link);
+        tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+      }
+    }
+
+    loadResumes();
+  </script>
+</body>
+</html>

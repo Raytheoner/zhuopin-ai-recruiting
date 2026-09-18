@@ -78,11 +78,17 @@
   <div class="banner">⚠️ 演示环境，不进入正式招聘流程</div>
 
   <!-- 三个视图之间用按钮切换，⛔ 不用 <a href> 或 hash 路由：那会和 <base href>
-       的解析纠缠出一类只在挂了 root_path 时才现形的 bug（部署约束 1）。 -->
+       的解析纠缠出一类只在挂了 root_path 时才现形的 bug（部署约束 1）。
+       "上传简历"这一项不是视图切换，是真的跳到另一个独立页面（M2 U2.5，
+       resumes/upload），<base href> 对普通页面跳转的相对路径解析是正常
+       工作的（resume_list.html / upload.html 之间互跳已经这么用），跟上面
+       那条按钮/hash 路由的禁令不是同一回事——用 <a>，只是样式对齐 .nav-btn
+       看起来跟按钮一致（finding 5：这是本单元目前唯一的入口，从这里进）。 -->
   <div class="nav">
     <button id="nav-intake" class="nav-btn active">提需求</button>
     <button id="nav-list" class="nav-btn">岗位列表</button>
     <button id="nav-queue" class="nav-btn">转人工队列</button>
+    <a id="nav-resume-upload" class="nav-btn" href="resumes/upload">上传简历</a>
   </div>
 
   <div id="view-intake">
