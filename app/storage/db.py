@@ -512,6 +512,88 @@ CREATE TABLE IF NOT EXISTS screening_flag (
 );
 
 CREATE INDEX IF NOT EXISTS idx_screening_flag_application ON screening_flag (application_id);
+
+-- 简历向量（design D7「向量存储」：SQLite 上进程内实现，BLOB 存表，召回时
+-- 全量读入 numpy 算 cosine，⛔ 不引入 pgvector/FAISS）。复合主键
+-- (resume_id, model)：同一简历可能有多个模型版本的向量并存（U0 model 定型
+-- 前的对比阶段），U4 tasks 5.1 的幂等键 {resume_id}:embed:{model} 与此对应。
+CREATE TABLE IF NOT EXISTS resume_embedding (
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (resume_id, model)
+);
+
+-- ⚠️ 禁止训练用途注释**刻意放在括号内、紧跟 CREATE TABLE 之后**（不是放在
+-- 语句前面）：SQLite 的 sqlite_master.sql 只保存语句本身的文本，语句前的
+-- 独立注释行不会被收进去——Task 7 的反证测试要靠 `SELECT sql FROM
+-- sqlite_master` 机器检查这行注释存在，放在语句外会让该检查读到空气、
+-- 静默总是通过（Task 7 的 test_eval_*_table_exists_and_has_training_ban_comment
+-- 三条用例已经把这条踩过一次）。三张表同一口径，与 analysis_run 表头注释
+-- 一致：本表内容禁止用作任何模型的训练、微调、prompt 自动优化输入。理由：
+-- 历史标注与人工排序携带既有偏见，拿它当监督信号会把偏见放大并固化
+-- （Amazon 2018 教训，CLAUDE.md 合规红线「绝不用历史录用结果做监督信号」）。
+-- 三张表只服务离线指标计算（U6）。
+CREATE TABLE IF NOT EXISTS eval_import_batch (
+    -- ⚠️ 禁止训练用途：本表内容禁止用作任何模型的训练、微调、prompt 自动优化输入。
+    id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL,
+    source_archive_path TEXT,
+    imported_by TEXT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+    row_count INTEGER NOT NULL
+);
+
+-- sample_ref 是「判例批改表」里的样本标识（eval-set-and-metrics spec「判例
+-- 批改表格式与导入校验」），不直接存简历内容——评测集样本文件本身在
+-- data/eval/ 目录（不进版本库，U6 tasks 7.5）。
+CREATE TABLE IF NOT EXISTS eval_sample (
+    -- ⚠️ 禁止训练用途，同上。
+    id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL,
+    sample_ref TEXT NOT NULL,
+    import_batch_id TEXT NOT NULL REFERENCES eval_import_batch(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- field_values_json 存六字段人工标注值，human_rank 存人工排序名次
+-- （eval-set-and-metrics spec「四项验收指标可一键计算」用它算 Spearman/
+-- Top-10 召回）。
+--
+-- ⛔ 不对 eval_sample_id 单独加唯一索引：spec「标注值变化时以最新一次为准
+-- 并保留历史」要求同一样本可以被不同批次重复标注、旧标注保留。唯一索引落在
+-- (import_batch_id, eval_sample_id)：这条防的是"同一批次文件重复导入"产生
+-- 重复行（eval-set-and-metrics spec「导入 MUST 幂等」），不同批次对同一样本
+-- 的标注视为历史演进，两者都合法存在。"当前有效标注"取最新一行是应用层
+-- （U6 report 命令）的查询逻辑，不是本表结构的责任。
+CREATE TABLE IF NOT EXISTS eval_annotation (
+    -- ⚠️ 禁止训练用途，同上。
+    id TEXT PRIMARY KEY NOT NULL,
+    eval_sample_id TEXT NOT NULL REFERENCES eval_sample(id),
+    field_values_json TEXT NOT NULL,
+    human_rank INTEGER,
+    annotated_by TEXT NOT NULL,
+    annotated_at TEXT NOT NULL,
+    import_batch_id TEXT NOT NULL REFERENCES eval_import_batch(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_annotation_batch_sample
+    ON eval_annotation (import_batch_id, eval_sample_id);
+
+-- HR 本地账号（design D12：鉴权从空壳换成本地账号，签名不变）。密码以
+-- PBKDF2-HMAC-SHA256 加盐哈希存储（app/storage/hr_account.py，Task 8），
+-- ⛔ 不存明文、不存可逆加密。username 唯一——每人一个账号（部署约束 5
+-- 「共享口令不满足」）。
+CREATE TABLE IF NOT EXISTS hr_account (
+    id TEXT PRIMARY KEY NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

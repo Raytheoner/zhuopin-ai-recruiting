@@ -480,3 +480,151 @@ def test_screening_flag_pass_and_skipped_allow_null_evidence(conn):
         "VALUES ('sf-skip', 'app-1', 1, 'years-gte-3', 'skipped')"
     )
     conn.commit()
+
+
+# ── resume_embedding / eval_* / hr_account（tasks 2.5）───────────────────
+
+
+def test_resume_embedding_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "resume_embedding")
+    assert _columns(conn, "resume_embedding") == {
+        "resume_id", "model", "dim", "vector", "created_at",
+    }
+
+
+def test_resume_embedding_primary_key_is_resume_and_model(conn):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO resume_embedding (resume_id, model, dim, vector) "
+        "VALUES ('r1', 'bge-m3', 1024, X'0102')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO resume_embedding (resume_id, model, dim, vector) "
+            "VALUES ('r1', 'bge-m3', 1024, X'0304')"
+        )
+
+
+def test_resume_embedding_allows_multiple_models_per_resume(conn):
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO resume_embedding (resume_id, model, dim, vector) "
+        "VALUES ('r1', 'bge-m3', 1024, X'0102')"
+    )
+    conn.execute(
+        "INSERT INTO resume_embedding (resume_id, model, dim, vector) "
+        "VALUES ('r1', 'bge-m3-v2', 1024, X'0304')"
+    )
+    conn.commit()
+
+
+def test_eval_import_batch_table_exists_and_has_training_ban_comment(conn):
+    assert _table_exists(conn, "eval_import_batch")
+    assert _columns(conn, "eval_import_batch") == {
+        "id", "job_id", "source_archive_path", "imported_by", "imported_at", "row_count",
+    }
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='eval_import_batch'"
+    ).fetchone()[0]
+    assert "训练" in sql
+
+
+def test_eval_sample_table_exists_and_has_training_ban_comment(conn):
+    assert _table_exists(conn, "eval_sample")
+    assert _columns(conn, "eval_sample") == {
+        "id", "job_id", "sample_ref", "import_batch_id", "created_at",
+    }
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='eval_sample'"
+    ).fetchone()[0]
+    assert "训练" in sql
+
+
+def test_eval_annotation_table_exists_and_has_training_ban_comment(conn):
+    assert _table_exists(conn, "eval_annotation")
+    assert _columns(conn, "eval_annotation") == {
+        "id", "eval_sample_id", "field_values_json", "human_rank",
+        "annotated_by", "annotated_at", "import_batch_id", "created_at",
+    }
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='eval_annotation'"
+    ).fetchone()[0]
+    assert "训练" in sql
+
+
+def _seed_eval_batch_and_sample(conn, batch_id="b1", sample_id="s1"):
+    conn.execute(
+        "INSERT INTO eval_import_batch (id, job_id, imported_by, row_count) "
+        "VALUES (?, 'j1', 'hr-1', 1)",
+        (batch_id,),
+    )
+    conn.execute(
+        "INSERT INTO eval_sample (id, job_id, sample_ref, import_batch_id) "
+        "VALUES (?, 'j1', 'sample-001', ?)",
+        (sample_id, batch_id),
+    )
+    conn.commit()
+
+
+def test_eval_annotation_same_batch_reimport_is_rejected_by_unique_index(conn):
+    """同一批次重复导入不产生重复标注——唯一索引在 (import_batch_id, eval_sample_id)。"""
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    _seed_eval_batch_and_sample(conn)
+    conn.execute(
+        "INSERT INTO eval_annotation "
+        "(id, eval_sample_id, field_values_json, annotated_by, annotated_at, import_batch_id) "
+        "VALUES ('ann-1', 's1', '{}', '汤丽萍', '2026-09-17 10:00:00', 'b1')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO eval_annotation "
+            "(id, eval_sample_id, field_values_json, annotated_by, annotated_at, import_batch_id) "
+            "VALUES ('ann-2', 's1', '{}', '汤丽萍', '2026-09-17 10:05:00', 'b1')"
+        )
+
+
+def test_eval_annotation_keeps_history_across_different_batches(conn):
+    """不同批次可以对同一样本再标注一次——保留历史，不覆盖。"""
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    _seed_eval_batch_and_sample(conn, batch_id="b1", sample_id="s1")
+    conn.execute(
+        "INSERT INTO eval_import_batch (id, job_id, imported_by, row_count) VALUES ('b2', 'j1', 'hr-1', 1)"
+    )
+    conn.commit()
+    conn.execute(
+        "INSERT INTO eval_annotation "
+        "(id, eval_sample_id, field_values_json, annotated_by, annotated_at, import_batch_id) "
+        "VALUES ('ann-1', 's1', '{}', '汤丽萍', '2026-09-17 10:00:00', 'b1')"
+    )
+    conn.execute(
+        "INSERT INTO eval_annotation "
+        "(id, eval_sample_id, field_values_json, annotated_by, annotated_at, import_batch_id) "
+        "VALUES ('ann-2', 's1', '{}', '汤丽萍', '2026-09-20 10:00:00', 'b2')"
+    )
+    conn.commit()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM eval_annotation WHERE eval_sample_id='s1'"
+    ).fetchone()[0]
+    assert count == 2
+
+
+def test_hr_account_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "hr_account")
+    assert _columns(conn, "hr_account") == {
+        "id", "username", "password_hash", "password_salt", "created_at",
+    }
+
+
+def test_hr_account_username_is_unique(conn):
+    conn.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+        "VALUES ('acc-1', 'tangliping', 'h1', 's1')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+            "VALUES ('acc-2', 'tangliping', 'h2', 's2')"
+        )
