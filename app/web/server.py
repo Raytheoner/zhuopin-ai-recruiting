@@ -48,6 +48,7 @@ from app.parsing.spans import TextSpan
 from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.schemas.resume_fields import FIELD_LABELS, FIELD_NAMES
 from app.storage import job_queries
+from app.storage.appeal import AppealRecordNotFound, IllegalAppealTransition, transition_appeal
 from app.storage.auth_session import create_session, delete_session
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 from app.storage.hr_account import verify_password
@@ -104,6 +105,10 @@ class JDEditRequest(BaseModel):
 
 class FieldReviewRequest(BaseModel):
     human_value: str
+
+
+class AppealTransitionRequest(BaseModel):
+    to_status: str
 
 
 class TurnOutcome(NamedTuple):
@@ -1173,6 +1178,47 @@ def create_app(
                 for r in rows
             ]
         }
+
+    @router.post("/api/applications/{application_id}/appeal")
+    def register_appeal(request: Request, application_id: str) -> dict:
+        """注册申诉（none→requested）。同一投递重复提交视为幂等——不产生
+        第二条流转事件（Task 8 transition_appeal 的 already_applied 语义），
+        ⛔ 不静默改判、不覆盖已有的申诉状态（合规红线「淘汰只由人确认并可
+        申诉」）。"""
+        row = conn.execute(
+            "SELECT id, appeal_status FROM rejection_record WHERE application_id = ? "
+            "ORDER BY decided_at DESC LIMIT 1",
+            (application_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="该投递没有拒绝记录，无法申诉")
+        rejection_id, appeal_status = row
+        actor = reviewer_of(request)
+        if appeal_status == "none":
+            result = transition_appeal(
+                conn, rejection_record_id=rejection_id, to_status="requested", actor=actor
+            )
+        else:
+            result = {"appeal_status": appeal_status, "already_applied": True}
+        return {"rejection_id": rejection_id, **result}
+
+    @router.post("/api/rejections/{rejection_id}/appeal/transition")
+    def transition_appeal_route(
+        request: Request, rejection_id: str, req: AppealTransitionRequest
+    ) -> dict:
+        """驱动申诉状态机的后续流转（requested→under_review→upheld|
+        overturned）。非法跳转 409、未知拒绝记录 404——两者都由 Task 8 的
+        transition_appeal 判定，这里只做异常到 HTTP 状态码的翻译。"""
+        try:
+            result = transition_appeal(
+                conn, rejection_record_id=rejection_id, to_status=req.to_status,
+                actor=reviewer_of(request),
+            )
+        except AppealRecordNotFound:
+            raise HTTPException(status_code=404, detail="拒绝记录不存在")
+        except IllegalAppealTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {"rejection_id": rejection_id, **result}
 
     @router.get("/api/resumes/by-job/{job_id}")
     def list_resumes_for_job(request: Request, job_id: str) -> dict:
