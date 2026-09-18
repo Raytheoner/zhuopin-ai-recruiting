@@ -3,13 +3,14 @@ version: 1
 summary:
   条目数: 498
   按状态:
-    待开: 268
-    在跑: 7
-    完成: 131
+    待开: 266
+    在跑: 8
+    完成: 132
     阻塞: 92
   阻塞·决策: 52
   阻塞·外部: 38
   conflicts:
+  - channel-resume-intake/0.1
   - m1-intake-quality-fixes/8.9
   - m1-intake-quality-fixes/U8/plan
   - m1-job-profile-intake/1.5b
@@ -21,6 +22,7 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
+  - m2-resume-parse-and-rank/U2.5/plan
   - opener:[Mac]0903A
   - propose:S-M3
   - propose:S-Offer
@@ -33,8 +35,6 @@ summary:
   - relay:R-6
   - scene:M3
   ready:
-  - m2-resume-parse-and-rank/U2.5/plan
-  - channel-resume-intake/0.1
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
@@ -218,11 +218,16 @@ tasks:
   单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
   依赖: []
   触碰区: []
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: M2 tasks 2.1／3.3／3.4 勾选
   来源: openspec/changes/channel-resume-intake/tasks.md:5
   可见: false
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: dispatcher_event-20260918-122705 核实：M2 tasks 2.1/3.3/3.4 均已勾选（m2-resume-parse-and-rank/tasks.md:16,29,30），判据成立，解除对 channel-resume-intake/U1 的门槛依赖
 - id: channel-resume-intake/0.2
   场景: channel-resume-intake
   阶段: gate
@@ -2845,11 +2850,15 @@ tasks:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit2.5-*.md
   状态: 在跑
   阻塞类型: 无
-  备注: 0918R（task-dispatcher·lanes-done-20260918-100256）
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit2.5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: true
   闸门: G2 m2-resume-parse-and-rank
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 0918R（task-dispatcher·lanes-done-20260918-100256）
 - id: m2-resume-parse-and-rank/U2.5
   场景: M2
   阶段: build
