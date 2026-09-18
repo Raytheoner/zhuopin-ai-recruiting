@@ -57,15 +57,28 @@ _TABLE_HEADER = "| 项 | 环境指纹 | 结论 | 关键指标 | 阻塞点 | 耗�
 _TABLE_SEP = "|---|---|---|---|---|---|---|"
 
 
+def _escape_cell(value: str) -> str:
+    """Escape pipe characters in markdown table cells to preserve split("|") integrity.
+    Uses HTML entity encoding (&#124;) so split("|") won't break on escaped pipes.
+    """
+    return value.replace("|", "&#124;")
+
+
+def _unescape_cell(value: str) -> str:
+    """Unescape pipe characters from markdown table cells."""
+    return value.replace("&#124;", "|")
+
+
 def _format_metrics(metrics: dict[str, Any]) -> str:
-    return "; ".join(f"{k}={v}" for k, v in sorted(metrics.items()))
+    formatted = "; ".join(f"{k}={v}" for k, v in sorted(metrics.items()))
+    return _escape_cell(formatted)
 
 
 def _format_row(result: ProbeResult) -> str:
     return (
-        f"| {result.item} | {result.env_fingerprint} | {result.conclusion} | "
-        f"{_format_metrics(result.metrics)} | {result.blocking_reason or ''} | "
-        f"{round(result.duration_ms)} | {result.timestamp} |"
+        f"| {_escape_cell(result.item)} | {_escape_cell(result.env_fingerprint)} | {_escape_cell(result.conclusion)} | "
+        f"{_format_metrics(result.metrics)} | {_escape_cell(result.blocking_reason or '')} | "
+        f"{round(result.duration_ms)} | {_escape_cell(result.timestamp)} |"
     )
 
 
@@ -91,7 +104,7 @@ def upsert_markdown_row(doc_text: str, result: ProbeResult) -> str:
     key = (result.item, result.env_fingerprint)
     for i in range(row_start, row_end):
         cells = [c.strip() for c in lines[i].split("|")]
-        if len(cells) > 2 and (cells[1], cells[2]) == key:
+        if len(cells) > 2 and (_unescape_cell(cells[1]), _unescape_cell(cells[2])) == key:
             lines[i] = new_row
             return "\n".join(lines) + "\n"
 

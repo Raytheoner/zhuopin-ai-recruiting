@@ -94,3 +94,56 @@ def test_cli_help_lists_registered_probes(capsys):
 
         cli_main(["--help"])
     assert exc_info.value.code == 0
+
+
+def test_upsert_with_real_env_fingerprint_containing_pipes():
+    """Test that real env_fingerprint() output (which contains |) is handled correctly.
+
+    This is the critical regression test for the bug where fingerprints with |
+    broke idempotent upsert. Using real env_fingerprint() ensures the composed
+    functions work end-to-end.
+    """
+    real_fp = env_fingerprint(target="test-machine", extra="test-network")
+    # real_fp will be something like "macOS-27.0-arm64-arm-64bit-Mach-O|py3.14.6|test-machine|test-network"
+    assert "|" in real_fp, "Real fingerprint should contain | separators"
+
+    # First upsert
+    r1 = ProbeResult(item="P1", env_fingerprint=real_fp, conclusion="通过", duration_ms=1.0)
+    doc = upsert_markdown_row("# 标题\n", r1)
+    rows_after_first = [ln for ln in doc.splitlines() if ln.startswith("| P1 |")]
+    assert len(rows_after_first) == 1, "First upsert should create exactly one row"
+
+    # Second upsert with same key should overwrite, not append
+    r2 = ProbeResult(item="P1", env_fingerprint=real_fp, conclusion="阻塞", blocking_reason="test", duration_ms=99.0)
+    doc = upsert_markdown_row(doc, r2)
+    rows_after_second = [ln for ln in doc.splitlines() if ln.startswith("| P1 |")]
+    assert len(rows_after_second) == 1, "Second upsert should still have exactly one row (overwritten, not appended)"
+    assert "阻塞" in rows_after_second[0], "Second upsert should have overwritten with new conclusion"
+    assert "99" in rows_after_second[0], "Second upsert should have updated duration"
+
+
+def test_upsert_with_metrics_containing_pipes():
+    """Test that metric values containing | are escaped correctly."""
+    result = ProbeResult(
+        item="P1",
+        env_fingerprint="fp-a",
+        conclusion="通过",
+        metrics={"config": "a|b|c", "status": "ok"}  # Value contains pipes
+    )
+    doc = upsert_markdown_row("# 标题\n", result)
+    # The row should be created successfully without breaking table structure
+    assert "| P1 |" in doc
+    assert "## 探针结果" in doc
+
+    # Verify we can upsert again with the same key
+    result2 = ProbeResult(
+        item="P1",
+        env_fingerprint="fp-a",
+        conclusion="阻塞",
+        blocking_reason="config error",
+        metrics={"config": "x|y|z"}
+    )
+    doc = upsert_markdown_row(doc, result2)
+    rows = [ln for ln in doc.splitlines() if ln.startswith("| P1 |")]
+    assert len(rows) == 1, "Should have exactly one row after second upsert (overwritten)"
+    assert "阻塞" in rows[0]
