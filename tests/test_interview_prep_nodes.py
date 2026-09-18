@@ -3,6 +3,7 @@ effect_* 节点写库）。LLM 用 tests/test_interview_prep_agent.py 同款脚�
 假客户端，数据库用真实 SQLite（tmp_path）。"""
 
 import json
+import logging
 
 import pytest
 
@@ -166,6 +167,56 @@ def test_compute_prep_and_persist_draft_end_to_end(conn):
         (version,),
     ).fetchall()
     assert questions == [(1, "AUTOSAR CP")]
+
+
+def _partial_drop_question_body():
+    """2 道题，1 道维度在白名单内（AUTOSAR CP）、1 道越界（越界维度）——
+    generate() 应当丢弃越界那道、保留另一道，dropped_count == 1 且不触发
+    PrepGenerationFailed（该异常只在全部越界时抛出）。"""
+    return json.dumps(
+        {
+            "questions": [
+                {
+                    "dimension": "AUTOSAR CP",
+                    "difficulty": "easy",
+                    "text": "讲讲你做过的 AUTOSAR 项目",
+                    "rubric": "能说清分层架构者得分",
+                    "follow_ups": ["具体是哪个 OEM 项目？"],
+                    "rationale": "画像要求 AUTOSAR CP 经验",
+                },
+                {
+                    "dimension": "越界维度",
+                    "difficulty": "easy",
+                    "text": "一道维度越界的题",
+                    "rubric": "不应保留",
+                    "follow_ups": ["追问"],
+                    "rationale": "越界",
+                },
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_compute_prep_logs_warning_on_partial_drop(conn, caplog):
+    """fix 2 回归：spec Scenario「维度越界」要求部分丢弃"可观测"。此前
+    generate() 算出 dropped_count 后没有任何地方记录，本用例断言 compute_prep
+    在部分丢弃、生成仍成功时打一条带丢弃数的 WARNING 日志。"""
+    _seed_job_and_approved_profile(conn)
+    _seed_application(conn)
+    gateway = LLMGateway(
+        api_key="k", base_url="https://example.com", model="deepseek-chat",
+        supports_json_schema=False, client=ScriptedClient([_partial_drop_question_body()]),
+        audit_hook=RecordingHook(conn),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.graph.interview_prep_nodes"):
+        draft, _, _ = compute_prep(conn, application_id="app-1", gateway=gateway)
+
+    assert draft.dropped_count == 1
+    assert len(draft.questions) == 1
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("1" in r.getMessage() and "丢弃" in r.getMessage() for r in warnings)
 
 
 def test_effect_persist_prep_draft_is_idempotent(conn):

@@ -15,6 +15,7 @@ StateGraph。effect_freeze_prep 与 app/graph/nodes.py::effect_confirm_profile
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 
@@ -24,6 +25,8 @@ from app.graph.screening_nodes import latest_approved_profile_version
 from app.schemas.interview_ai_input import PrepInput, ResumeScoreItem
 from app.schemas.job_profile import derive_rubric_dimensions
 from app.storage.idempotency import idempotent_effect
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileNotApprovedError(Exception):
@@ -162,8 +165,15 @@ def compute_prep(
             "node": "compute_prep",
             "application_id": application_id,
             "job_id": job_id,
+            "rubric_version": str(profile_version),
+            "rubric_snapshot": {"dimensions": rubric_dimensions},
         },
     )
+    if draft.dropped_count > 0:
+        logger.warning(
+            "prep 出题丢弃 %d 道越界维度题目 application_id=%s run_id=%s",
+            draft.dropped_count, application_id, draft.run_id,
+        )
     return draft, profile_version, resume_run_id
 
 

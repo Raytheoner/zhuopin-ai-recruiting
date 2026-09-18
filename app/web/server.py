@@ -1493,7 +1493,14 @@ def create_app(
             resume_run_id=resume_run_id,
             draft=draft,
         )
-        return _prep_payload(conn, application_id, version)
+        # 重复调用（同一 draft.run_id）会被 idempotent_effect 短路，version
+        # 这个预算号不会真的落库——用 gen_run_id 反查实际落库的 version，
+        # 不信任调用前算出来的那个数（见 fix 1a）。
+        actual_version = conn.execute(
+            "SELECT version FROM prep_snapshot WHERE application_id = ? AND gen_run_id = ?",
+            (application_id, draft.run_id),
+        ).fetchone()[0]
+        return _prep_payload(conn, application_id, actual_version)
 
     @router.get("/api/applications/{application_id}/prep/{version}")
     def get_prep(application_id: str, version: int):
@@ -1542,10 +1549,14 @@ def create_app(
             audit_context={
                 "thread_id": f"{application_id}:prep", "node": "effect_regenerate_prep_question",
                 "application_id": application_id, "job_id": job_id,
+                "rubric_version": str(profile_version), "rubric_snapshot": {"dimensions": rubric_dimensions},
             },
         )
+        # business_key 故意不用 run_id（内容哈希派生）：重生成是业务经理的一次
+        # 点击动作，必须每次点击都落库一次，即使 temperature=0 的模型两次返回
+        # 内容相同——用随机值换掉「同请求防重放」保护（见 fix 1b）。
         effect_regenerate_prep_question(
-            conn, thread_id=application_id, business_key=f"{version}:{seq}:regen:{run_id}",
+            conn, thread_id=application_id, business_key=f"{version}:{seq}:regen:{uuid.uuid4().hex}",
             snapshot_id=snapshot_id, seq=seq, question=question,
         )
         return _prep_payload(conn, application_id, version)

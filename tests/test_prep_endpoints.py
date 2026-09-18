@@ -178,6 +178,35 @@ def test_generate_edit_freeze_flow(tmp_path):
     assert blocked.status_code == 409
 
 
+def test_generate_twice_returns_existing_version_not_404(tmp_path):
+    """fix 1a 回归：重复调用 generate（相同画像、相同简历评分输入）在
+    temperature=0 下会得到同一个 draft.run_id，effect_persist_prep_draft
+    被 idempotent_effect 短路、不会真的插入第二行。此前的 bug 是端点信任
+    调用前预算好的 version 号去查payload，第二次查的 version 从未真正落库，
+    404。现在端点改成按 gen_run_id 反查实际落库的 version。"""
+    from tests.test_approval_branches import COMPLETE_PROFILE_RESPONSE, JD_RESPONSE
+
+    client, _ = _make_app_with_real_audit(
+        tmp_path, [
+            COMPLETE_PROFILE_RESPONSE,
+            JD_RESPONSE,
+            _question_response(),
+            _question_response(),
+        ]
+    )
+    _setup_auth(tmp_path, client)
+    job_id = _confirmed_job_id(tmp_path, client)
+    _seed_application(tmp_path, job_id)
+
+    first = client.post("/api/applications/app-1/prep/generate")
+    assert first.status_code == 200, first.text
+    first_version = first.json()["version"]
+
+    second = client.post("/api/applications/app-1/prep/generate")
+    assert second.status_code == 200, second.text
+    assert second.json()["version"] == first_version
+
+
 def test_delete_question_via_endpoint(tmp_path):
     from tests.test_approval_branches import COMPLETE_PROFILE_RESPONSE, JD_RESPONSE
 
@@ -230,3 +259,48 @@ def test_regenerate_question_via_endpoint(tmp_path):
     assert regenerated.status_code == 200
     assert regenerated.json()["questions"][0]["difficulty"] == "hard"
     assert regenerated.json()["questions"][0]["origin"] == "ai"
+
+
+def test_regenerate_twice_applies_both_times(tmp_path):
+    """fix 1b 回归：重生成用 f"{version}:{seq}:regen:{run_id}" 做 business_key
+    时，两次点击若命中相同 input_hash（同一维度/难度、temperature=0）会得到
+    相同的确定性 run_id，第二次点击被 idempotent_effect 短路成静默无操作——
+    真调用了 API、DB 却没变。business_key 改用 uuid4 后，两次点击必须都
+    真的落库，用两个不同的脚本化替换题目断言第二次点击生效、且不是第一次
+    点击内容的重复。"""
+    from tests.test_approval_branches import COMPLETE_PROFILE_RESPONSE, JD_RESPONSE
+
+    first_replacement = _question_response(dimension="CAN 驱动开发", difficulty="medium")
+    first_replacement = json.dumps(
+        {"question": json.loads(first_replacement)["questions"][0]}, ensure_ascii=False
+    )
+    second_replacement = _question_response(dimension="CAN 驱动开发", difficulty="hard")
+    second_replacement = json.dumps(
+        {"question": json.loads(second_replacement)["questions"][0]}, ensure_ascii=False
+    )
+    client, _ = _make_app_with_real_audit(
+        tmp_path,
+        [
+            COMPLETE_PROFILE_RESPONSE,
+            JD_RESPONSE,
+            _question_response(),
+            first_replacement,
+            second_replacement,
+        ],
+    )
+    _setup_auth(tmp_path, client)
+    job_id = _confirmed_job_id(tmp_path, client)
+    _seed_application(tmp_path, job_id)
+    version = client.post("/api/applications/app-1/prep/generate").json()["version"]
+
+    first_click = client.post(
+        f"/api/applications/app-1/prep/{version}/questions/1/regenerate"
+    )
+    assert first_click.status_code == 200, first_click.text
+    assert first_click.json()["questions"][0]["difficulty"] == "medium"
+
+    second_click = client.post(
+        f"/api/applications/app-1/prep/{version}/questions/1/regenerate"
+    )
+    assert second_click.status_code == 200, second_click.text
+    assert second_click.json()["questions"][0]["difficulty"] == "hard"

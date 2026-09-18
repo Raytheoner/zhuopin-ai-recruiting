@@ -151,7 +151,14 @@
         return;
       }
       const data = await resp.json();
-      window.history.replaceState(null, "", `../${data.version}/review`);
+      // replaceState 的 URL 参数按文档 <base href> 解析，不是按当前页面 URL——
+      // 本项目注入 <base href="/hr/recruit-agent/">，相对路径 `../N/review`
+      // 会被解析成 /hr/N/review 这种错误路径。改用当前页面 pathname 做替换，
+      // 不依赖 base href 的相对解析规则。
+      window.history.replaceState(
+        null, "",
+        window.location.pathname.replace(/\/prep\/\d+\/review\/?$/, `/prep/${data.version}/review`)
+      );
       render(data);
     });
 
