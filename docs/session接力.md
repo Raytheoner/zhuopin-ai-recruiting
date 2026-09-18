@@ -1,56 +1,58 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-17 06:2x（Cowork·0917D：R-1 实核已完成；体积闸归档接力 61→41 KB、编排 65→12 KB；R-2 拆成 `0917G`→`0917H` 经 launchd 发车（首发 E/F 作废）。此前：Cowork·HR业务线-接力0917D 转场：把 `0916E`–`0917B` 这一大段
+> 最后更新：2026-09-18 20:4x（Cowork·0918G 换道前实核：M2 可见薄片已上线 .51、投递中继上线、无头块铁律立规）｜ 上一次：2026-09-17 06:2x（Cowork·0917D：R-1 实核已完成；体积闸归档接力 61→41 KB、编排 65→12 KB；R-2 拆成 `0917G`→`0917H` 经 launchd 发车（首发 E/F 作废）。此前：Cowork·HR业务线-接力0917D 转场：把 `0916E`–`0917B` 这一大段
 > **从未进过本文**的进展补齐——第十七批波次 1＋2 已基本完成、Token 治理线已结项；
 > 订正 `tasks.md` 抬头进度行失真 24/33 → 27/33）
 
 ---
 
-## 🔴 新 session 先看这一节（2026-09-18 08:5x，Cowork·HR业务线-接力0917D 换道前实核）
+## 🔴 新 session 先看这一节（2026-09-18 20:4x，Cowork·HR业务线-接力0918G 换道前实核）
 
-⚠️ 本节之后的历史节一律以本节为准。**推进依据已从周排期改为任务驱动**：`docs/roadmap/任务驱动上线路线图.md`。
+⚠️ 本节之后的历史节一律以本节为准。推进依据＝任务驱动：`docs/roadmap/任务驱动上线路线图.md`。
 
-### 一、机制已就位（09-17 一天建成，全部已合 main）
+### 一、今天最要紧的两件（都已落地）
 
-- **任务驱动调度器**：`com.zhuopin.hr.task-dispatcher`（launchd，WatchPaths `.claude/handoff/events/` ＋ 每日 09:00 兜底）。skill `.claude/skills/task-dispatcher/`；台账 `docs/roadmap/任务台账.yaml`；定夺队列 `docs/roadmap/定夺队列.md`。
-- **在环闸门 G1–G5**（`scripts/gates.py`，口径见 `docs/roadmap/任务驱动workflow设计.md` 末节）：G1 intent 定稿／G2 design·spec 定稿／G3 发布／G4 发信／G5 口径签认。放行只认定夺队列该行「状态＝已答」且答复为放行字（定／发／签；G4 须「审核通过」＋「发」）。⛔ 任何无头会话不得越闸、不得自己改台账状态放行。
-- **动作通道** `.claude/handoff/commit/<ts>.action`：`send-followup`（双闸：台账 🆕 待发 ＋ G4 放行）、`install-agent`、`kickstart-liaison`；提交通道 `<ts>.request`（白名单 `docs/**`、`openspec/changes/*/tasks.md`，跑体积闸与全量 doc size 测试）。
-- **发车**：`.claude/handoff/launch/<ts>.request` 一行参数；发车器占用时自动入队 `launch/queue/`。
-- **`.51` 无头可达**：Mac 常驻内网，launchd 起的会话可免交互 ssh `zp51`（`docs/findings/2026-09-17-无头会话51可达性探测.md`）。09-17 已用它完成两次发版：现网 = `f81cc9d`，VC++ 升到 v14.44（torch／BGE-M3 在 `.51` 可用，单份 ~117 ms），每日快照计划任务 `ZhuopinDailySnapshot` 已装。
-- **Cowork 侧红线（09-17 踩过）**：⛔ Cowork 不在仓库跑任何 `git` 命令（会留下删不掉的 `.git/index.lock`，卡住全部自动提交）；一切提交走提交请求通道。
-- **受限会话投递中继**（0918H）：`.claude/**` 对远端文件工具只读，三条通道投递口都在其下 ⇒ 没本机 shell 的受限会话投不进去；破法是仓库根 `handoff-inbox/`（受限会话能写）＋ `com.zhuopin.hr.handoff-relay`（launchd，WatchPaths＋300s 兜底）跑 `scripts/handoff_relay.py` 按前缀转投三条通道，只搬运不放行。前缀→通道对照与五条校验见 `docs/roadmap/任务驱动workflow设计.md` §四。
+1. **M2 可见薄片已上线 `.51`**（`0918AM`，19:56 起跑、8 分钟、OK）。现网 `f81cc9d` → **`67772ba`**；开工自核三条前置全过：U1 `66e3b97`／U2 `42b999c`／U2.5 `413fc98` 均在 main 且 tasks 全勾、全量 **3456 passed / 10 skipped / 0 failed**、`live_resume_intake_enabled` 默认 False 无覆盖。快照 `C:\apps\backups\20260918-2001`；五阶段（快照／依赖／sync／G-e／冒烟）全过；冒烟：主页 200、jobs API 正常、上传页与登录页 200、未登录受保护 API 401、合规断言 6 条 EXIT=0；**入库闸发版前后均为关闭**。超范围携带项（U3 硬门槛引擎、语音面试包 m3-prep、Mac 侧调度脚本、新依赖 `python-multipart`／`pypdf`／`python-docx`）逐项核验不改变现网行为。⇒ 定夺队列 `Q-44` 已消费。
+2. **受限会话投递中继上线**（`0918H` 建、`0918Q` 修两处缺陷）：仓库根 `handoff-inbox/` →（launchd `com.zhuopin.hr.handoff-relay`）→ `.claude/handoff/{commit,launch,events}`，秒级搬运，**只搬运不放行**（不碰闸门、不改台账、不绕双闸；发车参数走严格白名单正则防注入）。根因：远端文件工具对 `.claude/**` 只读（原文 `Writing to .claude is not permitted via remote tools.`），与有没有 `device_bash` 无关。⇒ **Cowork 现在能自己提交、自己发车**；今天 19:2x–20:0x 全程 Shao Peishen 不在 Mac 边完成了发版，off-LAN 上线链路已实证。
 
-### 二、业务真身
+### 二、机制新增（09-18）
+
+- **无头块铁律**（`OP-0820`「三、无头块铁律」）：⛔ 无头泳道不得把任务交给后台子代理后结束回合，子代理一律前台等到返回，哨兵必须由泳道会话自己顶格打印。实证 `0918O`：`started_in_background=6`、`num_turns=2`、`subtype=success` 却判 NO-SENTINEL，`0918P` 未发车，代码写了没人收口（后由 `0918U` 补完）。
+- **泳道用量登记**（`0918F`）：`results.tsv` 增 `cost_usd/in/out/cache_read/cache_write/turns` 列，批次 `usage.tsv`，调度器 `dispatcher/usage.tsv`。
+- **调度器两处匹配缺陷修复**（`0918AI`，`relay:R-13`／`R-14`）：`_match_plans` 前缀回退误匹配（把 `voice-structured-interview` 的 plan 配给 `interview-scheduling`，造成 7 个任务假性 ready）、拆段兜底不按 3 个一段。
+- **Cowork 侧新知**：审批模式为「自动批准」时，写发版类或改调度器规则类内容会被沙箱拦（标 `Production Deploy`／`Self-Modification`）；改成**逐项询问**即可，由 Shao Peishen 逐项批准。⛔ 不绕。
+
+### 三、业务真身（09-18 20:4x）
 
 | 场景 | 状态 |
 |---|---|
-| M1 需求解析与岗位画像 | 已在 `.51` 演示环境；两包 G2 已放行（Q-22/23），剩 9.1 画像质量验收等人事部 10 个历史岗位 |
-| M2 简历解析与评分排序 | U0 定型（抽取模型＝`deepseek-flash`）；U1 数据模型 Segment A 已合 main，Segment B＋C 已合 main（`0918B`／`66e3b97`，3092 passed·0 失败，2.4–2.8＋8.1 已勾）；已按「人事部可见优先」切出 **U2.5 可见薄片**（上传页＋解析结果列表＋逐字段 evidence 高亮＋校对，章 9，5 条任务），G2 已放行（Q-30）。**G3「M2 可见薄片」已发版 `.51`**（`0918AM` 无头，发版 commit `67772ba`，现网原 `f81cc9d`→新 `67772ba`；前置①②④全过，全量 pytest 3456 passed·0 failed；五阶段快照→依赖→sync→G-e→冒烟全过未回滚；入库闸发版前后复验均关闭；携带项 U3 硬门槛引擎／语音面试包 m3-prep 等逐项核验不改变现网行为；执行记录 `docs/releases/2026-09-18-发版三-M2可见薄片执行记录.md`） |
-| M3 语音面试 | intent 定稿（Q-32/37）；包 `voice-structured-interview` 立完、G2 已放行（Q-46，75 条任务）。顺序：U0 探针 → U1 数据模型 → U2 出题 → U3 邀约同意 → U5 评分 → U4 实时语音 → U6 视图 → U7 合规开闸。🔴 语音主机规格与预算待探针实测后单独定夺 |
-| 后半程四场景 | `channel-resume-intake`／`interview-scheduling`／`offer-generation`／`onboarding-flow` 已立包，G2 **按 Shao Peishen 批注暂缓**：等 `人事部#3` 回件补齐现用流程与样例后回闸 |
-| 合规验收 #1 | 三份草稿在 `docs/compliance/`；法务对接人 **谷雨**；G5 暂缓，待她审阅后再签 |
-| 跟进信 | `人事部#3`（需求讨论会结论回收单）09-17 22:19 已推送，在途；`人事部#2` 已作废并入 #3。两份 Word 讨论稿在 `docs/人事部讨论/` |
+| M1 需求解析与岗位画像 | 同前；剩 9.1 画像质量验收等人事部 10 个历史岗位 |
+| M2 简历解析与评分排序 | U0 定型；U1（`66e3b97`）／U2 全章（`42b999c`）／U2.5 可见薄片（`413fc98`）均合 main 并**已上线 `.51`**；U3 硬门槛引擎实现计划已出（`0918W`，9 Tasks、2235 行），建造 `0918X/Y/Z` 已跑 |
+| M3 语音面试 | U0 探针收口（`0918U`）：P1 LiveKit 通过、P5 SDK 兼容通过、P2 FunASR／P3 CosyVoice／P4 LLM TTFT 阻塞（缺 30s 中文样本／`hyperpyyaml`／开发机 `LLM_API_KEY`）⇒ **live 段 U4 判留步**，目标机规格留白未编数字；U1 数据模型 2.1–2.8 合 main；U2 出题引擎建造 `0918AJ/AK/AL`；U3 出计划 `0918AN` 刚收 |
+| 后半程四场景 | G2 仍按批注暂缓，等 `人事部#3` 回件 |
+| 合规验收 #1 | 三份草稿在 `docs/compliance/`，法务对接人 **谷雨**；G5 暂缓 |
+| 跟进信 | `人事部#3` 09-17 22:19 已推送，在途 |
 
-### 三、下一步（新 session 直接接着做）
+### 四、下一步（新 session 直接接着做）
 
-1. 读 `docs/roadmap/定夺队列.md`「一、待答」——回本线时先报待答项。当前待答只剩外部输入类：Q-01 私信附件测试帧、Q-04 人事部#3 回件、Q-08 `.51` 冒烟、Q-10 群 webhook、Q-16 门户导航。
-2. ✅ `0918B`（M2 U1 Segment B/C）已收敛合 main。当前：`0918E`（M2·U2 上传与解析管线出实现计划）在 `launch/queue/` 等 `0918F` 收敛后自动发车 ⇒ 调度器自动接 U2 建造 → U2.5 ⇒ 满足预授权条件即发版 ⇒ 在本线报结果。
-3. 汤丽萍回件到达 ⇒ 值守服务自动归档、拆件回灌 ⇒ 结论回填需求基线 ⇒ 后半程四场景 G2 回闸问 Shao Peishen。
-4. 口令「看看泳道」＝读泳道 results、调度器日志、定夺队列，逐条报。节奏与设备口径见 `docs/roadmap/一天标准工作流程.md`。
+1. 读 `docs/roadmap/定夺队列.md`「一、待答」，回本线先报。当前待答仍以外部输入为主：Q-01 私信附件测试帧、Q-04 汤丽萍回件、Q-08 `.51` 冒烟、Q-10 群 webhook、Q-16 门户导航。
+2. 🔴 **`0918V` 仍欠**：补 `Q-27`／`Q-38` 答复→任务映射 ＋ 答复键归一化（`Q-38b`→`Q-38`）。正文 `docs/openers/0918V-补Q27Q38映射与键归一化.md` 已落档、号池已登记，但**泳道块未进 OP-0820、未发车**——Cowork 写它时被沙箱判 Self-Modification。Shao Peishen 2026-09-18 已答「好」授权派。⇒ 审批模式为逐项询问时可直接补块、经 `handoff-inbox` 发车。
+3. 盯 M2·U3 与 M3·U2 建造收敛，其余按调度器自转。
+4. 口令「看看泳道」＝读泳道 results、调度器日志、定夺队列，逐条报。
 
-### 四、Cowork 用量口径与换道提醒（09-18 实测＋Shao Peishen 定）
+### 五、Cowork 用量口径与换道提醒（09-18 实测＋Shao Peishen 定）
 
-一整天单会话折算约 2050 万 token：43% 花在反复重读对话历史、38% 新内容入缓存、14% 每轮重发的说明书与工具清单、5% 输出。⇒ **长会话及时换道**；⛔ 少读截图（三张 Word 截图＝37 万字符）；同一目的的多条查询合并成一条命令。
-🔴 **Cowork 主动提醒换道**（口径：`docs/roadmap/一天标准工作流程.md` 末节「换道提醒」）：跨过一个完整阶段、往返超约 50 轮、或历史明显偏长时，在回复末尾给一行提醒＋接力节位置＋可粘的开场词；⛔ 只说时机，不提额度。
+一整天单会话折算约 2050 万 token：43% 反复重读对话历史、38% 新内容入缓存、14% 每轮重发说明书与工具清单、5% 输出。⇒ **长会话及时换道**；⛔ 少读截图；⛔ 少用会返回上千条目的整目录列举（今天踩过，一次 ~7k token）；同一目的的多条查询合并成一条命令。
+🔴 **Cowork 主动提醒换道**（口径：`docs/roadmap/一天标准工作流程.md` 末节）：跨过一个完整阶段、往返超约 50 轮、或历史明显偏长时，在回复末尾给一行提醒＋接力节位置＋可粘开场词；⛔ 只说时机，不提额度。
 
 
 ## 开场词（复制即用）
 
 ```
-[Mac]0918G-HR业务线接力
-【设置】执行环境: Cowork ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（Cowork 无 worktree，只做文档、编排与派单）｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）
-读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 的「🔴 新 session 先看这一节（2026-09-18 08:5x）」恢复上下文，然后按【三、下一步】继续。
+[Mac]0918AO-HR业务线接力
+【设置】执行环境: Cowork ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（Cowork 无 worktree，只做文档、编排与派单）｜ 审批模式: 逐项询问 ｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）
+读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 的「🔴 新 session 先看这一节（2026-09-18 20:4x）」恢复上下文，然后按【四、下一步】继续。
 ```
 
 > 🔴 **Cowork 接力开场词同样是 opener，头两行＝标题行 + 【设置】行**（CLAUDE.md「CC 与 Cowork 两端同等适用」；09-09 Shao Peishen 指出漏了一次）。本 session 派出去的 opener，`派发` 一律写 `Cowork·HR业务线-接力0909Q`。
