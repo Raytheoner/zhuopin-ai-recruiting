@@ -192,6 +192,7 @@ def test_probe_p1_livekit_returns_blocking_result_on_connect_error():
     (livekit.rtc.room.ConnectError: engine: signal failure: transport timed out),
     without spinning up a real livekit-server or making a real connection.
     """
+    pytest.importorskip("livekit.rtc")
     from scripts.probe_m3_voice import probe_p1_livekit
 
     fake_proc = MagicMock()
@@ -295,6 +296,7 @@ def test_probe_p2_funasr_success_path_computes_latency_metrics(tmp_path: Path):
     mock.patch works fine on it) so the test doesn't need a real model download or a
     real audio file.
     """
+    pytest.importorskip("funasr")
     import numpy as np
     from types import SimpleNamespace
 
@@ -330,6 +332,7 @@ def test_probe_p2_funasr_blocks_when_no_chunk_ever_produces_text(tmp_path: Path)
     """The 'ran all chunks but got no text' branch — distinct from the module-missing
     and missing-sample branches, and from the try/except around model/IO failures.
     """
+    pytest.importorskip("funasr")
     import numpy as np
     from types import SimpleNamespace
 
@@ -536,6 +539,7 @@ def test_probe_p2_funasr_blocks_on_model_or_io_failure_instead_of_raising(tmp_pa
     docs/m3-voice-probe.md is left stale while the operator sees a raw traceback.
     Mirrors the existing probe_p1_livekit connect-failure regression test.
     """
+    pytest.importorskip("funasr")
     from types import SimpleNamespace
 
     from scripts.probe_m3_voice import probe_p2_funasr
