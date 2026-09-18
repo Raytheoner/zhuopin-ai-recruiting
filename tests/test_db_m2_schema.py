@@ -5,7 +5,9 @@
   ② 老库（复制 .51 demo.db 结构）升级后既有表一行不改 —— Task 7 统一补
   ③ 全部新增 CHECK 的反证（直接 INSERT，绕过应用层）—— 各表在各自任务里先写，Task 7 汇总检查覆盖面
 """
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -628,3 +630,127 @@ def test_hr_account_username_is_unique(conn):
             "INSERT INTO hr_account (id, username, password_hash, password_salt) "
             "VALUES ('acc-2', 'tangliping', 'h2', 's2')"
         )
+
+
+# ── 老库升级：.51 现网 demo.db 在 U1 上线前的真实形态 ─────────────────────
+#
+# 基线不是从 SCHEMA 裁剪，而是刻意固定成一份历史快照——它代表"U1 上线前，
+# .51 上的库长什么样"，不随 SCHEMA 一起演进（与 tests/test_db_migration.py
+# 顶部注释同一理由：派生的话测试会随 SCHEMA 一起演进，永远测不出"老库升级
+# 不了"这个真正要防的故障）。快照文件 2026-09-18 取自生产 .51 的
+# demo.db（sqlite_master.sql，只含 DDL、不含任何数据行），见
+# tests/fixtures/zp51_demo_db_schema_pre_u1.sql。
+
+_LEGACY_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "zp51_demo_db_schema_pre_u1.sql"
+
+_LEGACY_TABLES = (
+    "job", "job_profile", "conversation", "effect_log", "outbox",
+    "checkpoints", "writes",
+    "analysis_run", "criterion_score", "pending_approval", "human_review",
+    "hard_requirement",
+)
+
+_M2_U1_NEW_TABLES = (
+    "candidate", "resume", "resume_text_span", "application", "stage",
+    "application_stage_history", "rejection_record", "resume_access_log",
+    "field_review_queue", "screening_flag", "resume_embedding",
+    "eval_import_batch", "eval_sample", "eval_annotation", "hr_account",
+)
+
+
+def _legacy_db(tmp_path):
+    c = get_connection(str(tmp_path / "legacy_pre_u1.db"))
+    ddl = _LEGACY_FIXTURE_PATH.read_text(encoding="utf-8")
+    # sqlite_sequence 是 SQLite 内建表（AUTOINCREMENT 列——本快照里是
+    # outbox.id——建表时自动创建），手工 CREATE 会报 "object name reserved
+    # for internal use"，加载快照前把这条语句整行摘掉即可，其余原样
+    # executescript（该调用本身就支持一次跑多条以 ; 分隔的语句，含内嵌注释）。
+    ddl = ddl.replace("CREATE TABLE sqlite_sequence(name,seq);\n", "")
+    c.executescript(ddl)
+    c.execute("INSERT INTO job (id, title, status) VALUES ('old-job', '采购工程师', 'approved')")
+    c.execute(
+        "INSERT INTO job_profile (id, job_id, version, status, profile_json) "
+        "VALUES ('old-job-v1', 'old-job', 1, 'approved', ?)",
+        (json.dumps({"job_title": "采购工程师"}, ensure_ascii=False),),
+    )
+    c.execute(
+        "INSERT INTO human_review (id, job_id, profile_version, decision_type, reviewer) "
+        "VALUES ('hr-1', 'old-job', 1, 'approved', 'someone')"
+    )
+    c.commit()
+    return c
+
+
+def _legacy_sqlite_master_sql(conn: sqlite3.Connection, known_names: set[str]) -> dict[str, str]:
+    """既有表 + 既有索引的建表/建索引原文，按名字过滤到升级前就存在的对象。
+
+    用于比对 init_schema 前后一字不改——列集合相同不代表 DDL 原文相同（比如
+    CHECK 约束、DEFAULT、REFERENCES 措辞都不体现在 PRAGMA table_info 里）。
+    """
+    rows = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    return {name: sql for name, sql in rows if name in known_names}
+
+
+def test_legacy_pre_u1_db_gains_all_new_tables_after_init_schema(tmp_path):
+    conn = _legacy_db(tmp_path)
+
+    init_schema(conn)
+
+    for table in _M2_U1_NEW_TABLES:
+        assert _table_exists(conn, table), f"{table} 应该在 init_schema 后出现"
+
+
+def test_legacy_pre_u1_db_existing_tables_and_rows_are_untouched(tmp_path):
+    conn = _legacy_db(tmp_path)
+    before_columns = {t: _columns(conn, t) for t in _LEGACY_TABLES}
+    before_counts = {
+        t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        for t in _LEGACY_TABLES
+    }
+    known_names = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    before_sql = _legacy_sqlite_master_sql(conn, known_names)
+
+    init_schema(conn)
+
+    after_columns = {t: _columns(conn, t) for t in _LEGACY_TABLES}
+    after_counts = {
+        t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        for t in _LEGACY_TABLES
+    }
+    after_sql = _legacy_sqlite_master_sql(conn, known_names)
+
+    assert after_columns == before_columns
+    assert after_counts == before_counts
+    # "既有表一行不改"的字面判据：升级前就存在的每张表、每个索引，其
+    # sqlite_master.sql 原文必须逐字相同——列集合相同不足以覆盖 CHECK/
+    # DEFAULT/REFERENCES 措辞被悄悄改写的情况。
+    assert after_sql == before_sql
+
+
+def test_added_columns_tuple_still_only_touches_job_profile():
+    """reviewer 机械判据：本单元 diff 不得往 _ADDED_COLUMNS 里塞新表——
+    新表一律走 CREATE TABLE IF NOT EXISTS。"""
+    from app.storage.db import _ADDED_COLUMNS
+
+    tables_in_added_columns = {row[0] for row in _ADDED_COLUMNS}
+    assert tables_in_added_columns == {"job_profile"}
+
+
+def test_fresh_and_legacy_upgraded_schemas_have_identical_m2_u1_tables(tmp_path):
+    """新库直接 init_schema() 与老库升级后，M2 U1 新表的列集合必须完全一致——
+    两条路径不能产生两种不同形状的表。"""
+    fresh = get_connection(str(tmp_path / "fresh.db"))
+    init_schema(fresh)
+
+    legacy = _legacy_db(tmp_path)
+    init_schema(legacy)
+
+    for table in _M2_U1_NEW_TABLES:
+        assert _columns(fresh, table) == _columns(legacy, table), table
