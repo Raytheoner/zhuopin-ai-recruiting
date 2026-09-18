@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
@@ -33,6 +33,8 @@ from app.graph.nodes import (
     revision_count,
 )
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
+from app.storage.auth_session import create_session, delete_session
+from app.storage.hr_account import verify_password
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
     RequestIdMiddleware,
@@ -47,6 +49,17 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_TEMPLATE_PATH = STATIC_DIR / "index.html"
+
+
+class LoginRequest(BaseModel):
+    # ⚠️ 必须是模块级类，不能嵌进 create_app() 内部：本文件顶部有
+    # `from __future__ import annotations`，函数签名注解一律延迟求值成字符串，
+    # FastAPI 解析 `req: LoginRequest` 时若 LoginRequest 只存在于某次调用的
+    # 函数局部命名空间里，get_type_hints() 解不出这个名字，会静默把它当成
+    # 查询参数处理而不是请求体——login 路由因此对着一个不存在的 query
+    # 字段返回 422，而不是按预期校验请求体。
+    username: str
+    password: str
 
 
 class CreateJobRequest(BaseModel):
@@ -101,9 +114,24 @@ def _render_index(root_path: str) -> str:
     return html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">')
 
 
-def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") -> FastAPI:
+def create_app(
+    *,
+    db_path: str,
+    gateway_factory: Callable,
+    root_path: str = "",
+    resume_storage_dir: str | None = None,
+) -> FastAPI:
     conn = get_connection(db_path)
     init_schema(conn)
+
+    # 提前拉入的最小 constructor 装配（本任务只做到"目录存在"，上传路由与解析
+    # 摄取逻辑属于后续任务范围）：不传时落回 Settings.resume_storage_dir 的
+    # 默认值，测试可用 tmp_path 显式覆盖，避免把上传文件真的写进仓库工作区。
+    from app.config import get_settings
+
+    _resume_storage_dir = Path(resume_storage_dir or get_settings().resume_storage_dir)
+    _resume_storage_dir.mkdir(parents=True, exist_ok=True)
+
     channel = WebChannel(conn)
 
     # gateway 与 graph 的构造从"每次请求一次"上提到"应用启动一次"，与 conn/
@@ -126,12 +154,44 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         graph.checkpointer.conn.close()
 
     app = FastAPI(title="卓品智能招聘助手 · Demo", lifespan=_lifespan)
-    app.add_middleware(AuthMiddleware)
+    app.add_middleware(AuthMiddleware, conn=conn, root_path=root_path)
     # 后 add 的更靠外：RequestIdMiddleware 必须包住 AuthMiddleware，
     # 否则鉴权层自己产生的日志与异常拿不到请求标识。
     app.add_middleware(RequestIdMiddleware)
     app.add_exception_handler(Exception, unhandled_exception_handler)
     router = APIRouter()
+
+    @router.post("/api/auth/login")
+    def login(req: LoginRequest, response: Response):
+        row = conn.execute(
+            "SELECT id, password_hash, password_salt FROM hr_account WHERE username = ?",
+            (req.username.strip(),),
+        ).fetchone()
+        if row is None or not verify_password(req.password, row[1], row[2]):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        token = create_session(conn, hr_account_id=row[0])
+        response.set_cookie(
+            "hr_session",
+            token,
+            httponly=True,
+            samesite="lax",
+            path=root_path or "/",
+        )
+        return {"ok": True}
+
+    @router.post("/api/auth/logout")
+    def logout(request: Request, response: Response):
+        token = request.cookies.get("hr_session")
+        if token:
+            delete_session(conn, token)
+        response.delete_cookie("hr_session", path=root_path or "/")
+        return {"ok": True}
+
+    @router.get("/login")
+    def login_page():
+        html = (STATIC_DIR / "login.html").read_text(encoding="utf-8")
+        base_href = f"{root_path}/" if root_path else "/"
+        return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
 
     def _response_payload(message) -> dict:
         """

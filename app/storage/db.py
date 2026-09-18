@@ -594,6 +594,20 @@ CREATE TABLE IF NOT EXISTS hr_account (
     password_salt TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 会话（design D12：鉴权从空壳换成本地账号）。id 本身就是不透明的高熵令牌
+-- （secrets.token_urlsafe(32)，256 bit），直接当 Cookie 值使用——校验靠"这条
+-- 连接查得到这一行"而不是签名验证，与 Django 的 session 表是同一手法。
+-- ⛔ 不加 last_seen_at 之类的滑动续期列：会话固定 TTL，简单够用（app/storage/
+-- auth_session.py 的 SESSION_TTL_SECONDS）。
+CREATE TABLE IF NOT EXISTS hr_session (
+    id TEXT PRIMARY KEY NOT NULL,
+    hr_account_id TEXT NOT NULL REFERENCES hr_account(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
 """
 
 
