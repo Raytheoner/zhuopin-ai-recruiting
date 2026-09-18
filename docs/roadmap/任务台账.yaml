@@ -1,11 +1,11 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 505
+  条目数: 506
   按状态:
-    待开: 237
-    在跑: 10
-    完成: 172
+    待开: 238
+    在跑: 8
+    完成: 174
     阻塞: 86
   阻塞·决策: 49
   阻塞·外部: 35
@@ -32,8 +32,7 @@ summary:
   - relay:AT-4
   - relay:H-4
   - relay:R-10
-  - relay:R-11
-  - relay:R-12
+  - relay:R-13
   - relay:R-6
   - voice-structured-interview/U2/plan
   ready:
@@ -48,6 +47,7 @@ summary:
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
+  - relay:R-13
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - offer-generation/U1/plan ← G2 `offer-generation`（已答·未放行）
@@ -7527,17 +7527,14 @@ tasks:
   触碰区:
   - app/graph/build.py
   - tests/test_effect_idempotency_suite.py
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: EFFECT_NODE_MANIFEST 补上 effect_persist_flags，build_recipes() 加对应崩溃-恢复配方，tests/test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree 转绿
   来源: docs/session接力.md:75
   可见: false
-  备注: 0918 dispatcher 补登记——scripts/dispatcher_backlog.py 的 TAG4_RE 只认「【谁做：x】【状态：y】…」内联冒号格式，session接力.md 当前四标签行已全面转为「【谁做】x｜【状态】y｜…」分隔格式，正则 0 匹配（见 Q-47），故手工补条目防止此真回归漏派；下次唤醒若正则修复产生同语义新条目，两条去重合并；已派
-    0918AF（dispatcher-20260918-162948）
-  conflicts:
-    状态:
-      台账: 在跑
-      真身: 来源已消失或已勾选
+  备注: 0918 dispatcher 补登记——scripts/dispatcher_backlog.py 的 TAG4_RE 只认「【谁做：x】【状态：y】…」内联冒号格式，session接力.md 当前四标签行已全面转为「【谁做】x｜【状态】y｜…」分隔格式，正则 0 匹配（见 Q-47），故手工补条目防止此真回归漏派；已派
+    0918AF（dispatcher-20260918-162948），已确认合入 main：commit f1c0c14，`tests/test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree` 转绿，全量回归 3415 passed（0918
+    dispatcher 复核，2026-09-18）；生成器的 conflicts 提示（真身=来源已消失或已勾选）系旧 session接力.md 行号漂移的误报，与本条完成状态无关
 - id: relay:R-12
   场景: M3
   阶段: build
@@ -7546,15 +7543,32 @@ tasks:
   触碰区:
   - requirements-m3-u0.txt
   - tests/test_probe_m3_voice.py
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: requirements-m3-u0.txt 装进共享 venv，或测试改 pytest.importorskip 使懒加载生效，4 条转绿或规范 skip；本条判据成立前 M3 U0/U1 建造 lane 不得开工
   来源: docs/session接力.md:76
   可见: false
-  备注: 0918 dispatcher 补登记，同 relay:R-11 说明（TAG4_RE 格式漂移未解析，见 Q-47）；本身不依赖外部输入，是 M3 U0/U1 建造 lane 的前置环境准备，可现在直接派车；已派 0918AG（dispatcher-20260918-162948）
+  备注: 0918 dispatcher 补登记，同 relay:R-11 说明（TAG4_RE 格式漂移未解析，见 Q-47）；本身不依赖外部输入，是 M3 U0/U1 建造 lane 的前置环境准备；已派 0918AG（dispatcher-20260918-162948），首跑因 main 并发脏＋分叉留步 PARTIAL（分支已
+    push 未合），0918 dispatcher 复核 main 已清 ⇒ 在隔离 worktree 内 rebase 到 origin/main（commit a7e417a）、单文件 47 passed/4 skipped＋全量 3415 passed 复跑通过后 push 到 main、删除临时分支与远端 lane
+    分支；生成器的 conflicts 提示（真身=来源已消失或已勾选）系旧 session接力.md 行号漂移的误报，与本条完成状态无关
+- id: relay:R-13
+  场景: 构建自动化
+  阶段: build
+  标题: scripts/dispatcher_backlog.py::_match_plans 前缀回退匹配误把 voice-structured-interview 的 U1 plan 当成 interview-scheduling 的 U1 plan
+  依赖: []
+  触碰区:
+  - scripts/dispatcher_backlog.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: _match_plans() 对 change="interview-scheduling" 取 prefix="interview"，正则 `(?<![\w])interview-unit1(?!\.?\d)` 命中 `2026-09-18-voice-structured-interview-unit1-data-model`（该文件名内部子串
+    `...structured-interview-unit1-data-model` 的 `-` 满足非单词边界），导致 interview-scheduling/U1/plan 被误判「完成」、interview-scheduling/1.1–1.7 依赖被错接到该外部 plan 的 seg1–3 从而假阳性 ready；需收紧前缀回退匹配（如要求
+    prefix 后立即衔接 change 全名的其余部分，或限定只在 change 本身不含连字符时才用 prefix 回退）＋ 补回归测试固定此用例，并重跑 dispatcher_backlog.py 核对 interview-scheduling/U1/plan 与 1.1–1.7 状态改回正确值
+  来源: 0918 dispatcher 复核 ready 集时手工发现（interview-scheduling/1.1–1.7 与 interview-scheduling/U1/plan 的 conflicts）
+  可见: false
+  备注: 0918 dispatcher 发现，未派车（属工具链代码缺陷，需走正式 build lane 修复＋测试，不在本次台账刷新范围内）；修复前 interview-scheduling/1.1–1.7 ⛔ 不得当真 ready 派车，即便 --show ready 仍会列出
   conflicts:
     状态:
-      台账: 在跑
+      台账: 待开
       真身: 来源已消失或已勾选
 - id: relay:R-6
   场景: M0
