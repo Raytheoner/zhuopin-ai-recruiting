@@ -133,7 +133,7 @@ class RecorderAuditHook:
         latency_ms: float,
         attempt: int,
         audit_context: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str:
         context, rejected_keys = _split_context(audit_context)
 
         notes: list[str] = []
@@ -227,6 +227,8 @@ class RecorderAuditHook:
                 "是留痕里唯一能被调用方塞进任意内容的地方。"
                 f"（本次调用已按已登记的键留痕，id={event.id}）"
             )
+
+        return event.id
 
     def _write(self, event: DecisionEvent) -> bool:
         """
