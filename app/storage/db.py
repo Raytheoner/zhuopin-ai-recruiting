@@ -650,6 +650,58 @@ CREATE TABLE IF NOT EXISTS hr_session (
 );
 
 CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
+-- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
+-- "老库缺列"这一种情况，新表不需要它。.51 现网 demo.db 既有表一行不改，
+-- 无数据迁移（design.md Migration Plan 第 1 条）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- prep 出题快照（interview-prep-question-engine spec「题目快照版本化且可
+-- 追溯到输入」）。resume_run_id 可空：spec「简历评分尚未完成」场景下 prep
+-- 只按画像生成通用题目，没有简历评分 run 可关联；gen_run_id 不可空——不管
+-- 有没有简历弱点输入，prep 生成本身都是一次 AI 调用，必须留痕（工程铁律 3）。
+-- status 三态对应 spec「业务经理确认后才冻结」的状态机：draft（待确认）/
+-- frozen（已冻结，开场校验只认这个状态）/ expired（画像升版后旧版本过期）。
+CREATE TABLE IF NOT EXISTS prep_snapshot (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    version INTEGER NOT NULL,
+    profile_version INTEGER NOT NULL,
+    resume_run_id TEXT REFERENCES analysis_run(id),
+    gen_run_id TEXT NOT NULL REFERENCES analysis_run(id),
+    confirmed_by TEXT,
+    confirmed_at TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'frozen', 'expired')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_snapshot_application_version
+    ON prep_snapshot (application_id, version);
+
+-- prep 题目（同一 spec「按画像与简历弱点生成题目」「难度曲线」）。origin 记
+-- 「AI 生成」还是「AI 生成、人工修改」（spec「AI 生成标识」的存储层落点）；
+-- ai_text 只在 origin='ai_edited' 时有值，保留人工改写前的原文可追溯。
+-- (snapshot_id, seq) 唯一：同一份快照内题序不重复，也是 live 段"按冻结题序
+-- 出题"的天然索引。
+CREATE TABLE IF NOT EXISTS prep_question (
+    id TEXT PRIMARY KEY NOT NULL,
+    snapshot_id TEXT NOT NULL REFERENCES prep_snapshot(id),
+    seq INTEGER NOT NULL,
+    dimension TEXT NOT NULL,
+    difficulty TEXT NOT NULL,
+    text TEXT NOT NULL,
+    rubric_json TEXT NOT NULL,
+    follow_ups_json TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'ai' CHECK (origin IN ('ai', 'ai_edited')),
+    ai_text TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_question_snapshot_seq
+    ON prep_question (snapshot_id, seq);
 """
 
 
