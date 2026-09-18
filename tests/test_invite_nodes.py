@@ -10,6 +10,7 @@ import pytest
 
 from app.graph.invite_nodes import (
     ContactVaultUnavailableError,
+    InviteTokenInvalidError,
     LiveInterviewNotEnabledError,
     assert_invite_issuance_allowed,
     compute_new_invite_token,
@@ -17,6 +18,7 @@ from app.graph.invite_nodes import (
     effect_create_interview_session,
     effect_issue_invite,
     load_invite_expiry_days,
+    open_invite,
 )
 from app.storage.db import get_connection, init_schema
 
@@ -187,3 +189,80 @@ class TestInviteIssuance:
             (session_id,),
         ).fetchall()
         assert [e[0] for e in events] == ["issued", "reissued"]
+
+
+def _issue_token(conn, session_id, job_id="j1"):
+    from app.graph.invite_nodes import compute_new_invite_token, effect_issue_invite
+
+    token, token_hash, expires_at = compute_new_invite_token(conn, job_id=job_id)
+    effect_issue_invite(
+        conn, thread_id=session_id, business_key=token_hash,
+        session_id=session_id, token_hash=token_hash, expires_at=expires_at,
+    )
+    return token
+
+
+def _new_pending_session(conn):
+    _freeze_prep(conn)
+    session = compute_new_session(
+        conn, application_id="app1", prep_snapshot_version=1, sample_class="internal_sim"
+    )
+    return effect_create_interview_session(conn, thread_id="app1", business_key="req1", session=session)
+
+
+class TestOpenInvite:
+    def test_first_open_transitions_to_in_progress(self, conn):
+        session_id = _new_pending_session(conn)
+        token = _issue_token(conn, session_id)
+
+        opened_id = open_invite(conn, token)
+
+        assert opened_id == session_id
+        status = conn.execute(
+            "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()[0]
+        assert status == "in_progress"
+
+    def test_second_open_rejected_with_unified_error(self, conn):
+        session_id = _new_pending_session(conn)
+        token = _issue_token(conn, session_id)
+        open_invite(conn, token)
+
+        with pytest.raises(InviteTokenInvalidError):
+            open_invite(conn, token)
+
+        events = conn.execute(
+            "SELECT event_type FROM interview_invite_event WHERE session_id = ? "
+            "AND event_type = 'reused_access'",
+            (session_id,),
+        ).fetchall()
+        assert len(events) == 1
+
+    def test_unknown_token_rejected(self, conn):
+        with pytest.raises(InviteTokenInvalidError):
+            open_invite(conn, "this-token-was-never-issued")
+
+    def test_expired_token_rejected_and_logged(self, conn):
+        session_id = _new_pending_session(conn)
+        from app.graph.invite_nodes import compute_new_invite_token, effect_issue_invite
+
+        token, token_hash, _ = compute_new_invite_token(conn, job_id="j1")
+        past = "2020-01-01T00:00:00+00:00"
+        effect_issue_invite(
+            conn, thread_id=session_id, business_key=token_hash,
+            session_id=session_id, token_hash=token_hash, expires_at=past,
+        )
+
+        with pytest.raises(InviteTokenInvalidError):
+            open_invite(conn, token)
+
+        events = conn.execute(
+            "SELECT event_type FROM interview_invite_event WHERE session_id = ? "
+            "AND event_type = 'expired_access'",
+            (session_id,),
+        ).fetchall()
+        assert len(events) == 1
+        status = conn.execute(
+            "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()[0]
+        assert status == "pending"  # 过期打开不改变场次状态

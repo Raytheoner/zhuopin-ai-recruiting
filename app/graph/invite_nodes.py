@@ -169,3 +169,75 @@ def effect_issue_invite(
         "INSERT INTO interview_invite_event (id, session_id, event_type, detail) VALUES (?, ?, ?, ?)",
         (str(uuid.uuid4()), session_id, "reissued" if was_reissue else "issued", token_hash),
     )
+
+
+# ── 4.2：令牌校验端点 ────────────────────────────────────────────────
+
+class InviteTokenInvalidError(Exception):
+    """统一失效页情形：令牌未知、已用、已过期。⛔ 三种原因对候选人展示同一个
+    页面文案（spec「MUST NOT 泄露场次或候选人信息」），区分只在留痕里。"""
+
+
+def find_session_by_token(conn: sqlite3.Connection, token: str) -> str | None:
+    token_hash = _hash_token(token)
+    row = conn.execute(
+        "SELECT id FROM interview_session WHERE invite_token_hash = ?", (token_hash,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+@idempotent_effect("effect_log_invite_access_denied")
+def effect_log_invite_access_denied(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, reason: str
+) -> None:
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type) VALUES (?, ?, ?)",
+        (str(uuid.uuid4()), session_id, reason),
+    )
+
+
+@idempotent_effect("effect_open_invite")
+def effect_open_invite(conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str) -> None:
+    """首次打开：status pending → in_progress。这一步状态转移本身就是"令牌
+    已使用"的落点——第二次打开时 open_invite() 会看到 status != 'pending'
+    并拒绝，等价于 spec 要求的"打开即失效"，不需要额外的 used_at 列。"""
+    conn.execute(
+        "UPDATE interview_session SET status = 'in_progress' WHERE id = ? AND status = 'pending'",
+        (session_id,),
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type) VALUES (?, ?, 'opened')",
+        (str(uuid.uuid4()), session_id),
+    )
+
+
+def open_invite(conn: sqlite3.Connection, token: str) -> str:
+    """L4 编排：查找 → 校验过期 → 校验未用 → 标记已用，四步必须在同一次
+    请求内顺序发生（单连接 SQLite，无并发行锁问题，见 app/storage/db.py
+    的单连接模型）。返回 session_id；任何一步不满足抛 InviteTokenInvalidError。
+    """
+    session_id = find_session_by_token(conn, token)
+    if session_id is None:
+        raise InviteTokenInvalidError("令牌无效")
+
+    row = conn.execute(
+        "SELECT invite_expires_at, status FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    expires_at_raw, status = row
+
+    if _utcnow() > _parse_iso(expires_at_raw):
+        effect_log_invite_access_denied(
+            conn, thread_id=session_id, business_key=f"expired:{uuid.uuid4().hex}",
+            session_id=session_id, reason="expired_access",
+        )
+        raise InviteTokenInvalidError("令牌已过期")
+
+    if status != "pending":
+        effect_log_invite_access_denied(
+            conn, thread_id=session_id, business_key=f"reused:{uuid.uuid4().hex}",
+            session_id=session_id, reason="reused_access",
+        )
+        raise InviteTokenInvalidError("令牌已使用")
+
+    effect_open_invite(conn, thread_id=session_id, business_key="open", session_id=session_id)
+    return session_id
