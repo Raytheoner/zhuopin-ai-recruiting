@@ -17,7 +17,11 @@ def _write_docx(path: Path, paragraphs: list[str]) -> Path:
 
 
 def test_readable_docx_returns_spans(tmp_path):
-    path = _write_docx(tmp_path / "a.docx", ["张三", "工作年限：5年", "技能：Python"])
+    path = _write_docx(tmp_path / "a.docx", [
+        "张三",
+        "工作年限：5年，现就职于阿里巴巴从事后端开发工作",
+        "技能：Python、Java、Go、SQL、Docker等多种技术栈，熟悉分布式系统设计"
+    ])
     result = ingest_resume_text(path)
     assert result.readable is True
     assert result.kind == "docx"
@@ -42,6 +46,29 @@ def test_unreadable_when_ocr_unavailable(tmp_path, monkeypatch):
     result = ingest_resume_text(fake_pdf, ocr=_raise_ocr_unavailable)
     assert result.readable is False
     assert result.spans == []
+
+
+def test_unreadable_when_text_too_short(tmp_path, monkeypatch):
+    """文本太短（<50字）路径：extract_text 返回 readable=False ⇒ 转成人工队列。"""
+    import app.parsing.resume_ingest as ingest_mod
+    from app.parsing.extract_text import ExtractedText
+
+    def _mock_extract(_path, *, ocr=None):
+        return ExtractedText(
+            text="x",
+            kind="docx",
+            effective_chars=1,
+            readable=False
+        )
+
+    monkeypatch.setattr(ingest_mod, "extract_text", _mock_extract)
+    fake_docx = tmp_path / "short.docx"
+    fake_docx.write_bytes(b"fake docx")
+    result = ingest_resume_text(fake_docx)
+    assert result.readable is False
+    assert result.spans == []
+    assert result.raw_text == "x"
+    assert result.kind == "docx"
 
 
 def test_unsupported_type_raises(tmp_path):

@@ -32,8 +32,11 @@ def ingest_resume_text(
     except OcrUnavailable:
         return IngestResult(readable=False, raw_text="", spans=[], kind="pdf_scan")
 
-    # Successfully extracted text: generate spans and mark as readable.
-    # OcrUnavailable is the only condition that makes it unreadable.
+    if not extracted.readable:
+        return IngestResult(
+            readable=False, raw_text=extracted.text, spans=[], kind=extracted.kind
+        )
+
     spans = split_into_spans(extracted.text)
     return IngestResult(
         readable=True, raw_text=extracted.text, spans=spans, kind=extracted.kind
