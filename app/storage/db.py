@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS job (
     title TEXT NOT NULL,
     department TEXT,
     status TEXT NOT NULL DEFAULT 'drafting',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    parse_confidence_threshold REAL NOT NULL DEFAULT 0.7
 );
 
 CREATE TABLE IF NOT EXISTS job_profile (
@@ -294,10 +295,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_name_phone
 -- MUST NOT 以空字段进入后续判定与排序）。
 --
 -- parsed_json 存 app/schemas/resume_fields.py::ResumeFields 的 model_dump_json()；
--- parser_version 支持"同一份简历用新版本解析器重解析，新旧两版并存"
--- （resume-parsing spec「解析留痕与版本」）——重解析在 U2 会插入**新的 resume
--- 行**而不是覆盖本行，parser_version 是区分同一 content_sha256 下哪次解析
--- 结果最新的依据。
+-- parser_version/parse_confidence/parsed_json 三列缓存"最新一次解析结果"，
+-- 每份历史解析（含重解析）的完整记录在 resume_parse_version 表（U2 tasks 3.8），
+-- 工作台默认读本表三列即最新版，查历史版本才查 resume_parse_version。
+-- raw_text 是抽取出的全文（app/parsing/extract_text.py::ExtractedText.text），
+-- resume_text_span 的 start/end 偏移量都是相对这份原文——字段校对页的高亮
+-- 必须对着这份原文切字符串，不能对着任何"重新拼接"的文本切（偏移会对不上）。
 CREATE TABLE IF NOT EXISTS resume (
     id TEXT PRIMARY KEY NOT NULL,
     job_id TEXT NOT NULL REFERENCES job(id),
@@ -311,6 +314,7 @@ CREATE TABLE IF NOT EXISTS resume (
     parsed_json TEXT,
     parse_confidence REAL,
     parser_version TEXT,
+    raw_text TEXT,
     uploaded_by TEXT NOT NULL,
     uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -336,6 +340,21 @@ CREATE TABLE IF NOT EXISTS resume_text_span (
     end INTEGER NOT NULL,
     text TEXT NOT NULL,
     PRIMARY KEY (resume_id, span_id)
+);
+
+-- 解析结果的完整历史（resume-parsing spec「解析留痕与版本」）。resume 表的
+-- parsed_json/parse_confidence/parser_version 三列缓存"当前最新版"，本表存
+-- 每一次解析尝试的完整记录，旧版本永久保留、不删除、不覆盖。
+CREATE TABLE IF NOT EXISTS resume_parse_version (
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    parser_version TEXT NOT NULL,
+    parsed_json TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    model_configured TEXT NOT NULL,
+    model_response TEXT,
+    prompt_version TEXT NOT NULL,
+    parsed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (resume_id, parser_version)
 );
 
 -- 阶段池：全局共享，stage_type 是语义标签（逻辑只认类型），name 是可自定义
@@ -594,6 +613,20 @@ CREATE TABLE IF NOT EXISTS hr_account (
     password_salt TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 会话（design D12：鉴权从空壳换成本地账号）。id 本身就是不透明的高熵令牌
+-- （secrets.token_urlsafe(32)，256 bit），直接当 Cookie 值使用——校验靠"这条
+-- 连接查得到这一行"而不是签名验证，与 Django 的 session 表是同一手法。
+-- ⛔ 不加 last_seen_at 之类的滑动续期列：会话固定 TTL，简单够用（app/storage/
+-- auth_session.py 的 SESSION_TTL_SECONDS）。
+CREATE TABLE IF NOT EXISTS hr_session (
+    id TEXT PRIMARY KEY NOT NULL,
+    hr_account_id TEXT NOT NULL REFERENCES hr_account(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
 """
 
 
@@ -622,6 +655,14 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("job_profile", "written_fields", "TEXT NOT NULL DEFAULT '[]'"),
     ("job_profile", "llm_response_model", "TEXT"),
     ("job_profile", "asked_questions", "TEXT NOT NULL DEFAULT '[]'"),
+    # design D5：置信度阈值是岗位级配置，默认 0.7 起步（U0 实测后由 U4 定终值）。
+    ("job", "parse_confidence_threshold", "REAL NOT NULL DEFAULT 0.7"),
+    # M2 U2 tasks 3.3：抽取出的简历全文。resume 表在 U1 就已经建好并可能已经
+    # 存在于任何一个 U1 之后建的库里（含 .51 的 demo.db），U2 只往它的
+    # CREATE TABLE 里加了 raw_text 一列——CREATE TABLE IF NOT EXISTS 对已存在
+    # 的表彻底无效，不在这里登记的话老库上每一次上传都会在
+    # "UPDATE resume SET raw_text = ?" 上 500（final review 发现）。
+    ("resume", "raw_text", "TEXT"),
 )
 
 

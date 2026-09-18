@@ -72,6 +72,8 @@ def test_resume_table_exists_with_expected_columns(conn):
     assert _columns(conn, "resume") == {
         "id", "job_id", "sample_class", "file_name", "content_sha256",
         "status", "parsed_json", "parse_confidence", "parser_version",
+        # M2 U2 task 3：抽取出的全文，resume_text_span 的偏移量相对这份原文。
+        "raw_text",
         "uploaded_by", "uploaded_at",
     }
 
@@ -703,26 +705,37 @@ def test_legacy_pre_u1_db_gains_all_new_tables_after_init_schema(tmp_path):
 
 
 def test_legacy_pre_u1_db_existing_tables_and_rows_are_untouched(tmp_path):
+    """
+    "M2 U1 不得动老表"的字面判据。job 表是本判据的刻意例外：M2 U2 task 3
+    （design D5）经 _ADDED_COLUMNS 给 job 合法新增 parse_confidence_threshold，
+    这是被设计文档认可的加列机制，不是本测试要拦的"未声明改动"。job 单独
+    验证放在 tests/test_db_migration.py::test_job_columns_are_pinned（钉住加列
+    后的新列集合）与 tests/test_db_m2_u2_schema.py（专门验证这次迁移本身），
+    这里只把 job 从"列集合/行数/DDL 原文逐字不变"的老表未触碰判据里摘出去，
+    其余老表的保护力度不变。
+    """
+    untouched_tables = tuple(t for t in _LEGACY_TABLES if t != "job")
     conn = _legacy_db(tmp_path)
-    before_columns = {t: _columns(conn, t) for t in _LEGACY_TABLES}
+    before_columns = {t: _columns(conn, t) for t in untouched_tables}
     before_counts = {
         t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-        for t in _LEGACY_TABLES
+        for t in untouched_tables
     }
     known_names = {
         row[0]
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
+        if row[0] != "job"
     }
     before_sql = _legacy_sqlite_master_sql(conn, known_names)
 
     init_schema(conn)
 
-    after_columns = {t: _columns(conn, t) for t in _LEGACY_TABLES}
+    after_columns = {t: _columns(conn, t) for t in untouched_tables}
     after_counts = {
         t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-        for t in _LEGACY_TABLES
+        for t in untouched_tables
     }
     after_sql = _legacy_sqlite_master_sql(conn, known_names)
 
@@ -736,11 +749,21 @@ def test_legacy_pre_u1_db_existing_tables_and_rows_are_untouched(tmp_path):
 
 def test_added_columns_tuple_still_only_touches_job_profile():
     """reviewer 机械判据：本单元 diff 不得往 _ADDED_COLUMNS 里塞新表——
-    新表一律走 CREATE TABLE IF NOT EXISTS。"""
+    新表一律走 CREATE TABLE IF NOT EXISTS。
+
+    M2 U2 task 3（design D5）往 _ADDED_COLUMNS 加了 job 的
+    parse_confidence_threshold——job 是老表（SCHEMA 里一直有 CREATE TABLE IF
+    NOT EXISTS job），不是新表，不违反这条护栏的本意，预期表集合相应放宽。
+
+    final review 后再放宽到含 resume：resume 是 M2 U1 建的表，U1 合并之后建的
+    任何库里它都已经存在，U2 给它加的 raw_text 属于"老表缺列"，必须登记进
+    _ADDED_COLUMNS 才补得上（漏登记的话老库上每次上传都 500）。护栏本意不变：
+    进这个集合的表必须在 SCHEMA 里已有 CREATE TABLE IF NOT EXISTS。
+    """
     from app.storage.db import _ADDED_COLUMNS
 
     tables_in_added_columns = {row[0] for row in _ADDED_COLUMNS}
-    assert tables_in_added_columns == {"job_profile"}
+    assert tables_in_added_columns == {"job_profile", "job", "resume"}
 
 
 def test_fresh_and_legacy_upgraded_schemas_have_identical_m2_u1_tables(tmp_path):

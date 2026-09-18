@@ -1,4 +1,4 @@
-**进度：7/72**（2026-09-17 `0917BA` 可见薄片重排：章节顺序 0→U1→U2→U2.5(第 9 章)→U3→U0→U4→U5 其余→U6→U7，1.4 按第七节口径完成，6.2 移入 9.3；2026-09-17 `0917AD` 立包；同日 `0917AF` 回填六问裁决：0.5／0.6 已定，8.7 移出本包留墓碑。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决，对应 `design.md` Open Questions（当前 0 条）；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支。涉及副作用的任务已逐条写幂等策略。）
+**进度：26/72**（2026-09-18 `0918M` U2 上传与解析管线 3.1–3.10 全部完成并通过全分支终审；2026-09-17 `0917BA` 可见薄片重排：章节顺序 0→U1→U2→U2.5(第 9 章)→U3→U0→U4→U5 其余→U6→U7，1.4 按第七节口径完成，6.2 移入 9.3；2026-09-17 `0917AD` 立包；同日 `0917AF` 回填六问裁决：0.5／0.6 已定，8.7 移出本包留墓碑。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决，对应 `design.md` Open Questions（当前 0 条）；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支。涉及副作用的任务已逐条写幂等策略。）
 
 ## 0. 前置门槛（不写代码；任一未过则对应下游单元不得发车）
 
@@ -24,16 +24,16 @@
 
 ## 3. U2 上传与解析管线（含置信度与校对队列）
 
-- [ ] 3.1 `Settings.live_resume_intake_enabled` 默认 False；`is_live_resume_intake_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 鉴权可识别 AND 访问留痕探针；测试覆盖 spec 四个 Scenario（含"配置开但身份未知 ⇒ 关"）
-- [ ] 3.2 `AuthMiddleware.dispatch` 换成会话 cookie → `hr_account` 校验；`AuthContext` / `reviewer_of()` 签名不变；`/candidates* /resumes* /applications*` 未登录 401；登录页与登出接口；测试：`reviewer_of()` 返回真实用户名而非 `unknown:*`
-- [ ] 3.3 上传接口 `POST /resumes/upload`（多文件、`job_id`、`sample_class` 必填且 ∈ `synthetic/anonymized/departed/live`；类型白名单 pdf/docx；逐文件结果；`live` 且闸关 ⇒ 整批拒 + 留痕尝试不存内容）；幂等：文件内容 SHA-256 + `job_id` 唯一，重复返回既有 `resume_id` 不重解析
-- [ ] 3.4 文件 → 文本：文本型 PDF 直抽、Word 走 `python-docx`、扫描件走 PaddleOCR（design D14）；有效字符 < 阈值 ⇒ `resume.status='unreadable'` 进人工队列；分片器产出 `resume_text_span`（按段落，带 offset）；测试三种文件各一
-- [ ] 3.5 `ResumeFields` Pydantic schema（六字段 × `{value, confidence, spans[]}`，缺失 = `not_mentioned`）；`app/agents/resume_parser.py::compute_parse(text_spans) -> ResumeFields` 纯函数，走 LLM 网关 json_schema 路径，抽取模型＝deepseek-flash（1.7 已定型行；模型标识以 API 响应 `model` 字段为准），走 `AuditHook` 留痕（`prompt_version=parse-v1`）
-- [ ] 3.6 置信度合成：模型自报 × span 可定位性（`quote` 反查校正偏移，反查失败 ⇒ 无 span ⇒ 低置信度）；阈值读 `job.parse_confidence_threshold`（默认 Q3 值）
-- [ ] 3.7 LangGraph 节点 `effect_persist_parse`：写 `resume.parsed_json` ＋ `field_review_queue` 低置信度行；幂等键 `{application_id}:effect_persist_parse:{parser_version}`，`effect_log` 与业务写同事务；测试：节点重跑不产生第二份解析版本
-- [ ] 3.8 重解析：新 `parser_version` ⇒ 新版本并存、旧版保留、工作台默认最新；测试
-- [ ] 3.9 简历访问留痕：读取原文／分片／解析结果／下载的接口统一经 `record_resume_access()`，留痕失败 ⇒ 读取失败不返回内容；测试覆盖四种 access_type 与失败路径
-- [ ] 3.10 校对接口 `POST /resumes/{id}/fields/{field}/review`：写 `field_review_queue.human_value/reviewed_by/at`、关闭队列行、触发该投递重判（发一个内部事件，⛔ 不在接口里同步跑判定）；幂等：同字段同值重复提交不产生第二行
+- [x] 3.1 `Settings.live_resume_intake_enabled` 默认 False；`is_live_resume_intake_enabled()` 每次求值（环境变量 > 配置 > 默认）AND 鉴权可识别 AND 访问留痕探针；测试覆盖 spec 四个 Scenario（含"配置开但身份未知 ⇒ 关"）
+- [x] 3.2 `AuthMiddleware.dispatch` 换成会话 cookie → `hr_account` 校验；`AuthContext` / `reviewer_of()` 签名不变；`/candidates* /resumes* /applications*` 未登录 401；登录页与登出接口；测试：`reviewer_of()` 返回真实用户名而非 `unknown:*`
+- [x] 3.3 上传接口 `POST /resumes/upload`（多文件、`job_id`、`sample_class` 必填且 ∈ `synthetic/anonymized/departed/live`；类型白名单 pdf/docx；逐文件结果；`live` 且闸关 ⇒ 整批拒 + 留痕尝试不存内容）；幂等：文件内容 SHA-256 + `job_id` 唯一，重复返回既有 `resume_id` 不重解析
+- [x] 3.4 文件 → 文本：文本型 PDF 直抽、Word 走 `python-docx`、扫描件走 PaddleOCR（design D14）；有效字符 < 阈值 ⇒ `resume.status='unreadable'` 进人工队列；分片器产出 `resume_text_span`（按段落，带 offset）；测试三种文件各一
+- [x] 3.5 `ResumeFields` Pydantic schema（六字段 × `{value, confidence, spans[]}`，缺失 = `not_mentioned`）；`app/agents/resume_parser.py::compute_parse(text_spans) -> ResumeFields` 纯函数，走 LLM 网关 json_schema 路径，抽取模型＝deepseek-flash（1.7 已定型行；模型标识以 API 响应 `model` 字段为准），走 `AuditHook` 留痕（`prompt_version=parse-v1`）
+- [x] 3.6 置信度合成：模型自报 × span 可定位性（`quote` 反查校正偏移，反查失败 ⇒ 无 span ⇒ 低置信度）；阈值读 `job.parse_confidence_threshold`（默认 Q3 值）
+- [x] 3.7 LangGraph 节点 `effect_persist_parse`：写 `resume.parsed_json` ＋ `field_review_queue` 低置信度行；幂等键 `{application_id}:effect_persist_parse:{parser_version}`，`effect_log` 与业务写同事务；测试：节点重跑不产生第二份解析版本（实现按架构决策改用 `{resume_id}:effect_persist_parse:{parser_version}`，见计划「架构决策」第 1 条）
+- [x] 3.8 重解析：新 `parser_version` ⇒ 新版本并存、旧版保留、工作台默认最新；测试
+- [x] 3.9 简历访问留痕：读取原文／分片／解析结果／下载的接口统一经 `record_resume_access()`，留痕失败 ⇒ 读取失败不返回内容；测试覆盖四种 access_type 与失败路径
+- [x] 3.10 校对接口 `POST /resumes/{id}/fields/{field}/review`：写 `field_review_queue.human_value/reviewed_by/at`、关闭队列行、触发该投递重判（发一个内部事件，⛔ 不在接口里同步跑判定）；幂等：同字段同值重复提交不产生第二行
 
 ## 9. U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
 

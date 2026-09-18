@@ -280,6 +280,10 @@ class LLMGateway:
             client=fallback_client,
         )
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     @staticmethod
     def _build_fallback(
         *,

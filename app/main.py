@@ -61,4 +61,5 @@ app = create_app(
     db_path=settings.db_path,
     gateway_factory=_gateway_factory,
     root_path=settings.root_path,
+    resume_storage_dir=settings.resume_storage_dir,
 )

@@ -87,6 +87,9 @@ REGISTERED_DEPENDENCIES: dict[str, str] = {
     "pytest": "测试",
     "httpx": "测试用 HTTP 客户端（FastAPI TestClient 依赖）",
     "numpy": "D9 评估指标与召回：numpy 余弦相似度（M2·U0 对比 ＋ U4 生产召回）",
+    "python-multipart": "FastAPI 接收 multipart/form-data 文件上传（M2 U2 简历上传接口用）",
+    "pypdf": "PDF 文本抽取（M2 U2 简历文件解析）",
+    "python-docx": "docx 文本抽取（M2 U2 简历文件解析）",
 }
 
 # `uvicorn[standard]==0.34.0` → `uvicorn`；`pytest>=8` → `pytest`。

@@ -125,6 +125,12 @@ def test_create_app_signature_is_untouched():
     """
     delivery-units.md §2.U3：⛔ 不改 create_app 签名——改了立刻与 M1 的 B/D 单元
     串行。签名是那条约束唯一测得到的形状。
+
+    M1 已合并（commit 94b3fcf），U3 那条"避免与并发 M1 单元串行"的顾虑已过期。
+    M2 U2 Task 2（本地账号登录）按计划把 `resume_storage_dir` 提前拉进
+    create_app 的可选关键字参数（供 Task 7 的上传路由消费，见 task-2-brief.md
+    的显式裁决），这是一次记录在案、有意为之的签名扩展，不是意外回归——
+    守护更新为"新增关键字参数、既有参数顺序与语义不变"。
     """
     from app.web.server import create_app
 
@@ -132,6 +138,7 @@ def test_create_app_signature_is_untouched():
         "db_path",
         "gateway_factory",
         "root_path",
+        "resume_storage_dir",
     ]
 
 

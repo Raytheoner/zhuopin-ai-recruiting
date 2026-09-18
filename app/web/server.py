@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -7,14 +8,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
 from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
 from app.agents.jd_grounding import verify_jd_grounding
+from app.agents.resume_parser import PARSE_PROMPT_VERSION, compute_parse
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.jd_nodes import (
@@ -32,21 +34,39 @@ from app.graph.nodes import (
     effect_request_revision,
     revision_count,
 )
+from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
     RequestIdMiddleware,
     unhandled_exception_handler,
 )
+from app.parsing.extract_text import SUPPORTED_SUFFIXES
+from app.parsing.resume_ingest import ingest_resume_text
+from app.parsing.spans import TextSpan
 from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.storage import job_queries
+from app.storage.auth_session import create_session, delete_session
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
+from app.storage.hr_account import verify_password
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
+from app.storage.live_resume_gate import is_live_resume_intake_enabled
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_TEMPLATE_PATH = STATIC_DIR / "index.html"
+
+
+class LoginRequest(BaseModel):
+    # ⚠️ 必须是模块级类，不能嵌进 create_app() 内部：本文件顶部有
+    # `from __future__ import annotations`，函数签名注解一律延迟求值成字符串，
+    # FastAPI 解析 `req: LoginRequest` 时若 LoginRequest 只存在于某次调用的
+    # 函数局部命名空间里，get_type_hints() 解不出这个名字，会静默把它当成
+    # 查询参数处理而不是请求体——login 路由因此对着一个不存在的 query
+    # 字段返回 422，而不是按预期校验请求体。
+    username: str
+    password: str
 
 
 class CreateJobRequest(BaseModel):
@@ -80,6 +100,10 @@ class JDEditRequest(BaseModel):
     text: str
 
 
+class FieldReviewRequest(BaseModel):
+    human_value: str
+
+
 class TurnOutcome(NamedTuple):
     """一轮采集的结果：给通道的消息 + L3 判定的"这是不是用人需求"。
 
@@ -101,9 +125,24 @@ def _render_index(root_path: str) -> str:
     return html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">')
 
 
-def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") -> FastAPI:
+def create_app(
+    *,
+    db_path: str,
+    gateway_factory: Callable,
+    root_path: str = "",
+    resume_storage_dir: str | None = None,
+) -> FastAPI:
     conn = get_connection(db_path)
     init_schema(conn)
+
+    # 提前拉入的最小 constructor 装配（本任务只做到"目录存在"，上传路由与解析
+    # 摄取逻辑属于后续任务范围）：不传时落回 Settings.resume_storage_dir 的
+    # 默认值，测试可用 tmp_path 显式覆盖，避免把上传文件真的写进仓库工作区。
+    from app.config import get_settings
+
+    _resume_storage_dir = Path(resume_storage_dir or get_settings().resume_storage_dir)
+    _resume_storage_dir.mkdir(parents=True, exist_ok=True)
+
     channel = WebChannel(conn)
 
     # gateway 与 graph 的构造从"每次请求一次"上提到"应用启动一次"，与 conn/
@@ -126,12 +165,44 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
         graph.checkpointer.conn.close()
 
     app = FastAPI(title="卓品智能招聘助手 · Demo", lifespan=_lifespan)
-    app.add_middleware(AuthMiddleware)
+    app.add_middleware(AuthMiddleware, conn=conn, root_path=root_path)
     # 后 add 的更靠外：RequestIdMiddleware 必须包住 AuthMiddleware，
     # 否则鉴权层自己产生的日志与异常拿不到请求标识。
     app.add_middleware(RequestIdMiddleware)
     app.add_exception_handler(Exception, unhandled_exception_handler)
     router = APIRouter()
+
+    @router.post("/api/auth/login")
+    def login(req: LoginRequest, response: Response):
+        row = conn.execute(
+            "SELECT id, password_hash, password_salt FROM hr_account WHERE username = ?",
+            (req.username.strip(),),
+        ).fetchone()
+        if row is None or not verify_password(req.password, row[1], row[2]):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        token = create_session(conn, hr_account_id=row[0])
+        response.set_cookie(
+            "hr_session",
+            token,
+            httponly=True,
+            samesite="lax",
+            path=root_path or "/",
+        )
+        return {"ok": True}
+
+    @router.post("/api/auth/logout")
+    def logout(request: Request, response: Response):
+        token = request.cookies.get("hr_session")
+        if token:
+            delete_session(conn, token)
+        response.delete_cookie("hr_session", path=root_path or "/")
+        return {"ok": True}
+
+    @router.get("/login")
+    def login_page():
+        html = (STATIC_DIR / "login.html").read_text(encoding="utf-8")
+        base_href = f"{root_path}/" if root_path else "/"
+        return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
 
     def _response_payload(message) -> dict:
         """
@@ -790,6 +861,274 @@ def create_app(*, db_path: str, gateway_factory: Callable, root_path: str = "") 
             if latest
             else None,
         }
+
+    _VALID_SAMPLE_CLASSES = {"synthetic", "anonymized", "departed", "live"}
+
+    @router.post("/api/resumes/upload")
+    def upload_resumes(
+        request: Request,
+        job_id: str = Form(...),
+        sample_class: str = Form(...),
+        files: list[UploadFile] = File(...),
+    ):
+        if sample_class not in _VALID_SAMPLE_CLASSES:
+            raise HTTPException(status_code=422, detail="sample_class 取值非法")
+        job = conn.execute("SELECT id FROM job WHERE id = ?", (job_id,)).fetchone()
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+
+        uploader = reviewer_of(request)
+        results = []
+
+        if sample_class == "live":
+            gate_open = is_live_resume_intake_enabled(auth=request.state.auth, conn=conn)
+            if not gate_open:
+                for f in files:
+                    results.append({
+                        "file_name": f.filename,
+                        "status": "rejected",
+                        "reason": "真实简历入库闸未开启",
+                    })
+                logger.warning(
+                    "闸关闭时的 live 上传尝试：uploader=%s job_id=%s file_count=%d",
+                    uploader, job_id, len(files),
+                )
+                return {"results": results}
+
+        for f in files:
+            results.append(_ingest_one_resume(job_id=job_id, sample_class=sample_class,
+                                               uploaded_by=uploader, upload=f))
+        return {"results": results}
+
+    def _ingest_one_resume(*, job_id: str, sample_class: str, uploaded_by: str,
+                            upload: UploadFile) -> dict:
+        suffix = Path(upload.filename or "").suffix.lower()
+        content = upload.file.read()
+        # 提前拒收，不读 ingest_resume_text 的 UnsupportedFileType 路径——避免为被拒文件建 DB 行/落盘再回滚
+        if suffix not in SUPPORTED_SUFFIXES:
+            return {"file_name": upload.filename, "status": "rejected",
+                    "reason": "不支持的类型"}
+
+        content_hash = hashlib.sha256(content).hexdigest()
+        dup = conn.execute(
+            "SELECT id FROM resume WHERE job_id = ? AND content_sha256 = ?",
+            (job_id, content_hash),
+        ).fetchone()
+        if dup is not None:
+            return {"file_name": upload.filename, "status": "duplicate",
+                    "resume_id": dup[0]}
+
+        resume_id = str(uuid.uuid4())
+        stored_path = _resume_storage_dir / f"{resume_id}{suffix}"
+        stored_path.write_bytes(content)
+
+        conn.execute(
+            "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, "
+            "uploaded_by) VALUES (?, ?, ?, ?, ?, ?)",
+            (resume_id, job_id, sample_class, upload.filename, content_hash, uploaded_by),
+        )
+        conn.commit()
+
+        ingest_result = ingest_resume_text(stored_path)
+        if not ingest_result.readable:
+            conn.execute(
+                "UPDATE resume SET status = 'unreadable' WHERE id = ?", (resume_id,)
+            )
+            conn.commit()
+            return {"file_name": upload.filename, "status": "accepted",
+                    "resume_id": resume_id, "parse_status": "unreadable"}
+
+        conn.execute(
+            "UPDATE resume SET raw_text = ? WHERE id = ?",
+            (ingest_result.raw_text, resume_id),
+        )
+        for span in ingest_result.spans:
+            conn.execute(
+                "INSERT INTO resume_text_span (resume_id, span_id, start, end, text) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (resume_id, span.span_id, span.start, span.end, span.text),
+            )
+        conn.commit()
+
+        threshold_row = conn.execute(
+            "SELECT parse_confidence_threshold FROM job WHERE id = ?", (job_id,)
+        ).fetchone()
+        confidence_threshold = threshold_row[0] if threshold_row else 0.7
+
+        try:
+            fields, meta = compute_parse(
+                gateway,
+                spans=ingest_result.spans,
+                audit_context={"thread_id": resume_id, "node": "compute_parse", "job_id": job_id},
+            )
+        except Exception:
+            logger.exception("resume_id=%s 抽取失败，简历留在 pending，可稍后重解析", resume_id)
+            return {"file_name": upload.filename, "status": "accepted",
+                    "resume_id": resume_id, "parse_status": "parse_failed"}
+
+        parser_version = "v1"
+        application_id = effect_persist_parse(
+            conn,
+            thread_id=resume_id,
+            business_key=parser_version,
+            resume_id=resume_id,
+            job_id=job_id,
+            fields=fields,
+            parser_version=parser_version,
+            model_configured=gateway.model,
+            model_response=meta.response_model,
+            # ⛔ 不写 "parse-v1" 字面量：compute_parse 默认用的是
+            # PARSE_PROMPT_VERSION，字面量与常量一旦漂移，审计链（记的是
+            # compute_parse 的真实行为）与 resume_parse_version.prompt_version
+            # 会对同一次解析给出两个版本号，而且不报错。
+            prompt_version=PARSE_PROMPT_VERSION,
+            confidence_threshold=confidence_threshold,
+        )
+        return {"file_name": upload.filename, "status": "accepted",
+                "resume_id": resume_id, "application_id": application_id,
+                "parse_status": "parsed"}
+
+    @router.post("/api/resumes/{resume_id}/reparse")
+    def reparse_resume(resume_id: str):
+        row = conn.execute(
+            "SELECT job_id, status FROM resume WHERE id = ?", (resume_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="resume not found")
+        job_id, resume_status = row[0], row[1]
+
+        span_count = conn.execute(
+            "SELECT COUNT(*) FROM resume_text_span WHERE resume_id = ?", (resume_id,)
+        ).fetchone()[0]
+        # 不可读（TD-52 的扫描件退路）或一条分片都没有的简历，⛔ 不许重解析：
+        # compute_parse 拿空 span 列表会把六个字段全判 not_mentioned，
+        # _lowest_field_confidence 对空列表返回 1.0（"满分置信"），于是
+        # effect_persist_parse 会把它标成 parsed、一条人工校对都不建、还给它
+        # 建出一条字段全空的 candidate/application——把隔离区里的简历静默放进
+        # 后续筛选（resume-parsing spec「MUST NOT 以空字段进入后续判定与排序」）。
+        if resume_status == "unreadable" or span_count == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="该简历不可读（无原文分片），无法重新解析，请走人工补录",
+            )
+
+        spans = [
+            TextSpan(span_id=r[0], start=r[1], end=r[2], text=r[3])
+            for r in conn.execute(
+                "SELECT span_id, start, end, text FROM resume_text_span "
+                "WHERE resume_id = ? ORDER BY span_id",
+                (resume_id,),
+            ).fetchall()
+        ]
+        threshold_row = conn.execute(
+            "SELECT parse_confidence_threshold FROM job WHERE id = ?", (job_id,)
+        ).fetchone()
+        confidence_threshold = threshold_row[0] if threshold_row else 0.7
+
+        existing_versions = conn.execute(
+            "SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = ?", (resume_id,)
+        ).fetchone()[0]
+        parser_version = f"v{existing_versions + 1}"
+
+        fields, meta = compute_parse(
+            gateway,
+            spans=spans,
+            audit_context={"thread_id": resume_id, "node": "compute_parse", "job_id": job_id},
+        )
+        application_id = effect_persist_parse(
+            conn,
+            thread_id=resume_id,
+            business_key=parser_version,
+            resume_id=resume_id,
+            job_id=job_id,
+            fields=fields,
+            parser_version=parser_version,
+            model_configured=gateway.model,
+            model_response=meta.response_model,
+            # 同上传路由：版本号取常量，⛔ 不写字面量（审计链与
+            # resume_parse_version 必须说同一个 prompt 版本）。
+            prompt_version=PARSE_PROMPT_VERSION,
+            confidence_threshold=confidence_threshold,
+        )
+        return {"resume_id": resume_id, "application_id": application_id,
+                "parser_version": parser_version}
+
+    def _require_resume(resume_id: str) -> tuple:
+        row = conn.execute(
+            "SELECT id, file_name, raw_text, parsed_json, sample_class FROM resume WHERE id = ?",
+            (resume_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="resume not found")
+        return row
+
+    @router.get("/api/resumes/{resume_id}/text")
+    def get_resume_text(request: Request, resume_id: str):
+        row = _require_resume(resume_id)
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="raw_text")
+        return {"resume_id": resume_id, "raw_text": row[2] or ""}
+
+    @router.get("/api/resumes/{resume_id}/spans")
+    def get_resume_spans(request: Request, resume_id: str):
+        _require_resume(resume_id)
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="spans")
+        rows = conn.execute(
+            "SELECT span_id, start, end, text FROM resume_text_span "
+            "WHERE resume_id = ? ORDER BY span_id",
+            (resume_id,),
+        ).fetchall()
+        return {"spans": [
+            {"span_id": r[0], "start": r[1], "end": r[2], "text": r[3]} for r in rows
+        ]}
+
+    @router.get("/api/resumes/{resume_id}/parsed")
+    def get_resume_parsed(request: Request, resume_id: str):
+        row = _require_resume(resume_id)
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="parsed_result")
+        return {"resume_id": resume_id, "parsed_json": json.loads(row[3]) if row[3] else None}
+
+    @router.get("/api/resumes/{resume_id}/download")
+    def download_resume(request: Request, resume_id: str):
+        row = _require_resume(resume_id)
+        file_name = row[1]
+        suffix = Path(file_name).suffix.lower()
+        stored_path = _resume_storage_dir / f"{resume_id}{suffix}"
+        if not stored_path.exists():
+            raise HTTPException(status_code=404, detail="文件已不在存储中")
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="download")
+        return FileResponse(str(stored_path), filename=file_name)
+
+    @router.post("/api/resumes/{resume_id}/fields/{field}/review")
+    def review_field(request: Request, resume_id: str, field: str, req: FieldReviewRequest):
+        row = conn.execute(
+            "SELECT id, human_value FROM field_review_queue "
+            "WHERE resume_id = ? AND field = ? AND status = 'pending'",
+            (resume_id, field),
+        ).fetchone()
+        if row is None:
+            already_reviewed = conn.execute(
+                "SELECT human_value FROM field_review_queue "
+                "WHERE resume_id = ? AND field = ? AND status = 'reviewed' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (resume_id, field),
+            ).fetchone()
+            if already_reviewed is not None and already_reviewed[0] == req.human_value:
+                return {"ok": True, "already_reviewed": True}
+            raise HTTPException(status_code=404, detail="该字段没有待校对记录")
+
+        reviewer = reviewer_of(request)
+        conn.execute(
+            "UPDATE field_review_queue SET status = 'reviewed', human_value = ?, "
+            "reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?",
+            (req.human_value, reviewer, row[0]),
+        )
+        conn.commit()
+        queue_reapplication_screening(resume_id)
+        return {"ok": True, "already_reviewed": False}
 
     @router.get("/health")
     def health() -> dict:
