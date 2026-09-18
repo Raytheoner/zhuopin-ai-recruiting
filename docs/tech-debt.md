@@ -452,71 +452,6 @@ Shao Peishen 能拍板。
 effect_log 同一事务提交"对它们无人验证过；一旦其中一个在提交前崩溃后重放，
 不会有任何测试事先发现——而这恰恰是本交付单元存在的全部意义要防的那类失败。
 
-## TD-13 · 丢弃岗位的两次删除之间没有原子性保护 · ✅ 已还
-
-**已还**：2026-09-17，定夺队列 Q-20 已答 a（方案 C）。`app/web/server.py` 的调用点
-`try/except` 住 `discard_thread_checkpoints` 的异常、按 ERROR 记日志（含 `exc_info`）、
-照常返回既有引导语；`job_discard.py` 内部不改。TDD 覆盖：
-`tests/test_web_api.py::test_off_topic_first_message_survives_checkpoint_discard_failure`
-先证明异常会冒穿到 500（RED），再验证 catch 后响应仍是 200 + 引导语 + 一条 ERROR
-日志（GREEN）。commit `2e857c6`（合入 main 后哈希不变，见下方选项 C 描述保留存档）。
-
-**登记**：2026-09-08，delivery unit 5.3（需求识别）终审 park 登记。
-
-**是什么**：`POST /api/jobs` 判定首轮不是用人需求时，`app/web/server.py` 的 `create_job`
-连着调两个函数把这一轮写下的东西抹掉：
-
-```
-discard_unstarted_job(conn, job_id)          # 删业务行，自己 commit
-discard_thread_checkpoints(graph.checkpointer, job_id)   # 删 checkpoints / writes
-```
-
-两者**不在同一个事务里**（前者已经 commit 了，后者走的是 checkpointer 自己那条连接）。
-第二个调用若抛异常，业务行已经删掉、`checkpoints` / `writes` 还留着。
-
-**这不是 5.3 计划里已登记的那个崩溃窗口。** 计划正文登记的是「`INSERT job` 与
-`discard_unstarted_job` 之间崩溃 → 留一行零版本的 drafting job」（`create_job` 里有
-逐字注释）。本条是**另一个**、更靠后的窗口，计划没有覆盖到。
-
-**真正的代价比"孤儿行"大**（终审订正了首轮 park ruling 的表述，这一条要写清）：
-`discard_thread_checkpoints` 抛出来会一路冒到 `create_job` 外面，调用方拿到的是
-**500，而不是那句引导语**——而承载引导语的 `outbox` 行已经被前一个调用删掉了。
-也就是说这条路径上 **spec 的前半句（"回复引导语说明可以怎么提需求"）也静默失效了**，
-不只是记账没做干净。不是数据丢失（那一轮本来就没有任何有价值的东西），
-但比"残留几行 checkpoint"严重。
-
-**为什么现在不还（park 的理由）**：
-
-1. **这段代码是 5.3 计划逐字钉死的**（`docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition.md`
-   的 Task 4 Step 3）。改它属于推翻计划，按工具链协作规则是**人的决定**；
-   5.3 是无人值守泳道跑的，⛔ 不替 Shao Peishen 拍板。
-2. **实践中近乎不可达**（终审给出、比首轮 ruling 更强的理由）：`get_connection`
-   设了 `journal_mode=WAL` 与 `busy_timeout=5000`（`app/storage/db.py`），图是严格线性的，
-   checkpointer 自己独占一条连接 —— 这两条 DELETE 要撞上 `SQLITE_BUSY`，得先熬过一个
-   5 秒重试窗口，而此刻并没有任何东西在跟它抢。另一个触发源是表改名，那会**立刻、
-   每一次**都失败，部署当场就能发现，不会静默。
-
-**⛔ 不要把它理解成"只有两种删除顺序可选"**（终审明确要求把这条记进来，免得
-"二选一"的框架被冻进记录里）。至少有三个选项：
-
-- **A（现状）**：先删业务行、再删 checkpoint。失败 → 不可见的孤儿 checkpoint 行 + 500
-- **B**：先删 checkpoint、再删业务行。失败 → 留下一行**可见的**「待确定 / drafting」僵尸 job
-  （岗位列表走 LEFT JOIN，`app/storage/job_queries.py`），业务经理会真的在屏幕上看见它。
-  **比 A 更糟**
-- **C（终审提出，两轮 review 都没考虑过）**：保持 A 的顺序，让**业务行删除**作为
-  "为准的那次事务"；在**调用点**把 `discard_thread_checkpoints` 的异常 catch 住、
-  按 ERROR 记日志、照常把引导语返回给用户。
-  `job_discard.py` 里那条 `⛔ 不要 try/except` 是对的——但它约束的是**函数内部**，
-  并不延伸到调用点：表改名会在**每一条**离题首轮消息上失败，ERROR 日志会持续刷，
-  部署当场暴露，所以"静默空转"在这个场景下不是真风险
-
-**触发条件**：Shao Peishen 复核本条时。若判 C 可接受，改动量约 5 行，只动
-`app/web/server.py` 的调用点，不动 `app/storage/job_discard.py`。
-
-**不还的后果**：极低概率下，业务经理发了一句无关的话，屏幕上等来的是一个 500 错误
-而不是那句"没听懂是不是用人需求，可以试试…"，而**日志里不会有任何东西说明
-引导语其实已经生成过、只是连同 outbox 行一起被删了**。
-
 ## TD-21 · 值守服务的礼貌回复是 at-most-once，崩溃即丢
 
 **现象**：`tools/liaison/inbound.py` 的礼貌回复走注入的 reply port，不是
@@ -701,5 +636,42 @@ cp314 wheel，回退源码编译又缺 MSVC），详见 `docs/m2-model-compariso
 **不还的后果**：扫描件简历在本项目全生命周期内都进人工队列，不参与硬门槛判定
 与排序（这是 spec 明确允许的退路，不是缺陷）——后果是这部分候选人的自动化程度
 低于文本型简历，需要 HR 手工补录关键字段，不影响系统正确性。
+
+---
+
+## TD-53 · 简历链路的 `conn.commit()` 直接打在全应用共享连接上，并发请求会互相提交对方的半截事务
+
+**登记时间**：2026-09-18（M2 U2 全分支 final review 判 Important，reviewer 明确
+"不必在本单元解决，但不许无记录地合并"）
+
+**欠的是什么**：`app/storage/db.py::get_connection` 全应用只开一条 SQLite 连接
+（`check_same_thread=False`），而 FastAPI 把同步路由处理函数派进线程池——同一时刻
+两个请求跑在两个线程上、用同一条连接、共享同一个隐式事务。本单元新增了 5 处直接
+在这条共享连接上 `commit()` 的调用：
+
+- `app/web/server.py:930`（`_ingest_one_resume`，insert resume 之后）
+- `app/web/server.py:937`（同上，标 `unreadable` 之后）
+- `app/web/server.py:951`（同上，写 `raw_text` 与 `resume_text_span` 之后）
+- `app/web/server.py:1129`（`review_field`，更新 `field_review_queue` 之后）
+- `app/graph/resume_nodes.py:161`（`record_resume_access`，写访问留痕之后）
+
+任一处在 A 线程执行时，会把 B 线程正跑到一半的 `effect_*` 事务一并提交——包括
+"业务写已落、`effect_log` 尚未 INSERT"的那一瞬间。`app/audit/hook.py`
+的 `RecorderAuditHook` 对同一形态的问题已经给出过解法（`threading.Lock` +
+"一条连接、一个事务管理者"，见该文件 `_write_lock` 处注释），effect 落库这条路径
+上没有对应的锁。
+
+**触发条件**：满足任一条即必须还——① 同一时刻会有两个以上写请求打到本服务
+（批量上传 + 字段校对并行、或工作台多人同时操作）；② 再落地一个写密集的并发特性
+（U3 硬门槛重判、U5 批量确认淘汰都在这个方向上）；③ 迁 Postgres 时（技术栈既定
+方向，届时连接策略改成每请求池化连接，本条随之消解，但迁移当次必须显式核对 5 处
+调用点，不能默认"换了库就自动好了"）。还债形态二选一：effect 落库路径共用一把
+写锁（与 `RecorderAuditHook` 同款），或路由层改用每请求独立连接。
+
+**不还的后果**：并发下丢一次 `effect_log` 写入——业务行落了盘、幂等记录没落，
+工程铁律 1 的崩溃-恢复不变式（"`effect_log` 条数与业务表行数按 thread 恒等"）被
+静默打破：重放要么撞唯一约束永久失败，要么静默做第二次副作用（重复建投递、重复
+发消息）。现有测试一条都抓不到——`tests/test_effect_idempotency_suite.py` 全部
+用例都是单线程顺序调用，共享连接上的并发请求没有任何覆盖。
 
 ---

@@ -746,8 +746,15 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 prompt_version="parse-v1",
                 confidence_threshold=0.7,
             ),
+            # 数 resume_parse_version 而不是 application：application 被
+            # idx_application_resume（app/storage/db.py，UNIQUE(resume_id)）钉死
+            # 在"每份简历至多 1 行"，无论这个节点被重放几次、写没写成，计数都不
+            # 会超过 1——用它当业务事实等于用一个恒真断言冒充守卫。本节点真正
+            # 1:1 对应一次生效的是 resume_parse_version 的那一行（主键
+            # (resume_id, parser_version) = 一个 business_key 一行），重解析加
+            # 版本时它会真的增长，重复生效也会真的撞主键。
             count_business_rows=lambda conn: conn.execute(
-                "SELECT COUNT(*) FROM application WHERE resume_id = ?", (_RESUME,)
+                "SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = ?", (_RESUME,)
             ).fetchone()[0],
         ),
     }

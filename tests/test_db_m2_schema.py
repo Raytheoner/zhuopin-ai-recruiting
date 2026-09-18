@@ -754,11 +754,16 @@ def test_added_columns_tuple_still_only_touches_job_profile():
     M2 U2 task 3（design D5）往 _ADDED_COLUMNS 加了 job 的
     parse_confidence_threshold——job 是老表（SCHEMA 里一直有 CREATE TABLE IF
     NOT EXISTS job），不是新表，不违反这条护栏的本意，预期表集合相应放宽。
+
+    final review 后再放宽到含 resume：resume 是 M2 U1 建的表，U1 合并之后建的
+    任何库里它都已经存在，U2 给它加的 raw_text 属于"老表缺列"，必须登记进
+    _ADDED_COLUMNS 才补得上（漏登记的话老库上每次上传都 500）。护栏本意不变：
+    进这个集合的表必须在 SCHEMA 里已有 CREATE TABLE IF NOT EXISTS。
     """
     from app.storage.db import _ADDED_COLUMNS
 
     tables_in_added_columns = {row[0] for row in _ADDED_COLUMNS}
-    assert tables_in_added_columns == {"job_profile", "job"}
+    assert tables_in_added_columns == {"job_profile", "job", "resume"}
 
 
 def test_fresh_and_legacy_upgraded_schemas_have_identical_m2_u1_tables(tmp_path):

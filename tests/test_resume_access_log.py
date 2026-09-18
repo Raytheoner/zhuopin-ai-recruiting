@@ -86,3 +86,49 @@ def test_access_log_write_failure_blocks_the_read(uploaded_resume, monkeypatch):
     no_raise_client.cookies.update(client.cookies)
     resp = no_raise_client.get(f"/api/resumes/{resume_id}/text")
     assert resp.status_code == 500
+
+
+def test_resume_read_route_auth_works_under_a_root_path(tmp_path):
+    """
+    部署约束 1 + design D12 的交叉点：AuthMiddleware 判"这条路径要不要登录"是
+    拿 root_path 去拼 PROTECTED_PATH_PREFIXES 做字符串前缀匹配
+    （app/middleware/auth.py::_is_protected）。本单元新增的 9 条路由此前一条都
+    没在非空 root_path 下跑过——拼错的后果不是 500 而是**静默放行**：简历内容
+    在门户子路径下对未登录者可读。这里用 M1 既有的 /hr/recruit-agent 前缀跑一条
+    读接口，两个方向都钉住：匿名 401、带会话 200。
+    """
+    from app.llm.gateway import LLMGateway
+    from app.storage.db import get_connection
+    from app.web.server import create_app
+
+    prefix = "/hr/recruit-agent"
+    db_path = str(tmp_path / "rootpath.db")
+
+    def _gateway_factory():
+        return LLMGateway(
+            api_key="test", base_url="https://example.invalid",
+            model="deepseek-chat", supports_json_schema=False, client=object(),
+        )
+
+    app = create_app(
+        db_path=db_path, gateway_factory=_gateway_factory, root_path=prefix,
+        resume_storage_dir=str(tmp_path / "resumes"),
+    )
+    client = TestClient(app)
+    conn = get_connection(db_path)
+    conn.execute("INSERT INTO job (id, title) VALUES ('j1', '嵌入式工程师')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, "
+        "status, raw_text, uploaded_by) "
+        "VALUES ('r1', 'j1', 'synthetic', 'a.docx', 'hash1', 'parsed', '张三 嵌入式工程师', 'alice')"
+    )
+    conn.commit()
+
+    anonymous = client.get(f"{prefix}/api/resumes/r1/text")
+    assert anonymous.status_code == 401, anonymous.text
+
+    account_id = upsert_account(conn, username="alice", password="s3cret!")
+    client.cookies.set("hr_session", create_session(conn, hr_account_id=account_id))
+    authorized = client.get(f"{prefix}/api/resumes/r1/text")
+    assert authorized.status_code == 200, authorized.text
+    assert authorized.json()["raw_text"] == "张三 嵌入式工程师"

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ValidationError
 from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
 from app.agents.jd_grounding import verify_jd_grounding
-from app.agents.resume_parser import compute_parse
+from app.agents.resume_parser import PARSE_PROMPT_VERSION, compute_parse
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.jd_nodes import (
@@ -977,7 +977,11 @@ def create_app(
             parser_version=parser_version,
             model_configured=gateway.model,
             model_response=meta.response_model,
-            prompt_version="parse-v1",
+            # ⛔ 不写 "parse-v1" 字面量：compute_parse 默认用的是
+            # PARSE_PROMPT_VERSION，字面量与常量一旦漂移，审计链（记的是
+            # compute_parse 的真实行为）与 resume_parse_version.prompt_version
+            # 会对同一次解析给出两个版本号，而且不报错。
+            prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
         return {"file_name": upload.filename, "status": "accepted",
@@ -987,11 +991,26 @@ def create_app(
     @router.post("/api/resumes/{resume_id}/reparse")
     def reparse_resume(resume_id: str):
         row = conn.execute(
-            "SELECT job_id FROM resume WHERE id = ?", (resume_id,)
+            "SELECT job_id, status FROM resume WHERE id = ?", (resume_id,)
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="resume not found")
-        job_id = row[0]
+        job_id, resume_status = row[0], row[1]
+
+        span_count = conn.execute(
+            "SELECT COUNT(*) FROM resume_text_span WHERE resume_id = ?", (resume_id,)
+        ).fetchone()[0]
+        # 不可读（TD-52 的扫描件退路）或一条分片都没有的简历，⛔ 不许重解析：
+        # compute_parse 拿空 span 列表会把六个字段全判 not_mentioned，
+        # _lowest_field_confidence 对空列表返回 1.0（"满分置信"），于是
+        # effect_persist_parse 会把它标成 parsed、一条人工校对都不建、还给它
+        # 建出一条字段全空的 candidate/application——把隔离区里的简历静默放进
+        # 后续筛选（resume-parsing spec「MUST NOT 以空字段进入后续判定与排序」）。
+        if resume_status == "unreadable" or span_count == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="该简历不可读（无原文分片），无法重新解析，请走人工补录",
+            )
 
         spans = [
             TextSpan(span_id=r[0], start=r[1], end=r[2], text=r[3])
@@ -1026,7 +1045,9 @@ def create_app(
             parser_version=parser_version,
             model_configured=gateway.model,
             model_response=meta.response_model,
-            prompt_version="parse-v1",
+            # 同上传路由：版本号取常量，⛔ 不写字面量（审计链与
+            # resume_parse_version 必须说同一个 prompt 版本）。
+            prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
         return {"resume_id": resume_id, "application_id": application_id,

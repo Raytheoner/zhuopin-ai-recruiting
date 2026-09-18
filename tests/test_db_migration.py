@@ -30,6 +30,38 @@ CREATE TABLE job_profile (
 """
 
 
+# M2 U1 合并之后、U2 之前建的库里 resume 的真实形态——**没有 raw_text**。
+# 与上面两条 DDL 同一理由硬编码：它代表"已经存在的那个库长什么样"这个历史
+# 事实。U2 往 SCHEMA 的 resume CREATE TABLE 加了 raw_text 却漏登记
+# _ADDED_COLUMNS，老库上每次上传都会在 UPDATE resume SET raw_text 上 500，
+# 而当时没有任何测试能发现——因为夹具根本不建 resume 表，它永远是从 SCHEMA
+# 新建的。
+_LEGACY_RESUME_DDL = """
+CREATE TABLE resume (
+    id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL REFERENCES job(id),
+    sample_class TEXT NOT NULL CHECK (
+        sample_class IN ('synthetic', 'anonymized', 'departed', 'live')
+    ),
+    file_name TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'parsed', 'unreadable')),
+    parsed_json TEXT,
+    parse_confidence REAL,
+    parser_version TEXT,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+# 漂移守卫覆盖的表：凡是"既可能来自 SCHEMA 的 CREATE TABLE（新库）、又可能
+# 早就存在于老库里"的表都要进这个名单，新加一张这样的表就往这里加一行，并在
+# _legacy_db 里补上它的历史 DDL。⛔ 不要只写当下出过事的那张表——本守卫防的是
+# "往 CREATE TABLE 加列却不登记 _ADDED_COLUMNS"这一整类错法，不是某一次事故。
+_DRIFT_GUARDED_TABLES = ("job_profile", "resume")
+
+
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -37,9 +69,13 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _legacy_db(tmp_path) -> sqlite3.Connection:
     """建一个"老 schema + 已有数据"的库，模拟 .51 上的 data/demo.db。"""
     conn = get_connection(str(tmp_path / "legacy.db"))
-    conn.executescript(_LEGACY_JOB_DDL + _LEGACY_JOB_PROFILE_DDL)
+    conn.executescript(_LEGACY_JOB_DDL + _LEGACY_JOB_PROFILE_DDL + _LEGACY_RESUME_DDL)
     conn.execute(
         "INSERT INTO job (id, title, status) VALUES ('old-job', '采购工程师', 'approved')"
+    )
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('old-resume', 'old-job', 'synthetic', 'a.docx', 'hash-old', 'alice')"
     )
     conn.execute(
         "INSERT INTO job_profile (id, job_id, version, status, profile_json, unspecified_fields) "
@@ -109,6 +145,9 @@ def test_fresh_and_migrated_schemas_have_identical_columns(tmp_path):
     漂移守卫：SCHEMA 的 CREATE TABLE 与 _ADDED_COLUMNS 是同一件事的两种表达
     （新库走 CREATE、老库走 ALTER）。只改一边是这类迁移最经典的错法——本地
     新建的库全绿，服务器上的老库缺列，而两者都不会报错。
+
+    逐表跑 _DRIFT_GUARDED_TABLES，不再只盯 job_profile：resume 漏在守卫外面，
+    正是 U2 的 raw_text 能一路合并到 final review 才被发现的原因。
     """
     fresh = get_connection(str(tmp_path / "fresh.db"))
     init_schema(fresh)
@@ -116,7 +155,34 @@ def test_fresh_and_migrated_schemas_have_identical_columns(tmp_path):
     migrated = _legacy_db(tmp_path)
     init_schema(migrated)
 
-    assert _columns(fresh, "job_profile") == _columns(migrated, "job_profile")
+    for table in _DRIFT_GUARDED_TABLES:
+        assert _columns(fresh, table) == _columns(migrated, table), (
+            f"{table} 在新库与老库上的列集合不一致：多半是往 SCHEMA 的 CREATE TABLE "
+            "加了列却没在 _ADDED_COLUMNS 里登记同一列"
+        )
+
+
+def test_legacy_resume_gets_raw_text_and_is_writable(tmp_path):
+    """
+    final review 的 CRITICAL 回归：U1 时期建的库里 resume 没有 raw_text，
+    CREATE TABLE IF NOT EXISTS 补不上，上传路由的
+    `UPDATE resume SET raw_text = ?` 会在服务器上每次都 500。
+
+    只断言 PRAGMA 里有这一列不够——真正的故障形态是"写不进去"，所以这里真的
+    写一次再读回来。
+    """
+    conn = _legacy_db(tmp_path)
+    assert "raw_text" not in _columns(conn, "resume")
+
+    init_schema(conn)
+
+    assert "raw_text" in _columns(conn, "resume")
+    conn.execute(
+        "UPDATE resume SET raw_text = ? WHERE id = ?", ("张三 嵌入式工程师", "old-resume")
+    )
+    conn.commit()
+    row = conn.execute("SELECT raw_text FROM resume WHERE id = 'old-resume'").fetchone()
+    assert row[0] == "张三 嵌入式工程师"
 
 
 def test_every_added_column_is_nullable_or_has_constant_default(tmp_path):
@@ -237,8 +303,16 @@ def test_audit_tables_never_enter_the_add_column_path(tmp_path):
     parse_confidence_threshold（job 是老表，SCHEMA 里一直有 CREATE TABLE IF
     NOT EXISTS job，不是新表），所以预期的表集合从 {"job_profile"} 放宽到
     {"job_profile", "job"}，护栏本身的判定逻辑不变。
+
+    final review 后再放宽到含 "resume"：resume 是 M2 U1 建的表，U1 合并之后
+    建的任何库（含 .51 的 demo.db）里它都已经存在，U2 给它加的 raw_text 属于
+    "老表缺列"，必须走加列路径。判定逻辑仍然不变——进这个集合的表必须在
+    SCHEMA 里已有 CREATE TABLE IF NOT EXISTS，且在 _legacy_db 夹具里有对应的
+    历史 DDL。
     """
-    assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {"job_profile", "job"}
+    assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {
+        "job_profile", "job", "resume"
+    }
 
 
 def test_add_column_path_is_a_noop_after_audit_schema(tmp_path):

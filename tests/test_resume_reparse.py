@@ -48,3 +48,42 @@ def test_reparse_nonexistent_resume_404(uploaded_resume):
     client, _conn, _resume_id = uploaded_resume
     resp = client.post("/api/resumes/does-not-exist/reparse")
     assert resp.status_code == 404
+
+
+def test_reparse_unreadable_resume_is_rejected_with_409(uploaded_resume):
+    """
+    不可读简历（TD-52 的扫描件退路）重解析必须被拒。放行的话 compute_parse 拿到
+    空 span 列表，六个字段全 not_mentioned、置信度合成出 1.0（"满分"），
+    effect_persist_parse 会把它标 parsed、零条人工校对、还建出字段全空的
+    candidate/application——隔离区里的简历被静默送进后续筛选。
+    """
+    client, conn, _resume_id = uploaded_resume
+    # "张三" 两个有效字符低于 MIN_EFFECTIVE_CHARS=50，ingest_resume_text 判
+    # unreadable——与 tests/test_resume_upload.py 同一造法。
+    files = [("files", ("scan.docx", _docx_bytes(["张三"]),
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))]
+    result = client.post(
+        "/api/resumes/upload", data={"job_id": "j1", "sample_class": "synthetic"}, files=files
+    ).json()["results"][0]
+    assert result["parse_status"] == "unreadable", result
+    unreadable_id = result["resume_id"]
+
+    resp = client.post(f"/api/resumes/{unreadable_id}/reparse")
+
+    assert resp.status_code == 409, resp.text
+    assert "无法重新解析" in resp.json()["detail"]
+    # 隔离区状态一点没动：没有投递、没有候选人、没有解析版本，状态仍是 unreadable
+    assert conn.execute(
+        "SELECT COUNT(*) FROM application WHERE resume_id = ?", (unreadable_id,)
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = ?", (unreadable_id,)
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT status FROM resume WHERE id = ?", (unreadable_id,)
+    ).fetchone()[0] == "unreadable"
+    # 这份简历没有带出任何新候选人（上传夹具那份 parsed 简历的候选人不算）
+    assert conn.execute(
+        "SELECT COUNT(*) FROM candidate WHERE id IN "
+        "(SELECT candidate_id FROM application WHERE resume_id = ?)", (unreadable_id,)
+    ).fetchone()[0] == 0

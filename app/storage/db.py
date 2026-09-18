@@ -657,6 +657,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("job_profile", "asked_questions", "TEXT NOT NULL DEFAULT '[]'"),
     # design D5：置信度阈值是岗位级配置，默认 0.7 起步（U0 实测后由 U4 定终值）。
     ("job", "parse_confidence_threshold", "REAL NOT NULL DEFAULT 0.7"),
+    # M2 U2 tasks 3.3：抽取出的简历全文。resume 表在 U1 就已经建好并可能已经
+    # 存在于任何一个 U1 之后建的库里（含 .51 的 demo.db），U2 只往它的
+    # CREATE TABLE 里加了 raw_text 一列——CREATE TABLE IF NOT EXISTS 对已存在
+    # 的表彻底无效，不在这里登记的话老库上每一次上传都会在
+    # "UPDATE resume SET raw_text = ?" 上 500（final review 发现）。
+    ("resume", "raw_text", "TEXT"),
 )
 
 
