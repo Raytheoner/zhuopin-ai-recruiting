@@ -3,8 +3,8 @@ version: 1
 summary:
   条目数: 534
   按状态:
-    待开: 229
-    在跑: 7
+    待开: 228
+    在跑: 8
     完成: 213
     阻塞: 85
   阻塞·决策: 50
@@ -32,12 +32,12 @@ summary:
   - relay:H-4
   - relay:R-10
   - relay:R-6
+  - voice-structured-interview/U3/plan
   ready:
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
-  - voice-structured-interview/U3/plan
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -5324,6 +5324,10 @@ tasks:
   来源: openspec/changes/voice-structured-interview/tasks.md
   可见: false
   闸门: G2 voice-structured-interview
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
   备注: 0918 dispatcher 派车（0918AN，task-dispatcher·lanes-done-20260918-182246）
 - id: voice-structured-interview/U3
   场景: voice-structured-interview
