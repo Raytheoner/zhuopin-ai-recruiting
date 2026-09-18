@@ -60,8 +60,16 @@ from app.graph.nodes import (
     effect_record_outbound_audit,
     effect_request_revision,
 )
+from app.graph.resume_nodes import effect_persist_parse
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
+from app.schemas.resume_fields import (
+    EducationField,
+    ListField,
+    NumberField,
+    ResumeFields,
+    TextField,
+)
 from app.storage.db import get_connection, init_schema
 
 # 仓库根 = tests/ 的上一级
@@ -86,6 +94,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_mark_jd_human_written",
         "effect_mark_needs_manual",
         "effect_deliver_manual_handoff",
+        "effect_persist_parse",
     }
 )
 
@@ -301,6 +310,7 @@ def test_no_duplicate_effect_node_name_literals():
 
 
 _JOB = "job-4-4"
+_RESUME = "resume-4-4"
 _TS = "2026-09-08T02:00:00+00:00"
 _LABEL = AI_LABEL_TEMPLATE.format(generated_at=_TS)
 _AI_BODY = f"【AI 生成】本文案由系统基于岗位画像自动生成，生成时间 {_TS}。很遗憾……"
@@ -380,6 +390,32 @@ def _seed_job(conn: sqlite3.Connection) -> None:
         (_JOB,),
     )
     conn.commit()
+
+
+def _seed_resume(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO job (id, title, status) VALUES (?, '嵌入式工程师', 'drafting')",
+        (_JOB,),
+    )
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES (?, ?, 'synthetic', 'a.pdf', 'hash1', 'alice')",
+        (_RESUME, _JOB),
+    )
+    conn.commit()
+
+
+def _resume_fields() -> ResumeFields:
+    """与 tests/test_resume_nodes.py::_fields() 逐字同源的六字段构造——
+    崩溃-恢复配方不关心字段内容本身，只借用一份已知合法的 ResumeFields。"""
+    return ResumeFields(
+        name=TextField(value="张三", confidence=0.9),
+        years_of_experience=NumberField(value=5, confidence=0.9),
+        skills=ListField(not_mentioned=True, value=[], confidence=1.0),
+        companies=ListField(not_mentioned=True, value=[], confidence=1.0),
+        education=EducationField(not_mentioned=True, value=None, confidence=1.0),
+        expected_city=TextField(not_mentioned=True, value=None, confidence=1.0),
+    )
 
 
 def _seed_job_with_profile_v1(conn: sqlite3.Connection, profile: dict | None = None) -> None:
@@ -692,6 +728,26 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             ),
             count_business_rows=lambda conn: conn.execute(
                 "SELECT COUNT(*) FROM outbox WHERE thread_id = ?", (_JOB,)
+            ).fetchone()[0],
+        ),
+        "effect_persist_parse": Recipe(
+            thread_id=_RESUME,
+            seed=_seed_resume,
+            invoke=lambda conn: effect_persist_parse(
+                conn,
+                thread_id=_RESUME,
+                business_key="v1",
+                resume_id=_RESUME,
+                job_id=_JOB,
+                fields=_resume_fields(),
+                parser_version="v1",
+                model_configured="deepseek-chat",
+                model_response="deepseek-chat",
+                prompt_version="parse-v1",
+                confidence_threshold=0.7,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM application WHERE resume_id = ?", (_RESUME,)
             ).fetchone()[0],
         ),
     }
