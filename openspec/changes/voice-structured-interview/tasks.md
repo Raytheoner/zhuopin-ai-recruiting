@@ -31,14 +31,14 @@
 
 ## 3. U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
 
-- [ ] 3.1 `app/agents/interview_prep.py::generate(profile, rubric, resume_scores) -> PrepDraft`（纯函数，经 LLM 网关，`temperature=0`，输出 schema 强制每题带 `dimension/difficulty/rubric/follow_ups[≥1]/rationale`）；维度不在白名单的题丢弃并计数；全丢判失败
-- [ ] 3.2 prompt 版本 v1：只用画像＋简历弱点；预留 few-shot 槽位（待 OQ-2 现用面试题回件后升 v2，⛔ 不硬编码题库）；无简历评分时走"通用题"分支并在 `rationale` 标注
-- [ ] 3.3 难度曲线策略：岗位级配置 `prep_curve ∈ {easy_to_hard, by_dimension}`，默认 `easy_to_hard`；题量岗位级配置默认 10；测试：同输入同配置输出题序稳定
-- [ ] 3.4 LangGraph prep 子图：`compute_prep` → `interrupt()` → `effect_freeze_prep`（幂等键 `{application_id}:effect_freeze_prep:{version}`，与 `prep_snapshot`/`prep_question` 写同事务）；测试：重跑不重复建快照
-- [ ] 3.5 `effect_persist_prep_draft` 节点：把 draft 落 `prep_snapshot(status=draft)`＋`prep_question`（幂等键 `{application_id}:effect_persist_prep_draft:{gen_run_id}`）；`analysis_run` 留痕关联
-- [ ] 3.6 题目确认页（业务经理，Web）：逐题看／改题面与 rubric／删／重生成／"全部采纳"；改过的题 `origin=ai_edited` 且 `ai_text` 保留；页面带 AI 生成标识；接口相对路径
-- [ ] 3.7 冻结与开场校验：`freeze(snapshot_id, confirmed_by)` 记确认人与时刻；开场入口校验 `status='frozen'` 否则 4xx 并留痕；画像升版 ⇒ 旧快照 `expired`、可生成新版本；测试穷举 draft/frozen/expired 三态转移
-- [ ] 3.8 prep e2e 测试：合成画像＋M2 合成样本评分 → 生成 → 确认页改一题 → 冻结 → 开场校验通过；断言 `PrepInput` 不含身份字段
+- [x] 3.1 `app/agents/interview_prep.py::generate(profile, rubric, resume_scores) -> PrepDraft`（纯函数，经 LLM 网关，`temperature=0`，输出 schema 强制每题带 `dimension/difficulty/rubric/follow_ups[≥1]/rationale`）；维度不在白名单的题丢弃并计数；全丢判失败
+- [x] 3.2 prompt 版本 v1：只用画像＋简历弱点；预留 few-shot 槽位（待 OQ-2 现用面试题回件后升 v2，⛔ 不硬编码题库）；无简历评分时走"通用题"分支并在 `rationale` 标注
+- [x] 3.3 难度曲线策略：岗位级配置 `prep_curve ∈ {easy_to_hard, by_dimension}`，默认 `easy_to_hard`；题量岗位级配置默认 10；测试：同输入同配置输出题序稳定
+- [x] 3.4 LangGraph prep 子图：`compute_prep` → `interrupt()` → `effect_freeze_prep`（幂等键 `{application_id}:effect_freeze_prep:{version}`，与 `prep_snapshot`/`prep_question` 写同事务）；测试：重跑不重复建快照
+- [x] 3.5 `effect_persist_prep_draft` 节点：把 draft 落 `prep_snapshot(status=draft)`＋`prep_question`（幂等键 `{application_id}:effect_persist_prep_draft:{gen_run_id}`）；`analysis_run` 留痕关联
+- [x] 3.6 题目确认页（业务经理，Web）：逐题看／改题面与 rubric／删／重生成／"全部采纳"；改过的题 `origin=ai_edited` 且 `ai_text` 保留；页面带 AI 生成标识；接口相对路径
+- [x] 3.7 冻结与开场校验：`freeze(snapshot_id, confirmed_by)` 记确认人与时刻；开场入口校验 `status='frozen'` 否则 4xx 并留痕；画像升版 ⇒ 旧快照 `expired`、可生成新版本；测试穷举 draft/frozen/expired 三态转移
+- [x] 3.8 prep e2e 测试：合成画像＋M2 合成样本评分 → 生成 → 确认页改一题 → 冻结 → 开场校验通过；断言 `PrepInput` 不含身份字段
 
 ## 4. U3 邀约与同意流程（一次性链接 ＋ 门禁接线 ＋ 双同意 ＋ 验证码）
 
