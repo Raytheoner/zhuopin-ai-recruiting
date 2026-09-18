@@ -711,3 +711,35 @@ def test_intent_scene_is_frontmatter_verbatim_not_regex_guess(tmp_path):
     first = (repo / "docs/roadmap/任务台账.yaml").read_bytes()
     run(repo)
     assert first == (repo / "docs/roadmap/任务台账.yaml").read_bytes()
+
+
+# ── ⑦ 匹配与拆段修复（0918AI，relay R-13/R-14）──
+
+
+def test_match_plans_prefix_fallback_does_not_leak_into_unrelated_change_sharing_first_token():
+    """`change="interview-scheduling"` 的前缀 `interview` 不得吃到
+    `voice-structured-interview-unit1-...`——该 stem 里 `interview-unit1` 只是
+    `structured-interview` 的子串，不是 `interview-scheduling` 的缩写。"""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import dispatcher_backlog as db  # noqa: E402
+
+    def plan(stem: str) -> db.PlanInfo:
+        return db.PlanInfo(stem=stem, rel=stem, task_count=1, segments=[(1, 1)], pending=[], paths=[])
+
+    own = "2026-09-18-interview-scheduling-unit1-plan"
+    unrelated = "2026-09-18-voice-structured-interview-unit1-data-model"
+    plans = {own: plan(own), unrelated: plan(unrelated)}
+    matched = db._match_plans(plans, "interview-scheduling", "1")
+    assert [p.stem for p in matched] == [own]
+
+
+def test_parse_segments_without_section_falls_back_to_groups_of_three_not_one_giant_segment():
+    """无「## 建议拆段点」节、正文也解析不出旧式 `第 N 条：Task a–b` 时，
+    按 `.claude/skills/task-dispatcher/rules.md` §2「每 3 Task 一段」拆，
+    ⛔ 不得把全部 Task 压成一条 segment。"""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import dispatcher_backlog as db  # noqa: E402
+
+    text = "\n".join(f"### Task {n}: xxx（tasks {n}.1）" for n in range(1, 10))
+    segments = db.parse_segments(text, 9)
+    assert segments == [(1, 3), (4, 6), (7, 9)]

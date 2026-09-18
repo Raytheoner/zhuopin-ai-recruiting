@@ -524,7 +524,8 @@ TASK_HEAD_RE = re.compile(r"^### Task (\d+)\b[^\n]*?[（(]\s*tasks?\s+([^）)]*)
 
 def parse_segments(text: str, task_count: int) -> list[tuple[int, int]]:
     """拆段：优先读「## 建议拆段点」节里每个列表项的首个 `Task a–b`（措辞不限：「第 1 条：」「Segment A：」都算，0918C）；
-    无该节 ⇒ 兼容旧式全文 `第 N 条：Task a–b`；都没有 ⇒ 整份 plan 一段。"""
+    无该节 ⇒ 兼容旧式全文 `第 N 条：Task a–b`；都没有 ⇒ 按 `.claude/skills/task-dispatcher/rules.md` §2
+    「无拆段节 ⇒ 每 3 Task 一段」切分，⛔ 不得把整份 plan 压成一段（relay R-14）。"""
     segments: list[tuple[int, int]] = []
     sec = SEGMENT_SECTION_RE.search(text)
     if sec:
@@ -539,7 +540,7 @@ def parse_segments(text: str, task_count: int) -> list[tuple[int, int]]:
         for m in re.finditer(r"第\s*(\d+)\s*条[：:]\s*Task\s*(\d+)\s*[–—-]\s*(\d+)", text):
             segments.append((int(m.group(2)), int(m.group(3))))
     if not segments and task_count:
-        segments = [(1, task_count)]
+        segments = [(a, min(a + 2, task_count)) for a in range(1, task_count + 1, 3)]
     return segments
 
 
@@ -565,14 +566,21 @@ def parse_plan(path: Path, rel: str) -> PlanInfo:
 
 
 def _match_plans(plans: dict[str, PlanInfo], change: str, unit_no: str) -> list[PlanInfo]:
-    """文件名含 unit<N>（后面不跟数字或小数点——`unit2` ⛔ 不吃 `unit2.5`）且含变更包全名或其首段前缀（如 m2-unit0）的 plan，按名排序。"""
+    """文件名含 unit<N>（后面不跟数字或小数点——`unit2` ⛔ 不吃 `unit2.5`）且含变更包全名（如 `interview-scheduling-unit1`）
+    的 plan，按名排序。首段前缀回退（如 `2026-09-17-m2-unit0-model-comparison` 命中 `change="m2-resume-parse-and-rank"`
+    的首段 `m2`）只在前缀**紧接日期戳之后**（`YYYY-MM-DD-<prefix>-unit<N>`）才允许——否则前缀若是常见词，
+    会命中它在别的变更包文件名里当子串出现的位置（如 `change="interview-scheduling"` 的首段 `interview`
+    命中 `voice-structured-interview-unit1-...`，该处 `interview` 只是 `structured-interview` 的尾部，
+    relay R-13）。"""
     prefix = change.split("-")[0]
     u = re.escape(str(unit_no))
     out = []
     for stem in sorted(plans):
         if not re.search(rf"unit{u}(?!\.?\d)", stem):
             continue
-        if change in stem or re.search(rf"(?<![\w]){re.escape(prefix)}-unit{u}(?!\.?\d)", stem):
+        if re.search(rf"(?<![\w]){re.escape(change)}-unit{u}(?!\.?\d)", stem):
+            out.append(plans[stem])
+        elif re.match(rf"(?:\d{{4}}-\d{{2}}-\d{{2}}-)?{re.escape(prefix)}-unit{u}(?!\.?\d)", stem):
             out.append(plans[stem])
     return out
 
