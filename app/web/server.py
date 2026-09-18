@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
@@ -34,7 +34,7 @@ from app.graph.nodes import (
     effect_request_revision,
     revision_count,
 )
-from app.graph.resume_nodes import effect_persist_parse
+from app.graph.resume_nodes import effect_persist_parse, record_resume_access
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
@@ -1027,6 +1027,55 @@ def create_app(
         )
         return {"resume_id": resume_id, "application_id": application_id,
                 "parser_version": parser_version}
+
+    def _require_resume(resume_id: str) -> tuple:
+        row = conn.execute(
+            "SELECT id, file_name, raw_text, parsed_json, sample_class FROM resume WHERE id = ?",
+            (resume_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="resume not found")
+        return row
+
+    @router.get("/api/resumes/{resume_id}/text")
+    def get_resume_text(request: Request, resume_id: str):
+        row = _require_resume(resume_id)
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="raw_text")
+        return {"resume_id": resume_id, "raw_text": row[2] or ""}
+
+    @router.get("/api/resumes/{resume_id}/spans")
+    def get_resume_spans(request: Request, resume_id: str):
+        _require_resume(resume_id)
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="spans")
+        rows = conn.execute(
+            "SELECT span_id, start, end, text FROM resume_text_span "
+            "WHERE resume_id = ? ORDER BY span_id",
+            (resume_id,),
+        ).fetchall()
+        return {"spans": [
+            {"span_id": r[0], "start": r[1], "end": r[2], "text": r[3]} for r in rows
+        ]}
+
+    @router.get("/api/resumes/{resume_id}/parsed")
+    def get_resume_parsed(request: Request, resume_id: str):
+        row = _require_resume(resume_id)
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="parsed_result")
+        return {"resume_id": resume_id, "parsed_json": json.loads(row[3]) if row[3] else None}
+
+    @router.get("/api/resumes/{resume_id}/download")
+    def download_resume(request: Request, resume_id: str):
+        row = _require_resume(resume_id)
+        file_name = row[1]
+        suffix = Path(file_name).suffix.lower()
+        stored_path = _resume_storage_dir / f"{resume_id}{suffix}"
+        if not stored_path.exists():
+            raise HTTPException(status_code=404, detail="文件已不在存储中")
+        record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
+                              access_type="download")
+        return FileResponse(str(stored_path), filename=file_name)
 
     @router.get("/health")
     def health() -> dict:

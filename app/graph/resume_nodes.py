@@ -146,6 +146,21 @@ def effect_persist_parse(
     return application_id
 
 
+def record_resume_access(
+    conn: sqlite3.Connection, *, accessor: str, resume_id: str, access_type: str
+) -> None:
+    """resume-upload-and-gate spec「简历访问留痕」：写入失败必须让调用方的读取
+    也失败——本函数不吞任何异常，调用方（路由）不 catch 就是正确行为
+    （FastAPI 未捕获异常 ⇒ 500，读取自然失败，不返回简历内容）。
+    """
+    conn.execute(
+        "INSERT INTO resume_access_log (id, accessor, resume_id, access_type) "
+        "VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), accessor, resume_id, access_type),
+    )
+    conn.commit()
+
+
 def queue_reapplication_screening(resume_id: str) -> None:
     """U3 硬门槛引擎的接入点空壳（tasks 3.10「触发该投递重判」，与
     app/middleware/auth.py::AuthMiddleware 是同一种"空壳接入点"手法）。
