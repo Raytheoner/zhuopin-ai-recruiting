@@ -383,3 +383,38 @@ def effect_deliver_invitation(
             decision.reason or "",
         ),
     )
+
+
+# ── 4.6：双同意记录 ─────────────────────────────────────────────────
+
+CONSENT_KINDS: tuple[str, ...] = ("ai_interview", "identity_check")
+
+
+@idempotent_effect("effect_record_consent")
+def effect_record_consent(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, kind: str, result: str, version: str,
+) -> None:
+    """effect_* 节点：business_key = f"{kind}:{version}"（tasks 4.6 字面幂等
+    键公式 `{session_id}:effect_record_consent:{kind}:{version}`）。同一
+    (session_id, kind) 重复提交按 UPSERT 处理（候选人改主意重新勾选）。
+    任一拒绝 ⇒ 场次 abandoned ⇒ 留痕——spec「任一拒绝 ⇒ 场次不开始」，
+    每次调用独立判断，顺序不敏感（不管先提交哪一项，只要某一项是拒绝，
+    场次就会被置为 abandoned）。"""
+    conn.execute(
+        "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(session_id, kind) DO UPDATE SET "
+        "result = excluded.result, consent_version = excluded.consent_version, at = datetime('now')",
+        (session_id, kind, result, version),
+    )
+    if result == "declined":
+        conn.execute(
+            "UPDATE interview_session SET status = 'abandoned' WHERE id = ? AND status != 'abandoned'",
+            (session_id,),
+        )
+        conn.execute(
+            "INSERT INTO interview_invite_event (id, session_id, event_type, detail) "
+            "VALUES (?, ?, 'consent_declined', ?)",
+            (str(uuid.uuid4()), session_id, kind),
+        )

@@ -427,3 +427,60 @@ class TestDeliverInvitation:
         source = pathlib.Path("app/graph/invite_nodes.py").read_text(encoding="utf-8")
         assert "channel.deliver" not in source
         assert "from app.channels" not in source or "from app.channels.base import" in source
+
+
+from app.graph.invite_nodes import CONSENT_KINDS, effect_record_consent
+
+
+class TestConsent:
+    def test_consent_kinds(self):
+        assert CONSENT_KINDS == ("ai_interview", "identity_check")
+
+    def test_accept_both_kinds_persists_two_rows_session_stays_pending_state(self, conn):
+        session_id = _new_pending_session(conn)
+        for kind in CONSENT_KINDS:
+            effect_record_consent(
+                conn, thread_id=session_id, business_key=f"{kind}:v1",
+                session_id=session_id, kind=kind, result="accepted", version="v1",
+            )
+        rows = conn.execute(
+            "SELECT kind, result, consent_version FROM interview_consent WHERE session_id = ? ORDER BY kind",
+            (session_id,),
+        ).fetchall()
+        assert rows == [("ai_interview", "accepted", "v1"), ("identity_check", "accepted", "v1")]
+        status = conn.execute(
+            "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()[0]
+        assert status != "abandoned"
+
+    def test_decline_one_kind_abandons_session_and_logs(self, conn):
+        session_id = _new_pending_session(conn)
+        effect_record_consent(
+            conn, thread_id=session_id, business_key="ai_interview:v1",
+            session_id=session_id, kind="ai_interview", result="declined", version="v1",
+        )
+        status = conn.execute(
+            "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()[0]
+        assert status == "abandoned"
+        event = conn.execute(
+            "SELECT detail FROM interview_invite_event WHERE session_id = ? AND event_type = 'consent_declined'",
+            (session_id,),
+        ).fetchone()
+        assert event == ("ai_interview",)
+
+    def test_consent_upsert_on_resubmit_same_kind(self, conn):
+        session_id = _new_pending_session(conn)
+        effect_record_consent(
+            conn, thread_id=session_id, business_key="ai_interview:v1",
+            session_id=session_id, kind="ai_interview", result="declined", version="v1",
+        )
+        effect_record_consent(
+            conn, thread_id=session_id, business_key="ai_interview:v1-retry",
+            session_id=session_id, kind="ai_interview", result="accepted", version="v1",
+        )
+        row = conn.execute(
+            "SELECT result FROM interview_consent WHERE session_id = ? AND kind = 'ai_interview'",
+            (session_id,),
+        ).fetchone()
+        assert row[0] == "accepted"
