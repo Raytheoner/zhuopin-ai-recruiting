@@ -43,6 +43,7 @@ from app.observability.middleware import (
 )
 from app.parsing.extract_text import SUPPORTED_SUFFIXES
 from app.parsing.resume_ingest import ingest_resume_text
+from app.parsing.spans import TextSpan
 from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.storage import job_queries
 from app.storage.auth_session import create_session, delete_session
@@ -978,6 +979,54 @@ def create_app(
         return {"file_name": upload.filename, "status": "accepted",
                 "resume_id": resume_id, "application_id": application_id,
                 "parse_status": "parsed"}
+
+    @router.post("/api/resumes/{resume_id}/reparse")
+    def reparse_resume(resume_id: str):
+        row = conn.execute(
+            "SELECT job_id FROM resume WHERE id = ?", (resume_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="resume not found")
+        job_id = row[0]
+
+        spans = [
+            TextSpan(span_id=r[0], start=r[1], end=r[2], text=r[3])
+            for r in conn.execute(
+                "SELECT span_id, start, end, text FROM resume_text_span "
+                "WHERE resume_id = ? ORDER BY span_id",
+                (resume_id,),
+            ).fetchall()
+        ]
+        threshold_row = conn.execute(
+            "SELECT parse_confidence_threshold FROM job WHERE id = ?", (job_id,)
+        ).fetchone()
+        confidence_threshold = threshold_row[0] if threshold_row else 0.7
+
+        existing_versions = conn.execute(
+            "SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = ?", (resume_id,)
+        ).fetchone()[0]
+        parser_version = f"v{existing_versions + 1}"
+
+        fields, meta = compute_parse(
+            gateway,
+            spans=spans,
+            audit_context={"thread_id": resume_id, "node": "compute_parse", "job_id": job_id},
+        )
+        application_id = effect_persist_parse(
+            conn,
+            thread_id=resume_id,
+            business_key=parser_version,
+            resume_id=resume_id,
+            job_id=job_id,
+            fields=fields,
+            parser_version=parser_version,
+            model_configured=gateway.model,
+            model_response=meta.response_model,
+            prompt_version="parse-v1",
+            confidence_threshold=confidence_threshold,
+        )
+        return {"resume_id": resume_id, "application_id": application_id,
+                "parser_version": parser_version}
 
     @router.get("/health")
     def health() -> dict:
