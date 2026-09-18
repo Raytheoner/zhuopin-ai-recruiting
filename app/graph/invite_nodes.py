@@ -418,3 +418,163 @@ def effect_record_consent(
             "VALUES (?, ?, 'consent_declined', ?)",
             (str(uuid.uuid4()), session_id, kind),
         )
+
+
+# ── 4.7 / 4.8：手机号验证码 ──────────────────────────────────────────
+
+CODE_LENGTH = 6
+CODE_TTL_MINUTES = 5
+MAX_CODE_ATTEMPTS = 5
+
+
+def _hash_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def generate_verification_code() -> str:
+    return f"{secrets.randbelow(10 ** CODE_LENGTH):0{CODE_LENGTH}d}"
+
+
+@idempotent_effect("effect_issue_verification_code")
+def effect_issue_verification_code(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, code_hash: str, expires_at: str,
+) -> None:
+    """签发新验证码：落哈希与过期时刻，尝试次数清零（重新签发即重新给
+    5 次机会——候选人请求新码是自己的选择，不是绕过锁定，锁定后场次
+    status='locked'，签发前的编排函数会先挡住已锁定场次，见
+    issue_verification_code）。"""
+    conn.execute(
+        "UPDATE interview_session SET phone_code_hash = ?, phone_code_expires_at = ?, "
+        "phone_attempts = 0 WHERE id = ?",
+        (code_hash, expires_at, session_id),
+    )
+
+
+class SessionLockedError(Exception):
+    """场次已锁定，不能再签发新验证码。"""
+
+
+def issue_verification_code(conn: sqlite3.Connection, *, session_id: str) -> str:
+    """L4 编排：生成新验证码、落库、返回明文（仅此一次）。调用方决定展示给
+    谁：短信通道未配置（本单元现状）⇒ 调用方接着调
+    effect_display_verification_code_to_hr 展示在 HR 工作台；短信通道配置了
+    ⇒ 调用方改调 effect_send_verification_code（本单元只留接口，OQ-10 未定
+    前不接线，见该函数）。"""
+    status_row = conn.execute(
+        "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    if status_row is not None and status_row[0] == "locked":
+        raise SessionLockedError(f"场次 {session_id!r} 已锁定，不能签发新验证码")
+
+    code = generate_verification_code()
+    code_hash = _hash_code(code)
+    expires_at = (_utcnow() + timedelta(minutes=CODE_TTL_MINUTES)).isoformat()
+    effect_issue_verification_code(
+        conn, thread_id=session_id, business_key=uuid.uuid4().hex,
+        session_id=session_id, code_hash=code_hash, expires_at=expires_at,
+    )
+    return code
+
+
+class VerificationLockedError(Exception):
+    """场次已锁定（连续输错超限）。"""
+
+
+class VerificationExpiredError(Exception):
+    """验证码未签发、或已过期。"""
+
+
+class VerificationIncorrectError(Exception):
+    """验证码错误（未超限时的单次失败）。"""
+
+
+@idempotent_effect("effect_verify_phone")
+def effect_verify_phone(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, correct: bool
+) -> None:
+    """business_key = str(attempt_no)（tasks 4.7 字面幂等键公式
+    `{session_id}:effect_verify_phone:{attempt_no}`）。correct 由调用方
+    （verify_phone_code，纯比对哈希）算好传入——本节点只做落库这一件事：
+    通过则写 phone_verified_at + identity_check(result=skipped)；不通过则
+    计数，超限则锁定场次并留痕。"""
+    if correct:
+        conn.execute(
+            "UPDATE interview_session SET phone_verified_at = datetime('now') WHERE id = ?",
+            (session_id,),
+        )
+        conn.execute(
+            "INSERT INTO identity_check (session_id, result) VALUES (?, 'skipped') "
+            "ON CONFLICT(session_id) DO NOTHING",
+            (session_id,),
+        )
+        return
+
+    conn.execute(
+        "UPDATE interview_session SET phone_attempts = phone_attempts + 1 WHERE id = ?", (session_id,)
+    )
+    attempts = conn.execute(
+        "SELECT phone_attempts FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()[0]
+    if attempts >= MAX_CODE_ATTEMPTS:
+        conn.execute("UPDATE interview_session SET status = 'locked' WHERE id = ?", (session_id,))
+        conn.execute(
+            "INSERT INTO interview_invite_event (id, session_id, event_type) VALUES (?, ?, 'verification_locked')",
+            (str(uuid.uuid4()), session_id),
+        )
+
+
+def verify_phone_code(conn: sqlite3.Connection, *, session_id: str, submitted_code: str) -> None:
+    """L4 编排：过期/锁定校验 → 比对哈希 → 落库。⛔ 不返回布尔，抛出对应
+    异常——调用方（Web 路由）据异常类型映射 HTTP 状态与候选人文案。"""
+    row = conn.execute(
+        "SELECT status, phone_code_hash, phone_code_expires_at, phone_attempts "
+        "FROM interview_session WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    status, code_hash, expires_at_raw, attempts = row
+
+    if status == "locked":
+        raise VerificationLockedError("场次已锁定")
+    if code_hash is None or expires_at_raw is None:
+        raise VerificationExpiredError("验证码未签发或已失效")
+    if _utcnow() > _parse_iso(expires_at_raw):
+        raise VerificationExpiredError("验证码已过期")
+
+    attempt_no = attempts + 1
+    correct = _hash_code(submitted_code) == code_hash
+    effect_verify_phone(
+        conn, thread_id=session_id, business_key=str(attempt_no),
+        session_id=session_id, correct=correct,
+    )
+    if not correct:
+        post_row = conn.execute(
+            "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()
+        if post_row[0] == "locked":
+            raise VerificationLockedError("连续输错已达上限，场次锁定")
+        raise VerificationIncorrectError("验证码错误")
+
+
+@idempotent_effect("effect_display_verification_code_to_hr")
+def effect_display_verification_code_to_hr(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, accessor: str
+) -> None:
+    """短信通道未配置时的降级路径（tasks 4.8）：验证码在候选人请求时生成，
+    本节点只留痕"HR 看过这个场次的验证码"这件事，⛔ 不落验证码明文本身——
+    明文已经在 issue_verification_code 的返回值里，由 Web 路由直接吐给
+    HR 工作台的响应体，不进数据库。"""
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) VALUES (?, ?, 'code_displayed_to_hr', ?)",
+        (str(uuid.uuid4()), session_id, accessor),
+    )
+
+
+def effect_send_verification_code(*args, **kwargs):
+    """短信通道自动发送节点（design D13）。⏸ 门禁口径 OQ-10（自动发送验证码
+    是否属于"已人工确认邀约的从属动作"、可否免逐次门禁确认）未定前，本节点
+    只留接口、默认不启用、不接线——tasks 4.8 字面要求"该节点只留接口"。
+    ⛔ 不消费任何真实短信供应商 API（当前无供应商可消费）。调用方（Web 路由）
+    不得引用这个函数；本单元的候选人验证码路径只有
+    effect_display_verification_code_to_hr 一条。"""
+    raise NotImplementedError("短信验证码通道未采购/未接线（OQ-10 未决），本单元不启用")

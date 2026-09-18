@@ -484,3 +484,114 @@ class TestConsent:
             (session_id,),
         ).fetchone()
         assert row[0] == "accepted"
+
+
+import uuid
+
+from app.graph.invite_nodes import (
+    CODE_LENGTH,
+    MAX_CODE_ATTEMPTS,
+    VerificationExpiredError,
+    VerificationIncorrectError,
+    VerificationLockedError,
+    effect_display_verification_code_to_hr,
+    effect_send_verification_code,
+    issue_verification_code,
+    verify_phone_code,
+)
+
+
+class TestVerificationCode:
+    def test_issued_code_has_expected_length(self, conn):
+        session_id = _new_pending_session(conn)
+        code = issue_verification_code(conn, session_id=session_id)
+        assert len(code) == CODE_LENGTH
+        assert code.isdigit()
+
+    def test_correct_code_passes_and_writes_identity_check_skipped(self, conn):
+        session_id = _new_pending_session(conn)
+        code = issue_verification_code(conn, session_id=session_id)
+
+        verify_phone_code(conn, session_id=session_id, submitted_code=code)
+
+        row = conn.execute(
+            "SELECT phone_verified_at FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()
+        assert row[0] is not None
+        identity = conn.execute(
+            "SELECT result FROM identity_check WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        assert identity == ("skipped",)
+
+    def test_incorrect_code_raises_and_increments_attempts(self, conn):
+        session_id = _new_pending_session(conn)
+        issue_verification_code(conn, session_id=session_id)
+
+        with pytest.raises(VerificationIncorrectError):
+            verify_phone_code(conn, session_id=session_id, submitted_code="000000")
+
+        attempts = conn.execute(
+            "SELECT phone_attempts FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()[0]
+        assert attempts == 1
+
+    def test_five_wrong_attempts_locks_session(self, conn):
+        session_id = _new_pending_session(conn)
+        issue_verification_code(conn, session_id=session_id)
+
+        for i in range(MAX_CODE_ATTEMPTS):
+            with pytest.raises((VerificationIncorrectError, VerificationLockedError)):
+                verify_phone_code(conn, session_id=session_id, submitted_code="000000")
+
+        status = conn.execute(
+            "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()[0]
+        assert status == "locked"
+        event = conn.execute(
+            "SELECT 1 FROM interview_invite_event WHERE session_id = ? AND event_type = 'verification_locked'",
+            (session_id,),
+        ).fetchone()
+        assert event is not None
+
+    def test_verify_rejected_once_locked(self, conn):
+        session_id = _new_pending_session(conn)
+        issue_verification_code(conn, session_id=session_id)
+        for _ in range(MAX_CODE_ATTEMPTS):
+            try:
+                verify_phone_code(conn, session_id=session_id, submitted_code="000000")
+            except Exception:
+                pass
+        with pytest.raises(VerificationLockedError):
+            verify_phone_code(conn, session_id=session_id, submitted_code="000000")
+
+    def test_verify_without_issued_code_raises_expired(self, conn):
+        session_id = _new_pending_session(conn)
+        with pytest.raises(VerificationExpiredError):
+            verify_phone_code(conn, session_id=session_id, submitted_code="123456")
+
+    def test_expired_code_rejected(self, conn):
+        session_id = _new_pending_session(conn)
+        code = issue_verification_code(conn, session_id=session_id)
+        past = "2020-01-01T00:00:00+00:00"
+        conn.execute(
+            "UPDATE interview_session SET phone_code_expires_at = ? WHERE id = ?", (past, session_id)
+        )
+        conn.commit()
+        with pytest.raises(VerificationExpiredError):
+            verify_phone_code(conn, session_id=session_id, submitted_code=code)
+
+    def test_display_to_hr_logs_event(self, conn):
+        session_id = _new_pending_session(conn)
+        effect_display_verification_code_to_hr(
+            conn, thread_id=session_id, business_key=uuid.uuid4().hex,
+            session_id=session_id, accessor="hr:tester",
+        )
+        event = conn.execute(
+            "SELECT 1 FROM interview_invite_event WHERE session_id = ? AND event_type = 'code_displayed_to_hr'",
+            (session_id,),
+        ).fetchone()
+        assert event is not None
+
+    def test_send_verification_code_is_unimplemented_stub(self):
+        with pytest.raises(NotImplementedError):
+            effect_send_verification_code()
