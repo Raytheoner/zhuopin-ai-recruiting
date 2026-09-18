@@ -41,7 +41,7 @@ from app.observability.middleware import (
     RequestIdMiddleware,
     unhandled_exception_handler,
 )
-from app.parsing.extract_text import UnsupportedFileType
+from app.parsing.extract_text import SUPPORTED_SUFFIXES
 from app.parsing.resume_ingest import ingest_resume_text
 from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.storage import job_queries
@@ -899,7 +899,8 @@ def create_app(
                             upload: UploadFile) -> dict:
         suffix = Path(upload.filename or "").suffix.lower()
         content = upload.file.read()
-        if suffix not in (".pdf", ".docx"):
+        # 提前拒收，不读 ingest_resume_text 的 UnsupportedFileType 路径——避免为被拒文件建 DB 行/落盘再回滚
+        if suffix not in SUPPORTED_SUFFIXES:
             return {"file_name": upload.filename, "status": "rejected",
                     "reason": "不支持的类型"}
 
