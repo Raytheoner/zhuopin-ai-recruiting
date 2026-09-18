@@ -59,7 +59,12 @@ def test_init_schema_adds_new_columns_to_legacy_db(tmp_path):
 
     init_schema(conn)
 
-    expected = {column for _table, column, _ddl in _ADDED_COLUMNS}
+    # 只取 job_profile 自己的条目再比较：_ADDED_COLUMNS 现在还带着 job 的
+    # parse_confidence_threshold（M2 U2 task 3），不按 table 过滤会把不属于
+    # job_profile 的列名也塞进 expected，判它是 job_profile 列集合的子集必然假。
+    expected = {
+        column for table, column, _ddl in _ADDED_COLUMNS if table == "job_profile"
+    }
     assert expected <= _columns(conn, "job_profile")
 
 
@@ -226,8 +231,14 @@ def test_audit_tables_never_enter_the_add_column_path(tmp_path):
     U1 的第二条硬约束本身：三张全新表不走 _ADDED_COLUMNS。加列路径只服务
     "老库缺列"，把新表塞进去会让 apply_column_migrations 对着一张不存在的表
     执行 ALTER TABLE。
+
+    这条护栏本身没变——依然是"新表不许进 _ADDED_COLUMNS，只有已存在的老表才
+    能走加列路径"。M2 U2 task 3 往 _ADDED_COLUMNS 加了 job 表的
+    parse_confidence_threshold（job 是老表，SCHEMA 里一直有 CREATE TABLE IF
+    NOT EXISTS job，不是新表），所以预期的表集合从 {"job_profile"} 放宽到
+    {"job_profile", "job"}，护栏本身的判定逻辑不变。
     """
-    assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {"job_profile"}
+    assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {"job_profile", "job"}
 
 
 def test_add_column_path_is_a_noop_after_audit_schema(tmp_path):
@@ -285,6 +296,9 @@ def test_job_columns_are_pinned(tmp_path):
         "department",
         "status",
         "created_at",
+        # M2 U2 task 3（design D5）合法新增：岗位级解析置信度阈值，经
+        # _ADDED_COLUMNS 走老库加列路径，新库走 CREATE TABLE 一步到位。
+        "parse_confidence_threshold",
     }
 
 
