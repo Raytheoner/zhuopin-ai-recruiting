@@ -650,6 +650,185 @@ CREATE TABLE IF NOT EXISTS hr_session (
 );
 
 CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
+-- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
+-- "老库缺列"这一种情况，新表不需要它。.51 现网 demo.db 既有表一行不改，
+-- 无数据迁移（design.md Migration Plan 第 1 条）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- prep 出题快照（interview-prep-question-engine spec「题目快照版本化且可
+-- 追溯到输入」）。resume_run_id 可空：spec「简历评分尚未完成」场景下 prep
+-- 只按画像生成通用题目，没有简历评分 run 可关联；gen_run_id 不可空——不管
+-- 有没有简历弱点输入，prep 生成本身都是一次 AI 调用，必须留痕（工程铁律 3）。
+-- status 三态对应 spec「业务经理确认后才冻结」的状态机：draft（待确认）/
+-- frozen（已冻结，开场校验只认这个状态）/ expired（画像升版后旧版本过期）。
+CREATE TABLE IF NOT EXISTS prep_snapshot (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    version INTEGER NOT NULL,
+    profile_version INTEGER NOT NULL,
+    resume_run_id TEXT REFERENCES analysis_run(id),
+    gen_run_id TEXT NOT NULL REFERENCES analysis_run(id),
+    confirmed_by TEXT,
+    confirmed_at TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'frozen', 'expired')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_snapshot_application_version
+    ON prep_snapshot (application_id, version);
+
+-- prep 题目（同一 spec「按画像与简历弱点生成题目」「难度曲线」）。origin 记
+-- 「AI 生成」还是「AI 生成、人工修改」（spec「AI 生成标识」的存储层落点）；
+-- ai_text 只在 origin='ai_edited' 时有值，保留人工改写前的原文可追溯。
+-- (snapshot_id, seq) 唯一：同一份快照内题序不重复，也是 live 段"按冻结题序
+-- 出题"的天然索引。
+CREATE TABLE IF NOT EXISTS prep_question (
+    id TEXT PRIMARY KEY NOT NULL,
+    snapshot_id TEXT NOT NULL REFERENCES prep_snapshot(id),
+    seq INTEGER NOT NULL,
+    dimension TEXT NOT NULL,
+    difficulty TEXT NOT NULL,
+    text TEXT NOT NULL,
+    rubric_json TEXT NOT NULL,
+    follow_ups_json TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'ai' CHECK (origin IN ('ai', 'ai_edited')),
+    ai_text TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_question_snapshot_seq
+    ON prep_question (snapshot_id, seq);
+
+-- 面试场次（live-voice-interview-session spec「开场前置条件」；
+-- interview-recording-retention spec「留存期限在场次建立时固定」）。
+-- prep_snapshot_version 是裸整数，不建到 prep_snapshot 的复合外键——与
+-- screening_flag.profile_version 同一手法：版本号语义关联但不强制引用
+-- 完整性。retention_until / retention_policy_version 均 NOT NULL 且无默认
+-- 值：留存期限必须在场次建立那一刻由应用层算好并写入，不允许留空。
+-- status 六态覆盖 spec「场次状态 MUST 至少区分」的枚举。
+CREATE TABLE IF NOT EXISTS interview_session (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    prep_snapshot_version INTEGER NOT NULL,
+    invite_token_hash TEXT,
+    invite_expires_at TEXT,
+    resume_token_hash TEXT,
+    phone_verified_at TEXT,
+    phone_attempts INTEGER NOT NULL DEFAULT 0,
+    recording_uri TEXT,
+    retention_until TEXT NOT NULL,
+    retention_policy_version TEXT NOT NULL,
+    sample_class TEXT NOT NULL CHECK (sample_class IN ('internal_sim', 'live')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        status IN ('pending', 'in_progress', 'completed', 'interrupted', 'abandoned', 'locked')
+    ),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_session_invite_token
+    ON interview_session (invite_token_hash);
+
+CREATE INDEX IF NOT EXISTS idx_interview_session_application
+    ON interview_session (application_id);
+
+-- 双同意留痕（interview-invite-and-consent spec「AI 面试与身份核验各自
+-- 单独同意」）。复合主键 (session_id, kind)：天然键就是"这个场次的这一项
+-- 同意"，与 hard_requirement/resume_text_span 同一手法，不设代理主键。
+CREATE TABLE IF NOT EXISTS interview_consent (
+    session_id TEXT NOT NULL REFERENCES interview_session(id),
+    kind TEXT NOT NULL CHECK (kind IN ('ai_interview', 'identity_check')),
+    result TEXT NOT NULL CHECK (result IN ('accepted', 'declined')),
+    consent_version TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, kind)
+);
+
+-- 身份核验结果（interview-invite-and-consent spec「手机号验证码弱核验」
+-- D13：一期只做手机号验证码，result 一律 'skipped'，保留给活体/证件比对；
+-- 弱核验的通过时刻/尝试次数记在 interview_session 上，不进本表）。
+-- ⛔ 刻意不设图像列或任何评分相关列——见下方 test_identity_check_has_no_
+-- image_or_scoring_columns 的源码级反证测试；未来任何人往这张表加列都会被
+-- 这条测试拦下来。
+CREATE TABLE IF NOT EXISTS identity_check (
+    session_id TEXT PRIMARY KEY NOT NULL REFERENCES interview_session(id),
+    result TEXT NOT NULL CHECK (result IN ('pass', 'fail', 'skipped')),
+    checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 面试逐轮问答（live-voice-interview-session spec「全程录制与 turn 对齐」
+-- 「打断处理」「文本作答降级」）。question_id 引用 prep_question(id)——
+-- 冻结快照里的具体某一题；follow_up_of 自引用本表，记录"这条追问针对哪条
+-- turn"。answer_mode='text' 时 audio_start_ms/audio_end_ms 必须为空的
+-- CHECK 是 spec「文本作答的 turn MUST NOT 有音频起止」的存储层落点。
+-- acoustic_ref 只读展示字段（合规红线「声学信号只展示不计分」），文本作答
+-- turn 恒为空，不受 CHECK 约束（列本身允许 NULL，评分输入结构性不读它，
+-- 见 app/schemas/interview_ai_input.py 的 ScoreInputTurn）。
+CREATE TABLE IF NOT EXISTS interview_turn (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES interview_session(id),
+    seq INTEGER NOT NULL,
+    question_id TEXT NOT NULL REFERENCES prep_question(id),
+    question_text TEXT NOT NULL,
+    answer_text TEXT,
+    answer_mode TEXT NOT NULL CHECK (answer_mode IN ('voice', 'text')),
+    audio_start_ms INTEGER,
+    audio_end_ms INTEGER,
+    latency_json TEXT,
+    follow_up_of TEXT REFERENCES interview_turn(id),
+    interrupted_at_ms INTEGER,
+    asr_confidence REAL,
+    acoustic_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (
+        answer_mode != 'text'
+        OR (audio_start_ms IS NULL AND audio_end_ms IS NULL)
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_turn_session_seq
+    ON interview_turn (session_id, seq);
+
+-- 录音删除留痕（interview-recording-retention spec「到期自动删除并留痕」
+-- 「候选人撤回或终止」）。session_id 直接做主键：一个场次的录音只彻底删除
+-- 一次，重复扫描不产生第二行（spec「重复扫描」场景，删除动作本身幂等）。
+-- actor 的 CHECK 与 human_review.reviewer 同一手法：trim 第二参数显式列出
+-- 空格/制表/换行/回车（SQLite 单参 trim() 只剥空格）——空执行者等于没留痕。
+CREATE TABLE IF NOT EXISTS interview_recording_deletion (
+    session_id TEXT PRIMARY KEY NOT NULL REFERENCES interview_session(id),
+    deleted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    scope TEXT NOT NULL,
+    reason TEXT NOT NULL CHECK (reason IN ('expired', 'withdrawn', 'terminated')),
+    actor TEXT NOT NULL CHECK (
+        actor IS NOT NULL AND trim(actor, ' ' || char(9) || char(10) || char(13)) != ''
+    )
+);
+
+-- 录音/转写/ScoreCard 访问留痕（interview-recording-retention spec「访问
+-- 留痕」；interview-scorecard spec「面试官视图与回放」「一致性评估的数据
+-- 导出」）。⛔ session_id 上刻意不加外键——与 resume_access_log 同一形态：
+-- 留痕表按事件记事实，把它的可写性绑在业务表上会让"留痕写不进去"变成
+-- "读取整个失败"，而 spec 明确"留痕写入失败 MUST 读取失败"，这条约束该由
+-- 应用层的写入顺序保证（先留痕后返回内容），不该由外键去意外触发。
+-- 无内容列（spec「留痕 MUST 不含录音或转写内容」）。access_type 四态对应
+-- spec 里明确的四种读取入口：录音回放/查看转写/查看 ScoreCard/导出一致性
+-- 评估包。accessor 的 CHECK 与 resume_access_log.accessor 同一手法。
+CREATE TABLE IF NOT EXISTS interview_access_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL CHECK (
+        accessor IS NOT NULL AND trim(accessor, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    session_id TEXT NOT NULL,
+    access_type TEXT NOT NULL CHECK (
+        access_type IN ('recording_playback', 'transcript_view', 'scorecard_view', 'export')
+    ),
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_access_log_session ON interview_access_log (session_id);
 """
 
 

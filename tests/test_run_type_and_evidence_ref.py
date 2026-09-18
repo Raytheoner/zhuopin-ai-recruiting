@@ -6,11 +6,19 @@
 JSON 编码约定，服务 M2 精排把 evidence 存成 {span_id,start,end} 的场景。
 """
 import json
+import sqlite3
 
 import pytest
 
-from app.audit.evidence_ref import EvidenceRef, format_evidence_ref, parse_evidence_ref
-from app.audit.run_type import RUN_TYPE_PARSE, RUN_TYPE_RANK, run_type_of
+from app.audit.evidence_ref import (
+    EvidenceRef,
+    InterviewTurnEvidenceRef,
+    format_evidence_ref,
+    format_interview_turn_evidence_ref,
+    parse_evidence_ref,
+    validate_interview_turn_evidence,
+)
+from app.audit.run_type import RUN_TYPE_INTERVIEW, RUN_TYPE_PARSE, RUN_TYPE_RANK, run_type_of
 
 
 def test_run_type_of_parse_prefix():
@@ -48,3 +56,65 @@ def test_parse_evidence_ref_rejects_non_json_string():
 def test_parse_evidence_ref_rejects_missing_keys():
     with pytest.raises(KeyError):
         parse_evidence_ref(json.dumps({"span_id": 6, "start": 120}))
+
+
+def test_run_type_of_interview_prefix():
+    assert run_type_of("interview-prep-v1") == RUN_TYPE_INTERVIEW
+    assert run_type_of("interview-score-v1") == RUN_TYPE_INTERVIEW
+    assert run_type_of("interview-followup-v1") == RUN_TYPE_INTERVIEW
+
+
+def test_format_interview_turn_evidence_ref_produces_expected_json():
+    raw = format_interview_turn_evidence_ref("turn-1", start=3, end=10, quote="AUTOSAR CP")
+    assert json.loads(raw) == {
+        "type": "interview_turn", "id": "turn-1", "start": 3, "end": 10, "quote": "AUTOSAR CP",
+    }
+
+
+def test_parse_evidence_ref_dispatches_interview_turn_type():
+    raw = format_interview_turn_evidence_ref("turn-1", start=3, end=10, quote="AUTOSAR CP")
+    ref = parse_evidence_ref(raw)
+    assert ref == InterviewTurnEvidenceRef(id="turn-1", start=3, end=10, quote="AUTOSAR CP")
+
+
+def test_parse_evidence_ref_still_dispatches_legacy_span_id_type():
+    """旧的 resume span_id 编码不受影响——无 type 键时走原分支，零改动。"""
+    raw = format_evidence_ref(span_id=6, start=120, end=180)
+    ref = parse_evidence_ref(raw)
+    assert ref == EvidenceRef(span_id=6, start=120, end=180)
+
+
+def _turn_db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE interview_turn (id TEXT PRIMARY KEY, answer_text TEXT)")
+    conn.execute(
+        "INSERT INTO interview_turn VALUES ('turn-1', '我熟悉 AUTOSAR CP 平台的诊断栈')"
+    )
+    return conn
+
+
+def test_validate_interview_turn_evidence_accepts_legal_offset():
+    conn = _turn_db()
+    ref = InterviewTurnEvidenceRef(id="turn-1", start=3, end=9, quote="AUTOSAR")
+    validate_interview_turn_evidence(conn, ref)  # 不抛异常即通过
+
+
+def test_validate_interview_turn_evidence_rejects_missing_turn():
+    conn = _turn_db()
+    ref = InterviewTurnEvidenceRef(id="turn-missing", start=0, end=1, quote="x")
+    with pytest.raises(ValueError, match="不存在"):
+        validate_interview_turn_evidence(conn, ref)
+
+
+def test_validate_interview_turn_evidence_rejects_offset_out_of_range():
+    conn = _turn_db()
+    ref = InterviewTurnEvidenceRef(id="turn-1", start=5, end=999, quote="x")
+    with pytest.raises(ValueError, match="偏移越界"):
+        validate_interview_turn_evidence(conn, ref)
+
+
+def test_validate_interview_turn_evidence_rejects_start_not_before_end():
+    conn = _turn_db()
+    ref = InterviewTurnEvidenceRef(id="turn-1", start=8, end=8, quote="x")
+    with pytest.raises(ValueError, match="偏移越界"):
+        validate_interview_turn_evidence(conn, ref)
