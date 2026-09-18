@@ -5,12 +5,45 @@ import sqlite3
 
 import pytest
 
+from app.audit.hook import RecorderAuditHook
+from app.audit.recorder import AuditRecorder
+from app.audit.sinks import JsonlChainSink, SqliteSink
+from app.llm.gateway import LLMGateway
 from app.storage.auth_session import create_session
+from app.storage.db import get_connection, init_schema
 from app.storage.hr_account import upsert_account
-from tests.test_web_api import make_app_with_scripted_client
+from tests.test_web_api import ScriptedOpenAIClient
+from fastapi.testclient import TestClient
+from app.web.server import create_app
 
 
-def _question_response(dimension="AUTOSAR CP", difficulty="easy"):
+def _make_app_with_real_audit(tmp_path, responses):
+    """Set up test client with real audit hook (needed for analysis_run FK constraints)."""
+    db_path = str(tmp_path / "web.db")
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    chain_path = tmp_path / "decisions.jsonl"
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    hook = RecorderAuditHook(recorder, conn)
+
+    scripted_client = ScriptedOpenAIClient(responses)
+    def gateway_factory():
+        return LLMGateway(
+            api_key="k",
+            base_url="https://example.com",
+            model="deepseek-chat-241226",
+            supports_json_schema=False,
+            client=scripted_client,
+            audit_hook=hook,
+        )
+
+    app = create_app(db_path=db_path, gateway_factory=gateway_factory, root_path="")
+    client = TestClient(app)
+    return client, scripted_client
+
+
+def _question_response(dimension="CAN 驱动开发", difficulty="easy"):
     return json.dumps(
         {
             "questions": [
@@ -44,7 +77,7 @@ def test_generate_returns_409_when_profile_not_approved(tmp_path):
     # COMPLETE_PROFILE_RESPONSE 驱动第一轮问答直接产出完整画像草案，但本用例
     # 故意**不**调 /confirm——job_profile 只有 drafting 版本，没有任何
     # approved 版本，这正是本用例要触发的前置条件。
-    client, _ = make_app_with_scripted_client(tmp_path, [COMPLETE_PROFILE_RESPONSE])
+    client, _ = _make_app_with_real_audit(tmp_path, [COMPLETE_PROFILE_RESPONSE])
     _setup_auth(tmp_path, client)
 
     job_id = client.post(
@@ -104,7 +137,7 @@ def test_generate_edit_freeze_flow(tmp_path):
 
     # Need multiple responses: job creation + confirm (JD) + prep generation
     # Plus potential retries or additional calls
-    client, _ = make_app_with_scripted_client(
+    client, _ = _make_app_with_real_audit(
         tmp_path, [
             COMPLETE_PROFILE_RESPONSE,
             JD_RESPONSE,
@@ -148,7 +181,7 @@ def test_generate_edit_freeze_flow(tmp_path):
 def test_delete_question_via_endpoint(tmp_path):
     from tests.test_approval_branches import COMPLETE_PROFILE_RESPONSE, JD_RESPONSE
 
-    client, _ = make_app_with_scripted_client(
+    client, _ = _make_app_with_real_audit(
         tmp_path, [
             COMPLETE_PROFILE_RESPONSE,
             JD_RESPONSE,
@@ -170,11 +203,11 @@ def test_delete_question_via_endpoint(tmp_path):
 def test_regenerate_question_via_endpoint(tmp_path):
     from tests.test_approval_branches import COMPLETE_PROFILE_RESPONSE, JD_RESPONSE
 
-    replacement = _question_response(dimension="AUTOSAR CP", difficulty="hard")
+    replacement = _question_response(dimension="CAN 驱动开发", difficulty="hard")
     replacement = json.dumps(
         {"question": json.loads(replacement)["questions"][0]}, ensure_ascii=False
     )
-    client, _ = make_app_with_scripted_client(
+    client, _ = _make_app_with_real_audit(
         tmp_path,
         [
             COMPLETE_PROFILE_RESPONSE,
