@@ -4,8 +4,8 @@ summary:
   条目数: 534
   按状态:
     待开: 228
-    在跑: 8
-    完成: 213
+    在跑: 7
+    完成: 214
     阻塞: 85
   阻塞·决策: 50
   阻塞·外部: 34
@@ -38,6 +38,17 @@ summary:
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
+  - voice-structured-interview/4.1
+  - voice-structured-interview/4.10
+  - voice-structured-interview/4.11
+  - voice-structured-interview/4.2
+  - voice-structured-interview/4.3
+  - voice-structured-interview/4.4
+  - voice-structured-interview/4.5
+  - voice-structured-interview/4.6
+  - voice-structured-interview/4.7
+  - voice-structured-interview/4.8
+  - voice-structured-interview/4.9
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -69,6 +80,7 @@ summary:
   - 2026-09-10-liaison-reply-bridge
   - 2026-09-10-liaison-unpack-charter
   - 2026-09-10-liaison-unpack-dispatch
+  - 2026-09-18-voice-interview-u3-invite-consent
   缺任务映射:
   - Q-27
   - Q-38b
@@ -5318,7 +5330,7 @@ tasks:
   - voice-structured-interview/U2
   触碰区:
   - docs/superpowers/plans/*-voice-structured-interview-unit3-*.md
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 voice-structured-interview（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/voice-structured-interview/tasks.md
@@ -5326,9 +5338,10 @@ tasks:
   闸门: G2 voice-structured-interview
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: 0918 dispatcher 派车（0918AN，task-dispatcher·lanes-done-20260918-182246）
+  备注: 0918 dispatcher 派车（0918AN，task-dispatcher·lanes-done-20260918-182246）；plan 文件已交付但命名不合规（docs/superpowers/plans/2026-09-18-voice-interview-u3-invite-consent.md
+    缺 structured/unit3 关键字，未过自动 _match_plans），人工核实内容真实完成（10 Task+Global Constraints，commit 7776811）后手工标完成，本条状态由 task-dispatcher·lanes-done-20260918-200446 核实改写
 - id: voice-structured-interview/U3
   场景: voice-structured-interview
   阶段: build
