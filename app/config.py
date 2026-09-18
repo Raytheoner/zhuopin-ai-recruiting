@@ -67,6 +67,17 @@ class Settings(BaseSettings):
     # is_live_resume_intake_enabled()，业务代码不得直接读这个字段。
     live_resume_intake_enabled: bool = False
 
+    # 真实候选人开闸（design D14）。默认关闭；每次签发时求值，⛔ 不缓存——
+    # 唯一合法入口是 app/storage/live_interview_gate.py 的
+    # is_live_interview_enabled()，业务代码不得直接读这个字段。
+    live_interview_enabled: bool = False
+
+    # 合规验收 #2 的签认文件路径。存在即视为"法务已签认"，本单元不校验
+    # 文件内容——内容校验是人的事，代码只做"文件存在与否"这一层结构性门禁
+    # （与 live_resume_gate.py 的 _access_log_probe 同一层级：结构性前置，
+    # 不替代人工判断）。
+    m3_compliance_signoff_path: str = "docs/compliance/m3-interview-signoff.md"
+
     # 上传文件落盘目录（U2 tasks 3.3/3.4）。相对路径按进程工作目录解析，
     # 与 db_path 同一约定。
     resume_storage_dir: str = "data/resumes"
