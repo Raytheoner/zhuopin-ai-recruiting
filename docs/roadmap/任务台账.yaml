@@ -3,8 +3,8 @@ version: 1
 summary:
   条目数: 498
   按状态:
-    待开: 281
-    在跑: 6
+    待开: 279
+    在跑: 8
     完成: 119
     阻塞: 92
   阻塞·决策: 52
@@ -33,13 +33,11 @@ summary:
   - relay:R-6
   - scene:M3
   ready:
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   - channel-resume-intake/0.1
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -7029,7 +7027,7 @@ tasks:
   标题: m2-resume-parse-and-rank-unit2-upload-and-parsing Task 1–10
   依赖: []
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: Task 1–10 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing.md
@@ -7040,7 +7038,7 @@ tasks:
   标题: voice-structured-interview-unit0-probe Task 1–7
   依赖: []
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: Task 1–7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit0-probe.md
