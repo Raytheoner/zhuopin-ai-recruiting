@@ -1,11 +1,11 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 497
+  条目数: 498
   按状态:
-    待开: 280
-    在跑: 7
-    完成: 118
+    待开: 281
+    在跑: 6
+    完成: 119
     阻塞: 92
   阻塞·决策: 52
   阻塞·外部: 38
@@ -21,7 +21,6 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
-  - m2-resume-parse-and-rank/U2/plan
   - opener:[Mac]0903A
   - propose:S-M3
   - propose:S-Offer
@@ -34,6 +33,7 @@ summary:
   - relay:R-6
   - scene:M3
   ready:
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   - channel-resume-intake/0.1
   - interview-scheduling/0.2
   - offer-generation/0.2
@@ -2733,7 +2733,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2748,7 +2748,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2763,7 +2763,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2778,7 +2778,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2792,7 +2792,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区:
   - app/agents/resume_parser.py
   状态: 待开
@@ -2808,7 +2808,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2822,7 +2822,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2837,7 +2837,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2851,7 +2851,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2865,7 +2865,7 @@ tasks:
   单元: U2 上传与解析管线（含置信度与校对队列）
   依赖:
   - m2-resume-parse-and-rank/U1
-  - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -2881,17 +2881,14 @@ tasks:
   - m2-resume-parse-and-rank/U1
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit2-*.md
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: true
   闸门: G2 m2-resume-parse-and-rank
-  conflicts:
-    状态:
-      台账: 在跑
-      真身: 待开
-  备注: dispatcher-20260918-084350(lanes-done-20260918-075616) 派 0918E（launch-lanes --only 0918E）
+  备注: dispatcher-20260918-084350(lanes-done-20260918-075616) 派 0918E（launch-lanes --only 0918E）；dispatcher-20260918-093649(lanes-done-20260918-091836) 核实完成——plan
+    文件已合 main（commit 9449ec1，10 个 Task），无遗留分支
 - id: m2-resume-parse-and-rank/U2
   场景: M2
   阶段: build
@@ -2910,6 +2907,7 @@ tasks:
   - m2-resume-parse-and-rank/3.9
   - m2-resume-parse-and-rank/U1
   - m2-resume-parse-and-rank/U2/plan
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
   触碰区:
   - app/agents/resume_parser.py
   状态: 待开
@@ -7025,6 +7023,17 @@ tasks:
   来源: docs/superpowers/plans/2026-09-17-m2-unit0-model-comparison.md
   可见: false
   备注: 同上（0917AJ）
+- id: plan:2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing/seg1
+  场景: M2
+  阶段: build
+  标题: m2-resume-parse-and-rank-unit2-upload-and-parsing Task 1–10
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: Task 1–10 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2-upload-and-parsing.md
+  可见: true
 - id: plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
   场景: 构建自动化
   阶段: build
