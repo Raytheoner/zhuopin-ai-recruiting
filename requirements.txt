@@ -13,3 +13,9 @@ tzdata==2026.3
 pytest==8.3.4
 httpx==0.28.1
 numpy==2.5.3
+# M2 U2：简历文件解析（tasks 3.4）。版本号与 requirements-m2-u0.txt 里
+# 2026-09-17 冒烟通过的版本一致（Mac 与 .51 同款 Windows 均可装，见
+# docs/m2-model-comparison.md「环境」节）。
+python-multipart==0.0.20
+pypdf==6.19.0
+python-docx==1.2.0

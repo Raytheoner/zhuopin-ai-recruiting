@@ -683,3 +683,23 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 「上游声明长度比对」仍待通道层拿到真实响应头后补；TD-22（`msgid` 含 `_`）——真实文件帧到达时一并核。
 
 ---
+
+## TD-52 · PaddleOCR 在项目锁定的 Python 3.14 上装不上，扫描件走"不可读"退路
+
+**欠的是什么**：`app/parsing/extract_text.py::ocr_pdf` 依赖 `paddleocr`/
+`paddlepaddle`，2026-09-17 `[Mac]0917AX` 在 Mac 与 `.51` 同款 Windows 上均实测
+`paddlepaddle` 无 cp314 wheel、`paddleocr` 依赖树内钉死 `PyYAML==6.0.2`（同样无
+cp314 wheel，回退源码编译又缺 MSVC），详见 `docs/m2-model-comparison.md`「环境」
+节。design D14 的退路已生效：扫描件识别时 `OcrUnavailable` 会被上抛，
+`app/parsing/resume_ingest.py::ingest_resume_text`（本包 M2 U2 tasks 3.4）捕获后
+把该简历标记为 `unreadable` 进人工队列，不阻塞上传接口的其它文件。
+
+**触发条件**：`paddlepaddle` 发布 cp314 wheel，或项目降级到 cp313。任一条件满足
+后，重新在 `.51` 同款环境跑一遍 `requirements-m2-u0.txt` 里的冒烟脚本，通过后
+把 `paddleocr`/`paddlepaddle` 从"重依赖，单测懒加载"移进 `requirements.txt`。
+
+**不还的后果**：扫描件简历在本项目全生命周期内都进人工队列，不参与硬门槛判定
+与排序（这是 spec 明确允许的退路，不是缺陷）——后果是这部分候选人的自动化程度
+低于文本型简历，需要 HR 手工补录关键字段，不影响系统正确性。
+
+---
