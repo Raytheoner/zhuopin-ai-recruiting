@@ -1,6 +1,7 @@
 """hr_account 口令哈希与幂等建账号（design D12：鉴权从空壳换成本地账号）。
 
-PBKDF2-HMAC-SHA256，200,000 次迭代（OWASP 2023 推荐下限），标准库实现——
+PBKDF2-HMAC-SHA256，600,000 次迭代（OWASP 2023 Password Storage Cheat Sheet 对
+PBKDF2-HMAC-SHA256 的推荐值），标准库实现——
 ⛔ 不引入 bcrypt/argon2：.51 是 Windows 无 Docker 环境，新依赖必须先在
 Windows 上冒烟（design.md「外部依赖现状」），登录这种非评测热路径的功能
 没有必要为此扩大依赖面。
@@ -13,7 +14,7 @@ import secrets
 import sqlite3
 import uuid
 
-_PBKDF2_ITERATIONS = 200_000
+_PBKDF2_ITERATIONS = 600_000
 
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
