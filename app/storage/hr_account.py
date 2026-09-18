@@ -5,6 +5,11 @@ PBKDF2-HMAC-SHA256 的推荐值），标准库实现——
 ⛔ 不引入 bcrypt/argon2：.51 是 Windows 无 Docker 环境，新依赖必须先在
 Windows 上冒烟（design.md「外部依赖现状」），登录这种非评测热路径的功能
 没有必要为此扩大依赖面。
+
+`password_hash` 落库格式自描述为 `pbkdf2_sha256$<iterations>$<hexdigest>`
+（`salt` 仍单独一列存十六进制字符串，格式不变）：迭代次数写进哈希本身而不是
+只依赖模块常量，未来提高 `_PBKDF2_ITERATIONS` 时，老账号仍能用哈希里记录的
+旧迭代次数校验通过，不需要强制重置口令。
 """
 from __future__ import annotations
 
@@ -23,12 +28,31 @@ def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
     digest = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), bytes.fromhex(salt), _PBKDF2_ITERATIONS
     )
-    return digest.hex(), salt
+    password_hash = f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${digest.hex()}"
+    return password_hash, salt
 
 
 def verify_password(password: str, password_hash: str, salt: str) -> bool:
-    candidate, _ = hash_password(password, salt=salt)
-    return hmac.compare_digest(candidate, password_hash)
+    parts = password_hash.split("$")
+    if len(parts) != 3:
+        return False
+    algorithm, iterations_str, hex_digest = parts
+    if algorithm != "pbkdf2_sha256":
+        return False
+    try:
+        iterations = int(iterations_str)
+    except ValueError:
+        return False
+    if iterations <= 0:
+        return False
+    try:
+        salt_bytes = bytes.fromhex(salt)
+    except ValueError:
+        return False
+    candidate = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt_bytes, iterations
+    )
+    return hmac.compare_digest(candidate.hex(), hex_digest)
 
 
 def upsert_account(conn: sqlite3.Connection, *, username: str, password: str) -> str:

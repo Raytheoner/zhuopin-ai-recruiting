@@ -4,7 +4,12 @@
 新依赖——.51 是 Windows 无 Docker 环境，新依赖必须先冒烟（design.md「外部依赖
 现状」），登录这种非评测热路径的功能没有必要为此扩大依赖面。
 """
+import hashlib
+import os
+import subprocess
 import sqlite3
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -77,3 +82,76 @@ def test_upsert_account_rejects_blank_username(conn):
 def test_upsert_account_rejects_blank_password(conn):
     with pytest.raises(ValueError, match="口令"):
         upsert_account(conn, username="someone", password="")
+
+
+def test_hash_password_output_is_self_describing():
+    password_hash, _ = hash_password("hunter2")
+    assert password_hash.startswith("pbkdf2_sha256$600000$")
+
+
+def test_verify_password_accepts_hash_with_different_iteration_count():
+    salt = "00" * 16
+    old_digest = hashlib.pbkdf2_hmac(
+        "sha256", b"pw", bytes.fromhex(salt), 1000
+    ).hex()
+    old_style_hash = f"pbkdf2_sha256$1000${old_digest}"
+    assert verify_password("pw", old_style_hash, salt) is True
+
+
+@pytest.mark.parametrize(
+    "malformed_hash",
+    ["deadbeef", "pbkdf2_sha256$abc$00", "md5$1$00"],
+)
+def test_verify_password_rejects_malformed_stored_hash_without_raising(
+    malformed_hash,
+):
+    assert verify_password("pw", malformed_hash, "00" * 16) is False
+
+
+def test_create_hr_account_cli_create_then_update_with_padded_username(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    db_path = tmp_path / "cli.db"
+
+    def run_cli(username: str, password: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.create_hr_account",
+                "--username",
+                username,
+                "--password",
+                password,
+                "--db-path",
+                str(db_path),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            env={**os.environ},
+            check=True,
+        )
+
+    created = run_cli("smoke", "pw-1")
+    assert "已创建账号 smoke" in created.stdout
+
+    updated = run_cli("smoke", "pw-2")
+    assert "已更新账号 smoke" in updated.stdout
+
+    padded_updated = run_cli(" smoke ", "pw-3")
+    assert "已更新账号 smoke" in padded_updated.stdout
+
+    db_conn = sqlite3.connect(str(db_path))
+    try:
+        count = db_conn.execute(
+            "SELECT COUNT(*) FROM hr_account WHERE username='smoke'"
+        ).fetchone()[0]
+        assert count == 1
+
+        password_hash, salt = db_conn.execute(
+            "SELECT password_hash, password_salt FROM hr_account WHERE username='smoke'"
+        ).fetchone()
+    finally:
+        db_conn.close()
+
+    assert verify_password("pw-3", password_hash, salt) is True
