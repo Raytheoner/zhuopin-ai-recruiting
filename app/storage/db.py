@@ -702,6 +702,38 @@ CREATE TABLE IF NOT EXISTS prep_question (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_question_snapshot_seq
     ON prep_question (snapshot_id, seq);
+
+-- 面试场次（live-voice-interview-session spec「开场前置条件」；
+-- interview-recording-retention spec「留存期限在场次建立时固定」）。
+-- prep_snapshot_version 是裸整数，不建到 prep_snapshot 的复合外键——与
+-- screening_flag.profile_version 同一手法：版本号语义关联但不强制引用
+-- 完整性。retention_until / retention_policy_version 均 NOT NULL 且无默认
+-- 值：留存期限必须在场次建立那一刻由应用层算好并写入，不允许留空。
+-- status 六态覆盖 spec「场次状态 MUST 至少区分」的枚举。
+CREATE TABLE IF NOT EXISTS interview_session (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    prep_snapshot_version INTEGER NOT NULL,
+    invite_token_hash TEXT,
+    invite_expires_at TEXT,
+    resume_token_hash TEXT,
+    phone_verified_at TEXT,
+    phone_attempts INTEGER NOT NULL DEFAULT 0,
+    recording_uri TEXT,
+    retention_until TEXT NOT NULL,
+    retention_policy_version TEXT NOT NULL,
+    sample_class TEXT NOT NULL CHECK (sample_class IN ('internal_sim', 'live')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        status IN ('pending', 'in_progress', 'completed', 'interrupted', 'abandoned', 'locked')
+    ),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_session_invite_token
+    ON interview_session (invite_token_hash);
+
+CREATE INDEX IF NOT EXISTS idx_interview_session_application
+    ON interview_session (application_id);
 """
 
 

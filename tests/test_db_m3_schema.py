@@ -229,3 +229,150 @@ def test_prep_question_ai_text_preserves_original_after_edit(conn):
     ).fetchone()
     assert row[0] == "人工改写后的题面"
     assert row[1] == "AI 原始生成的题面"
+
+
+# ── interview_session（tasks 2.2）───────────────────────────────────────
+
+
+def _seed_interview_session(
+    conn, session_id="sess-1", application_id="app1",
+    retention_until="2026-12-01 00:00:00", sample_class="internal_sim",
+):
+    conn.execute(
+        "INSERT INTO interview_session "
+        "(id, application_id, prep_snapshot_version, retention_until, "
+        "retention_policy_version, sample_class) "
+        "VALUES (?, ?, 1, ?, 'v1', ?)",
+        (session_id, application_id, retention_until, sample_class),
+    )
+    conn.commit()
+
+
+def test_interview_session_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "interview_session")
+    assert _columns(conn, "interview_session") == {
+        "id", "application_id", "prep_snapshot_version", "invite_token_hash",
+        "invite_expires_at", "resume_token_hash", "phone_verified_at",
+        "phone_attempts", "recording_uri", "retention_until",
+        "retention_policy_version", "sample_class", "status", "created_at",
+    }
+
+
+def test_interview_session_retention_until_cannot_be_null(conn):
+    """recording-retention spec「留存期限在场次建立时固定」：retention_until
+    MUST 在建立时非空写入，不允许留空等以后补。"""
+    _seed_job_candidate_resume_application(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_session "
+            "(id, application_id, prep_snapshot_version, retention_until, "
+            "retention_policy_version, sample_class) "
+            "VALUES ('sess-bad', 'app1', 1, NULL, 'v1', 'internal_sim')"
+        )
+
+
+def test_interview_session_retention_policy_version_cannot_be_null(conn):
+    _seed_job_candidate_resume_application(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_session "
+            "(id, application_id, prep_snapshot_version, retention_until, "
+            "retention_policy_version, sample_class) "
+            "VALUES ('sess-bad', 'app1', 1, '2026-12-01 00:00:00', NULL, 'internal_sim')"
+        )
+
+
+def test_interview_session_sample_class_check_rejects_unknown_value(conn):
+    _seed_job_candidate_resume_application(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_session "
+            "(id, application_id, prep_snapshot_version, retention_until, "
+            "retention_policy_version, sample_class) "
+            "VALUES ('sess-bad', 'app1', 1, '2026-12-01 00:00:00', 'v1', 'staged')"
+        )
+
+
+@pytest.mark.parametrize("sample_class", ["internal_sim", "live"])
+def test_interview_session_sample_class_check_accepts_two_values(conn, sample_class):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn, session_id=f"sess-{sample_class}", sample_class=sample_class)
+
+
+def test_interview_session_status_check_rejects_unknown_value(conn):
+    _seed_job_candidate_resume_application(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_session "
+            "(id, application_id, prep_snapshot_version, retention_until, "
+            "retention_policy_version, sample_class, status) "
+            "VALUES ('sess-bad', 'app1', 1, '2026-12-01 00:00:00', 'v1', 'internal_sim', 'archived')"
+        )
+
+
+@pytest.mark.parametrize(
+    "status", ["pending", "in_progress", "completed", "interrupted", "abandoned", "locked"]
+)
+def test_interview_session_status_check_accepts_six_values(conn, status):
+    _seed_job_candidate_resume_application(conn)
+    conn.execute(
+        "INSERT INTO interview_session "
+        "(id, application_id, prep_snapshot_version, retention_until, "
+        "retention_policy_version, sample_class, status) "
+        "VALUES (?, 'app1', 1, '2026-12-01 00:00:00', 'v1', 'internal_sim', ?)",
+        (f"sess-{status}", status),
+    )
+    conn.commit()
+
+
+def test_interview_session_status_defaults_to_pending(conn):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    assert conn.execute(
+        "SELECT status FROM interview_session WHERE id='sess-1'"
+    ).fetchone()[0] == "pending"
+
+
+def test_interview_session_invite_token_hash_is_unique(conn):
+    _seed_job_candidate_resume_application(conn, application_id="app1")
+    conn.execute(
+        "INSERT INTO job (id, title, status) VALUES ('j2', '供应链总监', 'approved')"
+    )
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c2', '李四')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r2', 'j2', 'synthetic', 'b.pdf', 'sha-2', 'hr-1')"
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app2', 'c2', 'j2', 'r2', 'initial')"
+    )
+    conn.commit()
+    conn.execute(
+        "INSERT INTO interview_session "
+        "(id, application_id, prep_snapshot_version, invite_token_hash, retention_until, "
+        "retention_policy_version, sample_class) "
+        "VALUES ('sess-1', 'app1', 1, 'hash-same', '2026-12-01 00:00:00', 'v1', 'internal_sim')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_session "
+            "(id, application_id, prep_snapshot_version, invite_token_hash, retention_until, "
+            "retention_policy_version, sample_class) "
+            "VALUES ('sess-2', 'app2', 1, 'hash-same', '2026-12-01 00:00:00', 'v1', 'internal_sim')"
+        )
+
+
+def test_interview_session_allows_multiple_null_invite_token_hash(conn):
+    """令牌尚未签发时可空；SQLite 的 UNIQUE 把多个 NULL 视为互不相等
+    （与 candidate.phone_hash 同一手法）。"""
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn, session_id="sess-1")
+    conn.execute(
+        "INSERT INTO interview_session "
+        "(id, application_id, prep_snapshot_version, retention_until, "
+        "retention_policy_version, sample_class) "
+        "VALUES ('sess-2', 'app1', 1, '2026-12-01 00:00:00', 'v1', 'internal_sim')"
+    )
+    conn.commit()
