@@ -35,6 +35,7 @@ from app.graph.nodes import (
     revision_count,
 )
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
+from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
@@ -1011,6 +1012,23 @@ def create_app(
             prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
+        resolved_application_id = application_id
+        if resolved_application_id is None:
+            existing_app = conn.execute(
+                "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
+            ).fetchone()
+            resolved_application_id = existing_app[0] if existing_app else None
+        if resolved_application_id is not None:
+            profile_version = latest_approved_profile_version(conn, job_id)
+            if profile_version is not None:
+                screen_and_persist(
+                    conn,
+                    application_id=resolved_application_id,
+                    resume_id=resume_id,
+                    job_id=job_id,
+                    profile_version=profile_version,
+                    parse_version=parser_version,
+                )
         return {"file_name": upload.filename, "status": "accepted",
                 "resume_id": resume_id, "application_id": application_id,
                 "parse_status": "parsed"}
@@ -1077,6 +1095,23 @@ def create_app(
             prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
+        resolved_application_id = application_id
+        if resolved_application_id is None:
+            existing_app = conn.execute(
+                "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
+            ).fetchone()
+            resolved_application_id = existing_app[0] if existing_app else None
+        if resolved_application_id is not None:
+            profile_version = latest_approved_profile_version(conn, job_id)
+            if profile_version is not None:
+                screen_and_persist(
+                    conn,
+                    application_id=resolved_application_id,
+                    resume_id=resume_id,
+                    job_id=job_id,
+                    profile_version=profile_version,
+                    parse_version=parser_version,
+                )
         return {"resume_id": resume_id, "application_id": application_id,
                 "parser_version": parser_version}
 
@@ -1118,6 +1153,26 @@ def create_app(
             parts = [str(value[k]) for k in ("degree", "school") if value.get(k)]
             return " ".join(parts) if parts else "未提及"
         return str(value)
+
+    @router.get("/api/applications/{application_id}/screening-flags")
+    def get_screening_flags(application_id: str) -> dict:
+        """硬门槛判定标记的最小只读接口（task-5-brief.md 附带范围）：只用于
+        黑盒验证「上传/重解析后立即判定」这个触发点是否生效，⛔ 不做任何
+        排序/淘汰相关的展示或聚合。"""
+        rows = conn.execute(
+            "SELECT profile_version, rule_ref, verdict, reason, evidence_ref, created_at "
+            "FROM screening_flag WHERE application_id = ? ORDER BY created_at",
+            (application_id,),
+        ).fetchall()
+        return {
+            "flags": [
+                {
+                    "profile_version": r[0], "rule_ref": r[1], "verdict": r[2],
+                    "reason": r[3], "evidence_ref": r[4], "created_at": r[5],
+                }
+                for r in rows
+            ]
+        }
 
     @router.get("/api/resumes/by-job/{job_id}")
     def list_resumes_for_job(request: Request, job_id: str) -> dict:
