@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <title>面试题确认 · 卓品智能招聘助手</title>
+  <style>
+    .question { border: 1px solid #ccc; padding: 12px; margin-bottom: 12px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 8px; }
+    .badge-ai { background: #d0ebff; color: #1864ab; }
+    .badge-edited { background: #fff3bf; color: #856404; }
+    textarea { width: 100%; min-height: 60px; }
+    .actions button { margin-right: 8px; }
+    #status-bar { padding: 8px; margin-bottom: 12px; }
+    .status-draft { background: #fff3cd; }
+    .status-frozen { background: #d3f9d8; }
+  </style>
+</head>
+<body>
+  <h1>面试题确认</h1>
+  <p><strong>以下题目由 AI 自动生成，供业务经理逐题确认。确认前可修改、删除、重生成；确认后生成不可变的题目快照。</strong></p>
+  <div id="status-bar">加载中…</div>
+  <div id="questions"></div>
+  <div class="actions">
+    <button id="generate-btn">生成/重新生成整套</button>
+    <button id="freeze-btn">全部采纳并确认冻结</button>
+  </div>
+  <p id="error" style="color:red"></p>
+
+  <script>
+    function applicationIdFromPath() {
+      const m = window.location.pathname.match(/\/applications\/([^/]+)\/prep\/(\d+)\/review\/?$/);
+      return m ? { applicationId: m[1], version: Number(m[2]) } : null;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    const parsed = applicationIdFromPath();
+    const applicationId = parsed ? parsed.applicationId : null;
+    let version = parsed ? parsed.version : null;
+    const errorEl = document.getElementById("error");
+
+    function showError(message) {
+      errorEl.textContent = message;
+    }
+
+    function renderStatusBar(data) {
+      const bar = document.getElementById("status-bar");
+      bar.className = data.status === "frozen" ? "status-frozen" : "status-draft";
+      bar.textContent = data.status === "frozen"
+        ? `已冻结 · 确认人 ${data.confirmed_by || ""} · ${data.confirmed_at || ""}`
+        : "草稿状态，逐题确认后点「全部采纳并确认冻结」";
+    }
+
+    function renderQuestions(data) {
+      const container = document.getElementById("questions");
+      container.innerHTML = "";
+      const editable = data.status === "draft";
+      data.questions.forEach((q) => {
+        const div = document.createElement("div");
+        div.className = "question";
+        const badge = q.origin === "ai_edited"
+          ? '<span class="badge badge-edited">AI 生成、人工修改</span>'
+          : '<span class="badge badge-ai">AI 生成</span>';
+        div.innerHTML = `
+          <div><strong>第 ${q.seq} 题</strong>（${escapeHtml(q.dimension)} / ${escapeHtml(q.difficulty)}）${badge}</div>
+          <div>依据：${escapeHtml(q.rationale)}</div>
+          <textarea class="text-input" data-seq="${q.seq}" ${editable ? "" : "readonly"}>${escapeHtml(q.text)}</textarea>
+          <textarea class="rubric-input" data-seq="${q.seq}" ${editable ? "" : "readonly"}>${escapeHtml(q.rubric)}</textarea>
+          <div>预埋追问：${q.follow_ups.map(escapeHtml).join("；")}</div>
+          ${editable ? `
+            <div class="actions">
+              <button class="save-btn" data-seq="${q.seq}">保存修改</button>
+              <button class="delete-btn" data-seq="${q.seq}">删除</button>
+              <button class="regenerate-btn" data-seq="${q.seq}">重新生成</button>
+            </div>` : ""}
+        `;
+        container.appendChild(div);
+      });
+
+      container.querySelectorAll(".save-btn").forEach((btn) => {
+        btn.addEventListener("click", () => saveQuestion(btn.dataset.seq));
+      });
+      container.querySelectorAll(".delete-btn").forEach((btn) => {
+        btn.addEventListener("click", () => deleteQuestion(btn.dataset.seq));
+      });
+      container.querySelectorAll(".regenerate-btn").forEach((btn) => {
+        btn.addEventListener("click", () => regenerateQuestion(btn.dataset.seq));
+      });
+    }
+
+    function render(data) {
+      version = data.version;
+      renderStatusBar(data);
+      renderQuestions(data);
+    }
+
+    async function loadPrep() {
+      const resp = await fetch(`api/applications/${applicationId}/prep/${version}`);
+      if (!resp.ok) {
+        showError("加载失败：" + (await resp.text()));
+        return;
+      }
+      render(await resp.json());
+    }
+
+    async function saveQuestion(seq) {
+      const text = document.querySelector(`.text-input[data-seq="${seq}"]`).value;
+      const rubric = document.querySelector(`.rubric-input[data-seq="${seq}"]`).value;
+      const resp = await fetch(`api/applications/${applicationId}/prep/${version}/questions/${seq}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, rubric }),
+      });
+      if (!resp.ok) {
+        showError("保存失败：" + (await resp.text()));
+        return;
+      }
+      render(await resp.json());
+    }
+
+    async function deleteQuestion(seq) {
+      const resp = await fetch(`api/applications/${applicationId}/prep/${version}/questions/${seq}`, {
+        method: "DELETE",
+      });
+      if (!resp.ok) {
+        showError("删除失败：" + (await resp.text()));
+        return;
+      }
+      render(await resp.json());
+    }
+
+    async function regenerateQuestion(seq) {
+      const resp = await fetch(
+        `api/applications/${applicationId}/prep/${version}/questions/${seq}/regenerate`,
+        { method: "POST" }
+      );
+      if (!resp.ok) {
+        showError("重新生成失败：" + (await resp.text()));
+        return;
+      }
+      render(await resp.json());
+    }
+
+    document.getElementById("generate-btn").addEventListener("click", async () => {
+      const resp = await fetch(`api/applications/${applicationId}/prep/generate`, { method: "POST" });
+      if (!resp.ok) {
+        showError("生成失败：" + (await resp.text()));
+        return;
+      }
+      const data = await resp.json();
+      window.history.replaceState(null, "", `../${data.version}/review`);
+      render(data);
+    });
+
+    document.getElementById("freeze-btn").addEventListener("click", async () => {
+      const resp = await fetch(`api/applications/${applicationId}/prep/${version}/freeze`, { method: "POST" });
+      if (!resp.ok) {
+        showError("确认冻结失败：" + (await resp.text()));
+        return;
+      }
+      render(await resp.json());
+    });
+
+    if (applicationId && version) {
+      loadPrep();
+    } else {
+      showError("页面地址不正确：需要 /applications/{id}/prep/{version}/review");
+    }
+  </script>
+</body>
+</html>
