@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from app.storage.db import get_connection, init_schema
+from app.storage.db import get_connection, init_schema, apply_column_migrations
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -256,6 +256,7 @@ def test_interview_session_table_exists_with_expected_columns(conn):
         "invite_expires_at", "resume_token_hash", "phone_verified_at",
         "phone_attempts", "recording_uri", "retention_until",
         "retention_policy_version", "sample_class", "status", "created_at",
+        "phone_code_hash", "phone_code_expires_at",
     }
 
 
@@ -749,9 +750,9 @@ def test_job_prep_config_rejects_invalid_curve(conn):
 _LEGACY_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "zp51_demo_db_schema_pre_m3.sql"
 
 _M3_NEW_TABLES = (
-    "prep_snapshot", "prep_question", "interview_session", "interview_consent",
+    "prep_snapshot", "prep_question", "interview_consent",
     "identity_check", "interview_turn", "interview_recording_deletion",
-    "interview_access_log", "job_prep_config",
+    "interview_access_log", "interview_invite_event",
 )
 
 
@@ -861,3 +862,80 @@ def test_fresh_and_legacy_upgraded_schemas_have_identical_m3_tables(tmp_path):
 
     for table in _M3_NEW_TABLES:
         assert _columns(fresh, table) == _columns(legacy, table), table
+
+
+def test_interview_invite_event_table_exists(tmp_path):
+    conn = get_connection(str(tmp_path / "new.db"))
+    init_schema(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(interview_invite_event)")}
+    assert cols == {"id", "session_id", "event_type", "detail", "at"}
+
+
+def test_interview_invite_event_type_check_rejects_unknown_value(tmp_path):
+    conn = get_connection(str(tmp_path / "new.db"))
+    init_schema(conn)
+    # 创建必要的前置数据以通过FK约束
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', 'ECU 工程师', 'open')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c1', '张三')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r1', 'j1', 'synthetic', 'a.pdf', 'sha-1', 'hr-1')"
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('a1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.execute(
+        "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+        "retention_until, retention_policy_version, sample_class) "
+        "VALUES ('s1', 'a1', 1, '2027-01-01T00:00:00+00:00', 'v1-90d', 'internal_sim')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_invite_event (id, session_id, event_type) "
+            "VALUES ('e1', 's1', 'not_a_real_event_type')"
+        )
+
+
+def test_job_prep_config_invite_expiry_days_default(tmp_path):
+    conn = get_connection(str(tmp_path / "new.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', 'ECU 工程师', 'open')")
+    conn.execute("INSERT INTO job_prep_config (job_id) VALUES ('j1')")
+    row = conn.execute(
+        "SELECT invite_expiry_days FROM job_prep_config WHERE job_id = 'j1'"
+    ).fetchone()
+    assert row[0] == 7
+
+
+def test_interview_session_phone_code_columns_exist(tmp_path):
+    conn = get_connection(str(tmp_path / "new.db"))
+    init_schema(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(interview_session)")}
+    assert {"phone_code_hash", "phone_code_expires_at"} <= cols
+
+
+def test_legacy_db_gains_new_columns_via_migration(tmp_path):
+    """老库（U1/U2 已建表，没有本单元新列）跑 apply_column_migrations 后补齐，
+    既有行一列不丢（工程铁律「老库升级后既有表一行不改」的延伸：只加列不改值）。"""
+    db_path = str(tmp_path / "legacy.db")
+    conn = get_connection(db_path)
+    init_schema(conn)
+    # 模拟老库：手工删掉本单元要加的三列，重建成 U2 时代的形状
+    conn.execute("ALTER TABLE job_prep_config RENAME TO job_prep_config_old")
+    conn.execute(
+        "CREATE TABLE job_prep_config (job_id TEXT PRIMARY KEY, "
+        "prep_curve TEXT NOT NULL DEFAULT 'easy_to_hard', "
+        "prep_question_count INTEGER NOT NULL DEFAULT 10)"
+    )
+    conn.execute(
+        "INSERT INTO job_prep_config (job_id, prep_curve, prep_question_count) "
+        "SELECT job_id, prep_curve, prep_question_count FROM job_prep_config_old"
+    )
+    conn.execute("DROP TABLE job_prep_config_old")
+    conn.commit()
+    added = apply_column_migrations(conn)
+    assert "job_prep_config.invite_expiry_days" in added
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(job_prep_config)")}
+    assert "invite_expiry_days" in cols
