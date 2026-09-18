@@ -45,6 +45,7 @@ from app.parsing.extract_text import SUPPORTED_SUFFIXES
 from app.parsing.resume_ingest import ingest_resume_text
 from app.parsing.spans import TextSpan
 from app.schemas.job_profile import JobProfile, field_label, field_labels
+from app.schemas.resume_fields import FIELD_LABELS, FIELD_NAMES
 from app.storage import job_queries
 from app.storage.auth_session import create_session, delete_session
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
@@ -1061,6 +1062,97 @@ def create_app(
         if row is None:
             raise HTTPException(status_code=404, detail="resume not found")
         return row
+
+    def _latest_field_review_rows(resume_id: str) -> dict[str, dict]:
+        """按字段取最新一行校对队列记录（架构决策 3）：同一字段可能有一条历史
+        reviewed 行 + 一条新的 pending 行（重解析后再次判低置信度），
+        按 created_at 倒序取第一条即当前状态。"""
+        rows = conn.execute(
+            "SELECT field, status, reviewed_by, reviewed_at FROM field_review_queue "
+            "WHERE resume_id = ? ORDER BY created_at DESC",
+            (resume_id,),
+        ).fetchall()
+        latest: dict[str, dict] = {}
+        for field, status, reviewed_by, reviewed_at in rows:
+            if field not in latest:
+                latest[field] = {
+                    "status": status, "reviewed_by": reviewed_by, "reviewed_at": reviewed_at,
+                }
+        return latest
+
+    def _display_field_value(field_payload: dict) -> str:
+        if field_payload.get("not_mentioned"):
+            return "未提及"
+        value = field_payload.get("value")
+        if value is None:
+            return "未提及"
+        if isinstance(value, list):
+            return "、".join(value) if value else "未提及"
+        if isinstance(value, dict):
+            parts = [str(value[k]) for k in ("degree", "school") if value.get(k)]
+            return " ".join(parts) if parts else "未提及"
+        return str(value)
+
+    @router.get("/api/resumes/by-job/{job_id}")
+    def list_resumes_for_job(request: Request, job_id: str) -> dict:
+        """9.2 解析结果列表页的数据源。⛔ 不返回任何分数/排名字段——那些字段
+        本单元根本不产生（U4/U5 才有）。路径故意落在 /api/resumes 下而不是
+        /jobs/{id}/resumes（架构决策 1）：这样天然受 AuthMiddleware 的
+        PROTECTED_PATH_PREFIXES 保护，未登录 401、不返回任何候选人数据
+        （resume-upload-and-gate spec「可识别到人的登录」）。
+        """
+        job = conn.execute("SELECT id FROM job WHERE id = ?", (job_id,)).fetchone()
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+
+        rows = conn.execute(
+            "SELECT id, sample_class, file_name, status, parsed_json, parser_version, "
+            "uploaded_at FROM resume WHERE job_id = ? ORDER BY uploaded_at DESC",
+            (job_id,),
+        ).fetchall()
+
+        accessor = reviewer_of(request)
+        items = []
+        for resume_id, sample_class, file_name, status, parsed_json, parser_version, uploaded_at in rows:
+            display_name = file_name
+            pending_count = 0
+            fields_payload: list[dict] = []
+            if parsed_json:
+                # 每份简历一条留痕，⛔ 不因为要读六个字段就写六条
+                # （resume-upload-and-gate spec「简历访问留痕」按"这次读取"计一条）。
+                record_resume_access(conn, accessor=accessor, resume_id=resume_id,
+                                      access_type="parsed_result")
+                parsed = json.loads(parsed_json)
+                review_rows = _latest_field_review_rows(resume_id)
+                name_field = parsed.get("name") or {}
+                if not name_field.get("not_mentioned") and name_field.get("value"):
+                    display_name = name_field["value"]
+                for field_name in FIELD_NAMES:
+                    field_payload = parsed.get(field_name) or {}
+                    review = review_rows.get(field_name)
+                    review_status = review["status"] if review else "not_queued"
+                    if review_status == "pending":
+                        pending_count += 1
+                    fields_payload.append({
+                        "field": field_name,
+                        "label": FIELD_LABELS[field_name],
+                        "value_display": _display_field_value(field_payload),
+                        "confidence": field_payload.get("confidence"),
+                        "review_status": review_status,
+                        "reviewed_by": review["reviewed_by"] if review else None,
+                        "reviewed_at": review["reviewed_at"] if review else None,
+                    })
+            items.append({
+                "resume_id": resume_id,
+                "candidate_display_name": display_name,
+                "sample_class": sample_class,
+                "parse_status": status,
+                "parser_version": parser_version,
+                "uploaded_at": uploaded_at,
+                "pending_review_count": pending_count,
+                "fields": fields_payload,
+            })
+        return {"job_id": job_id, "resumes": items}
 
     @router.get("/api/resumes/{resume_id}/text")
     def get_resume_text(request: Request, resume_id: str):
