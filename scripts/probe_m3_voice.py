@@ -229,20 +229,38 @@ def probe_p1_livekit(args: argparse.Namespace) -> ProbeResult:
                 received.append(packet.data)
 
             room_b.on("data_received", _on_data)
-            await room_a.connect("ws://127.0.0.1:7880", token_a)
-            await room_b.connect("ws://127.0.0.1:7880", token_b)
-            await room_a.local_participant.publish_data(b"probe-ping", reliable=True)
-            for _ in range(20):
-                if received:
-                    break
-                await asyncio_sleep(0.2)
-            await room_a.disconnect()
-            await room_b.disconnect()
+            try:
+                await room_a.connect("ws://127.0.0.1:7880", token_a)
+                await room_b.connect("ws://127.0.0.1:7880", token_b)
+                await room_a.local_participant.publish_data(b"probe-ping", reliable=True)
+                for _ in range(20):
+                    if received:
+                        break
+                    await asyncio_sleep(0.2)
+            finally:
+                # 尽力断开已建立的连接；不掩盖上面真正的异常（原异常经 finally 正常
+                # 继续传播），只是避免"建连一半就失败"时把已连上的一端晾在那。
+                for room in (room_a, room_b):
+                    try:
+                        await room.disconnect()
+                    except Exception:  # noqa: BLE001 — 断开失败不是本探针关心的信息
+                        pass
 
         import asyncio
         from asyncio import sleep as asyncio_sleep
 
-        asyncio.run(_run())
+        try:
+            asyncio.run(_run())
+        except Exception as exc:  # noqa: BLE001 — LiveKit SDK 连接/数据通道失败需要
+            # 转成阻塞结论而不是让异常穿透 probe_p1_livekit，否则 main() 走不到
+            # write_result，docs/m3-voice-probe.md 不会更新，操作者只看到裸 traceback。
+            return ProbeResult(
+                item="P1",
+                env_fingerprint=fp,
+                conclusion="阻塞",
+                blocking_reason=f"LiveKit 客户端建连或数据通道交互失败: {exc!r}",
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
 
         if not received:
             return ProbeResult(
@@ -270,6 +288,7 @@ def probe_p1_livekit(args: argparse.Namespace) -> ProbeResult:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        drain_thread.join(timeout=1)
 
 
 def _add_p1_arguments(sub: argparse.ArgumentParser) -> None:

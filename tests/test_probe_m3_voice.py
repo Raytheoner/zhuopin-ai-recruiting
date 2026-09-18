@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
+import io
 import json
 import shutil
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -177,3 +179,37 @@ def test_resolve_livekit_binary_falls_back_to_which():
 def test_resolve_livekit_binary_returns_none_when_missing():
     with patch("shutil.which", return_value=None):
         assert _resolve_livekit_binary(None) is None
+
+
+def test_probe_p1_livekit_returns_blocking_result_on_connect_error():
+    """A LiveKit SDK connect failure must become a 阻塞 ProbeResult, not an
+    uncaught exception — otherwise main() never reaches write_result() and
+    docs/m3-voice-probe.md is left stale while the operator sees a raw
+    traceback instead of a recorded blocking reason. Reproduces the exact
+    failure mode hit during real Step 6 execution
+    (livekit.rtc.room.ConnectError: engine: signal failure: transport timed out),
+    without spinning up a real livekit-server or making a real connection.
+    """
+    from scripts.probe_m3_voice import probe_p1_livekit
+
+    fake_proc = MagicMock()
+    fake_proc.poll.return_value = None  # 装作 --dev 已正常起来、没有立即退出
+    fake_proc.stdout = io.StringIO("")  # drain 线程读空即结束，不阻塞
+
+    args = argparse.Namespace(
+        target="test-machine",
+        network_label="company-wifi",
+        livekit_bin="/fake/livekit-server",  # 显式路径，_resolve_livekit_binary 直接返回，不落盘校验
+        livekit_version_hint="test-version",
+    )
+
+    with (
+        patch("scripts.probe_m3_voice.subprocess.Popen", return_value=fake_proc),
+        patch("livekit.rtc.Room.connect", new=AsyncMock(side_effect=RuntimeError("boom: transport timed out"))),
+    ):
+        result = probe_p1_livekit(args)
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "boom" in result.blocking_reason
+    fake_proc.terminate.assert_called_once()
