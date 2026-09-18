@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <title>字段校对 · 卓品智能招聘助手</title>
+  <style>
+    .pending { background: #fff3cd; }
+    mark { background: #ffec99; }
+    #raw-text { white-space: pre-wrap; border: 1px solid #ccc; padding: 8px; max-height: 70vh; overflow-y: auto; }
+    .field-row { cursor: pointer; padding: 4px; }
+    .field-row.selected { outline: 2px solid #339af0; }
+  </style>
+</head>
+<body>
+  <h1>字段校对</h1>
+  <p><strong>右侧字段由 AI 自动抽取，点击字段可在左侧原文中看到依据；未经确认前仅供参考。</strong></p>
+  <div style="display:flex; gap:16px">
+    <div style="flex:1"><div id="raw-text">加载中…</div></div>
+    <div style="flex:1" id="fields-panel">加载中…</div>
+  </div>
+  <p id="error" style="color:red"></p>
+
+  <script>
+    function resumeIdFromPath() {
+      const m = window.location.pathname.match(/\/resumes\/([^/]+)\/review\/?$/);
+      return m ? m[1] : null;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    const resumeId = resumeIdFromPath();
+    let rawText = "";
+    let parsedFields = {};
+
+    function renderRawText(highlightSpans) {
+      const spans = (highlightSpans || []).slice().sort((a, b) => a.start - b.start);
+      let html = "";
+      let cursor = 0;
+      for (const span of spans) {
+        if (span.start < cursor) continue; // 忽略与前一个 span 重叠的部分，MVP 不处理重叠
+        html += escapeHtml(rawText.slice(cursor, span.start));
+        html += `<mark>${escapeHtml(rawText.slice(span.start, span.end))}</mark>`;
+        cursor = span.end;
+      }
+      html += escapeHtml(rawText.slice(cursor));
+      document.getElementById("raw-text").innerHTML = html;
+    }
+
+    function selectField(fieldName) {
+      document.querySelectorAll(".field-row").forEach((el) => el.classList.remove("selected"));
+      const row = document.getElementById(`field-row-${fieldName}`);
+      if (row) row.classList.add("selected");
+      const field = parsedFields[fieldName] || {};
+      renderRawText(field.spans || []);
+    }
+
+    async function submitReview(fieldName, humanValue) {
+      const resp = await fetch(`api/resumes/${resumeId}/fields/${fieldName}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ human_value: humanValue }),
+      });
+      if (resp.ok) {
+        await loadParsed();
+      } else {
+        document.getElementById("error").textContent = "提交失败：该字段可能没有待校对记录";
+      }
+    }
+
+    function fieldDisplayValue(field) {
+      if (field.not_mentioned) return "未提及";
+      const v = field.value;
+      if (v === null || v === undefined) return "未提及";
+      if (Array.isArray(v)) return v.length ? v.join("、") : "未提及";
+      if (typeof v === "object") return [v.degree, v.school].filter(Boolean).join(" ") || "未提及";
+      return String(v);
+    }
+
+    function renderFields() {
+      const panel = document.getElementById("fields-panel");
+      panel.innerHTML = "";
+      for (const [fieldName, field] of Object.entries(parsedFields)) {
+        const row = document.createElement("div");
+        row.className = "field-row" + (field.review_pending ? " pending" : "");
+        row.id = `field-row-${fieldName}`;
+        row.addEventListener("click", () => selectField(fieldName));
+
+        const title = document.createElement("div");
+        title.textContent = `${fieldName}：${fieldDisplayValue(field)}（置信度 ${field.confidence}）`;
+        row.appendChild(title);
+
+        if (field.review_pending) {
+          const badge = document.createElement("span");
+          badge.textContent = "【待校对】";
+          row.appendChild(badge);
+        }
+
+        const confirmBtn = document.createElement("button");
+        confirmBtn.textContent = "确认";
+        confirmBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          submitReview(fieldName, fieldDisplayValue(field));
+        });
+        row.appendChild(confirmBtn);
+
+        const editInput = document.createElement("input");
+        editInput.placeholder = "改为…";
+        row.appendChild(editInput);
+
+        const editBtn = document.createElement("button");
+        editBtn.textContent = "提交修改";
+        editBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (editInput.value.trim()) submitReview(fieldName, editInput.value.trim());
+        });
+        row.appendChild(editBtn);
+
+        panel.appendChild(row);
+      }
+    }
+
+    async function loadRawText() {
+      const resp = await fetch(`api/resumes/${resumeId}/text`);
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return;
+      }
+      const body = await resp.json();
+      rawText = body.raw_text || "";
+    }
+
+    async function loadParsed() {
+      const resp = await fetch(`api/resumes/${resumeId}/parsed`);
+      const body = await resp.json();
+      const parsed = body.parsed_json || {};
+      parsedFields = {};
+      for (const [name, field] of Object.entries(parsed)) {
+        parsedFields[name] = { ...field, review_pending: false };
+      }
+      renderFields();
+      renderRawText([]);
+    }
+
+    async function init() {
+      await loadRawText();
+      await loadParsed();
+    }
+
+    init();
+  </script>
+</body>
+</html>
