@@ -502,3 +502,111 @@ def test_identity_check_has_no_image_or_scoring_columns(conn):
     ).fetchone()[0].lower()
     for bad in banned_substrings:
         assert bad not in ddl, f"identity_check 建表原文里出现了禁止词 {bad!r}"
+
+
+# ── interview_turn（tasks 2.4）───────────────────────────────────────────
+
+
+def _seed_prep_question(conn, question_id="q-1", snapshot_id="snap-1", seq=1):
+    conn.execute(
+        "INSERT INTO prep_question "
+        "(id, snapshot_id, seq, dimension, difficulty, text, rubric_json, follow_ups_json, rationale) "
+        "VALUES (?, ?, ?, 'diag_stack', 'medium', '问题文本', '{}', '[]', '依据画像')",
+        (question_id, snapshot_id, seq),
+    )
+    conn.commit()
+
+
+def _seed_turn_chain(conn):
+    """搭好 interview_turn 需要的完整前置链：job/candidate/resume/application
+    → prep_snapshot/prep_question → interview_session。"""
+    _seed_job_candidate_resume_application(conn)
+    _seed_analysis_run(conn)
+    _seed_prep_snapshot(conn)
+    _seed_prep_question(conn)
+    _seed_interview_session(conn)
+
+
+def test_interview_turn_table_exists_with_expected_columns(conn):
+    _seed_turn_chain(conn)
+    assert _table_exists(conn, "interview_turn")
+    assert _columns(conn, "interview_turn") == {
+        "id", "session_id", "seq", "question_id", "question_text", "answer_text",
+        "answer_mode", "audio_start_ms", "audio_end_ms", "latency_json",
+        "follow_up_of", "interrupted_at_ms", "asr_confidence", "acoustic_ref", "created_at",
+    }
+
+
+def test_interview_turn_unique_on_session_and_seq(conn):
+    _seed_turn_chain(conn)
+    conn.execute(
+        "INSERT INTO interview_turn "
+        "(id, session_id, seq, question_id, question_text, answer_mode) "
+        "VALUES ('turn-1', 'sess-1', 1, 'q-1', '问题文本', 'voice')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_turn "
+            "(id, session_id, seq, question_id, question_text, answer_mode) "
+            "VALUES ('turn-2', 'sess-1', 1, 'q-1', '问题文本', 'text')"
+        )
+
+
+def test_interview_turn_answer_mode_check_rejects_unknown_value(conn):
+    _seed_turn_chain(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_turn "
+            "(id, session_id, seq, question_id, question_text, answer_mode) "
+            "VALUES ('turn-bad', 'sess-1', 1, 'q-1', '问题文本', 'video')"
+        )
+
+
+def test_interview_turn_text_mode_rejects_audio_offsets(conn):
+    """live-voice-interview-session spec「文本作答降级」：文本作答的 turn
+    MUST NOT 有音频起止。"""
+    _seed_turn_chain(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_turn "
+            "(id, session_id, seq, question_id, question_text, answer_mode, audio_start_ms) "
+            "VALUES ('turn-bad', 'sess-1', 1, 'q-1', '问题文本', 'text', 100)"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_turn "
+            "(id, session_id, seq, question_id, question_text, answer_mode, audio_end_ms) "
+            "VALUES ('turn-bad2', 'sess-1', 1, 'q-1', '问题文本', 'text', 3000)"
+        )
+
+
+def test_interview_turn_voice_mode_allows_audio_offsets(conn):
+    _seed_turn_chain(conn)
+    conn.execute(
+        "INSERT INTO interview_turn "
+        "(id, session_id, seq, question_id, question_text, answer_text, answer_mode, "
+        "audio_start_ms, audio_end_ms) "
+        "VALUES ('turn-1', 'sess-1', 1, 'q-1', '问题文本', '回答文本', 'voice', 0, 3000)"
+    )
+    conn.commit()
+
+
+def test_interview_turn_follow_up_of_points_to_another_turn(conn):
+    """spec「选择预埋追问」：turn 记录 follow_up_of 指向被追问的 turn。"""
+    _seed_turn_chain(conn)
+    conn.execute(
+        "INSERT INTO interview_turn "
+        "(id, session_id, seq, question_id, question_text, answer_mode) "
+        "VALUES ('turn-1', 'sess-1', 1, 'q-1', '问题文本', 'voice')"
+    )
+    conn.execute(
+        "INSERT INTO interview_turn "
+        "(id, session_id, seq, question_id, question_text, answer_mode, follow_up_of) "
+        "VALUES ('turn-2', 'sess-1', 2, 'q-1', '追问文本', 'voice', 'turn-1')"
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT follow_up_of FROM interview_turn WHERE id='turn-2'"
+    ).fetchone()
+    assert row[0] == "turn-1"

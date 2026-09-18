@@ -758,6 +758,39 @@ CREATE TABLE IF NOT EXISTS identity_check (
     result TEXT NOT NULL CHECK (result IN ('pass', 'fail', 'skipped')),
     checked_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 面试逐轮问答（live-voice-interview-session spec「全程录制与 turn 对齐」
+-- 「打断处理」「文本作答降级」）。question_id 引用 prep_question(id)——
+-- 冻结快照里的具体某一题；follow_up_of 自引用本表，记录"这条追问针对哪条
+-- turn"。answer_mode='text' 时 audio_start_ms/audio_end_ms 必须为空的
+-- CHECK 是 spec「文本作答的 turn MUST NOT 有音频起止」的存储层落点。
+-- acoustic_ref 只读展示字段（合规红线「声学信号只展示不计分」），文本作答
+-- turn 恒为空，不受 CHECK 约束（列本身允许 NULL，评分输入结构性不读它，
+-- 见 app/schemas/interview_ai_input.py 的 ScoreInputTurn）。
+CREATE TABLE IF NOT EXISTS interview_turn (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES interview_session(id),
+    seq INTEGER NOT NULL,
+    question_id TEXT NOT NULL REFERENCES prep_question(id),
+    question_text TEXT NOT NULL,
+    answer_text TEXT,
+    answer_mode TEXT NOT NULL CHECK (answer_mode IN ('voice', 'text')),
+    audio_start_ms INTEGER,
+    audio_end_ms INTEGER,
+    latency_json TEXT,
+    follow_up_of TEXT REFERENCES interview_turn(id),
+    interrupted_at_ms INTEGER,
+    asr_confidence REAL,
+    acoustic_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (
+        answer_mode != 'text'
+        OR (audio_start_ms IS NULL AND audio_end_ms IS NULL)
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_turn_session_seq
+    ON interview_turn (session_id, seq);
 """
 
 
