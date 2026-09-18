@@ -138,6 +138,11 @@ ${ev_list:-（无——每日兜底：只刷新台账、推进状态、算 ready
 EOF
 }
 
+# 用量登记（0918F）：与 run-lanes.sh 同口径，缺字段写 "-" 不报错。本壳一次调用可能跑多轮，
+# 各轮共用同一个 $LOG——记下起跑前的行数，事后只在新增的那一段里找 json 行，不与前几轮混。
+USAGE_TSV="$LOGDIR/usage.tsv"
+[[ -f "$USAGE_TSV" ]] || printf 'timestamp\tround\tevents\tcost_usd\tin\tout\tcache_read\tcache_write\n' > "$USAGE_TSV"
+
 round=0
 overall_rc=0
 while :; do
@@ -155,12 +160,16 @@ while :; do
   fi
   log "▶ 第 $round 轮：$trigger model=$MODEL budget=\$$BUDGET"
   [[ -n "$ev_names" ]] && printf '%s\n' "$ev_names" | sed 's/^/    事件: /' | tee -a "$LOG"
+  ev_count="$(printf '%s\n' "$ev_names" | grep -c . || true)"
+  pre_lines="$(wc -l < "$LOG" 2>/dev/null | tr -d ' ')"; pre_lines="${pre_lines:-0}"
 
   # -p 模式默认只等后台子任务 600 秒；调度器不派子代理，但与 run-lanes 同口径放宽无害。
   # 后台起、记 pid 进锁、再 wait：壳被 TERM 时 trap 能拿到子进程杀掉；锁里第二行让别的实例也能看见它。
+  # --output-format json（0918F）：只为拿 total_cost_usd/usage——本壳成败只认 rc，不像
+  # run-lanes.sh 那样靠 grep $LOG 判定，所以这里不用把 result 文本转译回纯文本，直接原样落 $LOG。
   build_prompt "$ev_names" "$trigger" | env DISPATCHER_LOCK_HELD=1 HR_HEADLESS_LANE=1 \
       CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$MODEL" \
-      "$CLAUDE_BIN" -p -n "[Mac]dispatcher-$STAMP" --output-format text \
+      "$CLAUDE_BIN" -p -n "[Mac]dispatcher-$STAMP" --output-format json \
       --model "$MODEL" --max-budget-usd "$BUDGET" --dangerously-skip-permissions --strict-mcp-config \
       >> "$LOG" 2>&1 &
   child=$!
@@ -170,6 +179,37 @@ while :; do
   child=""
   echo "$$" > "$LOCK"
   log "■ 第 $round 轮结束 rc=$rc"
+
+  usage_row="$(python3 - "$LOG" "$pre_lines" <<'PY'
+import json, sys
+
+log_path, skip = sys.argv[1], int(sys.argv[2])
+cost = tin = tout = cread = cwrite = "-"
+try:
+    with open(log_path, encoding="utf-8") as f:
+        lines = f.readlines()[skip:]
+except OSError:
+    lines = []
+for line in lines:
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        data = json.loads(line)
+    except Exception:
+        continue
+    if "total_cost_usd" not in data:
+        continue
+    usage = data.get("usage") or {}
+    cost = data.get("total_cost_usd", "-")
+    tin = usage.get("input_tokens", "-")
+    tout = usage.get("output_tokens", "-")
+    cread = usage.get("cache_read_input_tokens", "-")
+    cwrite = usage.get("cache_creation_input_tokens", "-")
+print("\t".join(str(x) for x in (cost, tin, tout, cread, cwrite)))
+PY
+)"
+  printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$round" "${ev_count:-0}" "$usage_row" >> "$USAGE_TSV"
 
   if [[ $rc -eq 0 ]]; then
     : > "$DAILY"

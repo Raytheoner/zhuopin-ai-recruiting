@@ -270,6 +270,51 @@ def test_session_log_is_written_under_dispatcher_dir(repo: Path) -> None:
     assert "hello-from-fake" in logs[0].read_text(encoding="utf-8")
 
 
+# ── 用量登记（2026-09-18，0918F）：.claude/handoff/dispatcher/usage.tsv ──
+
+
+def fake_claude_json(repo: Path, rc: int = 0) -> Path:
+    """假 claude：输出单行 json（--output-format json 的真实返回形状），带固定用量字段。"""
+    script = repo / "fake-claude-json.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "cat >/dev/null\n"
+        "cat <<'JSON'\n"
+        '{"total_cost_usd":0.05,"num_turns":3,"usage":{"input_tokens":100,"output_tokens":200,'
+        '"cache_read_input_tokens":300,"cache_creation_input_tokens":400},"result":"OPENER_DONE"}\n'
+        "JSON\n"
+        f"exit {rc}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_usage_tsv_records_cost_and_tokens_from_json_output(repo: Path) -> None:
+    (events_dir(repo) / "lanes-done-1").touch()
+    proc = run_shell(repo, fake_claude_json(repo))
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    usage = repo / ".claude" / "handoff" / "dispatcher" / "usage.tsv"
+    assert usage.is_file()
+    lines = usage.read_text(encoding="utf-8").splitlines()
+    assert lines[0].split("\t") == ["timestamp", "round", "events", "cost_usd", "in", "out", "cache_read", "cache_write"]
+    assert len(lines) == 2, lines
+    _, round_, events, cost, tin, tout, cread, cwrite = lines[1].split("\t")
+    assert round_ == "1" and events == "1"
+    assert (cost, tin, tout, cread, cwrite) == ("0.05", "100", "200", "300", "400")
+
+
+def test_usage_tsv_writes_dashes_when_output_is_not_json(repo: Path) -> None:
+    """旧假桩（纯文本 OPENER_DONE，非 json）⇒ 用量列全 "-"，不报错、不挡会话成败判定。"""
+    (events_dir(repo) / "lanes-done-1").touch()
+    proc = run_shell(repo, fake_claude(repo))
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    usage = repo / ".claude" / "handoff" / "dispatcher" / "usage.tsv"
+    assert usage.is_file()
+    row = usage.read_text(encoding="utf-8").splitlines()[1].split("\t")
+    assert row[3:8] == ["-", "-", "-", "-", "-"]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # install_task_dispatcher.py
 # ─────────────────────────────────────────────────────────────────────────────

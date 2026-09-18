@@ -59,11 +59,16 @@ def _build_sandbox(tmp_path: Path):
     bindir.mkdir()
     calls = tmp_path / "calls.txt"
     fake = bindir / "claude"
+    # --output-format json 的假返回（0918F）：result=OPENER_DONE ＋ 固定用量字段，
+    # 供下游断言 results.tsv 新列（cost_usd/in/out/cache_read/cache_write/turns）。
     fake.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "ARGS $* SUB=${{CLAUDE_CODE_SUBAGENT_MODEL:-unset}} LANE=${{HR_HEADLESS_LANE:-unset}}" >> "{calls}"\n'
         "cat >/dev/null\n"
-        "echo OPENER_DONE\n",
+        "cat <<'JSON'\n"
+        '{"total_cost_usd":0.0123,"num_turns":2,"usage":{"input_tokens":10,"output_tokens":20,'
+        '"cache_read_input_tokens":30,"cache_creation_input_tokens":40},"result":"OPENER_DONE"}\n'
+        "JSON\n",
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -145,7 +150,7 @@ def test_mcp_on_opt_in_skips_strict_flag(sandbox):
 
 def test_bold_sentinel_counts_as_done(sandbox):
     fake = sandbox["script"].parent / "bin" / "claude"
-    fake.write_text(fake.read_text(encoding="utf-8").replace("echo OPENER_DONE", "echo '**OPENER_DONE**'"), encoding="utf-8")
+    fake.write_text(fake.read_text(encoding="utf-8").replace('"result":"OPENER_DONE"', '"result":"**OPENER_DONE**"'), encoding="utf-8")
     r = run(sandbox, "--yes", "--full-auto", "--only", "0101A")
     assert r.returncode == 0, r.stdout + r.stderr
     results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
@@ -256,3 +261,73 @@ def test_dry_run_writes_no_lanes_done_event(sandbox):
     r = run(sandbox, "--dry-run")
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (sandbox["repo"] / ".claude" / "handoff" / "events").exists()
+
+
+# ── 用量登记（2026-09-18，0918F）：results.tsv 追加 cost/token 六列 ＋ 批次 usage.tsv ──
+
+
+def _results_rows(sandbox):
+    results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
+    return {l.split("\t")[1]: l.split("\t") for l in results.read_text(encoding="utf-8").splitlines()}, results
+
+
+def test_results_tsv_has_usage_columns(sandbox):
+    r = run(sandbox, "--yes", "--full-auto")
+    assert r.returncode == 0, r.stdout + r.stderr
+    rows, _ = _results_rows(sandbox)
+    assert rows["0101A"][2] == "OK"
+    # 列序固定在旧 6 列之后：cost_usd, in, out, cache_read, cache_write, turns
+    assert rows["0101A"][6:12] == ["0.0123", "10", "20", "30", "40", "2"]
+    assert rows["0101B"][6:12] == ["0.0123", "10", "20", "30", "40", "2"]
+
+
+def test_usage_tsv_batch_summary(sandbox):
+    r = run(sandbox, "--yes", "--full-auto")
+    assert r.returncode == 0, r.stdout + r.stderr
+    _, results = _results_rows(sandbox)
+    usage = results.parent / "usage.tsv"
+    assert usage.is_file()
+    lines = usage.read_text(encoding="utf-8").splitlines()
+    assert lines[0].split("\t") == ["cost_usd", "in", "out", "cache_read", "cache_write", "turns", "lanes"]
+    cost, tin, tout, cread, cwrite, turns, lanes = lines[1].split("\t")
+    assert float(cost) == pytest.approx(0.0246)
+    assert (tin, tout, cread, cwrite, turns, lanes) == ("20", "40", "60", "80", "4", "2")
+
+
+def test_non_json_stdout_falls_back_to_plain_text(sandbox):
+    """假桩输出非法 json（旧 text 模式那种纯文本）⇒ 哨兵判据零影响，用量列全 "-"。"""
+    fake = sandbox["script"].parent / "bin" / "claude"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "cat >/dev/null\n"
+        "echo OPENER_DONE\n",
+        encoding="utf-8",
+    )
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101A")
+    assert r.returncode == 0, r.stdout + r.stderr
+    rows, _ = _results_rows(sandbox)
+    assert rows["0101A"][2] == "OK"
+    assert rows["0101A"][6:12] == ["-", "-", "-", "-", "-", "-"]
+
+
+def test_budget_hit_still_detected_via_json(sandbox):
+    """json 模式下撞预算不再是「Error: Exceeded USD budget」纯文本，脚本要把它转译回
+    这句写进 $log，622 行起的 BUDGET-HIT grep 判据才不受影响（既有列语义不变）。"""
+    fake = sandbox["script"].parent / "bin" / "claude"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "cat >/dev/null\n"
+        "cat <<'JSON'\n"
+        '{"total_cost_usd":0.5,"num_turns":1,"usage":{"input_tokens":1,"output_tokens":1,'
+        '"cache_read_input_tokens":1,"cache_creation_input_tokens":1},'
+        '"subtype":"error_max_budget_usd","terminal_reason":"budget_exhausted"}\n'
+        "JSON\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101A")
+    rows, _ = _results_rows(sandbox)
+    assert rows["0101A"][2] == "BUDGET-HIT"
+    assert rows["0101A"][6:12] == ["0.5", "1", "1", "1", "1", "1"]
+    log_path = Path(rows["0101A"][4])
+    assert "Exceeded USD budget" in log_path.read_text(encoding="utf-8")

@@ -543,13 +543,14 @@ PY
 run_lane() {
   local lane="$1"
   local id title body log t0 t1 code mins status lmodel lsrc
+  local rawjson usage_row ucost uin uout ucread ucwrite uturns
 
   while IFS=$'\t' read -r _lane id title; do
     log="$LOGDIR/${lane}-${id}.log"
     body="$(extract "$id")"
 
     if [[ -z "$body" ]]; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "NO-BODY" "0" "$log" "-" >> "$LOGDIR/results.tsv"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "NO-BODY" "0" "$log" "-" "-" "-" "-" "-" "-" "-" >> "$LOGDIR/results.tsv"
       echo "  ✗ [$lane/$id] 抽不到正文，停本泳道"
       return 1
     fi
@@ -568,7 +569,7 @@ run_lane() {
     # （参数不生效也不报错），⛔ 但不要把它写成"编号靠这条保住了"。
     # 要验只需 5 分钟：跑一条最小 opener，看 claude 那侧有没有这个名字。
     # 这正是 kickoff skill 那条判据的适用场合——写成规则之前先想能不能推翻它。
-    local args=(-p -n "[Mac]$id-$title" --output-format text --max-budget-usd "$BUDGET")
+    local args=(-p -n "[Mac]$id-$title" --output-format json --max-budget-usd "$BUDGET")
     if [[ $FULL_AUTO -eq 1 ]]; then args+=(--dangerously-skip-permissions)
     else args+=(--permission-mode acceptEdits); fi
     IFS=$'\t' read -r lmodel lsrc <<< "$(resolve_model "$body")"
@@ -605,7 +606,7 @@ run_lane() {
       fi
       if [[ ! -d "$run_dir" ]] || [[ "$(git -C "$run_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)" != "$br" ]]; then
         echo "worktree=FAIL path=$wt_rel branch=$br" >> "$log"
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "WORKTREE-FAIL" "0" "$log" "$lmodel" >> "$LOGDIR/results.tsv"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "WORKTREE-FAIL" "0" "$log" "$lmodel" "-" "-" "-" "-" "-" "-" >> "$LOGDIR/results.tsv"
         echo "  ✗ [$lane/$id] worktree 建不出来或分支不符（$wt_rel / $br），停本泳道"
         return 1
       fi
@@ -615,9 +616,56 @@ run_lane() {
 
     # -p 模式默认只等后台子任务 600 秒就强杀（2026-09-16 0916S 实证：final review 派出的修复子代理被杀、判 NO-SENTINEL）。
     # 放宽到 60 分钟；真卡死仍有 --max-budget-usd 与这 60 分钟兜底。
-    ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) >> "$log" 2>&1
+    #
+    # 2026-09-18 0918F：改用 --output-format json 只为拿 total_cost_usd/usage/num_turns——
+    # stdout 单独落 $rawjson（不进 $log），下面用 python 把其中 result 字段（解码后的最终文本，
+    # 与旧 text 模式的 stdout 逐字等价）写回 $log，哨兵 grep 与状态判定（622 行起）完全不用动。
+    rawjson="$LOGDIR/${lane}-${id}.json"
+    ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) > "$rawjson" 2>> "$log"
     code=$?
     t1=$(date +%s); mins=$(( (t1 - t0) / 60 ))
+
+    # 解不出合法 json（测试假桩、异常中断等）⇒ 原始内容整段当文本落 $log，与旧 text 模式
+    # 字节等价，哨兵判据零影响；用量六列全写 "-"。
+    usage_row="$(python3 - "$rawjson" "$log" <<'PY'
+import json, sys
+
+raw_path, log_path = sys.argv[1], sys.argv[2]
+cost = tin = tout = cread = cwrite = turns = "-"
+try:
+    raw = open(raw_path, encoding="utf-8").read()
+except OSError:
+    raw = ""
+
+text_to_log = raw
+try:
+    data = json.loads(raw)
+    usage = data.get("usage") or {}
+    cost = data.get("total_cost_usd", "-")
+    tin = usage.get("input_tokens", "-")
+    tout = usage.get("output_tokens", "-")
+    cread = usage.get("cache_read_input_tokens", "-")
+    cwrite = usage.get("cache_creation_input_tokens", "-")
+    turns = data.get("num_turns", "-")
+    if data.get("subtype") == "error_max_budget_usd" or data.get("terminal_reason") == "budget_exhausted":
+        # 旧 text 模式撞预算时 stdout 就是这句，622 行起的 BUDGET-HIT 判据靠 grep 这个子串。
+        text_to_log = "Error: Exceeded USD budget\n"
+    else:
+        result = data.get("result", "")
+        text_to_log = result if isinstance(result, str) else ""
+        if text_to_log and not text_to_log.endswith("\n"):
+            text_to_log += "\n"
+except Exception:
+    pass
+
+if text_to_log:
+    with open(log_path, "a", encoding="utf-8") as lf:
+        lf.write(text_to_log)
+
+print("\t".join(str(x) for x in (cost, tin, tout, cread, cwrite, turns)))
+PY
+)"
+    IFS=$'\t' read -r ucost uin uout ucread ucwrite uturns <<< "$usage_row"
 
     # 哨兵扫全文，不扫 tail —— 原版实测哨兵落在第 2 行，扫 tail 会误判
     # 容忍模型把哨兵加粗/包反引号（2026-09-16 0916K 实证：输出 `**OPENER_DONE**`，活已干完却判 NO-SENTINEL）
@@ -633,7 +681,7 @@ run_lane() {
     elif [[ $sentinel == PARTIAL ]];            then status="PARTIAL"
     else                                             status="NO-SENTINEL"; fi
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" "$lmodel" >> "$LOGDIR/results.tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" "$lmodel" "$ucost" "$uin" "$uout" "$ucread" "$ucwrite" "$uturns" >> "$LOGDIR/results.tsv"
     echo "  • [$lane/$id] $status (${mins}m, $lmodel)"
 
     # 活干完的条目自动摘掉泳道标注 —— 让「跑完即摘」成为机制，不靠人记得。
@@ -684,6 +732,12 @@ echo "━━━━━━ 泳道执行汇总 ━━━━━━"
     printf '%-12s %-14s %-14s %s\n' "$lane" "$id" "$status" "$mins"
   done
 } | tee "$LOGDIR/summary.txt"
+
+# 批次用量合计（0918F）：results.tsv 第 7-12 列，"-" 当 0 计。新文件，无历史消费方。
+{
+  printf 'cost_usd\tin\tout\tcache_read\tcache_write\tturns\tlanes\n'
+  awk -F'\t' 'NF>=12{c++; cost+=($7=="-"?0:$7); ti+=($8=="-"?0:$8); to+=($9=="-"?0:$9); cr+=($10=="-"?0:$10); cw+=($11=="-"?0:$11); tn+=($12=="-"?0:$12)} END{printf "%.6f\t%d\t%d\t%d\t%d\t%d\t%d\n", cost+0, ti+0, to+0, cr+0, cw+0, tn+0, c+0}' "$LOGDIR/results.tsv"
+} > "$LOGDIR/usage.tsv"
 
 echo
 echo "日志目录：$LOGDIR"

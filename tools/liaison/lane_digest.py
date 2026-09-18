@@ -3,8 +3,8 @@
 **纯函数**（工程铁律 2 的形状）：不读文件、不看时钟、不记日志——文件由 CLI
 （`owner_notify.owner_notify_main --lane-logdir`）读好了喂进来。
 
-输入契约（`docs/openers/run-lanes.sh` 第 636 行逐字）：`results.tsv` 每行六列、tab 分隔
-    lane \\t id \\t status \\t mins \\t log \\t model
+输入契约（`docs/openers/run-lanes.sh` 第 636 行逐字）：`results.tsv` 每行前六列、tab 分隔
+    lane \\t id \\t status \\t mins \\t log \\t model \\t ...（0918F 起再加 cost_usd/in/out/cache_read/cache_write/turns 六列，本模块不读）
 `status` 取值：OK / PARTIAL / FAIL(<code>) / NO-SENTINEL / NO-BODY / WORKTREE-FAIL / BUDGET-HIT。
 `summary.txt` 是同一份数据的人读排版，这里只当兜底（results.tsv 解析不出行时提示它存在），
 ⛔ 不从它二次解析。
