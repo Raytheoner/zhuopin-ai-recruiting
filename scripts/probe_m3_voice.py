@@ -573,20 +573,31 @@ def _stream_first_token_latency_ms(chunk_iter) -> float:
     raise RuntimeError("流式响应结束但从未出现非空 delta.content")
 
 
-def _schema_compliance_rate(gateway: LLMGateway, *, runs: int, system_prompt: str, user_prompt: str) -> float:
+def _schema_compliance_rate(
+    gateway: LLMGateway, *, runs: int, system_prompt: str, user_prompt: str
+) -> tuple[float, set[str]]:
+    """返回 (合规率, 这条路径上见到的响应 model 集合)。用
+    `extract_structured_with_meta` 而不是 `extract_structured`——后者的薄封装
+    直接丢弃 `LLMCallMeta`（见 app/llm/gateway.py:339-356），而
+    `LLMCallMeta.response_model` 正是铁律 5 要求持久化的"响应侧实际模型标识"，
+    合规率这条路径不能因为调用了封装版就漏记它。
+    """
     successes = 0
+    response_models_seen: set[str] = set()
     for _ in range(runs):
         try:
-            gateway.extract_structured(
+            _parsed, meta = gateway.extract_structured_with_meta(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 schema=FollowUpChoice,
                 prompt_version="probe-p4-v1",
             )
             successes += 1
+            if meta.response_model:
+                response_models_seen.add(meta.response_model)
         except SchemaExtractionFailed:
             continue
-    return successes / runs
+    return successes / runs, response_models_seen
 
 
 _SAMPLE_FOLLOW_UPS = ["能具体说说你在这个项目里遇到的最大技术难点吗？", "如果重新做一次，你会怎么改进这个方案？"]
@@ -658,8 +669,6 @@ def probe_p4_llm_ttft(args: argparse.Namespace) -> ProbeResult:
             )
             latency_ms = _stream_first_token_latency_ms(stream)
             ttft_samples_ms.append(latency_ms)
-            # 流式响应体的 model 字段每个 chunk 都带，取最后见到的一个即可（铁律 5：
-            # 响应侧字段才可信，不看构造请求时传的 settings.llm_model 字面量）。
         # 流式调用拿不到 usage/model 的稳定聚合点，这里单独补一次非流式调用只为取响应 model 字段。
         probe_response = raw_client.chat.completions.create(
             model=settings.llm_model,
@@ -676,9 +685,10 @@ def probe_p4_llm_ttft(args: argparse.Namespace) -> ProbeResult:
             max_retries=0,  # 测「第一次」合规率，不吃网关内建的 schema 重试红利
             audit_hook=NoopAuditHook(),
         )
-        compliance_rate = _schema_compliance_rate(
+        compliance_rate, compliance_response_models = _schema_compliance_rate(
             gateway, runs=args.runs, system_prompt=_SAMPLE_SYSTEM_PROMPT, user_prompt=user_prompt
         )
+        response_models_seen |= compliance_response_models
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(
             item="P4",

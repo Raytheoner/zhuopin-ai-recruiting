@@ -638,6 +638,7 @@ def test_stream_first_token_latency_ms_raises_when_no_nonempty_delta():
 
 
 def test_schema_compliance_rate_counts_successes(monkeypatch):
+    from app.llm.gateway import LLMCallMeta
     from scripts.probe_m3_voice import FollowUpChoice, _schema_compliance_rate
 
     gateway = MagicMock()
@@ -649,11 +650,15 @@ def test_schema_compliance_rate_counts_successes(monkeypatch):
             from scripts.probe_m3_voice import SchemaExtractionFailed
 
             raise SchemaExtractionFailed("越界")
-        return FollowUpChoice(action="next_question", follow_up_index=None)
+        return (
+            FollowUpChoice(action="next_question", follow_up_index=None),
+            LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat", attempts=1),
+        )
 
-    gateway.extract_structured.side_effect = _side_effect
-    rate = _schema_compliance_rate(gateway, runs=8, system_prompt="s", user_prompt="u")
+    gateway.extract_structured_with_meta.side_effect = _side_effect
+    rate, response_models = _schema_compliance_rate(gateway, runs=8, system_prompt="s", user_prompt="u")
     assert rate == pytest.approx(6 / 8)
+    assert response_models == {"deepseek-chat"}
 
 
 def _p4_args(*, runs: int = 3):
@@ -786,6 +791,7 @@ def test_probe_p4_llm_ttft_blocks_when_gateway_construction_fails():
 
 
 def test_probe_p4_llm_ttft_success_path_computes_metrics():
+    from app.llm.gateway import LLMCallMeta
     from scripts.probe_m3_voice import FollowUpChoice, probe_p4_llm_ttft
 
     fake_client = MagicMock()
@@ -798,7 +804,14 @@ def test_probe_p4_llm_ttft_success_path_computes_metrics():
     fake_client.chat.completions.create.side_effect = _create_side_effect
 
     fake_gateway = MagicMock()
-    fake_gateway.extract_structured.return_value = FollowUpChoice(action="next_question", follow_up_index=None)
+    # 合规率路径的响应 model 故意给一个和 TTFT 非流式探测调用不同的值
+    # （"deepseek-chat-compliance" vs "deepseek-chat"），断言里要求两个都出现在
+    # 最终 response_model 列表里——这才是真正验证「两条调用路径都记了 model」，
+    # 而不是恰好两边给了同一个字符串、断言看不出漏记哪一条。
+    fake_gateway.extract_structured_with_meta.return_value = (
+        FollowUpChoice(action="next_question", follow_up_index=None),
+        LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat-compliance", attempts=1),
+    )
 
     with (
         patch("scripts.probe_m3_voice.get_settings", return_value=_fake_settings()),
@@ -813,5 +826,5 @@ def test_probe_p4_llm_ttft_success_path_computes_metrics():
     assert result.metrics["ttft_p95_ms"] >= 0
     assert result.metrics["schema_compliance_rate"] == pytest.approx(1.0)
     assert result.metrics["runs"] == 3
-    assert result.metrics["response_model"] == ["deepseek-chat"]
+    assert result.metrics["response_model"] == ["deepseek-chat", "deepseek-chat-compliance"]
     assert result.metrics["model_configured"] == "deepseek-chat"
