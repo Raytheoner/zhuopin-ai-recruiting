@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.agents.jd_agent import AI_LABEL_TEMPLATE
+from app.outbound.delivery import deliver_candidate_message
+from app.outbound.messages import CandidateOutboundMessage
 from app.storage.contact_source import is_contact_vault_available
 from app.storage.idempotency import idempotent_effect
 from app.storage.live_interview_gate import is_live_interview_enabled
@@ -322,3 +325,61 @@ def open_resume(conn: sqlite3.Connection, token: str) -> tuple[str, int]:
 
     effect_consume_resume_token(conn, thread_id=session_id, business_key=token_hash, session_id=session_id)
     return session_id, next_seq
+
+
+# ── 4.4：邀约投递（经既有外发门禁） ──────────────────────────────────
+
+def render_invite_body(*, candidate_link: str, job_title: str) -> str:
+    """草稿正文，复用 jd_agent 的 AI 生成标识模板（design D6：不另写一套）。"""
+    generated_at = _utcnow().isoformat()
+    label = AI_LABEL_TEMPLATE.format(generated_at=generated_at)
+    return (
+        f"您好，您已进入「{job_title}」岗位的 AI 结构化面试环节。\n"
+        f"请点击以下链接开始（链接仅可使用一次，请勿转发给他人）：\n{candidate_link}\n\n"
+        f"{label}"
+    )
+
+
+def compose_invite_draft(*, candidate_link: str, job_title: str) -> tuple[str, str]:
+    """返回 (draft_id, body)。draft_id 是这次拟稿的稳定标识，用作
+    effect_deliver_invitation 的幂等键（tasks 4.4 字面公式
+    `{session_id}:effect_deliver_invitation:{draft_id}`）——同一次拟稿只投递
+    一次，重新拟稿（如改了文案）产生新 draft_id，允许重新走一次门禁。"""
+    draft_id = uuid.uuid4().hex
+    body = render_invite_body(candidate_link=candidate_link, job_title=job_title)
+    return draft_id, body
+
+
+@idempotent_effect("effect_deliver_invitation")
+def effect_deliver_invitation(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, recipient: str, body: str, channel, recorder,
+    outbound_enabled, confirmed_by: str | None = None,
+) -> None:
+    """effect_* 节点：调既有门禁唯一入口 deliver_candidate_message()。
+    ⛔ 本函数不绕过门禁直连任何通道实现的投递方法——反证测试
+    test_no_direct_channel_deliver_import 会源码级扫描本文件确认不出现
+    绕开 deliver_candidate_message 的直连 import。
+
+    总开关关闭 ⇒ 门禁拒绝（REASON_OUTBOUND_DISABLED）⇒ 留 'manual_handoff'
+    事件，链接由调用方（Web 路由）已经拿在手里、直接展示在 HR 工作台，不需要
+    本函数额外处理；总开关开启且 confirmed_by 非空 ⇒ 门禁放行 ⇒ 留
+    'delivered' 事件。"""
+    message = CandidateOutboundMessage(
+        message_type="interview_invitation",
+        recipient=recipient,
+        body=body,
+        confirmed_by=confirmed_by,
+    )
+    decision = deliver_candidate_message(
+        conn, thread_id=thread_id, message=message, channel=channel,
+        recorder=recorder, outbound_enabled=outbound_enabled,
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) VALUES (?, ?, ?, ?)",
+        (
+            str(uuid.uuid4()), session_id,
+            "delivered" if decision.allowed else "manual_handoff",
+            decision.reason or "",
+        ),
+    )

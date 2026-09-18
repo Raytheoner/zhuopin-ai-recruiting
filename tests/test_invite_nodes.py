@@ -345,3 +345,85 @@ class TestResumeToken:
 
         with pytest.raises(ResumeTokenLimitExceededError):
             compute_new_resume_token(conn, session_id=session_id)
+
+
+from app.audit.recorder import AuditRecorder
+from app.audit.sinks import JsonlChainSink, SqliteSink
+from app.channels.web_channel import WebChannel
+from app.graph.invite_nodes import compose_invite_draft, effect_deliver_invitation, render_invite_body
+
+
+def _recorder(conn, tmp_path):
+    return AuditRecorder(SqliteSink(conn), JsonlChainSink(tmp_path / "decisions.jsonl"))
+
+
+class TestDeliverInvitation:
+    def test_render_invite_body_contains_ai_label(self):
+        from app.agents.jd_agent import AI_LABEL_PREFIX
+
+        body = render_invite_body(candidate_link="https://x.example/i/tok123", job_title="ECU 工程师")
+        assert AI_LABEL_PREFIX in body
+        assert "https://x.example/i/tok123" in body
+
+    def test_compose_invite_draft_returns_draft_id_and_body(self):
+        draft_id, body = compose_invite_draft(
+            candidate_link="https://x.example/i/tok123", job_title="ECU 工程师"
+        )
+        assert draft_id
+        assert "https://x.example/i/tok123" in body
+
+    def test_effect_deliver_invitation_blocked_when_outbound_disabled_logs_manual_handoff(
+        self, conn, tmp_path
+    ):
+        session_id = _new_pending_session(conn)
+        draft_id, body = compose_invite_draft(
+            candidate_link="https://x.example/i/tok123", job_title="ECU 工程师"
+        )
+        recorder = _recorder(conn, tmp_path)
+        channel = WebChannel(conn)
+
+        effect_deliver_invitation(
+            conn, thread_id=session_id, business_key=draft_id,
+            session_id=session_id, recipient="candidate:app1", body=body,
+            channel=channel, recorder=recorder, outbound_enabled=lambda: False,
+            confirmed_by="hr:tester",
+        )
+
+        event = conn.execute(
+            "SELECT event_type FROM interview_invite_event WHERE session_id = ? "
+            "AND event_type = 'manual_handoff'",
+            (session_id,),
+        ).fetchone()
+        assert event is not None
+
+    def test_effect_deliver_invitation_allowed_when_outbound_enabled_logs_delivered(
+        self, conn, tmp_path
+    ):
+        session_id = _new_pending_session(conn)
+        draft_id, body = compose_invite_draft(
+            candidate_link="https://x.example/i/tok123", job_title="ECU 工程师"
+        )
+        recorder = _recorder(conn, tmp_path)
+        channel = WebChannel(conn)
+
+        effect_deliver_invitation(
+            conn, thread_id=session_id, business_key=draft_id,
+            session_id=session_id, recipient="candidate:app1", body=body,
+            channel=channel, recorder=recorder, outbound_enabled=lambda: True,
+            confirmed_by="hr:tester",
+        )
+
+        event = conn.execute(
+            "SELECT event_type FROM interview_invite_event WHERE session_id = ? "
+            "AND event_type = 'delivered'",
+            (session_id,),
+        ).fetchone()
+        assert event is not None
+
+    def test_no_direct_channel_deliver_import(self):
+        """tasks 4.4 反证：代码里不得 import channel.deliver。"""
+        import pathlib
+
+        source = pathlib.Path("app/graph/invite_nodes.py").read_text(encoding="utf-8")
+        assert "channel.deliver" not in source
+        assert "from app.channels" not in source or "from app.channels.base import" in source
