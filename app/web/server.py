@@ -34,7 +34,7 @@ from app.graph.nodes import (
     effect_request_revision,
     revision_count,
 )
-from app.graph.resume_nodes import effect_persist_parse, record_resume_access
+from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
@@ -98,6 +98,10 @@ class JDEditRequest(BaseModel):
     # HR 编辑后的**完整**文案正文。服务端会剥掉其中任何 AI 标识行再重贴一行
     # 唯一的标识——⛔ 前端不要自己拼标识，也不要指望这里原样保存。
     text: str
+
+
+class FieldReviewRequest(BaseModel):
+    human_value: str
 
 
 class TurnOutcome(NamedTuple):
@@ -1076,6 +1080,34 @@ def create_app(
         record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
                               access_type="download")
         return FileResponse(str(stored_path), filename=file_name)
+
+    @router.post("/api/resumes/{resume_id}/fields/{field}/review")
+    def review_field(request: Request, resume_id: str, field: str, req: FieldReviewRequest):
+        row = conn.execute(
+            "SELECT id, human_value FROM field_review_queue "
+            "WHERE resume_id = ? AND field = ? AND status = 'pending'",
+            (resume_id, field),
+        ).fetchone()
+        if row is None:
+            already_reviewed = conn.execute(
+                "SELECT human_value FROM field_review_queue "
+                "WHERE resume_id = ? AND field = ? AND status = 'reviewed' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (resume_id, field),
+            ).fetchone()
+            if already_reviewed is not None and already_reviewed[0] == req.human_value:
+                return {"ok": True, "already_reviewed": True}
+            raise HTTPException(status_code=404, detail="该字段没有待校对记录")
+
+        reviewer = reviewer_of(request)
+        conn.execute(
+            "UPDATE field_review_queue SET status = 'reviewed', human_value = ?, "
+            "reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?",
+            (req.human_value, reviewer, row[0]),
+        )
+        conn.commit()
+        queue_reapplication_screening(resume_id)
+        return {"ok": True, "already_reviewed": False}
 
     @router.get("/health")
     def health() -> dict:
