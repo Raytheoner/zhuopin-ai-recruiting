@@ -1,0 +1,171 @@
+"""U3 邀约与同意流程 L4 编排层（voice-structured-interview tasks 4.1-4.11,
+design D5/D6/D13/D14/D20）。
+
+与 app/graph/interview_prep_nodes.py 同一形态：Web 通道下"挂起等人确认"由
+HTTP 端点直接调用普通 Python 函数达成，不建真实 LangGraph interrupt()
+（2026-08-26 判例，见 interview_prep_nodes.py 模块 docstring）。
+
+thread_id 统一取 session_id（design D20 invite 子图定义）。本文件按 tasks.md
+4.1→4.11 顺序组织：场次创建/令牌签发/令牌校验/续入令牌/邀约投递/同意/
+验证码/HR 展示。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import secrets
+import sqlite3
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from app.storage.contact_source import is_contact_vault_available
+from app.storage.idempotency import idempotent_effect
+from app.storage.live_interview_gate import is_live_interview_enabled
+
+logger = logging.getLogger(__name__)
+
+TOKEN_BYTES = 32
+DEFAULT_INVITE_EXPIRY_DAYS = 7
+RETENTION_DAYS = 90
+RETENTION_POLICY_VERSION = "v1-90d"  # design D18 起步值
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_iso(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+# ── 4.1 前置：场次创建 ──────────────────────────────────────────────
+
+class PrepSnapshotNotFrozenForInviteError(Exception):
+    """选中的投递没有已冻结的 prep 快照，不能签发邀约（tasks 4.11 前置）。"""
+
+
+def compute_new_session(
+    conn: sqlite3.Connection, *, application_id: str, prep_snapshot_version: int, sample_class: str
+) -> dict[str, Any]:
+    """纯计算：组装新场次的字段，不写库。retention_until 在这里算好——铁律
+    要求留存期限必须在场次建立那一刻由应用层写入，不允许留空（U1 已有的
+    NOT NULL 约束）。"""
+    row = conn.execute(
+        "SELECT status FROM prep_snapshot WHERE application_id = ? AND version = ?",
+        (application_id, prep_snapshot_version),
+    ).fetchone()
+    if row is None or row[0] != "frozen":
+        raise PrepSnapshotNotFrozenForInviteError(
+            f"投递 {application_id!r} 版本 {prep_snapshot_version} 的 prep 快照未冻结"
+        )
+    retention_until = (_utcnow() + timedelta(days=RETENTION_DAYS)).isoformat()
+    return {
+        "id": str(uuid.uuid4()),
+        "application_id": application_id,
+        "prep_snapshot_version": prep_snapshot_version,
+        "sample_class": sample_class,
+        "retention_until": retention_until,
+        "retention_policy_version": RETENTION_POLICY_VERSION,
+    }
+
+
+@idempotent_effect("effect_create_interview_session")
+def effect_create_interview_session(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session: dict[str, Any]
+) -> str:
+    """effect_* 节点：写 interview_session 一行，status='pending'。business_key
+    由调用方传 HR 点击签发时生成的 request_id（每次点击必须产生一次意图，即使
+    参数逐字相同——与 effect_regenerate_prep_question 的 request_id 用法同一
+    先例）。"""
+    conn.execute(
+        "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+        "retention_until, retention_policy_version, sample_class, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+        (
+            session["id"], session["application_id"], session["prep_snapshot_version"],
+            session["retention_until"], session["retention_policy_version"], session["sample_class"],
+        ),
+    )
+    return session["id"]
+
+
+# ── 4.9 / 4.10：签发前置闸 ───────────────────────────────────────────
+
+class LiveInterviewNotEnabledError(Exception):
+    """真实候选人开闸未开启，live 场次签发被拒（design D14，tasks 4.9）。"""
+
+
+class ContactVaultUnavailableError(Exception):
+    """candidate-contact-vault 未开启/未交付，live 场次签发被拒（tasks 4.10）。"""
+
+
+def assert_invite_issuance_allowed(conn: sqlite3.Connection, *, sample_class: str) -> None:
+    """签发前的结构性前置校验。internal_sim 场次不受这两道闸约束（spec
+    「开关关闭时只允许为内部模拟场次签发」）；live 场次必须两道闸都通过。
+    ⛔ 不在这里捕获异常——调用方（Web 路由）据异常类型返回 4xx 并留痕。"""
+    if sample_class != "live":
+        return
+    if not is_live_interview_enabled():
+        raise LiveInterviewNotEnabledError("真实候选人开闸未开启")
+    if not is_contact_vault_available():
+        raise ContactVaultUnavailableError("candidate-contact-vault 未开启，live 场次签发被拒")
+
+
+# ── 4.1：令牌签发 ───────────────────────────────────────────────────
+
+def generate_invite_token() -> str:
+    """32 字节随机、URL-safe 编码（spec「MUST 不可猜测」）。"""
+    return secrets.token_urlsafe(TOKEN_BYTES)
+
+
+def load_invite_expiry_days(conn: sqlite3.Connection, job_id: str) -> int:
+    row = conn.execute(
+        "SELECT invite_expiry_days FROM job_prep_config WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    if row is None or row[0] is None:
+        return DEFAULT_INVITE_EXPIRY_DAYS
+    return row[0]
+
+
+def compute_new_invite_token(conn: sqlite3.Connection, *, job_id: str) -> tuple[str, str, str]:
+    """纯计算：生成明文令牌、其哈希、到期时刻（ISO8601 UTC）。不写库。
+    返回 (明文令牌, 哈希, 到期时刻字符串)——明文令牌只在这一次调用里出现，
+    调用方负责把它拼进候选人链接，之后系统只认哈希。"""
+    token = generate_invite_token()
+    token_hash = _hash_token(token)
+    days = load_invite_expiry_days(conn, job_id)
+    expires_at = (_utcnow() + timedelta(days=days)).isoformat()
+    return token, token_hash, expires_at
+
+
+@idempotent_effect("effect_issue_invite")
+def effect_issue_invite(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, token_hash: str, expires_at: str,
+) -> None:
+    """effect_* 节点：business_key = token_hash（tasks 4.1 字面幂等键公式）。
+    "同一场次重复签发 ⇒ 旧令牌作废" 由 UPDATE 覆盖旧哈希实现——旧哈希一旦被
+    覆盖，任何用旧明文令牌算出的哈希都查不到匹配行，天然作废，不需要额外
+    的"已作废"标记。"并留痕" 由 interview_invite_event 承担。"""
+    prior = conn.execute(
+        "SELECT invite_token_hash FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    was_reissue = prior is not None and prior[0] is not None
+    conn.execute(
+        "UPDATE interview_session SET invite_token_hash = ?, invite_expires_at = ? WHERE id = ?",
+        (token_hash, expires_at, session_id),
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), session_id, "reissued" if was_reissue else "issued", token_hash),
+    )
