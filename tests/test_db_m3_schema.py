@@ -6,6 +6,7 @@
   ③ 全部新增 CHECK 的反证（直接 INSERT，绕过应用层）—— 各表在各自任务里先写
 """
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -713,3 +714,127 @@ def test_interview_access_log_access_type_rejects_unknown_value(conn):
             "INSERT INTO interview_access_log (id, accessor, session_id, access_type) "
             "VALUES ('log-bad', 'interviewer-1', 'sess-x', 'preview')"
         )
+
+
+# ── 老库升级：M3 U1 落地前的 .51 现网库真实形态 ───────────────────────────
+#
+# 基线不是从 SCHEMA 裁剪，而是刻意固定成 Task 1 生成的历史快照——它代表
+# "M3 U1 上线前，.51 上的库长什么样"，不随 SCHEMA 一起演进（与
+# tests/test_db_migration.py 顶部注释同一理由：派生的话测试会随 SCHEMA 一起
+# 演进，永远测不出"老库升级不了"这个真正要防的故障）。
+
+_LEGACY_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "zp51_demo_db_schema_pre_m3.sql"
+
+_M3_NEW_TABLES = (
+    "prep_snapshot", "prep_question", "interview_session", "interview_consent",
+    "identity_check", "interview_turn", "interview_recording_deletion",
+    "interview_access_log",
+)
+
+
+def _legacy_pre_m3_db(tmp_path):
+    c = get_connection(str(tmp_path / "legacy_pre_m3.db"))
+    ddl = _LEGACY_FIXTURE_PATH.read_text(encoding="utf-8")
+    c.executescript(ddl)
+    # sqlite_master.sql 只存 DDL，不存 SCHEMA 常量里紧跟 stage 建表之后的
+    # `INSERT OR IGNORE INTO stage ...` 三行种子数据——这三行必须在这里手工
+    # 补上，否则下面插入 application 行会因为 current_stage_id 的外键指向
+    # 一张空的 stage 表而失败（本计划写作时已实测踩到这个 FOREIGN KEY
+    # constraint failed，在此补齐修正）。
+    c.execute("INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('initial', '初筛', 'initial')")
+    c.execute("INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('screening', '评估中', 'screening')")
+    c.execute("INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('rejected', '已淘汰', 'rejected')")
+    # 挑几张跨 M1/M2 都在用的老表插入历史数据，验证升级后行数与内容不变。
+    c.execute("INSERT INTO job (id, title, status) VALUES ('old-job', '底层软件工程师', 'approved')")
+    c.execute("INSERT INTO candidate (id, name) VALUES ('old-cand', '张三')")
+    c.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('old-resume', 'old-job', 'synthetic', 'a.pdf', 'sha-old', 'hr-1')"
+    )
+    c.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('old-app', 'old-cand', 'old-job', 'old-resume', 'initial')"
+    )
+    c.commit()
+    return c
+
+
+def _legacy_sqlite_master_sql(conn: sqlite3.Connection, known_names: set[str]) -> dict[str, str]:
+    rows = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    return {name: sql for name, sql in rows if name in known_names}
+
+
+def test_legacy_pre_m3_db_gains_all_new_tables_after_init_schema(tmp_path):
+    conn = _legacy_pre_m3_db(tmp_path)
+
+    init_schema(conn)
+
+    for table in _M3_NEW_TABLES:
+        assert _table_exists(conn, table), f"{table} 应该在 init_schema 后出现"
+
+
+def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
+    """M3 U1 的字面判据：老库升级后既有表一行不改。既比列集合，也比
+    sqlite_master.sql 原文（CHECK/DEFAULT/REFERENCES 措辞是否被悄悄改写），
+    还比几张关键表的行数。"""
+    conn = _legacy_pre_m3_db(tmp_path)
+    known_names = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    before_sql = _legacy_sqlite_master_sql(conn, known_names)
+    before_counts = {
+        t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        for t in ("job", "candidate", "resume", "application")
+    }
+
+    init_schema(conn)
+
+    after_sql = _legacy_sqlite_master_sql(conn, known_names)
+    after_counts = {
+        t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        for t in ("job", "candidate", "resume", "application")
+    }
+
+    assert after_sql == before_sql
+    assert after_counts == before_counts
+
+
+def test_legacy_pre_m3_db_init_schema_is_idempotent(tmp_path):
+    """重跑三次不报错——UNIQUE INDEX 与 CHECK 都必须带 IF NOT EXISTS 的
+    幂等性（M3 新加的 8 张表同样要满足）。"""
+    conn = _legacy_pre_m3_db(tmp_path)
+
+    init_schema(conn)
+    init_schema(conn)
+    init_schema(conn)
+
+    for table in _M3_NEW_TABLES:
+        assert _table_exists(conn, table)
+
+
+def test_m3_new_tables_never_enter_the_add_column_path():
+    """本单元的第二条硬约束：8 张全新表一个都不许进 _ADDED_COLUMNS——加列
+    路径只服务"老库缺列"，把新表塞进去会让 apply_column_migrations 对着一张
+    不存在的表执行 ALTER TABLE。"""
+    from app.storage.db import _ADDED_COLUMNS
+
+    tables_touched = {table for table, _column, _ddl in _ADDED_COLUMNS}
+    assert not (set(_M3_NEW_TABLES) & tables_touched)
+
+
+def test_fresh_and_legacy_upgraded_schemas_have_identical_m3_tables(tmp_path):
+    """新库直接 init_schema() 与老库升级后，M3 新表的列集合必须完全一致——
+    两条路径不能产生两种不同形状的表。"""
+    fresh = get_connection(str(tmp_path / "fresh.db"))
+    init_schema(fresh)
+
+    legacy = _legacy_pre_m3_db(tmp_path)
+    init_schema(legacy)
+
+    for table in _M3_NEW_TABLES:
+        assert _columns(fresh, table) == _columns(legacy, table), table
