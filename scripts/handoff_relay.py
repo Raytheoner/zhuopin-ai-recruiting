@@ -176,28 +176,36 @@ def _candidates(inbox: Path) -> list[Path]:
 
 
 def process_one(repo: Path, entry: Path, min_age_seconds: float) -> str:
-    """返回 "skipped" / "moved" / "rejected"（供单测断言）。"""
-    age = time.time() - entry.stat().st_mtime
-    if age < min_age_seconds:
-        return "skipped"
+    """返回 "skipped" / "moved" / "rejected" / "claimed-elsewhere"（供单测断言）。
 
-    result = classify_and_validate(
-        entry.name,
-        read_text=lambda: entry.read_text(encoding="utf-8", errors="replace"),
-        stat_size=lambda: entry.stat().st_size,
-    )
-    if not result.ok:
-        dst = rejected_dir(repo) / entry.name
+    launchd 的 WatchPaths 与 300 秒 `StartInterval` 兜底可能前后脚重叠触发；本函数不做
+    独占认领（不像 commit_request.py 有 `.claiming` 改名），只在文件已被另一实例先一步
+    `os.replace` 掉时把 `FileNotFoundError` 当作正常的「抢输」处理，⛔ 不重试、不报错退出。
+    """
+    try:
+        age = time.time() - entry.stat().st_mtime
+        if age < min_age_seconds:
+            return "skipped"
+
+        result = classify_and_validate(
+            entry.name,
+            read_text=lambda: entry.read_text(encoding="utf-8", errors="replace"),
+            stat_size=lambda: entry.stat().st_size,
+        )
+        if not result.ok:
+            dst = rejected_dir(repo) / entry.name
+            os.replace(entry, dst)
+            log(repo, f"REJECTED {entry.name}: {result.reason}")
+            return "rejected"
+
+        target_dir = repo / CHANNEL_SUBDIR[result.channel]
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dst = target_dir / result.target_name
         os.replace(entry, dst)
-        log(repo, f"REJECTED {entry.name}: {result.reason}")
-        return "rejected"
-
-    target_dir = repo / CHANNEL_SUBDIR[result.channel]
-    target_dir.mkdir(parents=True, exist_ok=True)
-    dst = target_dir / result.target_name
-    os.replace(entry, dst)
-    log(repo, f"MOVED {entry.name} -> {result.channel}/{result.target_name}")
-    return "moved"
+        log(repo, f"MOVED {entry.name} -> {result.channel}/{result.target_name}")
+        return "moved"
+    except FileNotFoundError:
+        return "claimed-elsewhere"
 
 
 def run(repo: Path, min_age_seconds: float = DEFAULT_MIN_AGE_SECONDS) -> list[tuple[str, str]]:

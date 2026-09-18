@@ -180,6 +180,19 @@ def test_fresh_file_processed_next_round_once_aged(repo: Path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 并发：launchd WatchPaths 与 300s 兜底可能重叠触发
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_file_removed_mid_processing_is_claimed_elsewhere_not_crash(repo: Path):
+    """模拟另一实例抢先把文件搬走：process_one 不应抛异常，应返回 claimed-elsewhere。"""
+    entry = drop(repo, "commit-20260918-093000.request", json.dumps({"message": "m", "paths": ["docs/x.md"]}))
+    entry.unlink()  # 另一实例已经把它搬走（这里简化为直接删除）
+    outcome = relay.process_one(repo, entry, min_age_seconds=0)
+    assert outcome == "claimed-elsewhere"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 基础设施：忽略自身产物、目录建出来
 # ─────────────────────────────────────────────────────────────────────────────
 
