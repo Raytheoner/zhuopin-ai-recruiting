@@ -3,12 +3,12 @@ version: 1
 summary:
   条目数: 500
   按状态:
-    待开: 260
+    待开: 253
     在跑: 8
-    完成: 140
-    阻塞: 92
-  阻塞·决策: 52
-  阻塞·外部: 38
+    完成: 151
+    阻塞: 88
+  阻塞·决策: 50
+  阻塞·外部: 36
   conflicts:
   - channel-resume-intake/0.1
   - m1-intake-quality-fixes/8.9
@@ -22,7 +22,6 @@ summary:
   - m1-job-profile-intake/U1/plan
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6
-  - m2-resume-parse-and-rank/U3/plan
   - opener:[Mac]0903A
   - propose:S-M3
   - propose:S-Offer
@@ -34,8 +33,8 @@ summary:
   - relay:R-10
   - relay:R-6
   - scene:M3
+  - voice-structured-interview/U1/plan
   ready:
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
@@ -2903,7 +2902,8 @@ tasks:
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   闸门: G2 m2-resume-parse-and-rank
-  备注: dispatcher_event-20260918-134654 派 0918W（spec-to-plan）已完成，plan 落 docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening.md（9 个 Task），号池台账已登记
+  备注: dispatcher_event-20260918-134654 派 0918W（spec-to-plan）已完成，plan 落 docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening.md（9
+    个 Task），号池台账已登记
 - id: m2-resume-parse-and-rank/U3
   场景: M2
   阶段: build
@@ -5078,19 +5078,6 @@ tasks:
   产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
   来源: openspec/changes/onboarding-flow/tasks.md
   可见: false
-- id: voice-structured-interview/0.2
-  场景: voice-structured-interview
-  阶段: gate
-  标题: X5 探针五项结论落档（由第 1 章 U0 执行）
-  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
-  依赖: []
-  触碰区:
-  - docs/m3-voice-probe.md
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: '`docs/m3-voice-probe.md` 对 P1–P5 各有「通过／阻塞＋原因」结论行'
-  来源: openspec/changes/voice-structured-interview/tasks.md:6
-  可见: false
 - id: voice-structured-interview/0.3
   场景: voice-structured-interview
   阶段: gate
@@ -5129,101 +5116,6 @@ tasks:
   产出判据: '`docs/口径点台账.md` 登记四个 `HR-G-NN` 并有回件'
   来源: openspec/changes/voice-structured-interview/tasks.md:9
   可见: false
-- id: voice-structured-interview/1.1
-  场景: voice-structured-interview
-  阶段: build
-  标题: '`scripts/probe_m3_voice.py` 骨架：五项探针各一个子命令，输出统一 JSON（项／环境指纹／结论／耗时／阻塞点），结果追加写 `docs/m3-voice-probe.md`（幂等：同环境指纹＋同项覆盖同一行）'
-  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
-  依赖:
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  触碰区:
-  - docs/m3-voice-probe.md
-  - scripts/probe_m3_voice.py
-  状态: 待开
-  阻塞类型: 无
-  产出判据: '`scripts/probe_m3_voice.py` 骨架：五项探针各一个子命令，输出统一 JSON（项／环境指纹／结论／耗时／阻塞点），结果追加写 `docs/m3-voice-probe.md`（幂等：同环境指纹＋同项覆盖同一行）'
-  来源: openspec/changes/voice-structured-interview/tasks.md:13
-  可见: false
-- id: voice-structured-interview/1.2
-  场景: voice-structured-interview
-  阶段: build
-  标题: P1 LiveKit server 可运行性：目标机（未采购前在开发机，结论标「非目标机」）下载 Go 二进制、起单节点、两个浏览器页建连；TURN 需求评估（从公司 Wi-Fi 与手机 4G 各测一次）
-  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
-  依赖:
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: P1 LiveKit server 可运行性：目标机（未采购前在开发机，结论标「非目标机」）下载 Go 二进制、起单节点、两个浏览器页建连；TURN 需求评估（从公司 Wi-Fi 与手机 4G 各测一次）。结论落档
-  来源: openspec/changes/voice-structured-interview/tasks.md:14
-  可见: false
-- id: voice-structured-interview/1.3
-  场景: voice-structured-interview
-  阶段: build
-  标题: P2 FunASR 可装性与流式 ASR 首字延迟：目标机 venv 实装（记录 Python 版本、wheel 来源），用 30 s 中文样本测首字延迟中位／P95 与 CPU 占用；不可装则记录阻塞点（wheel 缺失／编译错误）
-  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
-  依赖:
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: P2 FunASR 可装性与流式 ASR 首字延迟：目标机 venv 实装（记录 Python 版本、wheel 来源），用 30 s 中文样本测首字延迟中位／P95 与 CPU 占用；不可装则记录阻塞点（wheel 缺失／编译错误）
-  来源: openspec/changes/voice-structured-interview/tasks.md:15
-  可见: false
-- id: voice-structured-interview/1.4
-  场景: voice-structured-interview
-  阶段: build
-  标题: P3 CosyVoice 可装性与 TTS 首帧延迟：同 1.3 方法；记录模型文件哈希与版本号
-  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
-  依赖:
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: P3 CosyVoice 可装性与 TTS 首帧延迟：同 1.3 方法；记录模型文件哈希与版本号
-  来源: openspec/changes/voice-structured-interview/tasks.md:16
-  可见: false
-- id: voice-structured-interview/1.5
-  场景: voice-structured-interview
-  阶段: build
-  标题: P4 追问选择 LLM TTFT：在 `.51` 上经现网关对 DeepSeek 跑 20 次追问选择 prompt（只含本题＋本轮转写），记 TTFT 中位／P95；与 D17 枚举 schema 一起测输出合规率
-  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
-  依赖:
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: P4 追问选择 LLM TTFT：在 `.51` 上经现网关对 DeepSeek 跑 20 次追问选择 prompt（只含本题＋本轮转写），记 TTFT 中位／P95；与 D17 枚举 schema 一起测输出合规率
-  来源: openspec/changes/voice-structured-interview/tasks.md:17
-  可见: false
-- id: voice-structured-interview/1.6
-  场景: voice-structured-interview
-  阶段: build
-  标题: P5 `livekit-agents` SDK 兼容性：按 `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md` 方法测 3.14 与 3.12；结论写明语音主机选用的 Python 版本
-  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
-  依赖:
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  触碰区:
-  - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
-  状态: 待开
-  阻塞类型: 无
-  产出判据: P5 `livekit-agents` SDK 兼容性：按 `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md` 方法测 3.14 与 3.12；结论写明语音主机选用的 Python 版本
-  来源: openspec/changes/voice-structured-interview/tasks.md:18
-  可见: false
-- id: voice-structured-interview/1.7
-  场景: voice-structured-interview
-  阶段: build
-  标题: 探针总结：`docs/m3-voice-probe.md`「结论」节填「live 段：可做／留步」与「目标机规格建议（CPU/GPU、内存、带宽）」，作为 0.4 采购输入；tasks 0.2 回勾
-  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
-  依赖:
-  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  触碰区:
-  - docs/m3-voice-probe.md
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 探针总结：`docs/m3-voice-probe.md`「结论」节填「live 段：可做／留步」与「目标机规格建议（CPU/GPU、内存、带宽）」，作为 0.4 采购输入；tasks 0.2 回勾
-  来源: openspec/changes/voice-structured-interview/tasks.md:19
-  可见: false
 - id: voice-structured-interview/U0/plan
   场景: voice-structured-interview
   阶段: plan
@@ -5246,19 +5138,12 @@ tasks:
   单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
   依赖:
   - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
-  - voice-structured-interview/1.1
-  - voice-structured-interview/1.2
-  - voice-structured-interview/1.3
-  - voice-structured-interview/1.4
-  - voice-structured-interview/1.5
-  - voice-structured-interview/1.6
-  - voice-structured-interview/1.7
   - voice-structured-interview/U0/plan
   触碰区:
   - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
   - docs/m3-voice-probe.md
   - scripts/probe_m3_voice.py
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/voice-structured-interview/tasks.md
@@ -5392,12 +5277,17 @@ tasks:
   - voice-structured-interview/U0
   触碰区:
   - docs/superpowers/plans/*-voice-structured-interview-unit1-*.md
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 voice-structured-interview（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/voice-structured-interview/tasks.md
   可见: false
   闸门: G2 voice-structured-interview
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: 编号 0918AA ｜ 事件 lanes-done-20260918-141006
 - id: voice-structured-interview/U1
   场景: voice-structured-interview
   阶段: build
@@ -6105,7 +5995,6 @@ tasks:
   标题: 5. U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
   单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
   依赖:
-  - voice-structured-interview/0.2
   - voice-structured-interview/0.4
   - voice-structured-interview/5.1
   - voice-structured-interview/5.10
@@ -6824,10 +6713,7 @@ tasks:
   阶段: build
   标题: m2-resume-parse-and-rank-unit3-hard-requirement-screening Task 1–9
   依赖: []
-  触碰区:
-  - app/graph/screening_nodes.py
-  - app/storage/rejection.py
-  - app/storage/appeal.py
+  触碰区: []
   状态: 在跑
   阻塞类型: 无
   产出判据: Task 1–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
@@ -6840,7 +6726,7 @@ tasks:
   标题: voice-structured-interview-unit0-probe Task 1–7
   依赖: []
   触碰区: []
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: Task 1–7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit0-probe.md
@@ -7745,3 +7631,111 @@ tasks:
   可见: false
   队列: Q-11 作废
   备注: 作废：Q-11（0917R findings 已更正——两份答复单为 Cowork 所写并经本人审核，非拆件越界；人事部#1 已闭环）
+- id: voice-structured-interview/0.2
+  场景: voice-structured-interview
+  阶段: gate
+  标题: X5 探针五项结论落档（由第 1 章 U0 执行）
+  单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
+  依赖: []
+  触碰区:
+  - docs/m3-voice-probe.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`docs/m3-voice-probe.md` 对 P1–P5 各有「通过／阻塞＋原因」结论行'
+  来源: openspec/changes/voice-structured-interview/tasks.md:6
+  可见: false
+- id: voice-structured-interview/1.1
+  场景: voice-structured-interview
+  阶段: build
+  标题: '`scripts/probe_m3_voice.py` 骨架：五项探针各一个子命令，输出统一 JSON（项／环境指纹／结论／耗时／阻塞点），结果追加写 `docs/m3-voice-probe.md`（幂等：同环境指纹＋同项覆盖同一行）'
+  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区:
+  - docs/m3-voice-probe.md
+  - scripts/probe_m3_voice.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`scripts/probe_m3_voice.py` 骨架：五项探针各一个子命令，输出统一 JSON（项／环境指纹／结论／耗时／阻塞点），结果追加写 `docs/m3-voice-probe.md`（幂等：同环境指纹＋同项覆盖同一行）'
+  来源: openspec/changes/voice-structured-interview/tasks.md:13
+  可见: false
+- id: voice-structured-interview/1.2
+  场景: voice-structured-interview
+  阶段: build
+  标题: P1 LiveKit server 可运行性：目标机（未采购前在开发机，结论标「非目标机」）下载 Go 二进制、起单节点、两个浏览器页建连；TURN 需求评估（从公司 Wi-Fi 与手机 4G 各测一次）
+  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: P1 LiveKit server 可运行性：目标机（未采购前在开发机，结论标「非目标机」）下载 Go 二进制、起单节点、两个浏览器页建连；TURN 需求评估（从公司 Wi-Fi 与手机 4G 各测一次）。结论落档
+  来源: openspec/changes/voice-structured-interview/tasks.md:14
+  可见: false
+- id: voice-structured-interview/1.3
+  场景: voice-structured-interview
+  阶段: build
+  标题: P2 FunASR 可装性与流式 ASR 首字延迟：目标机 venv 实装（记录 Python 版本、wheel 来源），用 30 s 中文样本测首字延迟中位／P95 与 CPU 占用；不可装则记录阻塞点（wheel 缺失／编译错误）
+  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: P2 FunASR 可装性与流式 ASR 首字延迟：目标机 venv 实装（记录 Python 版本、wheel 来源），用 30 s 中文样本测首字延迟中位／P95 与 CPU 占用；不可装则记录阻塞点（wheel 缺失／编译错误）
+  来源: openspec/changes/voice-structured-interview/tasks.md:15
+  可见: false
+- id: voice-structured-interview/1.4
+  场景: voice-structured-interview
+  阶段: build
+  标题: P3 CosyVoice 可装性与 TTS 首帧延迟：同 1.3 方法；记录模型文件哈希与版本号
+  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: P3 CosyVoice 可装性与 TTS 首帧延迟：同 1.3 方法；记录模型文件哈希与版本号
+  来源: openspec/changes/voice-structured-interview/tasks.md:16
+  可见: false
+- id: voice-structured-interview/1.5
+  场景: voice-structured-interview
+  阶段: build
+  标题: P4 追问选择 LLM TTFT：在 `.51` 上经现网关对 DeepSeek 跑 20 次追问选择 prompt（只含本题＋本轮转写），记 TTFT 中位／P95；与 D17 枚举 schema 一起测输出合规率
+  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: P4 追问选择 LLM TTFT：在 `.51` 上经现网关对 DeepSeek 跑 20 次追问选择 prompt（只含本题＋本轮转写），记 TTFT 中位／P95；与 D17 枚举 schema 一起测输出合规率
+  来源: openspec/changes/voice-structured-interview/tasks.md:17
+  可见: false
+- id: voice-structured-interview/1.6
+  场景: voice-structured-interview
+  阶段: build
+  标题: P5 `livekit-agents` SDK 兼容性：按 `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md` 方法测 3.14 与 3.12；结论写明语音主机选用的 Python 版本
+  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区:
+  - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: P5 `livekit-agents` SDK 兼容性：按 `docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md` 方法测 3.14 与 3.12；结论写明语音主机选用的 Python 版本
+  来源: openspec/changes/voice-structured-interview/tasks.md:18
+  可见: false
+- id: voice-structured-interview/1.7
+  场景: voice-structured-interview
+  阶段: build
+  标题: 探针总结：`docs/m3-voice-probe.md`「结论」节填「live 段：可做／留步」与「目标机规格建议（CPU/GPU、内存、带宽）」，作为 0.4 采购输入；tasks 0.2 回勾
+  单元: U0 技术探针（X5，P1–P5；结论决定 live 段做不做、在哪做）
+  依赖:
+  - plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
+  触碰区:
+  - docs/m3-voice-probe.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 探针总结：`docs/m3-voice-probe.md`「结论」节填「live 段：可做／留步」与「目标机规格建议（CPU/GPU、内存、带宽）」，作为 0.4 采购输入；tasks 0.2 回勾
+  来源: openspec/changes/voice-structured-interview/tasks.md:19
+  可见: false
