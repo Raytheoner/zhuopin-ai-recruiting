@@ -52,21 +52,29 @@ def write_rejection(
     from_stage_id = application_row[0]
 
     rejection_id = str(uuid.uuid4())
-    conn.execute(
-        "INSERT INTO rejection_record "
-        "(id, application_id, reason_type, rule_ref, human_readable, decided_by, batch_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (rejection_id, application_id, reason_type, rule_ref, human_readable, decided_by, batch_id),
-    )
-    conn.execute(
-        "UPDATE application SET status = 'rejected', current_stage_id = 'rejected' WHERE id = ?",
-        (application_id,),
-    )
-    conn.execute(
-        "INSERT INTO application_stage_history "
-        "(id, application_id, from_stage_id, to_stage_id, actor_type, actor) "
-        "VALUES (?, ?, ?, 'rejected', 'human', ?)",
-        (str(uuid.uuid4()), application_id, from_stage_id, decided_by),
-    )
+    try:
+        conn.execute(
+            "INSERT INTO rejection_record "
+            "(id, application_id, reason_type, rule_ref, human_readable, decided_by, batch_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (rejection_id, application_id, reason_type, rule_ref, human_readable, decided_by, batch_id),
+        )
+        conn.execute(
+            "UPDATE application SET status = 'rejected', current_stage_id = 'rejected' WHERE id = ?",
+            (application_id,),
+        )
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, from_stage_id, to_stage_id, actor_type, actor) "
+            "VALUES (?, ?, ?, 'rejected', 'human', ?)",
+            (str(uuid.uuid4()), application_id, from_stage_id, decided_by),
+        )
+    except Exception:
+        # conn 是全应用共享的单连接：写到一半失败，前面几条语句仍挂在这个
+        # 隐式打开的事务里，不回滚的话会被之后任何一次*不相关*的
+        # conn.commit() 悄悄落盘——拒绝记录有了、流转事实表却没有，
+        # 精确审计链出现窟窿（这正是本子系统存在的目的）。
+        conn.rollback()
+        raise
     conn.commit()
     return rejection_id

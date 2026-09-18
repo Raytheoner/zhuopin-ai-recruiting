@@ -75,3 +75,5 @@ def test_queue_reapplication_screening_no_op_when_no_approved_profile(conn):
 
 def test_queue_reapplication_screening_no_op_when_resume_missing(conn):
     queue_reapplication_screening(conn, "no-such-resume")  # 不应抛异常
+    count = conn.execute("SELECT COUNT(*) FROM screening_flag").fetchone()[0]
+    assert count == 0

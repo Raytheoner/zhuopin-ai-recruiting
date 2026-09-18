@@ -62,34 +62,41 @@ def transition_appeal(
             f"申诉状态不能从 {current_status!r} 跳到 {to_status!r}"
         )
 
-    conn.execute(
-        "UPDATE rejection_record SET appeal_status = ? WHERE id = ?",
-        (to_status, rejection_record_id),
-    )
-    conn.execute(
-        "INSERT INTO appeal_event "
-        "(id, rejection_record_id, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?)",
-        (str(uuid.uuid4()), rejection_record_id, current_status, to_status, actor),
-    )
+    try:
+        conn.execute(
+            "UPDATE rejection_record SET appeal_status = ? WHERE id = ?",
+            (to_status, rejection_record_id),
+        )
+        conn.execute(
+            "INSERT INTO appeal_event "
+            "(id, rejection_record_id, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), rejection_record_id, current_status, to_status, actor),
+        )
 
-    if to_status == "overturned":
-        history_row = conn.execute(
-            "SELECT from_stage_id FROM application_stage_history "
-            "WHERE application_id = ? AND to_stage_id = 'rejected' "
-            "ORDER BY occurred_at DESC LIMIT 1",
-            (application_id,),
-        ).fetchone()
-        pre_rejection_stage_id = history_row[0] if history_row and history_row[0] else "initial"
-        conn.execute(
-            "UPDATE application SET status = 'active', current_stage_id = ? WHERE id = ?",
-            (pre_rejection_stage_id, application_id),
-        )
-        conn.execute(
-            "INSERT INTO application_stage_history "
-            "(id, application_id, from_stage_id, to_stage_id, actor_type, actor) "
-            "VALUES (?, ?, 'rejected', ?, 'human', ?)",
-            (str(uuid.uuid4()), application_id, pre_rejection_stage_id, actor),
-        )
+        if to_status == "overturned":
+            history_row = conn.execute(
+                "SELECT from_stage_id FROM application_stage_history "
+                "WHERE application_id = ? AND to_stage_id = 'rejected' "
+                "ORDER BY occurred_at DESC LIMIT 1",
+                (application_id,),
+            ).fetchone()
+            pre_rejection_stage_id = history_row[0] if history_row and history_row[0] else "initial"
+            conn.execute(
+                "UPDATE application SET status = 'active', current_stage_id = ? WHERE id = ?",
+                (pre_rejection_stage_id, application_id),
+            )
+            conn.execute(
+                "INSERT INTO application_stage_history "
+                "(id, application_id, from_stage_id, to_stage_id, actor_type, actor) "
+                "VALUES (?, ?, 'rejected', ?, 'human', ?)",
+                (str(uuid.uuid4()), application_id, pre_rejection_stage_id, actor),
+            )
+    except Exception:
+        # 同 rejection.py::write_rejection 的理由：conn 是全应用共享的单连接，
+        # 写到一半失败会把前面几条语句留在隐式打开的事务里，被之后任何一次
+        # *不相关*的 conn.commit() 悄悄落盘，精确审计链出现窟窿。
+        conn.rollback()
+        raise
 
     conn.commit()
     return {"appeal_status": to_status, "already_applied": False}

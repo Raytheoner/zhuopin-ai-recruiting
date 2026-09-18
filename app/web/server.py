@@ -1023,20 +1023,29 @@ def create_app(
                 "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
             ).fetchone()
             resolved_application_id = existing_app[0] if existing_app else None
+        screening_status = "deferred"
         if resolved_application_id is not None:
             profile_version = latest_approved_profile_version(conn, job_id)
             if profile_version is not None:
-                screen_and_persist(
-                    conn,
-                    application_id=resolved_application_id,
-                    resume_id=resume_id,
-                    job_id=job_id,
-                    profile_version=profile_version,
-                    parse_version=parser_version,
-                )
+                try:
+                    screen_and_persist(
+                        conn,
+                        application_id=resolved_application_id,
+                        resume_id=resume_id,
+                        job_id=job_id,
+                        profile_version=profile_version,
+                        parse_version=parser_version,
+                    )
+                    screening_status = "ok"
+                except Exception:
+                    logger.exception(
+                        "job_id=%s resume_id=%s 硬门槛判定失败，简历已入库，"
+                        "留待人工/后续触发重判",
+                        job_id, resume_id,
+                    )
         return {"file_name": upload.filename, "status": "accepted",
                 "resume_id": resume_id, "application_id": application_id,
-                "parse_status": "parsed"}
+                "parse_status": "parsed", "screening_status": screening_status}
 
     @router.post("/api/resumes/{resume_id}/reparse")
     def reparse_resume(resume_id: str):
@@ -1106,19 +1115,28 @@ def create_app(
                 "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
             ).fetchone()
             resolved_application_id = existing_app[0] if existing_app else None
+        screening_status = "deferred"
         if resolved_application_id is not None:
             profile_version = latest_approved_profile_version(conn, job_id)
             if profile_version is not None:
-                screen_and_persist(
-                    conn,
-                    application_id=resolved_application_id,
-                    resume_id=resume_id,
-                    job_id=job_id,
-                    profile_version=profile_version,
-                    parse_version=parser_version,
-                )
+                try:
+                    screen_and_persist(
+                        conn,
+                        application_id=resolved_application_id,
+                        resume_id=resume_id,
+                        job_id=job_id,
+                        profile_version=profile_version,
+                        parse_version=parser_version,
+                    )
+                    screening_status = "ok"
+                except Exception:
+                    logger.exception(
+                        "job_id=%s resume_id=%s 重解析后硬门槛判定失败，简历已"
+                        "重新解析入库，留待人工/后续触发重判",
+                        job_id, resume_id,
+                    )
         return {"resume_id": resume_id, "application_id": application_id,
-                "parser_version": parser_version}
+                "parser_version": parser_version, "screening_status": screening_status}
 
     def _require_resume(resume_id: str) -> tuple:
         row = conn.execute(
