@@ -36,6 +36,18 @@
     const jobSelect = document.getElementById("job-select");
     const toListLink = document.getElementById("to-list-link");
 
+    // 会话过期时统一跳登录页（与 resume_list.html / resume_review.html 的既有
+    // 行为一致）。api/jobs 本身不鉴权（部署约束：/api/jobs* 不在保护前缀里），
+    // 但上传提交 api/resumes/upload 在保护前缀内——未登录用户能看到完整表单，
+    // 提交时才会 401，这时必须给出可操作的路径而不是一句不带跳转的错误提示。
+    function redirectIfUnauthorized(resp) {
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return true;
+      }
+      return false;
+    }
+
     async function loadJobs() {
       const resp = await fetch("api/jobs");
       const body = await resp.json();
@@ -74,6 +86,7 @@
         formData.append("files", f);
       }
       const resp = await fetch("api/resumes/upload", { method: "POST", body: formData });
+      if (redirectIfUnauthorized(resp)) return;
       if (!resp.ok) {
         document.getElementById("error").textContent = "上传失败，请确认已登录";
         return;
