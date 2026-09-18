@@ -3,9 +3,9 @@ version: 1
 summary:
   条目数: 499
   按状态:
-    待开: 266
+    待开: 259
     在跑: 8
-    完成: 133
+    完成: 140
     阻塞: 92
   阻塞·决策: 52
   阻塞·外部: 38
@@ -44,34 +44,8 @@ summary:
   - offer-generation/U1/plan ← G2 `offer-generation`（已答·未放行）
   - onboarding-flow/U1/plan ← G2 `onboarding-flow`（已答·未放行）
   未知依赖: []
-  未归属plans:
-  - 2026-08-06-m1-chapter0-demo
-  - 2026-08-13-fix-sqlite-transaction-ownership-chapter1
-  - 2026-08-19-m1-intake-quality-fixes-unitA-storage-and-structured-questions
-  - 2026-08-19-m1-intake-quality-fixes-unitB-fallback-options-and-budget
-  - 2026-08-19-m1-intake-quality-fixes-unitC-frontend-selectable-options
-  - 2026-08-19-server-runtime-logging
-  - 2026-08-25-m1-intake-quality-fixes-unitD-unspecified-fields-and-gap-warning
-  - 2026-08-25-m1-intake-quality-fixes-unitF-field-grounding
-  - 2026-08-26-ai-audit-trail-unitU1-schema-and-config
-  - 2026-08-26-ai-audit-trail-unitU2-audit-module
-  - 2026-08-26-m1-intake-quality-fixes-unitE-question-tracking-and-honest-reask
-  - 2026-08-28-ai-audit-trail-unitU2-plan-reconciliation
-  - 2026-08-28-ai-audit-trail-unitU3-recorder-wiring
-  - 2026-08-28-ai-audit-trail-unitU4-outbound-gate-pure-functions
-  - 2026-08-28-ai-audit-trail-unitU5-queue-and-wiring
-  - 2026-09-03-ai-audit-trail-unitU6-assertions-and-ci
-  - 2026-09-03-ai-audit-trail-unitU7-boundary-ci
-  - 2026-09-03-outbound-retry-audit-trace
-  - 2026-09-04-m1-job-profile-intake-unit-hard-requirement
-  - 2026-09-08-idempotent-effect-unique-race-short-circuit
-  - 2026-09-10-liaison-criteria-ledger
-  - 2026-09-10-liaison-reply-bridge
-  - 2026-09-10-liaison-unpack-charter
-  - 2026-09-10-liaison-unpack-dispatch
-  缺任务映射:
-  - Q-27
-  - Q-38b
+  未归属plans: []
+  缺任务映射: []
 tasks:
 - id: scene:M0
   场景: M0
@@ -2762,82 +2736,6 @@ tasks:
   产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
-- id: m2-resume-parse-and-rank/9.1
-  场景: M2
-  阶段: build
-  标题: 上传入口页（`app/web/static/` 新页 + `GET /resumes/upload`）：多文件选择、岗位下拉（已审批画像）、样本类别单选只列 `synthetic/anonymized/departed`（`live` 不出
-  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
-  依赖:
-  - m2-resume-parse-and-rank/U2
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 上传入口页（`app/web/static/` 新页 + `GET /resumes/upload`）：多文件选择、岗位下拉（已审批画像）、样本类别单选只列 `synthetic/anonymized/departed`（`live` 不出现在页面选项，接口侧仍由 3.3 的闸拦）；逐文件结果表（成功／重复返回既有
-    `resume_id`／不可读／拒收原因）；相对路径（部署约束 1，测试在子路径前
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:42
-  可见: true
-- id: m2-resume-parse-and-rank/9.2
-  场景: M2
-  阶段: build
-  标题: 解析结果列表页 + `GET /jobs/{id}/resumes`：按上传时间倒序，每行＝候选人姓名（缺则文件名）、`sample_class`、解析状态（`parsed/unreadable/pending`）、六字段摘要、待校对字段数
-  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
-  依赖:
-  - m2-resume-parse-and-rank/U2
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 解析结果列表页 + `GET /jobs/{id}/resumes`：按上传时间倒序，每行＝候选人姓名（缺则文件名）、`sample_class`、解析状态（`parsed/unreadable/pending`）、六字段摘要、待校对字段数、`parser_version`；AI 生成标识与"仅供参考"说明（合规红线）；读取经
-    3.9 留痕；⛔ 不显示分数与排名（那是 6.1）
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:43
-  可见: true
-- id: m2-resume-parse-and-rank/9.3
-  场景: M2
-  阶段: build
-  标题: 字段校对页（原 6.2 移入）：左原文右六字段，每字段显示 `value/confidence`，选中字段 ⇒ 原文按 `spans[]` offset 逐段高亮（evidence 高亮，按 `resume_text_span` 偏移切字符
-  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
-  依赖:
-  - m2-resume-parse-and-rank/U2
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 字段校对页（原 6.2 移入）：左原文右六字段，每字段显示 `value/confidence`，选中字段 ⇒ 原文按 `spans[]` offset 逐段高亮（evidence 高亮，按 `resume_text_span` 偏移切字符串）；低置信度／队列字段醒目；「确认」「改为…」提交走 3.10；确认后
-    9.2 列表该字段显示"已校对（谁／何时）"
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:44
-  可见: true
-- id: m2-resume-parse-and-rank/9.4
-  场景: M2
-  阶段: build
-  标题: 薄片 e2e（httpx＋HTML 断言）：上传 3 份合成样本（文本 PDF／Word／扫描件各一）→ 9.2 列表可见 → 9.3 高亮命中 span → 确认后列表更新；全程在子路径前缀下；`live` 在页面不可选且接口拒收；每次读
-  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
-  依赖:
-  - m2-resume-parse-and-rank/U2
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 薄片 e2e（httpx＋HTML 断言）：上传 3 份合成样本（文本 PDF／Word／扫描件各一）→ 9.2 列表可见 → 9.3 高亮命中 span → 确认后列表更新；全程在子路径前缀下；`live` 在页面不可选且接口拒收；每次读取在 `resume_access_log` 各一条
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:45
-  可见: true
-- id: m2-resume-parse-and-rank/9.5
-  场景: M2
-  阶段: build
-  标题: 薄片交付件：HR 一页操作说明 `docs/m2-visible-slice-guide.md`（人事部看什么、怎么传、怎么校对、哪些不能传）、`requirements.txt` 与 `sync-to-server.sh` 白名单增量、`
-  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
-  依赖:
-  - m2-resume-parse-and-rank/U2
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
-  触碰区:
-  - docs/m2-visible-slice-guide.md
-  - scripts/create_hr_account.py
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 薄片交付件：HR 一页操作说明 `docs/m2-visible-slice-guide.md`（人事部看什么、怎么传、怎么校对、哪些不能传）、`requirements.txt` 与 `sync-to-server.sh` 白名单增量、`scripts/create_hr_account.py` 建账号步骤。发版本身走
-    G3（8.9），⛔ 不在本条
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:46
-  可见: true
 - id: m2-resume-parse-and-rank/U2.5/plan
   场景: M2
   阶段: plan
@@ -2851,7 +2749,7 @@ tasks:
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit2.5 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
-  可见: true
+  可见: false
   闸门: G2 m2-resume-parse-and-rank
   备注: 0918R（task-dispatcher·lanes-done-20260918-100256）；dispatcher_event-20260918-124739 核实：plan 文件 2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice.md 含
     6 个 Task 且含 Global Constraints，判据成立，改台账状态=完成
@@ -2861,22 +2759,18 @@ tasks:
   标题: 9. U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
   单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
   依赖:
-  - m2-resume-parse-and-rank/9.1
-  - m2-resume-parse-and-rank/9.2
-  - m2-resume-parse-and-rank/9.3
-  - m2-resume-parse-and-rank/9.4
-  - m2-resume-parse-and-rank/9.5
   - m2-resume-parse-and-rank/U2
   - m2-resume-parse-and-rank/U2.5/plan
   - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
   触碰区:
   - docs/m2-visible-slice-guide.md
   - scripts/create_hr_account.py
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: 章节 9 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
-  可见: true
+  可见: false
+  备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
 - id: m2-resume-parse-and-rank/4.1
   场景: M2
   阶段: build
@@ -2975,12 +2869,13 @@ tasks:
   - m2-resume-parse-and-rank/U2.5
   触碰区:
   - docs/superpowers/plans/*-m2-resume-parse-and-rank-unit3-*.md
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 m2-resume-parse-and-rank（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   闸门: G2 m2-resume-parse-and-rank
+  备注: dispatcher_event-20260918-134654 派 0918W（spec-to-plan），号池台账已登记
 - id: m2-resume-parse-and-rank/U3
   场景: M2
   阶段: build
@@ -6889,12 +6784,12 @@ tasks:
   标题: m2-resume-parse-and-rank-unit2.5-visible-slice Task 1–6
   依赖: []
   触碰区: []
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: Task 1–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice.md
-  可见: true
-  备注: 0918S/0918T（task-dispatcher·lanes-done-20260918-122929）
+  可见: false
+  备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
 - id: plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
   场景: 构建自动化
   阶段: build
@@ -7474,6 +7369,87 @@ tasks:
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:103
   可见: false
   备注: dispatcher-20260918-084350(lanes-done-20260918-075616) 核实 tasks.md:103 已 [x]（0918B 收口记录：与 U1 Task 3 同批交付于 906ee01），改判完成
+- id: m2-resume-parse-and-rank/9.1
+  场景: M2
+  阶段: build
+  标题: 上传入口页（`app/web/static/` 新页 + `GET /resumes/upload`）：多文件选择、岗位下拉（已审批画像）、样本类别单选只列 `synthetic/anonymized/departed`（`live` 不出
+  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 上传入口页（`app/web/static/` 新页 + `GET /resumes/upload`）：多文件选择、岗位下拉（已审批画像）、样本类别单选只列 `synthetic/anonymized/departed`（`live` 不出现在页面选项，接口侧仍由 3.3 的闸拦）；逐文件结果表（成功／重复返回既有
+    `resume_id`／不可读／拒收原因）；相对路径（部署约束 1，测试在子路径前
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:42
+  可见: true
+  备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
+- id: m2-resume-parse-and-rank/9.2
+  场景: M2
+  阶段: build
+  标题: 解析结果列表页 + `GET /jobs/{id}/resumes`：按上传时间倒序，每行＝候选人姓名（缺则文件名）、`sample_class`、解析状态（`parsed/unreadable/pending`）、六字段摘要、待校对字段数
+  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 解析结果列表页 + `GET /jobs/{id}/resumes`：按上传时间倒序，每行＝候选人姓名（缺则文件名）、`sample_class`、解析状态（`parsed/unreadable/pending`）、六字段摘要、待校对字段数、`parser_version`；AI 生成标识与"仅供参考"说明（合规红线）；读取经
+    3.9 留痕；⛔ 不显示分数与排名（那是 6.1）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:43
+  可见: true
+  备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
+- id: m2-resume-parse-and-rank/9.3
+  场景: M2
+  阶段: build
+  标题: 字段校对页（原 6.2 移入）：左原文右六字段，每字段显示 `value/confidence`，选中字段 ⇒ 原文按 `spans[]` offset 逐段高亮（evidence 高亮，按 `resume_text_span` 偏移切字符
+  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 字段校对页（原 6.2 移入）：左原文右六字段，每字段显示 `value/confidence`，选中字段 ⇒ 原文按 `spans[]` offset 逐段高亮（evidence 高亮，按 `resume_text_span` 偏移切字符串）；低置信度／队列字段醒目；「确认」「改为…」提交走 3.10；确认后
+    9.2 列表该字段显示"已校对（谁／何时）"
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:44
+  可见: true
+  备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
+- id: m2-resume-parse-and-rank/9.4
+  场景: M2
+  阶段: build
+  标题: 薄片 e2e（httpx＋HTML 断言）：上传 3 份合成样本（文本 PDF／Word／扫描件各一）→ 9.2 列表可见 → 9.3 高亮命中 span → 确认后列表更新；全程在子路径前缀下；`live` 在页面不可选且接口拒收；每次读
+  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 薄片 e2e（httpx＋HTML 断言）：上传 3 份合成样本（文本 PDF／Word／扫描件各一）→ 9.2 列表可见 → 9.3 高亮命中 span → 确认后列表更新；全程在子路径前缀下；`live` 在页面不可选且接口拒收；每次读取在 `resume_access_log` 各一条
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:45
+  可见: true
+  备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
+- id: m2-resume-parse-and-rank/9.5
+  场景: M2
+  阶段: build
+  标题: 薄片交付件：HR 一页操作说明 `docs/m2-visible-slice-guide.md`（人事部看什么、怎么传、怎么校对、哪些不能传）、`requirements.txt` 与 `sync-to-server.sh` 白名单增量、`
+  单元: U2.5 可见薄片（上传入口＋解析结果列表＋逐字段 evidence 高亮＋校对确认；顺序位于 U2 之后、U3 之前——章号 9 只为保持 4.x–8.x 既有编号稳定）
+  依赖:
+  - m2-resume-parse-and-rank/U2
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit2.5-visible-slice/seg1
+  触碰区:
+  - docs/m2-visible-slice-guide.md
+  - scripts/create_hr_account.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 薄片交付件：HR 一页操作说明 `docs/m2-visible-slice-guide.md`（人事部看什么、怎么传、怎么校对、哪些不能传）、`requirements.txt` 与 `sync-to-server.sh` 白名单增量、`scripts/create_hr_account.py` 建账号步骤。发版本身走
+    G3（8.9），⛔ 不在本条
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:46
+  可见: true
+  备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
 - id: opener:[Mac]0903A
   场景: 构建自动化
   阶段: build
