@@ -3,9 +3,9 @@ version: 1
 summary:
   条目数: 500
   按状态:
-    待开: 253
-    在跑: 8
-    完成: 151
+    待开: 246
+    在跑: 7
+    完成: 159
     阻塞: 88
   阻塞·决策: 50
   阻塞·外部: 36
@@ -2798,95 +2798,6 @@ tasks:
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: false
   备注: dispatcher_event-20260918-134654 核实：413fc98 已合 lane-m2-u25-visible-slice 入 main，tasks.md 9.1-9.5 均已勾选（08006d1）；分支已合无残留，判据成立，标完成
-- id: m2-resume-parse-and-rank/4.1
-  场景: M2
-  阶段: build
-  标题: '`app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现'
-  单元: U3 硬门槛引擎（标记＋依据＋申诉）
-  依赖:
-  - m2-resume-parse-and-rank/U2.5
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
-  触碰区:
-  - app/agents/hard_requirement_screening.py
-  状态: 待开
-  阻塞类型: 无
-  产出判据: '`app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现；依赖字段在队列 ⇒ `skipped(待校对)`、`not_mentioned`
-    ⇒ `skipped(未提及)`；`fail` 必带 `evidence_r'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:50
-  可见: false
-- id: m2-resume-parse-and-rank/4.2
-  场景: M2
-  阶段: build
-  标题: 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-rank
-  单元: U3 硬门槛引擎（标记＋依据＋申诉）
-  依赖:
-  - m2-resume-parse-and-rank/U2.5
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-ranking` spec「主观描述不入硬门槛」）；空规则集 ⇒ 全 pass
-    并注明
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:51
-  可见: false
-- id: m2-resume-parse-and-rank/4.3
-  场景: M2
-  阶段: build
-  标题: 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version
-  单元: U3 硬门槛引擎（标记＋依据＋申诉）
-  依赖:
-  - m2-resume-parse-and-rank/U2.5
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version}`，同事务；重判（校对完成／画像升版）产生新一组 flags，旧组保留带版本；测试：重跑不重复、三种触发点各一
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:52
-  可见: false
-- id: m2-resume-parse-and-rank/4.4
-  场景: M2
-  阶段: build
-  标题: 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_ru
-  单元: U3 硬门槛引擎（标记＋依据＋申诉）
-  依赖:
-  - m2-resume-parse-and-rank/U2.5
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
-  触碰区:
-  - app/storage/rejection.py
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_rule` 必带 `rule_ref`；测试：传 `ai_score`
-    在应用层被拒，绕过应用层在 CHECK 被拒
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:53
-  可见: false
-- id: m2-resume-parse-and-rank/4.5
-  场景: M2
-  阶段: build
-  标题: 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_hi
-  单元: U3 硬门槛引擎（标记＋依据＋申诉）
-  依赖:
-  - m2-resume-parse-and-rank/U2.5
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_history(actor_type=human)`；幂等：同记录同目标状态重复提交无第二条流转；原拒绝记录不删
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:54
-  可见: false
-- id: m2-resume-parse-and-rank/4.6
-  场景: M2
-  阶段: build
-  标题: 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 已裁决 2026-09-17：HR 代候选人登记
-  单元: U3 硬门槛引擎（标记＋依据＋申诉）
-  依赖:
-  - m2-resume-parse-and-rank/U2.5
-  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 ✅ 已裁决 2026-09-17：HR 代候选人登记，本期不开候选人自助入口
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:55
-  可见: false
 - id: m2-resume-parse-and-rank/U3/plan
   场景: M2
   阶段: plan
@@ -2910,19 +2821,13 @@ tasks:
   标题: 4. U3 硬门槛引擎（标记＋依据＋申诉）
   单元: U3 硬门槛引擎（标记＋依据＋申诉）
   依赖:
-  - m2-resume-parse-and-rank/4.1
-  - m2-resume-parse-and-rank/4.2
-  - m2-resume-parse-and-rank/4.3
-  - m2-resume-parse-and-rank/4.4
-  - m2-resume-parse-and-rank/4.5
-  - m2-resume-parse-and-rank/4.6
   - m2-resume-parse-and-rank/U2.5
   - m2-resume-parse-and-rank/U3/plan
   - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
   触碰区:
   - app/agents/hard_requirement_screening.py
   - app/storage/rejection.py
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
@@ -6714,12 +6619,13 @@ tasks:
   标题: m2-resume-parse-and-rank-unit3-hard-requirement-screening Task 1–9
   依赖: []
   触碰区: []
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: Task 1–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening.md
   可见: false
-  备注: dispatcher_event-lanes-done-20260918-135326 派 0918X/Y/Z（run-build，无「## 建议拆段点」节，按每 3 Task 一段拆 3 条同泳道串行，分支 lane-m2-u3-hard-requirement-screening），号池台账已登记
+  备注: dispatcher_event-lanes-done-20260918-135326 派 0918X/Y/Z（run-build，无「## 建议拆段点」节，按每 3 Task 一段拆 3 条同泳道串行，分支 lane-m2-u3-hard-requirement-screening），号池台账已登记；事件 lanes-done-20260918-142227
+    核验合 main 且 tasks.md 4.1-4.6 全勾，判「完成」
 - id: plan:2026-09-18-voice-structured-interview-unit0-probe/seg1
   场景: 构建自动化
   阶段: build
@@ -7269,6 +7175,95 @@ tasks:
   产出判据: 简历访问留痕：读取原文／分片／解析结果／下载的接口统一经 `record_resume_access()`，留痕失败 ⇒ 读取失败不返回内容；测试覆盖四种 access_type 与失败路径
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:35
   可见: true
+- id: m2-resume-parse-and-rank/4.1
+  场景: M2
+  阶段: build
+  标题: '`app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现'
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2.5
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  触碰区:
+  - app/agents/hard_requirement_screening.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现；依赖字段在队列 ⇒ `skipped(待校对)`、`not_mentioned`
+    ⇒ `skipped(未提及)`；`fail` 必带 `evidence_r'
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:50
+  可见: false
+- id: m2-resume-parse-and-rank/4.2
+  场景: M2
+  阶段: build
+  标题: 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-rank
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2.5
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-ranking` spec「主观描述不入硬门槛」）；空规则集 ⇒ 全 pass
+    并注明
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:51
+  可见: false
+- id: m2-resume-parse-and-rank/4.3
+  场景: M2
+  阶段: build
+  标题: 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2.5
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version}`，同事务；重判（校对完成／画像升版）产生新一组 flags，旧组保留带版本；测试：重跑不重复、三种触发点各一
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:52
+  可见: false
+- id: m2-resume-parse-and-rank/4.4
+  场景: M2
+  阶段: build
+  标题: 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_ru
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2.5
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  触碰区:
+  - app/storage/rejection.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_rule` 必带 `rule_ref`；测试：传 `ai_score`
+    在应用层被拒，绕过应用层在 CHECK 被拒
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:53
+  可见: false
+- id: m2-resume-parse-and-rank/4.5
+  场景: M2
+  阶段: build
+  标题: 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_hi
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2.5
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_history(actor_type=human)`；幂等：同记录同目标状态重复提交无第二条流转；原拒绝记录不删
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:54
+  可见: false
+- id: m2-resume-parse-and-rank/4.6
+  场景: M2
+  阶段: build
+  标题: 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 已裁决 2026-09-17：HR 代候选人登记
+  单元: U3 硬门槛引擎（标记＋依据＋申诉）
+  依赖:
+  - m2-resume-parse-and-rank/U2.5
+  - plan:2026-09-18-m2-resume-parse-and-rank-unit3-hard-requirement-screening/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 ✅ 已裁决 2026-09-17：HR 代候选人登记，本期不开候选人自助入口
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:55
+  可见: false
 - id: m2-resume-parse-and-rank/6.2
   场景: M2
   阶段: build
