@@ -706,3 +706,213 @@ P1 的 2.7 要改 P0 的 `bridge.run_bridge`；P2 的 3.2/3.4 要 P1 的 `dispat
 **D. 顺手件**：清理 `/private/tmp/wt-0908M`、`wt-0909B`（真未合 0）；CLAUDE.md 252 行已超 250 红线 2 行，下次改它时拆一段出去。
 
 ---
+
+
+<!-- 〔归档工具〕 2026-09-18 搬入：【已闭环】🔴 新 session 先看这一节（2026-09-17 06:0x 实核真身，⛔ 下面各历史节均早于它） -->
+
+## 【已闭环】🔴 新 session 先看这一节（2026-09-17 06:0x 实核真身，⛔ 下面各历史节均早于它）
+
+⚠️ **本文此前停在 2026-09-16 14:2x（`[Mac]0916D`）**，而其后 `0916E`–`0917B` 约 20 个号的进展
+**一条都没进过本文**（实核：全文对 `0916E`/`0916V`/`0916W`/`0917A`/`0917B`/`Token治理` 的命中数 ＝ **0**）。
+本节按文件系统真身补齐。⛔ 读下面那些历史节时，一律以本节为准。
+
+### 一、第十七批：`liaison-reply-bridge-and-patrol` 已 **27/33**
+
+| 章 | 单元 | 状态 | 谁跑的 |
+|---|---|---|---|
+| §0 | 三条前置门槛 | ✅ **全勾** | `[Mac]0910A`（2026-09-16 跑完 AT-1b／TD-43 与 TD-42 真实验证） |
+| §1 | **P0 · 回件桥＋第九态** | ✅ **9/9 合回 main** | 波次 2 `0916N`→`O`→`P` |
+| §2 | **P1 · 信号与打标即开班** | ✅ **9/9 合回 main** | 波次 2 `0916Q`→`R`→`S` |
+| §3 | **P2 · 拆件章程正本** | 🟡 **3/4** —— 🔴 只剩 **3.2 `unpack/charter.py`** | 波次 2 `0916T`→`U` |
+| §4 | **P3 · 口径点台账** | ✅ **3/3 合回 main**（`9724339`，顺带登记 TD-44） | 波次 2 `0916V` |
+| §5 | 验收 · 真实起活实测 | 🔴 **0/5，全部不可代** | **Shao Peishen 本人** |
+
+⇒ **「回灌自动落档、自动拆件」那条链，四个零环已经建起来三个半**（对照本文下一节那张六环表——
+那张表是 2026-09-10 的快照，⛔ 已过期，留作判据由来）。
+
+**剩下的 6 条，只有 1 条是机器能做的**：
+
+- **3.2** `tools/liaison/unpack/charter.py`：单点常量 `CHARTER_RELATIVE_PATH`、`read_charter(repo_root)`
+  （缺失抛 `CharterMissing`，由 dispatch 转 `failed(charter_missing)`）、纯函数 `compute_prompt(...)`。
+  ⚠️ 3.1／3.3／3.4 都已勾 —— 章程正本 `.claude/skills/liaison-unpack/SKILL.md` 与两组交叉核对测试都在，
+  **只差把章程读进来的那个模块**。
+- **5.1–5.5**：重启值守服务 → P1 单独验 `unpack-dispatch --dry-run` → P0+P1 端到端等汤丽萍真实入站
+  → D1 反证（邵培申自己发一条，他名下无在途信）→ 实测记录落 `docs/findings/`。
+  🔴 **⛔ 单测全绿不算验收**，本包 `tasks.md` 抬头写死。
+
+### 二、🔴 `tasks.md` 抬头进度行失真（同一族教训又一次）
+
+`openspec/changes/liaison-reply-bridge-and-patrol/tasks.md` 第 1 行写 **`24/33`**，实际勾选 **`27/33`**。
+差的正是 §4 P3 那 3 条——`9724339` 把 4.1/4.2/4.3 回勾了，**没同步抬头**。
+📌 **这和「`git log -3` 深度判据」「预占号」是同一族**：把一个会变的量抄成了常量。
+⇒ 订正动作已交 `[Mac]0917C`（见【下一步】）。
+
+### 三、另一条线：Token 治理已结项
+
+`0917A` 总验收（治理前后五项指标对比与结项判定）、`0917B` 结项登记（路线图结项段、跟踪项 T-1、
+10-01 复测）。产物在 `docs/token治理/`。⇒ **这条线已闭，⛔ 不要再当待办排**。
+机制侧顺带落地：`0916W` 给 `run-lanes.sh` 加了**脚本强制建 worktree** ＋ `worktree-guard` hook
+（⇒ 以后无头泳道不再需要执行者自己建 worktree，`0910B` 那次卡自检 1 的形态已根治）。
+
+### 四、当前工作区与号池
+
+- `git status`：**`docs/openers/OP-0820-全量编排.md` 一处未提交** —— `0917B` 的泳道标注被
+  `run-lanes.sh` 自动摘成 `> ✅ 已完成 2026-09-17（PARTIAL）· 原泳道 Token治理结项提交`。
+  另有 `?? _to_delete/`（⛔ 不 add、⛔ 不删）。与 origin ahead/behind 均 0。
+- 🔢 **号池台账已迁到 `docs/openers/号池台账.md`**（2026-09-16），历史月份在 `docs/openers/归档/号池台账-归档.md`。
+  ⛔ 不要再往 `OP-0820` 顶部那张旧表登记。已用到 **`[Mac]0917B`**；`0917C`／`0917D` 本轮派出，
+  `0917E`–`0917AN` 已由 0917D 派出（E/F 作废），**下一个可用号是 `[Mac]0917AO`**（`Z` 留看护者）。
+- 其余包：`hr-wecom-aibot-liaison` **63/67**（剩 8.6–8.9 灰度四条，他亲自）；
+  `m1-intake-quality-fixes` 68/69；`m1-job-profile-intake` 60/72；`lane-launch-armed-scan` **已撤包 2026-09-17**（`0917AC`，移至 `openspec/changes/archive/2026-09-17-lane-launch-armed-scan-withdrawn/`，未走 archive 流程）。
+
+### 五、【下一步】—— 四列待办
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| **R-1** | `[Mac]0917C` 转场落档提交 | CC | ✅ **已完成**（`73a5be2`，已推，ahead/behind 0；`tasks.md` 抬头已是 27/33） | — | — |
+| **R-2** | 3.2 章程接入生产路径 ＋ TD-45 ＋ design D4 常量名 | `[Mac]0917G`→`[Mac]0917H` | ✅ **已完成**（`59e9a78`＋`9e510d1`，已 ff 合入并推；tasks 28/33；生产代码 P2-TODO/CHARTER_RELPATH 零命中） | — | — |
+| **R-2b** | 全量 pytest 残留 1 红（`test_worktree_lane_runs_inside_script_created_worktree`） | `[Mac]0917I` | ✅ **已完成**（`159dca5`）：根因＝`sandbox` fixture 用 `dict(os.environ)` 把泳道的 `HR_LANE_*` 带进被测子进程；全量 2454 passed / 0 failed；TD-46 已还；run-lanes.sh 零改动 | — | — |
+| **R-3**【已闭环】 | §5 五条真实起活实测 | `0917N`/`0917P`/`0917R`/`0917U` 无头泳道 ＋ 汤丽萍真实入站 | ✅ **§5 全通过，已归档**（`ca02197` 之后各提交；tasks 33/33）。5.3：09:45/09:46 两条测试回件 ⇒ `bridge_marked`×2、`dispatch_started`×1、子会话判非实质并还原台账、信号清空、提交 `d703cd3` 路径全合规；`0917R` 报的「越界新建答复单」系误判（文件是 Cowork 出的答复单，findings 已订正）。5.5：`0917U` 把 5.2/5.3/5.4 的逐字命令、时刻、`sqlite3 -readonly` 审计表 SELECT 输出、日志全文补进 findings「七、5.2/5.3/5.4 补录」节，`openspec-archive-change` 已跑，变更包已移至 `openspec/changes/archive/2026-09-17-liaison-reply-bridge-and-patrol/`，4 份 delta spec 已同步进 `openspec/specs/`（`openspec validate --specs --strict` 8 passed），全量 `pytest` 2466 passed / 0 failed | — | — |
+| **R-3b** | TD-47 ✅ 已还（`ca02197`）；**TD-48** 拆件会话权限无路径边界 ＋ 真实信号文件挂着测试假数据 `MSGID0001` | `[Mac]0917O`（worktree，Opus）→ `[Mac]0917P`（主工作区清假信号、重启、复验 5.2） | ✅ **已完成**：`0917O`（`7df5633`）还 TD-48/TD-49，`docs/archive/tech-debt-已还.md:1759` 已归档 `~~TD-48~~`；`0917P` 清掉 `MSGID0001` 假信号（三条判据全中，见下）＋ 用真实章程复验 5.2，子会话零提交、零越界 | — | — |
+| **R-7** | 路线图四项裁决（09-17 答 `1a，2a，3a，4a`）：G3 泳道结果私信本人／G4 Mac 侧调度器／G7 撤包 `lane-launch-armed-scan`／M2 需求树由 Cowork 起草 | Cowork 编排；M2 需 Shao Peishen 逐题答 | G7 ✅ **已完成**（`0917AC` 撤包）；⏸ G3→G4 等本批 `0917T`–`X` 收敛后发车（发车器不允许两批并发）；**M2 六问已裁决并回填**（`0917AF`，commit 见 `git log --grep 0917AF`：design D3/D5/D7/D11 写定＋新增 D14 PaddleOCR／D15 bias 另立包，Open Questions 待裁决 0 条；tasks 0.5/0.6 已定、8.7 墓碑、进度 2/68；proposal「不做」补 bias 夹具）；**U0 计划已出**（`docs/superpowers/plans/2026-09-17-m2-unit0-model-comparison.md`，8 Task、拆段 1–3／4–6／7–8，提取验证 67 passed），待 run-build。⚠️ 计划「待裁决」#6：`paddlepaddle` 无 cp314 wheel（实测），未答前按 D14 退路 | G3/G4 两条泳道 OK 合入；M2 十题答完 → intent → propose | 自动化缺口 G3/G4 长期挂着；M2 迟迟不立包 |
+| **R-4** | 汤丽萍解锁 | — | ✅ **已解锁**（§0 的 0.3 已勾＝真实入站已落库一条） | — | — |
+| **R-5** | `hr-wecom-aibot-liaison` 8.6–8.9 灰度四条 | Shao Peishen 本人 | ✅ §5 前置已解锁，`0917V` 已核验：**8.7 通过并勾**；**8.6 不勾**（3 条验收面只 1/3 满足，私信附件归档归 `0917W`，群通知回推待本人配置真实 `HR_LIAISON_GROUP_WEBHOOK`）；**8.8 已开一周观察窗**（09-17→09-24） | 四条全勾并归档 | 值守通道停在「代码齐、没真用过」 |
+| **R-6** | 8.8 观察窗 09-24 到期 → 收观察结论 → 勾 8.8 → 当场归档 `hr-wecom-aibot-liaison` | Cowork 派泳道 | ⏸ **待 09-24 到期后派发** | `docs/findings/2026-09-17-值守通道一周观察窗.md` 三项观察结论落档、无异常或异常已处置 ⇒ 8.8 勾选 → `tasks.md` 全勾（8.6/8.9 视当时状态另计）→ 跑 `openspec-archive-change` | 观察窗过期无人收尾，`hr-wecom-aibot-liaison` 停在「代码齐、没勾完」跨会话悬置 |
+| **R-8** | `.51` 七次发版 ①（G3 Q-24 答「发」） | `[Mac]0917AX` 无头 | ✅ **已完成 2026-09-17 21:19 CST**：现网 = **`f81cc9d`**，numpy 先装再 sync，G-e 三条＋冒烟 ①–④ 全过，未回滚。记录 `docs/releases/2026-09-17-发版一执行记录.md`；`audit-and-outbound-ops.md` §五「七次发版记录」 | — | — |
+| **R-9** | `.51` 装 VC++ 2015–2022 x64 Redistributable（现 v14.27 过旧，torch 2.14 `c10.dll` WinError 1114）后重跑 `smoke_m2_deps` 与 `bench_bge_m3`，填 `docs/m2-model-comparison.md`「BGE-M3 本地 CPU 召回」的 `.51` 耗时 | `[Mac]0917BB` 无头（Q-27 放行） | ✅ **已完成 2026-09-17 22:07–22:20 CST**：VC++ v14.27.29016 → **v14.44.35211**（安装器 `restart: None`，服务全程 200，未重启）；探针 torch ✅ 6.6 s／FlagEmbedding ✅ 24.8 s；`bench_bge_m3` 单份 ~117 ms、画像 ~493 ms、recall@10 40%。记录 `docs/releases/2026-09-17-发版二与R9执行记录.md` | `.51` 隔离 venv `C:\apps\m2-smoke` 里 `import torch` 成功、探针 torch/FlagEmbedding 行 ✅ | D7「BGE-M3 在 `.51` 本地 CPU」在现网跑不起来，M2 U3 召回上线被卡 |
+| **R-10** | `smoke_m2_deps.py` 在 GBK 控制台 `print` 崩（`UnicodeEncodeError`）→ 脚本自带 `sys.stdout.reconfigure(encoding="utf-8")` | M2 U1 泳道顺带 | ⏸ 待登记 TD（`0917BB` 复跑仍以 `set PYTHONIOENCODING=utf-8` 绕过，未改代码；权重获取另有一条口径：`.51` 走 ModelScope＋本地目录，hf-mirror 对 `imgs/.DS_Store` 403 且仅 116 KB/s，见 `docs/m2-model-comparison.md`） | `.51` 不设 `PYTHONUTF8` 裸跑 `EXIT=0` | 每次在 Windows 跑探针都得手动加环境变量 |
+
+- 2026-09-17 拆件会话（真实起活，非 `--force` 验收）再探同一 pending：`人事部#1`/`MSGID0001`（`at` 2026-09-10T10:00:00+08:00）。复核结果与 R-3、TD-48 一致：`README-跟进信清单.md` 该行仍 `✅ 已推送 2026-09-09`（非第九态），`archived_path`（`data/liaison/archive/threadA/20260910/MSGID0001__正文.txt`）仍不存在。命中章程 §四第 3 条，未新建 R 行（信息已由 R-3 承载，避免重复 `07537fe`/`748a323` 的噪声模式）。【谁做：`0917P`】【状态：✅ 已完成】【判据：确认为陈旧测试信号（三条判据全中：msgid 固定值、归档文件不存在、测试用例命中而 DB 无此 msgid）后已执行 `unpack-signal --clear --before 2026-09-11T00:00:00+08:00`，`--probe` 现为 `[NO-SIGNAL]`】【不做会怎样：已不适用——信号已清】
+
+---
+
+
+<!-- 〔归档工具〕 2026-09-18 搬入：【已闭环】🆕 第十六批已收敛 ＋ Shao Peishen 五项裁决（2026-09-10 00:2x，`[Mac]09 -->
+
+## 【已闭环】🆕 第十六批已收敛 ＋ Shao Peishen 五项裁决（2026-09-10 00:2x，`[Mac]0909AZ` 落档）
+
+**第十六批六条泳道（`0909AK`–`AP`）全部合回 `main`，零红灯。**
+报告：`.claude/handoff/lanes-20260909-234309-第十六批看护报告.md`（gitignore 内，未提交）。
+销账 +7：TD-23 / 24 / 26 / 28 / 31 / 32 / 35；TD-29 部分已还。pytest 2066 → **2155，0 失败**。
+⚠️ `0909AK` 的 `NO-SENTINEL` 是**哨兵漏打**，非失败（commit 已在 main、cherry 判真合 0），⛔ 不需重跑。
+
+🔢 **号池**：`0909AP` 归第十六批·入站预演泳道；G-12·N-0 看门狗**已改判为 `0909AQ`**
+（原取号时 AP 那行在 `OP-0820` 未提交段里，`0909AJ` grep 不到才误判空号）。**下一个可用号是 `0909AR`**。
+
+### 五项裁决（Shao Peishen 2026-09-10 答 `1a，2a，3a，4a，5a`）
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| **H-1** | ~~`.51` 现网~~ **Mac 本机 `data/liaison.db`**（liaison 永不上 `.51`，`0917AW` 核实误标）`liaison_group_notify` **重建表**补上跨字段 CHECK（答 `1a`） | `[Mac]0917AX` 随 `.51` 发版 ① 同日在 Mac 侧做 | ✅ **已闭合 2026-09-17**（Q-12 同件）：备份 `liaison.db.bak-20260917-2135`，0 行直接重建，两条 CHECK 负向实证生效，值守 pid 89987 回来。TD-28 可标已还 | 建表语句含 `5ca1f50` 那两条 CHECK ✅ | — |
+| **H-2** | 名单外发送人的消息**仍归档**（答 `2a`） | — | ✅ **已闭合**，无代码动作 | 裁决已落进 `docs/findings/2026-09-09-入站带附件链路预演.md` §4.2 上方；`0909AP` opener 里「名单外 ⇒ ⛔ 不归档」那句**作废** | 下一轮有人按作废的 opener 口径去改 `inbound.py`，把合规裁定反向推翻 |
+| **H-3** | 0 字节附件全链路无症状 → **登记 TD，随第 7 章通道层一起做**（答 `3a`） | 第 7 章通道层泳道 | ✅ **已登记 TD-41** | 通道层开工时一并处理；⛔ 在此之前不单独占泳道。8.6 当天人工兜底＝`find data/liaison/archive -type f -size 0` | 下载环节静默失败返回空文件＝**材料丢失**，而它与「用户真发空文件」长得一模一样、核对器报空清单 |
+| **H-4** | TD-29 剩两条：**下一批单独派一条**「测试脚手架收编 ＋ `config.py` 文案」（答 `4a`） | 下一批泳道 | ⏸ **待派发**（已登记 TD-29 条目） | `conftest` 收编完成；`config.py:75` 不再复用 `MissingCredentialsError` | 服务正常运行时，运维会收到一句说「拒绝启动」的告警 |
+| **H-5** | 订正 `docs/跟进信/README-跟进信清单.md` 里「`bf63e7a` 入库时把本行写成终态」那句失真（答 `5a`） | ~~另起 session~~ ⇒ **Cowork·0909AU 已代办**（2026-09-10 Shao Peishen 答 `1a` 授权动他的触碰区） | ✅ **已改，随 `[Mac]0910F` 提交** | 已改为「来源不明的未提交工作区状态」，台账与版本库口径归一。🔴 **顺带查实**：`git show bf63e7a:docs/跟进信/README-跟进信清单.md` 里本行是 **`🆕 待发`**、⛔ **不是**终态 ⇒ 原归因整句失真，版本库从未有过那个终态。已在 README 同处加第二条教训「给失真定的因，本身也要核 git 真身」 | 下次按这句去查 `bf63e7a` 会扑空；且「台账状态是机器判据」那条教训的**依据本身是错的** |
+
+~~⚠️ H-1 尚无 opener~~（H-1 已由 `0917AX` 2026-09-17 闭合）（H-4 已并进 `[Mac]0909AR`；**H-5 已由 Cowork·0909AU 于 2026-09-10 做掉、随 `[Mac]0910F` 提交**）。派发 H-1 时从 **`[Mac]0910G`** 起取号，**取号当场登记进 `OP-0820` 号池台账并 commit**。
+
+### 🆕 `0909AT` 打标即开班：需求已收敛、已立包（2026-09-10 10:2x CST，`[Mac]0909AT`）
+
+**包**：`openspec/changes/liaison-reply-bridge-and-patrol/`（`intent.md` ＋ proposal／4 specs／design／tasks 0/33，`openspec validate --strict` ✅）。
+grill 八问 Shao Peishen 当场全按推荐答（Q1 无在途不标不起活／Q2 多在途拒标告警／Q3 权限层 `acceptEdits`＋白名单，⛔ 不用 `--dangerously-skip-permissions`／Q3b 红线八项照单／Q4 主工作区／Q5 消息接线归 liaison 包／Q6 只 add 列出路径＋commit 不 push／Q7 该发送人任何入站算回件）。
+🔴 **M2 查出的硬事实**：值守服务**根本没订阅 SDK `message` 事件**（`SUBSCRIBED_EVENTS` 只有三个连接事件，`test_this_chapter_wires_no_message_handling` 明令不接）⇒ 即使 TD-42 还了，`liaison_message` 仍是 0 行。这是比 TD-42 更靠前的前置，此前未登记。
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| **AT-1** | `hr-wecom-aibot-liaison` 追加任务 **8.5bis：SDK `message` 事件接线**（订 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling`）＋ 真实入站落库一条 | ✅ **已拆两条**（2026-09-10 答 `1a`）：**AT-1a** 代码接线 ⇒ `[Mac]0910B`（worktree ☑）；**AT-1b** 真实入站落库一条 ⇒ `[Mac]0910A`（主工作区，串行在 `0910B` 合回 main 之后） | ✅ **AT-1a 已落地**（2026-09-10 `[Mac]0910B`，commit `7636613`；`tasks.md` 8.5bis 已勾，进度 62/67→63/67，`validate --strict` 过；测试 934→952）／⏸ **AT-1b 待 `[Mac]0910A` 在主工作区验**。⚠️ **AT-1a 里的帧字段映射走了 fail-closed 支**（**TD-43**）：SDK 只命名 `body.msgtype` 与 `headers.req_id`，`msgid`／发送人 userid／会话 id 落在哪个键上无真实帧依据 ⇒ `frames.FIELD_PATHS` 留空、本帧不落库、只打一行**无取值**的帧键结构。⇒ **AT-1b 多一步**：照日志里那行结构把 `FIELD_PATHS` 四个键填上，`liaison_message` 才会由 0 变 1 | `SUBSCRIBED_EVENTS` 含 `message`（✅ 已满足，`7636613`）；`liaison_message` 有一条真实企微消息行（⏸ 未满足，归 AT-1b；⛔ 不许因为前半条已勾就把整条 AT-1 标成完成） | 8.6 灰度与本包 §0 门槛都过不了；汤丽萍发的每一条继续静默落空 |
+| **AT-2** | design Open Question ①：章程 §〇 **第 ⑨ 条「回件附件疑似含候选人个人信息 ⇒ 不读入 prompt、只登记转人」的措辞与判据** | Shao Peishen | ✅ **已答 `1a`**（10:3x）：按起草措辞定稿，落 design D15 | P2 3.1 写章程时逐字取 D15 | — |
+| **AT-3** | `HR_LIAISON_UNPACK_BUDGET_USD` 默认值（起草建议 5） | Shao Peishen | ✅ **已答 `2a`**：默认 5，落 design D16 | P1 2.9 写进 `.env.example` 注释 | — |
+| **AT-4** | 本包开工顺序：§0 三门槛（TD-42 已还＋AT-1 接通＋真实入站一条）全勾 → P0→P1→P2→P3 各一条 worktree 泳道 → §5 真实起活实测（他重启服务＋等汤丽萍下一条入站） | Cowork 编排 → 泳道 | ⏸ 等 §0 | tasks §5 实测记录落 `docs/findings/` 后归档 | — |
+
+#### ~~⚠️ AT-1 的 worktree 矛盾~~ ✅ **已解，⛔ 不必再拍**（`[Mac]0910A` 查出，同日由它自己出的 `docs/openers/0910B-SDK-message事件接线.md` 按下表拆法解掉）
+
+> 🔴 **结论先行**：`0910B` 的 opener 正文已采用下表的拆法——**AT-1a 在 worktree 做**（其【设置】行 worktree ☑，【八】明令「⛔ 不做真实建连、不等真实入站」），**AT-1b 交回主工作区**（【九】收工要求单列一行「⏸ 下一步：AT-1b 真实入站落库一条（主工作区、worktree ❌，归 `[Mac]0910A`）」）。下面的分析保留作**判据由来**，⛔ 不要再当成待决项重提。
+
+AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性质不同**的事：
+
+| 子项 | 内容 | 需要什么 | 能不能在 worktree 做 |
+|---|---|---|---|
+| **AT-1a** | 代码接线：`SUBSCRIBED_EVENTS` 加 `message`、回调只往队列放帧、值守线程调 `handle_inbound_message`、删 `test_this_chapter_wires_no_message_handling` | 只要源码 ＋ 单测 | ✅ 能，且 CLAUDE.md 固定判据「写代码 ⇒ worktree ✅」要求就在 worktree |
+| **AT-1b** | 判据「`liaison_message` 有一条**真实**企微消息行」 | `.env` ＋ `tools/liaison/.venv` ＋ 真实库 ＋ 值守服务真在跑 | ❌ **不能**——三者都被 gitignore 挡着，git 不带进 worktree（`0909AJ`／`0909AH` 已立此判据） |
+
+⇒ 答 `1b`「`0910A` 串行接 AT-1」在 **AT-1b 上成立**（`0910A` 本就在主工作区、本就要重启真实服务），
+但在 **AT-1a 上与「写代码走 worktree」相冲**：`0910A` 的【设置】是 worktree ❌ 不勾。
+✅ **2026-09-10 Shao Peishen 答 `1a` 已拍：拆两条。** AT-1a ⇒ `[Mac]0910B`（worktree ☑，不需 `.env`）→ 合回 `main` → AT-1b ⇒ `[Mac]0910A` 在主工作区重启服务时顺带验。
+
+**另两条同日裁决**：
+
+- **流程口径（答 `1a`）**：`0910B` 走**单条直接 TDD**，⛔ 不走 `spec-to-plan` → `run-build`。
+  已落真源 `03-工具链协作规则.md`「轻量通道」**第 4 条**：补已批准 spec 与代码之间的缺口 ⇒ 按「未改行为」走。
+  ⚠️ 反向不成立——要动 spec 文本的一律回全流程。
+- **排序（答 `2a`）**：🔴 **`0910B` → `0910A`，有依赖，⛔ 不可并行**。
+  `0910B` 在 worktree 写代码并**合回 `main`** 之后，`0910A` 才能在主工作区拿到这份代码；
+  `0910A` 一次重启服务把 **TD-42 真实验证**与 **AT-1b 真实入站**两件一起验完（⛔ 不重启两次）。
+
+
+---
+
+
+<!-- 〔归档工具〕 2026-09-18 搬入：【已闭环】2026-09-17 拆件会话（自动，验收起活） -->
+
+## 【已闭环】2026-09-17 拆件会话（自动，验收起活）
+
+- 【谁做：本次拆件会话（自动）】【状态：已闭环】
+  【判据：`人事部#1` 两条归档正文（msgid `a932acca20f0ce42ab267c29f4fb5bbe`、`b8b523c7b96a4ac73f7a799431e8c570`）
+  均为测试性质消息（"测试短信"／"人力保障组测试"），与决策点 a 无实质关联 ⇒ 判非实质回件；
+  `README-跟进信清单.md` 该行已从第九态还原为 `✅ 已推送 2026-09-09`；回灌结论落
+  `docs/跟进信/回件/人事部#1-2026-09-17.md`】
+  【不做会怎样：台账停在第九态误判"待拆件"，下一封真实回件到达时会与本条噪声混淆】
+
+- 【谁做：Shao Peishen】【状态：待人】
+  【判据：拆件子会话（上条 `d703cd3`）运行期间在 `docs/跟进信/` 下新建了两份章程外文件——
+  `人事部-汤丽萍-答复单-2026-09-17-人事部#1决策点a.md`／`.docx`（拟发给汤丽萍的答复单草稿，
+  子会话最终自述完全未提及此事）；`--dry-run` 已确认 `allowedTools` 无任何 `Write(...)` 路径约束，
+  是一次真实的越界写入（非 dry-run 假阳性）。两份文件目前原位未跟踪、未提交、未对外发送
+  （`liaison_group_notify`/`effect_log` 均无发送类记录）。请定：① 这两份草稿要不要真的按其
+  内容发给汤丽萍（若要发，属红线①对外发送，须走人工通道，不可由拆件会话代发）；② 文件本身
+  删除/保留/移出仓库；③ 是否需要开一条新 TD 登记"`--force` 真实运行下 Write 工具无路径约束"
+  （本次未代开，超出本轮 opener 授权的提交路径）。详见
+  `docs/findings/2026-09-17-打标即开班真实起活实测.md`「5.3 真实回件（0917R）」⑥】
+  【不做会怎样：两份文件继续留在工作区不确定归属；tasks.md 5.3 无法勾选，5.5 归档随之搁置；
+  下一轮拆件会话仍会正常运行（不受此项阻塞），但同类越界若再次发生不会被自动发现，
+  需要人工核对 `git status` 才能看到】
+
+
+<!-- 〔归档工具〕 2026-09-18 搬入：【已闭环】2026-09-17 拆件会话（自动，第二轮，msgid `c61d35...`） -->
+
+## 【已闭环】2026-09-17 拆件会话（自动，第二轮，msgid `c61d35...`）
+
+- 【谁做：本次拆件会话（自动）】【状态：已闭环】
+  【判据：`人事部#1` 决策点 a 的真实回件到达（msgid `c61d35e5af71af6d98a9197416b89841`，
+  正文「人事部#1 决策点a 答复 / 选择：1 / 说明： / 节奏：」），按答复单固定格式判定为**实质回件**
+  （选 1＝随时在组里说）；`README-跟进信清单.md` 该行已由第九态转闭环态
+  `📥 已回件并回灌 2026-09-17`；口径点 `HR-G-01` 已由 `待专员` 转 `已回复`
+  （evidence 指向本条归档正文，⛔ 未转 `已签认`——签认须 Shao Peishen 本人）；
+  回灌结论追加进 `docs/跟进信/回件/人事部#1-2026-09-17.md`】
+  【不做会怎样：`HR-G-01` 停留在「待专员」，误判该口径点尚无人回复；`人事部#1` 台账继续停在
+  第九态"待拆件"，与已消化的回件状态不符】
+
+- 【谁做：Shao Peishen（或后续建造类 session）】【状态：已闭环（0917AG）】
+  【判据：发现拆件章程 §一步骤 5 的用法本身有坑——前言给的「检查点时刻」与信号项自身的 `at`
+  字段是同一个 `now`（`dispatch_wiring.py:129` 用 `now.isoformat()`，`bridge.py:467` 用
+  `session.format_instant(now)`，两者对同一个 `now` 在微秒非零时格式化结果相同），而
+  `clear_signal_before`（`signal.py:93`）保留规则是 `at >= checkpoint`——照前言原样把该
+  检查点字符串传给 `--clear --before` 会把触发本轮的这一项也保留下来，永远清不掉、下一轮
+  探测仍会拿到同一条 pending 重复处理。本轮变通：手工把检查点字符串最后一位微秒 +1
+  （`...336711+08:00` → `...336712+08:00`）再清，验证有效（清后 `pending: []`）。这不是本会话
+  可修的范围（红线②不改 `tools/`），需要建造类 session 判断是修 `dispatch_wiring.py` 的
+  checkpoint 生成（改成晚于 append 的时刻）还是修 `signal.py` 的边界语义（改成 `at > checkpoint`
+  才保留），并补测试覆盖这个恰好相等的边界。
+  **0917AG 处理结果**：选了前者——`signal.py` 的 `at < checkpoint` 边界是 spec 逐字要求
+  （「只清除时刻早于检查点的项」），不能改。改 `dispatch_wiring.py::bridge_dispatch`：新增
+  `_clock` 参数（生产默认真实时钟 `datetime.now(timezone.utc)`，测试可注入固定值），
+  `checkpoint_iso` 改为 `session.format_instant(_clock())`——`bridge_dispatch` 运行在
+  `append_signal` 已落盘之后（`bridge.py::_emit_signal_and_dispatch` 先落信号再调
+  `dispatch()`），取一次此刻真实时钟即严格晚于触发本轮的这一项的 `at`，同时与 `at` 同口径
+  （`format_instant`）。新增回归用例
+  `tools/liaison/tests/test_unpack_dispatch_wiring.py::
+  test_checkpoint_is_strictly_after_this_signals_at_so_clear_actually_works`
+  复现踩坑现场（CST、微秒恰好为 0）并断言 `clear_signal_before` 用新 checkpoint 能真的清掉】
+  【不做会怎样：下一轮真实回件到达、走到这一步时，若某会话照抄前言检查点字符串原样调用
+  `--clear`，会陷入同一 msgid 无法清除、每轮都重新"探测到信号→处理→清不掉→再探测到"的空转；
+  目前靠"手工微调时间戳"能绕过，但不是所有拆件会话都会想到这么做】
