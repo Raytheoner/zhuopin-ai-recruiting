@@ -1,12 +1,12 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 503
+  条目数: 505
   按状态:
-    待开: 249
-    在跑: 6
+    待开: 250
+    在跑: 8
     完成: 160
-    阻塞: 88
+    阻塞: 87
   阻塞·决策: 49
   阻塞·外部: 36
   conflicts:
@@ -32,14 +32,16 @@ summary:
   - relay:AT-4
   - relay:H-4
   - relay:R-10
+  - relay:R-11
+  - relay:R-12
   - relay:R-6
-  - scene:M3
   ready:
+  - relay:R-11
+  - relay:R-12
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
-  - plan:2026-09-18-voice-structured-interview-unit1-data-model/seg1
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - offer-generation/U1/plan ← G2 `offer-generation`（已答·未放行）
@@ -125,15 +127,13 @@ tasks:
   依赖:
   - scene:M2
   触碰区: []
-  状态: 阻塞
+  状态: 在跑
   阻塞类型: 无
   产出判据: 设计上依赖 M2 真实数据校准题库
   来源: docs/roadmap/HR项目实施路线图与构建自动化流程.md:24
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 在跑
+  备注: 0918 dispatcher 核实：路线图 M3 行「已立包 1/76」（0918B，openspec/changes/voice-structured-interview/，commit 4299785），G1 已放行（Q-32/Q-37 答「定」），已进入 propose/plan 阶段，早于 scene:M2
+    完成即已启动（Shao Peishen 决策），真身应判在跑而非阻塞；本条为聚合条目不影响发车判据
 - id: gap:G1
   场景: 构建自动化
   阶段: gap
@@ -7635,6 +7635,38 @@ tasks:
   conflicts:
     状态:
       台账: 阻塞
+      真身: 来源已消失或已勾选
+- id: relay:R-11
+  场景: M2
+  阶段: build
+  标题: EFFECT_NODE_MANIFEST 漏登 M2U3 合并带入的 effect_persist_flags，全量 pytest 真回归
+  依赖: []
+  触碰区:
+  - app/graph/build.py
+  - tests/test_effect_idempotency_suite.py
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: EFFECT_NODE_MANIFEST 补上 effect_persist_flags，build_recipes() 加对应崩溃-恢复配方，tests/test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree 转绿
+  来源: docs/session接力.md:75
+  可见: false
+  备注: 0918 dispatcher 补登记——scripts/dispatcher_backlog.py 的 TAG4_RE 只认「【谁做：x】【状态：y】…」内联冒号格式，session接力.md 当前四标签行已全面转为「【谁做】x｜【状态】y｜…」分隔格式，正则 0 匹配（见 Q-47），故手工补条目防止此真回归漏派；下次唤醒若正则修复产生同语义新条目，两条去重合并；已派 0918AF（dispatcher-20260918-162948）
+- id: relay:R-12
+  场景: M3
+  阶段: build
+  标题: M3 U0/U1 建造 lane 开工前须把 funasr／livekit 装进共享 venv，否则 tests/test_probe_m3_voice.py 4 条环境缺口持续非 0 failed
+  依赖: []
+  触碰区:
+  - requirements-m3-u0.txt
+  - tests/test_probe_m3_voice.py
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: requirements-m3-u0.txt 装进共享 venv，或测试改 pytest.importorskip 使懒加载生效，4 条转绿或规范 skip；本条判据成立前 M3 U0/U1 建造 lane 不得开工
+  来源: docs/session接力.md:76
+  可见: false
+  备注: 0918 dispatcher 补登记，同 relay:R-11 说明（TAG4_RE 格式漂移未解析，见 Q-47）；本身不依赖外部输入，是 M3 U0/U1 建造 lane 的前置环境准备，可现在直接派车；已派 0918AG（dispatcher-20260918-162948）
+  conflicts:
+    状态:
+      台账: 待开
       真身: 来源已消失或已勾选
 - id: relay:R-6
   场景: M0
