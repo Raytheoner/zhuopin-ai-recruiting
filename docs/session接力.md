@@ -66,6 +66,15 @@
 
 ## 二、下一步
 
+### 🆕 2026-09-18 `0918AB` reportlab／Pillow 依赖登记核查——早已登记，无需改动；顺带定位到 main 当前测试红
+
+派车前提（`0918U`：main 全量 pytest 4 failed，判「reportlab／Pillow 未登记进任何依赖清单」）已过期：**两包早在 2026-09-17 M2·U0（`6e93eb6`）就已登记进 `requirements-m2-u0.txt`**（标「轻依赖（单测需要）」，版本与共享 venv 已装版本一致），`tests/test_extract_text.py`／`tests/test_compare_models_m2.py` 现状 23 passed，无需任何改动。
+
+`0918AB` 全量 pytest 实测（main `8e4574f`＝本分支 HEAD，`git rev-list --count main...HEAD`＝0）：**5 failed**（非 opener 预期的 4 条，且均与 reportlab/Pillow 无关）——1 条真回归 `tests/test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree`（`EFFECT_NODE_MANIFEST` 漏登 M2U3 合并带入的 `effect_persist_flags`）；4 条环境缺口 `tests/test_probe_m3_voice.py`（`funasr`／`livekit` 未装，`requirements-m3-u0.txt` 未装进共享 venv）。按 opener 预案「真回归⇒立刻停，不顺手改业务代码」，本条到此为止，两项登记待派发：
+
+- 【谁做】M2U3 后续 lane／下一次 task-dispatcher 唤醒｜【状态】待派发｜【判据】`EFFECT_NODE_MANIFEST` 补上 `effect_persist_flags` ＋ `build_recipes()` 加对应崩溃-恢复配方，该测试转绿｜【不做会怎样】铁律1（每个 effect_* 节点须被强制中断验证过）对新节点失去覆盖，且全量 pytest 持续红，掩盖后续真回归信号
+- 【谁做】M3 U0/U1 建造 lane 开工前｜【状态】待派发｜【判据】`requirements-m3-u0.txt` 装进共享 venv，或测试改 `pytest.importorskip` 使懒加载生效，4 条转绿或规范 skip｜【不做会怎样】全量 pytest 持续非 0 failed，同样掩盖真回归信号
+
 ### 🆕 2026-09-18 `0918B` M2·U1 数据模型 Segment B＋C 已合 main（`66e3b97`，3092 passed，2.4–2.8＋8.1 已勾）
 - 【谁做】U2／U4 接手者【状态】9 条 Minor 延后【判据】见 `docs/findings/2026-09-18-0918B-M2U1-SegmentBC收口.md`「终审遗留」逐条关闭【不做会怎样】U2 写 `accessor` 与 U7 审计口径可能不一致；U4 落库前不校验 evidence_ref 偏移会存脏回指
 
