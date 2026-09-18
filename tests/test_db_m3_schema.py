@@ -376,3 +376,129 @@ def test_interview_session_allows_multiple_null_invite_token_hash(conn):
         "VALUES ('sess-2', 'app1', 1, '2026-12-01 00:00:00', 'v1', 'internal_sim')"
     )
     conn.commit()
+
+
+# ── interview_consent / identity_check（tasks 2.3）──────────────────────
+
+
+def test_interview_consent_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "interview_consent")
+    assert _columns(conn, "interview_consent") == {
+        "session_id", "kind", "result", "consent_version", "at",
+    }
+
+
+def test_interview_consent_primary_key_is_session_and_kind(conn):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    conn.execute(
+        "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+        "VALUES ('sess-1', 'ai_interview', 'accepted', 'v1')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+            "VALUES ('sess-1', 'ai_interview', 'declined', 'v1')"
+        )
+
+
+def test_interview_consent_allows_two_independent_kinds_per_session(conn):
+    """spec「AI 面试与身份核验各自单独同意」：两项各自独立留痕。"""
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    conn.execute(
+        "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+        "VALUES ('sess-1', 'ai_interview', 'accepted', 'v1')"
+    )
+    conn.execute(
+        "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+        "VALUES ('sess-1', 'identity_check', 'accepted', 'v1')"
+    )
+    conn.commit()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM interview_consent WHERE session_id='sess-1'"
+    ).fetchone()[0]
+    assert count == 2
+
+
+def test_interview_consent_kind_check_rejects_unknown_value(conn):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+            "VALUES ('sess-1', 'video_interview', 'accepted', 'v1')"
+        )
+
+
+def test_interview_consent_result_check_rejects_unknown_value(conn):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+            "VALUES ('sess-1', 'ai_interview', 'maybe', 'v1')"
+        )
+
+
+def test_identity_check_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "identity_check")
+    assert _columns(conn, "identity_check") == {"session_id", "result", "checked_at"}
+
+
+def test_identity_check_result_check_rejects_unknown_value(conn):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO identity_check (session_id, result) VALUES ('sess-1', 'pending')"
+        )
+
+
+@pytest.mark.parametrize("result", ["pass", "fail", "skipped"])
+def test_identity_check_result_check_accepts_three_values(conn, result):
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    conn.execute(
+        "INSERT INTO identity_check (session_id, result) VALUES ('sess-1', ?)", (result,)
+    )
+    conn.commit()
+
+
+def test_identity_check_session_id_is_unique_primary_key(conn):
+    """一期一个场次只产生一行核验结果（D13：一律 skipped，保留给活体/证件比对）。"""
+    _seed_job_candidate_resume_application(conn)
+    _seed_interview_session(conn)
+    conn.execute(
+        "INSERT INTO identity_check (session_id, result) VALUES ('sess-1', 'skipped')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO identity_check (session_id, result) VALUES ('sess-1', 'pass')"
+        )
+
+
+# ── m3-compliance-assertions spec「身份核验与评分隔离」的源码级反证 ───────
+#
+# identity_check 表结构上不允许出现图像列或任何可用于评分的列。这不是数据库
+# CHECK 能表达的约束（CHECK 只能限制值域，不能限制"未来会不会加这一列"），
+# 所以判据下沉到源码：直接扫描 sqlite_master.sql 的建表原文与
+# PRAGMA table_info 的列名，任何一处出现 image/photo/face 子串就判违规。
+# 真正把这条接入 CI 断言是 U7 tasks 8.1 的职责，这里只是 U1 自己的结构守护。
+
+
+def test_identity_check_has_no_image_or_scoring_columns(conn):
+    banned_substrings = ("image", "photo", "face", "video", "biometric")
+    columns = _columns(conn, "identity_check")
+    for column in columns:
+        lowered = column.lower()
+        assert not any(bad in lowered for bad in banned_substrings), (
+            f"identity_check.{column} 命中禁止列名模式，疑似引入图像/生物特征列"
+        )
+    ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='identity_check'"
+    ).fetchone()[0].lower()
+    for bad in banned_substrings:
+        assert bad not in ddl, f"identity_check 建表原文里出现了禁止词 {bad!r}"

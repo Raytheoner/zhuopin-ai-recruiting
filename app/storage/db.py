@@ -734,6 +734,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_session_invite_token
 
 CREATE INDEX IF NOT EXISTS idx_interview_session_application
     ON interview_session (application_id);
+
+-- 双同意留痕（interview-invite-and-consent spec「AI 面试与身份核验各自
+-- 单独同意」）。复合主键 (session_id, kind)：天然键就是"这个场次的这一项
+-- 同意"，与 hard_requirement/resume_text_span 同一手法，不设代理主键。
+CREATE TABLE IF NOT EXISTS interview_consent (
+    session_id TEXT NOT NULL REFERENCES interview_session(id),
+    kind TEXT NOT NULL CHECK (kind IN ('ai_interview', 'identity_check')),
+    result TEXT NOT NULL CHECK (result IN ('accepted', 'declined')),
+    consent_version TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, kind)
+);
+
+-- 身份核验结果（interview-invite-and-consent spec「手机号验证码弱核验」
+-- D13：一期只做手机号验证码，result 一律 'skipped'，保留给活体/证件比对；
+-- 弱核验的通过时刻/尝试次数记在 interview_session 上，不进本表）。
+-- ⛔ 刻意不设图像列或任何评分相关列——见下方 test_identity_check_has_no_
+-- image_or_scoring_columns 的源码级反证测试；未来任何人往这张表加列都会被
+-- 这条测试拦下来。
+CREATE TABLE IF NOT EXISTS identity_check (
+    session_id TEXT PRIMARY KEY NOT NULL REFERENCES interview_session(id),
+    result TEXT NOT NULL CHECK (result IN ('pass', 'fail', 'skipped')),
+    checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
