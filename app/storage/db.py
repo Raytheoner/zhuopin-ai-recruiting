@@ -449,6 +449,29 @@ CREATE INDEX IF NOT EXISTS idx_rejection_record_application
 CREATE INDEX IF NOT EXISTS idx_rejection_record_batch
     ON rejection_record (batch_id);
 
+-- 申诉流转审计（m2-resume-parse-and-rank U3 tasks 4.6「均记操作人」）。
+-- rejection_record.appeal_status 只保留"当前状态"，本表记录每一次合法
+-- 流转的操作人与时刻——包括 none→requested 这次"登记"，不仅仅是最终的
+-- overturned。新表，走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：
+-- 加列路径只服务"老库缺列"这一种情况，新表不需要它。
+--
+-- actor 的 CHECK 与 rejection_record.decided_by 同一手法：trim 第二参数
+-- 显式列出空格/制表/换行/回车（SQLite 单参 trim() 只剥空格）——空操作人
+-- 等于没有留痕，且由数据库强制。
+CREATE TABLE IF NOT EXISTS appeal_event (
+    id TEXT PRIMARY KEY NOT NULL,
+    rejection_record_id TEXT NOT NULL REFERENCES rejection_record(id),
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    actor TEXT NOT NULL CHECK (
+        actor IS NOT NULL
+        AND trim(actor, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_appeal_event_rejection ON appeal_event (rejection_record_id);
+
 -- 简历访问留痕（resume-upload-and-gate spec「简历访问留痕」）。⛔ resume_id
 -- 上刻意不加外键——与 human_review.job_id、effect_log.thread_id 同一形态：
 -- 留痕表按事件记事实，把它的可写性绑在业务表上，"留痕写不进去"就会变成
