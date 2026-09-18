@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
@@ -173,6 +174,11 @@ class AuditHook(Protocol):
     （application_id / job_id / rubric 快照）由适配层理解，网关继续对业务无知
     （design.md D6）。守护见 `tests/test_llm_gateway.py`
     `test_gateway_never_reads_inside_audit_context`。
+
+    返回值是这次调用写入（或命中幂等短路）的那条 `analysis_run.id`——调用方
+    需要它去关联下游持久化行（如 `prep_snapshot.gen_run_id`）。网关本身仍然
+    不解释这个 id 的构造方式，只把 hook 已经算好的值原样中继给
+    `LLMCallMeta.run_id`（voice-structured-interview U2 tasks 3.5）。
     """
 
     def record(
@@ -189,7 +195,7 @@ class AuditHook(Protocol):
         latency_ms: float,
         attempt: int,
         audit_context: dict[str, Any] | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
 
 class NoopAuditHook:
@@ -200,10 +206,17 @@ class NoopAuditHook:
     留着它的理由：`LLMGateway` 的单元测试与 `scripts/compare_models.py` 不需要
     一个真实的数据库连接。⛔ 不要在生产路径上用它：它只 `logger.debug`，
     工程铁律 3 在它身上一条都不成立。
+
+    返回的占位 id **不对应任何真实持久化行**——调用方若需要一个能通过
+    `analysis_run` 外键校验的 id（如 U2 的 `prep_snapshot.gen_run_id`），必须
+    在测试里换用真实的 `RecorderAuditHook`（见
+    `tests/test_prep_e2e.py::_make_app_with_real_audit`），不能用这个占位符
+    去满足 `REFERENCES analysis_run(id)`。
     """
 
-    def record(self, **kwargs: Any) -> None:
+    def record(self, **kwargs: Any) -> str:
         logger.debug("audit_hook(noop): %s", kwargs)
+        return f"noop:{uuid.uuid4().hex}"
 
 
 @dataclass(frozen=True)
@@ -211,19 +224,21 @@ class LLMCallMeta:
     """
     一次 extract_structured 调用的可观测元数据。
 
-    为什么走返回值而不是扩展 AuditHook：AuditHook 的签名不能动
-    （design.md 决策 9——ai-audit-trail-and-outbound-gate 正基于现签名设计），
-    而调用方（compute_intake_turn → effect_persist_draft）需要在**同一个事务**
-    里把耗时和画像一起写下去，hook 是单向的、拿不回来。
+    为什么走返回值而不是扩展 AuditHook 的参数：AuditHook 的**参数**签名不动
+    （design.md 决策 9 的取舍延续），而调用方（compute_intake_turn →
+    effect_persist_draft）需要在**同一个事务**里把耗时和画像一起写下去，hook
+    是单向的、拿不回来。`run_id`（voice-structured-interview U2 tasks 3.5）是
+    这条原则的例外：AuditHook 的**返回值**（不是参数）扩展成携带它实际写入的
+    `analysis_run.id`，网关只中继、不解释，边界与决策 9 不冲突。
 
-    只承载"这次调用花了多久、真正回答的是哪个模型"。prompt 版本、input_hash、
-    原始响应仍然只经 AuditHook 走——intake-turn-observability 明确要求时序留痕
-    不承担审计职责。
+    只承载"这次调用花了多久、真正回答的是哪个模型、写进了哪一行留痕"。
+    prompt 版本、input_hash、原始响应仍然只经 AuditHook 走。
     """
 
     latency_ms: float
     response_model: str | None
     attempts: int
+    run_id: str
 
 
 @dataclass(frozen=True)
@@ -467,7 +482,7 @@ class LLMGateway:
                 else {}
             )
 
-            self._audit_hook.record(
+            run_id = self._audit_hook.record(
                 # 配置侧记的是**这一次实际用的那家**的模型名，切到备用之后
                 # 就是备用方的名字——记主供应商的名字等于让留痕撒谎。
                 model=provider.model,
@@ -498,6 +513,7 @@ class LLMGateway:
                 latency_ms=total_latency_ms,
                 response_model=response_model,
                 attempts=schema_attempts_used,
+                run_id=run_id,
             )
 
         raise SchemaExtractionFailed(

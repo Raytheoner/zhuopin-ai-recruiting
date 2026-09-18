@@ -497,6 +497,7 @@ def test_audit_hook_records_one_row_per_attempt(monkeypatch):
 
         def record(self, **kwargs):
             self.calls.append(kwargs)
+            return "run-id-stub"
 
     hook = RecordingHook()
     gateway = LLMGateway(

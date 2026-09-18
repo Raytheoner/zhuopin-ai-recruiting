@@ -15,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
+from app.agents.interview_prep import PrepGenerationFailed, regenerate_one
 from app.agents.jd_grounding import verify_jd_grounding
 from app.agents.resume_parser import PARSE_PROMPT_VERSION, compute_parse
 from app.channels.web_channel import WebChannel
@@ -34,6 +35,17 @@ from app.graph.nodes import (
     effect_request_revision,
     revision_count,
 )
+from app.graph.interview_prep_nodes import (
+    ProfileNotApprovedError,
+    compute_prep,
+    effect_delete_prep_question,
+    effect_edit_prep_question,
+    effect_freeze_prep,
+    effect_persist_prep_draft,
+    effect_regenerate_prep_question,
+    load_application_job,
+    next_prep_version,
+)
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
@@ -45,7 +57,8 @@ from app.observability.middleware import (
 from app.parsing.extract_text import SUPPORTED_SUFFIXES
 from app.parsing.resume_ingest import ingest_resume_text
 from app.parsing.spans import TextSpan
-from app.schemas.job_profile import JobProfile, field_label, field_labels
+from app.schemas.interview_ai_input import PrepInput
+from app.schemas.job_profile import JobProfile, derive_rubric_dimensions, field_label, field_labels
 from app.schemas.resume_fields import FIELD_LABELS, FIELD_NAMES
 from app.storage import job_queries
 from app.storage.appeal import AppealRecordNotFound, IllegalAppealTransition, transition_appeal
@@ -109,6 +122,11 @@ class FieldReviewRequest(BaseModel):
 
 class AppealTransitionRequest(BaseModel):
     to_status: str
+
+
+class PrepQuestionEditRequest(BaseModel):
+    text: str
+    rubric: str
 
 
 class TurnOutcome(NamedTuple):
@@ -390,6 +408,67 @@ def create_app(
             "authorship": authorship,
             "ungrounded_terms": verify_jd_grounding(jd_text, persisted),
         }
+
+    def _prep_payload(conn, application_id: str, version: int) -> dict:
+        snapshot = conn.execute(
+            "SELECT id, status, profile_version, confirmed_by, confirmed_at FROM prep_snapshot "
+            "WHERE application_id = ? AND version = ?",
+            (application_id, version),
+        ).fetchone()
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="prep 快照不存在")
+        snapshot_id, status, profile_version, confirmed_by, confirmed_at = snapshot
+        rows = conn.execute(
+            "SELECT seq, dimension, difficulty, text, rubric_json, follow_ups_json, "
+            "rationale, origin, ai_text FROM prep_question WHERE snapshot_id = ? ORDER BY seq",
+            (snapshot_id,),
+        ).fetchall()
+        return {
+            "application_id": application_id,
+            "version": version,
+            "status": status,
+            "profile_version": profile_version,
+            "confirmed_by": confirmed_by,
+            "confirmed_at": confirmed_at,
+            "questions": [
+                {
+                    "seq": seq,
+                    "dimension": dimension,
+                    "difficulty": difficulty,
+                    "text": text,
+                    "rubric": rubric_json,
+                    "follow_ups": json.loads(follow_ups_json),
+                    "rationale": rationale,
+                    "origin": origin,
+                    "ai_text": ai_text,
+                }
+                for seq, dimension, difficulty, text, rubric_json, follow_ups_json, rationale, origin, ai_text in rows
+            ],
+        }
+
+    def _load_prep_question_dimension_difficulty(conn, snapshot_id: str, seq: int) -> tuple[str, str]:
+        row = conn.execute(
+            "SELECT dimension, difficulty FROM prep_question WHERE snapshot_id = ? AND seq = ?",
+            (snapshot_id, seq),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="题目不存在")
+        return row
+
+    def _require_draft_snapshot(conn, application_id: str, version: int) -> str:
+        """改题/删题/重生成只允许在 draft 状态下操作，返回 snapshot_id。"""
+        row = conn.execute(
+            "SELECT id, status FROM prep_snapshot WHERE application_id = ? AND version = ?",
+            (application_id, version),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="prep 快照不存在")
+        snapshot_id, status = row
+        if status != "draft":
+            raise HTTPException(
+                status_code=409, detail=f"快照状态是 {status!r}，只有 draft 状态可修改"
+            )
+        return snapshot_id
 
     @router.post("/api/jobs")
     def create_job(req: CreateJobRequest):
@@ -1391,6 +1470,109 @@ def create_app(
             "status": "degraded" if status.degraded else "ok",
             "logging": status.as_dict(),
         }
+
+    @router.post("/api/applications/{application_id}/prep/generate")
+    def generate_prep(application_id: str):
+        try:
+            draft, profile_version, resume_run_id = compute_prep(
+                conn, application_id=application_id, gateway=gateway
+            )
+        except ProfileNotApprovedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PrepGenerationFailed as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        version = next_prep_version(conn, application_id)
+        effect_persist_prep_draft(
+            conn,
+            thread_id=application_id,
+            business_key=draft.run_id,
+            application_id=application_id,
+            version=version,
+            profile_version=profile_version,
+            resume_run_id=resume_run_id,
+            draft=draft,
+        )
+        # 重复调用（同一 draft.run_id）会被 idempotent_effect 短路，version
+        # 这个预算号不会真的落库——用 gen_run_id 反查实际落库的 version，
+        # 不信任调用前算出来的那个数（见 fix 1a）。
+        actual_version = conn.execute(
+            "SELECT version FROM prep_snapshot WHERE application_id = ? AND gen_run_id = ?",
+            (application_id, draft.run_id),
+        ).fetchone()[0]
+        return _prep_payload(conn, application_id, actual_version)
+
+    @router.get("/api/applications/{application_id}/prep/{version}")
+    def get_prep(application_id: str, version: int):
+        return _prep_payload(conn, application_id, version)
+
+    @router.patch("/api/applications/{application_id}/prep/{version}/questions/{seq}")
+    def edit_prep_question(application_id: str, version: int, seq: int, req: PrepQuestionEditRequest):
+        snapshot_id = _require_draft_snapshot(conn, application_id, version)
+        effect_edit_prep_question(
+            conn,
+            thread_id=application_id,
+            business_key=f"{version}:{seq}:edit:{hashlib.sha256(req.text.encode()).hexdigest()[:16]}",
+            snapshot_id=snapshot_id,
+            seq=seq,
+            text=req.text,
+            rubric=req.rubric,
+        )
+        return _prep_payload(conn, application_id, version)
+
+    @router.delete("/api/applications/{application_id}/prep/{version}/questions/{seq}")
+    def delete_prep_question(application_id: str, version: int, seq: int):
+        snapshot_id = _require_draft_snapshot(conn, application_id, version)
+        effect_delete_prep_question(
+            conn, thread_id=application_id, business_key=f"{version}:{seq}:delete",
+            snapshot_id=snapshot_id, seq=seq,
+        )
+        return _prep_payload(conn, application_id, version)
+
+    @router.post("/api/applications/{application_id}/prep/{version}/questions/{seq}/regenerate")
+    def regenerate_prep_question(application_id: str, version: int, seq: int):
+        snapshot_id = _require_draft_snapshot(conn, application_id, version)
+        dimension, difficulty = _load_prep_question_dimension_difficulty(conn, snapshot_id, seq)
+
+        job_id = load_application_job(conn, application_id)
+        profile_version = latest_approved_profile_version(conn, job_id)
+        profile_row = conn.execute(
+            "SELECT profile_json FROM job_profile WHERE job_id = ? AND version = ?",
+            (job_id, profile_version),
+        ).fetchone()
+        profile = json.loads(profile_row[0])
+        rubric_dimensions = derive_rubric_dimensions(profile)
+        prep_input = PrepInput(profile=profile, rubric_dimensions=rubric_dimensions, resume_scores=[])
+
+        question, run_id = regenerate_one(
+            gateway, prep_input, dimension=dimension, difficulty=difficulty,
+            audit_context={
+                "thread_id": f"{application_id}:prep", "node": "effect_regenerate_prep_question",
+                "application_id": application_id, "job_id": job_id,
+                "rubric_version": str(profile_version), "rubric_snapshot": {"dimensions": rubric_dimensions},
+            },
+        )
+        # business_key 故意不用 run_id（内容哈希派生）：重生成是业务经理的一次
+        # 点击动作，必须每次点击都落库一次，即使 temperature=0 的模型两次返回
+        # 内容相同——用随机值换掉「同请求防重放」保护（见 fix 1b）。
+        effect_regenerate_prep_question(
+            conn, thread_id=application_id, business_key=f"{version}:{seq}:regen:{uuid.uuid4().hex}",
+            snapshot_id=snapshot_id, seq=seq, question=question,
+        )
+        return _prep_payload(conn, application_id, version)
+
+    @router.post("/api/applications/{application_id}/prep/{version}/freeze")
+    def freeze_prep(application_id: str, version: int, request: Request):
+        snapshot_id = _require_draft_snapshot(conn, application_id, version)
+        effect_freeze_prep(
+            conn, thread_id=application_id, business_key=str(version),
+            application_id=application_id, version=version, confirmed_by=reviewer_of(request),
+        )
+        return _prep_payload(conn, application_id, version)
+
+    @router.get("/applications/{application_id}/prep/{version}/review")
+    def prep_review_page(application_id: str, version: int):
+        return _render_static_page("interview_prep_review.html", root_path)
 
     @router.get("/")
     def index() -> HTMLResponse:

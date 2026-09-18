@@ -656,7 +656,7 @@ def test_schema_compliance_rate_counts_successes(monkeypatch):
             raise SchemaExtractionFailed("越界")
         return (
             FollowUpChoice(action="next_question", follow_up_index=None),
-            LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat", attempts=1),
+            LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat", attempts=1, run_id="run-id-stub"),
         )
 
     gateway.extract_structured_with_meta.side_effect = _side_effect
@@ -814,7 +814,7 @@ def test_probe_p4_llm_ttft_success_path_computes_metrics():
     # 而不是恰好两边给了同一个字符串、断言看不出漏记哪一条。
     fake_gateway.extract_structured_with_meta.return_value = (
         FollowUpChoice(action="next_question", follow_up_index=None),
-        LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat-compliance", attempts=1),
+        LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat-compliance", attempts=1, run_id="run-id-stub"),
     )
 
     with (

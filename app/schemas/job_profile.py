@@ -203,3 +203,26 @@ def summarize_profile(profile: dict) -> list[dict]:
             continue
         summary.append({"label": label, "value": rendered})
     return summary
+
+
+# ── rubric 维度推导（voice-structured-interview U2 tasks 3.1）───────────────
+#
+# JobProfile 本身没有独立的"rubric"字段；candidate-ranking spec（M2）要求
+# "rubric 维度 MUST 来自显式岗位画像"，但取哪些字段、由谁实现，在本函数落地
+# 前没有任何代码定义过。这里给出唯一实现：core_skills（技能名）∪
+# soft_skill_keywords（软技能关键词），前者在前、后者在后、组内保留原始顺序、
+# 整体去重。M2 candidate-ranking 落地时应直接复用本函数，⛔ 不要另造一份口径
+# ——两份口径分叉会导致简历精排与面试出题引用不同的维度白名单。
+def derive_rubric_dimensions(profile: dict) -> list[str]:
+    seen: set[str] = set()
+    dimensions: list[str] = []
+    for item in profile.get("core_skills", []):
+        name = item.get("name") if isinstance(item, dict) else None
+        if name and name not in seen:
+            seen.add(name)
+            dimensions.append(name)
+    for keyword in profile.get("soft_skill_keywords", []):
+        if keyword and keyword not in seen:
+            seen.add(keyword)
+            dimensions.append(keyword)
+    return dimensions

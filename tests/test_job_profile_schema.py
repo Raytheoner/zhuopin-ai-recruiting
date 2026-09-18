@@ -107,3 +107,33 @@ def test_field_labels_preserves_order():
         FIELD_LABELS["toolchain"],
         FIELD_LABELS["headcount"],
     ]
+
+
+# --- Rubric 维度推导（tasks 3.1）────────────────────────────────────────────
+
+from app.schemas.job_profile import derive_rubric_dimensions
+
+
+def test_derive_rubric_dimensions_combines_core_skills_and_soft_keywords():
+    profile = {
+        "core_skills": [
+            {"name": "AUTOSAR CP", "required": True},
+            {"name": "CAN 总线", "required": False},
+        ],
+        "soft_skill_keywords": ["沟通能力", "抗压能力"],
+    }
+    assert derive_rubric_dimensions(profile) == [
+        "AUTOSAR CP", "CAN 总线", "沟通能力", "抗压能力",
+    ]
+
+
+def test_derive_rubric_dimensions_dedupes_preserving_first_occurrence():
+    profile = {
+        "core_skills": [{"name": "AUTOSAR CP", "required": True}],
+        "soft_skill_keywords": ["AUTOSAR CP", "沟通能力"],
+    }
+    assert derive_rubric_dimensions(profile) == ["AUTOSAR CP", "沟通能力"]
+
+
+def test_derive_rubric_dimensions_empty_profile_returns_empty_list():
+    assert derive_rubric_dimensions({}) == []

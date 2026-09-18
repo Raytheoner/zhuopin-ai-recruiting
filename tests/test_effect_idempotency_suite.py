@@ -60,6 +60,14 @@ from app.graph.nodes import (
     effect_record_outbound_audit,
     effect_request_revision,
 )
+from app.graph.interview_prep_nodes import (
+    effect_delete_prep_question,
+    effect_edit_prep_question,
+    effect_freeze_prep,
+    effect_persist_prep_draft,
+    effect_regenerate_prep_question,
+)
+from app.agents.interview_prep import PrepDraft, PrepQuestionDraft
 from app.graph.resume_nodes import effect_persist_parse
 from app.graph.screening_nodes import compute_screen, effect_persist_flags
 from app.outbound.messages import CandidateOutboundMessage
@@ -97,6 +105,11 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_deliver_manual_handoff",
         "effect_persist_parse",
         "effect_persist_flags",
+        "effect_persist_prep_draft",
+        "effect_freeze_prep",
+        "effect_edit_prep_question",
+        "effect_delete_prep_question",
+        "effect_regenerate_prep_question",
     }
 )
 
@@ -315,6 +328,7 @@ _JOB = "job-4-4"
 _RESUME = "resume-4-4"
 _CANDIDATE = "candidate-4-4"
 _APPLICATION = "application-4-4"
+_PREP_RUN = "prep-run-4-4"
 _TS = "2026-09-08T02:00:00+00:00"
 _LABEL = AI_LABEL_TEMPLATE.format(generated_at=_TS)
 _AI_BODY = f"【AI 生成】本文案由系统基于岗位画像自动生成，生成时间 {_TS}。很遗憾……"
@@ -561,6 +575,78 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             },
         )
 
+    def _seed_application_base(conn):
+        """prep 五个节点共用的前置：已确认画像 + 一条投递 + 一条可引用的
+        analysis_run（充当 gen_run_id 的外键目标——真实链路里这行由 LLM
+        网关的 AuditHook 写，这里手工造一行等价物，配方不关心它的内容）。"""
+        conn.execute(
+            "INSERT INTO job (id, title, status) VALUES (?, '嵌入式软件工程师', 'approved')",
+            (_JOB,),
+        )
+        conn.execute(
+            "INSERT INTO job_profile (job_id, version, status, profile_json) "
+            "VALUES (?, 1, 'approved', ?)",
+            (_JOB, json.dumps({"job_title": "嵌入式软件工程师"}, ensure_ascii=False)),
+        )
+        conn.execute("INSERT INTO candidate (id, name) VALUES (?, '张三')", (_CANDIDATE,))
+        conn.execute(
+            "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+            "VALUES (?, ?, 'synthetic', 'a.pdf', 'hash-4-4', 'tester')",
+            (_RESUME, _JOB),
+        )
+        conn.execute(
+            "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+            "VALUES (?, ?, ?, ?, 'initial')",
+            (_APPLICATION, _CANDIDATE, _JOB, _RESUME),
+        )
+        conn.execute(
+            "INSERT INTO analysis_run (id, configured_model, prompt_version, temperature, "
+            "input_hash, raw_response) VALUES (?, 'deepseek-chat', 'interview-prep-v1', 0, "
+            "'hash', '{}')",
+            (_PREP_RUN,),
+        )
+        conn.commit()
+
+    def _seed_prep_snapshot_draft(conn):
+        """在 _seed_application_base 基础上再加一份 draft 快照 + 一道题，供
+        edit/delete/regenerate/freeze 四个节点复用。"""
+        _seed_application_base(conn)
+        conn.execute(
+            "INSERT INTO prep_snapshot (id, application_id, version, profile_version, "
+            "gen_run_id, status) VALUES ('prep-snap-4-4', ?, 1, 1, ?, 'draft')",
+            (_APPLICATION, _PREP_RUN),
+        )
+        conn.execute(
+            "INSERT INTO prep_question (id, snapshot_id, seq, dimension, difficulty, text, "
+            "rubric_json, follow_ups_json, rationale, origin) VALUES "
+            "('prep-q-4-4', 'prep-snap-4-4', 1, 'AUTOSAR CP', 'easy', '原题面', "
+            "'原 rubric', '[\"追问\"]', '依据', 'ai')"
+        )
+        conn.commit()
+
+    def _prep_snapshot_count(conn, *, status=None):
+        if status is None:
+            return conn.execute(
+                "SELECT COUNT(*) FROM prep_snapshot WHERE application_id = ? AND version = 1",
+                (_APPLICATION,),
+            ).fetchone()[0]
+        return conn.execute(
+            "SELECT COUNT(*) FROM prep_snapshot WHERE application_id = ? AND version = 1 "
+            "AND status = ?",
+            (_APPLICATION, status),
+        ).fetchone()[0]
+
+    def _prep_question_row(conn):
+        return conn.execute(
+            "SELECT text, rubric_json, origin FROM prep_question WHERE snapshot_id = 'prep-snap-4-4' "
+            "AND seq = 1"
+        ).fetchone()
+
+    _regen_replacement = PrepQuestionDraft(
+        dimension="AUTOSAR CP", difficulty="medium", text="重生成后的题面",
+        rubric="重生成后的 rubric", follow_ups=["新追问"], rationale="重生成依据",
+    )
+
     return {
         "effect_persist_draft": Recipe(
             thread_id=_JOB,
@@ -806,6 +892,113 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             count_business_rows=lambda conn: conn.execute(
                 "SELECT COUNT(*) FROM screening_flag WHERE application_id = ?", (_APPLICATION,)
             ).fetchone()[0],
+        ),
+        "effect_persist_prep_draft": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_application_base,
+            invoke=lambda conn: effect_persist_prep_draft(
+                conn,
+                thread_id=_APPLICATION,
+                business_key=_PREP_RUN,
+                application_id=_APPLICATION,
+                version=1,
+                profile_version=1,
+                resume_run_id=None,
+                draft=PrepDraft(
+                    questions=[
+                        PrepQuestionDraft(
+                            dimension="AUTOSAR CP", difficulty="easy", text="题面",
+                            rubric="rubric", follow_ups=["追问"], rationale="依据",
+                        )
+                    ],
+                    dropped_count=0,
+                    run_id=_PREP_RUN,
+                    response_model="deepseek-chat-241226",
+                ),
+            ),
+            count_business_rows=lambda conn: _prep_snapshot_count(conn),
+        ),
+        "effect_freeze_prep": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_prep_snapshot_draft,
+            invoke=lambda conn: effect_freeze_prep(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="1",
+                application_id=_APPLICATION,
+                version=1,
+                confirmed_by="hr-1",
+            ),
+            count_business_rows=lambda conn: _prep_snapshot_count(conn, status="frozen"),
+            note=(
+                "**value-idempotent**：draft → frozen 是 UPDATE，行数口径改用"
+                "「处于 frozen 状态的行数」而非「新增行数」，与 "
+                "effect_mark_needs_manual 同一手法。"
+            ),
+        ),
+        "effect_edit_prep_question": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_prep_snapshot_draft,
+            invoke=lambda conn: effect_edit_prep_question(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="1:1:edit1",
+                snapshot_id="prep-snap-4-4",
+                seq=1,
+                text="改过的题面",
+                rubric="改过的 rubric",
+            ),
+            count_business_rows=lambda conn: int(
+                _prep_question_row(conn) == ("改过的题面", "改过的 rubric", "ai_edited")
+            ),
+            note=(
+                "**value-idempotent**：改题面是 UPDATE 同一行，行数口径改用"
+                "「该行取值是否等于编辑后的目标值」这个 0/1 谓词，与 "
+                "effect_update_jd_text 同一手法。"
+            ),
+        ),
+        "effect_regenerate_prep_question": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_prep_snapshot_draft,
+            invoke=lambda conn: effect_regenerate_prep_question(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="1:1:regen1",
+                snapshot_id="prep-snap-4-4",
+                seq=1,
+                question=_regen_replacement,
+            ),
+            count_business_rows=lambda conn: int(
+                (_prep_question_row(conn) or (None,))[0] == "重生成后的题面"
+            ),
+            note=(
+                "**value-idempotent**：重生成是 UPDATE 同一行，行数口径改用"
+                "「该行题面是否等于重生成后的目标值」这个 0/1 谓词，与 "
+                "effect_update_jd_text 同一手法。"
+            ),
+        ),
+        "effect_delete_prep_question": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_prep_snapshot_draft,
+            invoke=lambda conn: effect_delete_prep_question(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="1:1:delete",
+                snapshot_id="prep-snap-4-4",
+                seq=1,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM prep_question WHERE snapshot_id = 'prep-snap-4-4' "
+                "AND seq = 1"
+            ).fetchone()[0],
+            rows_per_effect=-1,
+            note=(
+                "**全表唯一的负值**：这是 DELETE，不是 INSERT/UPDATE——种子先放一行"
+                "（rows_before=1），生效一次后这行消失（0 行），"
+                "`rows_before + rows_per_effect == 0` 要求 rows_per_effect=-1。"
+                "双发保护同样完全靠 effect_log 的 COUNT(*) == 1：第二次调用命中"
+                "幂等短路，不会在已经是 0 行的表上再次尝试 DELETE。"
+            ),
         ),
     }
 

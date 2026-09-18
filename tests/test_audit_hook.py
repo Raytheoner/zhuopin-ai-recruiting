@@ -398,3 +398,35 @@ def test_a_deduped_write_does_not_append_a_second_mirror_line(hook, conn, chain_
     assert len(_rows(conn)) == 1
     assert len(chain_path.read_text(encoding="utf-8").strip().splitlines()) == 1
     assert hook._recorder.reconcile().ok is True
+
+
+def test_record_returns_the_written_event_id(hook, conn):
+    returned_id = None
+
+    class _Wrap:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def record(self, **kwargs):
+            nonlocal returned_id
+            returned_id = self._inner.record(**kwargs)
+            return returned_id
+
+    wrapped = _Wrap(hook)
+    wrapped.record(
+        model="deepseek-chat",
+        response_model="deepseek-chat-241226",
+        system_fingerprint="fp_1",
+        prompt_version="interview-prep-v1",
+        temperature=0,
+        input_hash="b" * 64,
+        raw_response='{"ok": true}',
+        token_usage={"prompt_tokens": 1, "completion_tokens": 1},
+        latency_ms=10.0,
+        attempt=1,
+        audit_context={"thread_id": "app-1:prep:1", "node": "compute_prep"},
+    )
+
+    assert returned_id == "app-1:prep:1:compute_prep:" + "b" * 64 + ":1"
+    row = conn.execute("SELECT id FROM analysis_run").fetchone()
+    assert row[0] == returned_id
