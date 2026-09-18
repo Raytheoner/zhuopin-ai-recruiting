@@ -38,6 +38,11 @@
 ## 四、机制细节
 
 - **R1 发车排队**：`lane-launcher.sh` 遇占用 ⇒ 请求移入 `launch/queue/`；`run-lanes.sh` 收敛末尾写 `.claude/handoff/events/lanes-done-<批次>`；事件监听器出队下一条。
+- **受限会话投递路径**（0918H）：`.claude/**` 对远端文件工具只读（`device_commit_files` 直接拒），提交/发车/事件三条通道的投递口全在 `.claude/` 下 ⇒ 没有本机 shell 的受限会话一件也投不进来。破法：投递口搬到仓库根 `handoff-inbox/`（受限会话能写），`com.zhuopin.hr.handoff-relay`（launchd，WatchPaths `handoff-inbox/` ＋ 300 秒兜底）跑 `scripts/handoff_relay.py` 按文件名前缀分派到真正的通道目录、去掉前缀、沿用既有命名：
+  - `commit-<ts>[-来源].request`／`.action` → `.claude/handoff/commit/`（`.request` 的 `paths` 复用 `commit_request.validate_path` 同一份白名单）
+  - `launch-<ts>[-来源].request` → `.claude/handoff/launch/`（整行须精确匹配 `^--full-auto --yes --only [0-9A-Za-z]+(,[0-9A-Za-z]+)*$`）
+  - `event-<事件名>` → `.claude/handoff/events/`（须 0 字节）
+  五条校验（文件名、mtime<30s 跳过防半截、以上三条内容闸）任一不过 ⇒ 移入 `handoff-inbox/rejected/`、`relay.log` 追加一行。**只搬运不放行**：不解析 G1–G5、不改台账／定夺队列状态。
 - **R2 调度器**：`.claude/handoff/events/` 下出现事件文件 ⇒ launchd 起一个无头 CC 会话（Sonnet，单实例锁，预算上限）执行 skill `task-dispatcher`：读 R3 台账＋仓库真身 → 计算 ready 集（前置已合 main、非决策/外部阻塞、触碰区不与在跑泳道重叠）→ 按 lane-dispatch 规则写块、登记号池、dry-run、写 launch request → 更新台账状态 → 需人的写 R5。事件来源：泳道批次收敛、提交通道完成一次「定夺答复」提交、拆件会话收口、每日一次日历兜底（09:00，防事件丢失）。
 - **R3 任务台账** `docs/roadmap/任务台账.yaml`：每条 `id / 场景 / 阶段 / 依赖 / 触碰区 / 状态(待开|在跑|完成|阻塞) / 阻塞类型(决策|外部|无) / 产出判据`；初始由调度器从路线图＋各 openspec tasks.md＋plans 生成，之后以台账为准、真身核对。
 - **R4 阶段推进规则**（调度器内置）：intent 有且无未答题 ⇒ **G1 定夺「intent 定稿」**，答复后 ⇒ propose；包 validate 过且无 Open Questions ⇒ **G2 定夺「design／spec 定稿」**，答复后 ⇒ spec-to-plan（逐单元）；plan Task≥5 ⇒ 拆段 run-build；单元合 main ⇒ 下一单元；全部单元合 main ⇒ 发布定夺（R5）；发布后 ⇒ 起草验收跟进信（待你审进 R5）；回件拆件 ⇒ 口径签认定夺（R5）或新需求 ⇒ intent。

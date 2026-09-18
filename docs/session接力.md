@@ -19,6 +19,7 @@
 - **发车**：`.claude/handoff/launch/<ts>.request` 一行参数；发车器占用时自动入队 `launch/queue/`。
 - **`.51` 无头可达**：Mac 常驻内网，launchd 起的会话可免交互 ssh `zp51`（`docs/findings/2026-09-17-无头会话51可达性探测.md`）。09-17 已用它完成两次发版：现网 = `f81cc9d`，VC++ 升到 v14.44（torch／BGE-M3 在 `.51` 可用，单份 ~117 ms），每日快照计划任务 `ZhuopinDailySnapshot` 已装。
 - **Cowork 侧红线（09-17 踩过）**：⛔ Cowork 不在仓库跑任何 `git` 命令（会留下删不掉的 `.git/index.lock`，卡住全部自动提交）；一切提交走提交请求通道。
+- **受限会话投递中继**（0918H）：`.claude/**` 对远端文件工具只读，三条通道投递口都在其下 ⇒ 没本机 shell 的受限会话投不进去；破法是仓库根 `handoff-inbox/`（受限会话能写）＋ `com.zhuopin.hr.handoff-relay`（launchd，WatchPaths＋300s 兜底）跑 `scripts/handoff_relay.py` 按前缀转投三条通道，只搬运不放行。前缀→通道对照与五条校验见 `docs/roadmap/任务驱动workflow设计.md` §四。
 
 ### 二、业务真身
 
