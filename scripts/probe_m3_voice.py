@@ -301,6 +301,106 @@ def _add_p1_arguments(sub: argparse.ArgumentParser) -> None:
 probe_p1_livekit.__wrapped_add_arguments__ = _add_p1_arguments  # type: ignore[attr-defined]
 
 
+def _percentile(values: list[float], pct: float) -> float:
+    if not values:
+        raise ValueError("values 不能为空")
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    k = (len(ordered) - 1) * (pct / 100)
+    f = int(k)
+    c = min(f + 1, len(ordered) - 1)
+    if f == c:
+        return ordered[f]
+    return ordered[f] + (ordered[c] - ordered[f]) * (k - f)
+
+
+@register("p2-funasr")
+def probe_p2_funasr(args: argparse.Namespace) -> ProbeResult:
+    started = time.monotonic()
+    fp = env_fingerprint(target=args.target)
+    try:
+        import funasr  # noqa: PLC0415
+    except Exception as exc:
+        return ProbeResult(
+            item="P2",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=f"funasr 不可导入: {type(exc).__name__}: {exc}",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    audio_path = Path(args.audio_path)
+    if not audio_path.exists():
+        return ProbeResult(
+            item="P2",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=(
+                f"funasr 可导入（版本 {getattr(funasr, '__version__', '未知')}），但缺少 30s 中文样本音频"
+                f"（--audio-path {audio_path} 不存在，需人工录制/提供，不入库）"
+            ),
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    import soundfile as sf  # noqa: PLC0415
+
+    model = funasr.AutoModel(model="paraformer-zh-streaming", device="cpu")
+    audio, _sr = sf.read(str(audio_path), dtype="float32")
+    chunk_size = [0, 10, 5]
+    chunk_stride = chunk_size[1] * 960
+    cache: dict = {}
+    n_chunks = (len(audio) - 1) // chunk_stride + 1
+
+    first_text_latency_ms: float | None = None
+    call_latencies_ms: list[float] = []
+    chunk_started = time.monotonic()
+    for i in range(n_chunks):
+        chunk = audio[i * chunk_stride : (i + 1) * chunk_stride]
+        call_start = time.monotonic()
+        res = model.generate(
+            input=chunk,
+            cache=cache,
+            is_final=(i == n_chunks - 1),
+            chunk_size=chunk_size,
+            encoder_chunk_look_back=4,
+            decoder_chunk_look_back=1,
+        )
+        call_latencies_ms.append((time.monotonic() - call_start) * 1000)
+        if first_text_latency_ms is None and res and res[0].get("text"):
+            first_text_latency_ms = (time.monotonic() - chunk_started) * 1000
+
+    if first_text_latency_ms is None:
+        return ProbeResult(
+            item="P2",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason="流式推理跑完全部分片但从未产出非空 text，首字延迟无法测定",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    return ProbeResult(
+        item="P2",
+        env_fingerprint=fp,
+        conclusion="通过",
+        metrics={
+            "funasr_version": getattr(funasr, "__version__", "unknown"),
+            "first_text_latency_ms": round(first_text_latency_ms),
+            "chunk_call_p50_ms": round(_percentile(call_latencies_ms, 50)),
+            "chunk_call_p95_ms": round(_percentile(call_latencies_ms, 95)),
+        },
+        duration_ms=(time.monotonic() - started) * 1000,
+    )
+
+
+def _add_p2_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("--target", default="dev-machine")
+    sub.add_argument("--audio-path", default="data/m3-voice-probe/samples/sample-zh-30s.wav")
+
+
+probe_p2_funasr.__wrapped_add_arguments__ = _add_p2_arguments  # type: ignore[attr-defined]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M3 语音链路技术探针")
     parser.add_argument("--json", type=Path, default=None, help="额外把结果写成 JSON 文件")

@@ -213,3 +213,44 @@ def test_probe_p1_livekit_returns_blocking_result_on_connect_error():
     assert result.blocking_reason is not None
     assert "boom" in result.blocking_reason
     fake_proc.terminate.assert_called_once()
+
+
+from scripts.probe_m3_voice import _percentile
+
+
+def test_percentile_median_and_p95():
+    values = [float(i) for i in range(1, 101)]  # 1..100
+    assert _percentile(values, 50) == pytest.approx(50.5, abs=1.0)
+    assert _percentile(values, 95) == pytest.approx(95.5, abs=1.0)
+
+
+def test_percentile_single_value():
+    assert _percentile([42.0], 50) == 42.0
+    assert _percentile([42.0], 95) == 42.0
+
+
+def test_probe_p2_funasr_blocks_when_module_missing(tmp_path: Path):
+    import sys
+    from types import SimpleNamespace
+
+    from scripts.probe_m3_voice import probe_p2_funasr
+
+    real_import = __import__
+
+    def _fake_import(name, *a, **kw):
+        if name == "funasr":
+            raise ModuleNotFoundError("No module named 'funasr'")
+        return real_import(name, *a, **kw)
+
+    import builtins
+
+    monkey_target = builtins.__import__
+    builtins.__import__ = _fake_import
+    try:
+        args = SimpleNamespace(target="dev-machine", audio_path=str(tmp_path / "missing.wav"))
+        result = probe_p2_funasr(args)
+    finally:
+        builtins.__import__ = monkey_target
+
+    assert result.conclusion == "阻塞"
+    assert "funasr" in result.blocking_reason

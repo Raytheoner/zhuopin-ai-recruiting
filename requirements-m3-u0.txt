@@ -2,3 +2,7 @@
 # 做不做之前，这些包不该出现在生产依赖表里。版本 2026-09-18 从 PyPI 元数据核实。
 livekit-api==1.2.1
 livekit==1.1.19
+
+# ---- P2 FunASR（design D15，tasks 1.3）----
+funasr==1.4.15
+soundfile==0.13.1
