@@ -72,6 +72,7 @@ DOCS_EXCLUDED = frozenset({
     "docs/openers/run-lanes.sh",
     "docs/openers/lane-launcher.sh",
     "docs/openers/commit-launcher.sh",
+    "docs/openers/handoff-relay.sh",
 })
 DOC_SIZE_TEST = Path("tests") / "test_doc_size_budget.py"
 

@@ -33,6 +33,17 @@ __pycache__/
 # scripts/hoff 的命令输出与 _next.md 指令，两边靠文件系统交换，用完即弃
 .claude/handoff/
 
+# === 受限会话投递中继（过程产物，不入库；0918H）===
+# handoff-inbox/ 是 .claude/** 只读的受限会话（远端文件工具）投递 commit/launch/event
+# 请求的落点，scripts/handoff_relay.py 会把合格件搬进 .claude/handoff/**；目录结构保留。
+# ⛔ 不写 handoff-inbox/**/.gitkeep 一条了事：git 不会下钻一个已被通配符整体忽略的目录
+# 去找里面的取消忽略规则，rejected/ 必须单独取消忽略才能让其内的 .gitkeep 生效。
+handoff-inbox/*
+!handoff-inbox/.gitkeep
+!handoff-inbox/rejected/
+handoff-inbox/rejected/*
+!handoff-inbox/rejected/.gitkeep
+
 # === OpenSpec 临时文件 ===
 .openspec-test-*
 
