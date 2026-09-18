@@ -16,11 +16,11 @@
 - [x] 2.1 `app/storage/db.py` 新增 `candidate`（姓名＋手机号哈希唯一）、`resume`（`sample_class` CHECK IN synthetic/anonymized/departed/live——`synthetic` 为合成替身样本（`scripts/gen_pilot_samples.py`），薄片期与脱敏样本同等可入库、`parser_version`、`parse_confidence`）、`resume_text_span`（`resume_id, span_id, start, end, text`）；全部 `CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`
 - [x] 2.2 新增 `application`、`stage`（预置 `initial/screening/rejected` 三行，`stage_type` 语义标签）、`application_stage_history`（`actor_type` CHECK IN human/agent）；测试：状态不挂在 `candidate` 上
 - [x] 2.3 新增 `rejection_record`：`reason_type` CHECK IN `('hard_rule','human_decision')`、`rule_ref`、`appeal_status` CHECK IN `('none','requested','under_review','upheld','overturned')`、`decided_by`、`batch_id`；反证测试：直接 INSERT `ai_score` 被 CHECK 拒绝
-- [ ] 2.4 新增 `resume_access_log`（`accessor, resume_id, access_type, at`，无内容列）、`field_review_queue`（`resume_id, field, machine_value, confidence, status, reviewed_by, reviewed_at, human_value`）、`screening_flag`（`application_id, profile_version, rule_ref, verdict CHECK IN pass/fail/skipped, reason, evidence_ref`；`fail` 时 `evidence_ref` 非空 CHECK）
-- [ ] 2.5 新增 `resume_embedding`（`resume_id, model, dim, vector BLOB`）、`eval_sample` / `eval_annotation` / `eval_import_batch`（含「禁止训练用途」表注释，同 `analysis_run` 口径）、`hr_account`（用户名唯一、盐哈希口令）
-- [ ] 2.6 `analysis_run` 增加 `run_type` 语义约定（`parse/rank`，可空列已存在的用 `prompt_version` 前缀区分，⛔ 不加列）；`criterion_score.evidence_ref` 的 JSON 形态 `{span_id,start,end}` 定为约定并加解析工具函数 + 测试
-- [ ] 2.7 `tests/test_db_m2_schema.py`：新库建表齐全、老库（复制 `.51` 的 demo.db 结构）升级后既有表一行不改、全部 CHECK 反证
-- [ ] 2.8 `scripts/create_hr_account.py`（建账号，幂等：同用户名重复运行只更新口令并提示）
+- [x] 2.4 新增 `resume_access_log`（`accessor, resume_id, access_type, at`，无内容列）、`field_review_queue`（`resume_id, field, machine_value, confidence, status, reviewed_by, reviewed_at, human_value`）、`screening_flag`（`application_id, profile_version, rule_ref, verdict CHECK IN pass/fail/skipped, reason, evidence_ref`；`fail` 时 `evidence_ref` 非空 CHECK）
+- [x] 2.5 新增 `resume_embedding`（`resume_id, model, dim, vector BLOB`）、`eval_sample` / `eval_annotation` / `eval_import_batch`（含「禁止训练用途」表注释，同 `analysis_run` 口径）、`hr_account`（用户名唯一、盐哈希口令）
+- [x] 2.6 `analysis_run` 增加 `run_type` 语义约定（`parse/rank`，可空列已存在的用 `prompt_version` 前缀区分，⛔ 不加列）；`criterion_score.evidence_ref` 的 JSON 形态 `{span_id,start,end}` 定为约定并加解析工具函数 + 测试
+- [x] 2.7 `tests/test_db_m2_schema.py`：新库建表齐全、老库（复制 `.51` 的 demo.db 结构）升级后既有表一行不改、全部 CHECK 反证
+- [x] 2.8 `scripts/create_hr_account.py`（建账号，幂等：同用户名重复运行只更新口令并提示）
 
 ## 3. U2 上传与解析管线（含置信度与校对队列）
 
@@ -100,7 +100,7 @@
 
 ## 8. U7 合规断言与真实简历入库闸
 
-- [ ] 8.1 `app/audit/assertions.py`：`REJECTION_TABLE` 缺表分支从"M1 现状放行"改为判失败；反证测试同步改；⚠️ 与 U1 建表在同一交付单元合并，不跨 session
+- [x] 8.1 `app/audit/assertions.py`：`REJECTION_TABLE` 缺表分支从"M1 现状放行"改为判失败；反证测试同步改；⚠️ 与 U1 建表在同一交付单元合并，不跨 session
 - [ ] 8.2 新增断言「评分 100% 可回溯」：`criterion_score.evidence_ref` 解析后分片存在且偏移不越界；反证：造一条越界记录
 - [ ] 8.3 新增断言「真实简历入库闸默认关闭」：无配置环境下 `is_live_resume_intake_enabled()` 为 False；反证：临时改默认值
 - [ ] 8.4 新增断言「简历访问留痕不可缺」：表缺失判失败；被读取过的简历至少一条留痕；反证
