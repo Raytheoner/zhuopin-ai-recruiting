@@ -828,3 +828,131 @@ def test_probe_p4_llm_ttft_success_path_computes_metrics():
     assert result.metrics["runs"] == 3
     assert result.metrics["response_model"] == ["deepseek-chat", "deepseek-chat-compliance"]
     assert result.metrics["model_configured"] == "deepseek-chat"
+
+
+def test_pip_install_and_import_reports_failed_pip():
+    from scripts.probe_m3_voice import _pip_install_and_import
+
+    fake_result = MagicMock(returncode=1, stdout="", stderr="ERROR: no matching distribution")
+    with patch("subprocess.run", return_value=fake_result):
+        report = _pip_install_and_import("/fake/venv/bin/python", "livekit-agents", "livekit.agents")
+    assert report["pip_ok"] is False
+    assert "no matching distribution" in report["pip_error"]
+
+
+def test_pip_install_and_import_reports_import_failure_after_successful_pip():
+    from scripts.probe_m3_voice import _pip_install_and_import
+
+    pip_result = MagicMock(returncode=0, stdout="Successfully installed", stderr="")
+    import_result = MagicMock(returncode=1, stdout="", stderr="ImportError: cannot import name")
+    with patch("subprocess.run", side_effect=[pip_result, import_result]):
+        report = _pip_install_and_import("/fake/venv/bin/python", "livekit-agents", "livekit.agents")
+    assert report["pip_ok"] is True
+    assert report["import_ok"] is False
+    assert "ImportError" in report["import_error"]
+
+
+def test_pip_install_and_import_success_path():
+    from scripts.probe_m3_voice import _pip_install_and_import
+
+    pip_result = MagicMock(returncode=0, stdout="Successfully installed", stderr="")
+    import_result = MagicMock(returncode=0, stdout="livekit.agents", stderr="")
+    with patch("subprocess.run", side_effect=[pip_result, import_result]):
+        report = _pip_install_and_import("/fake/venv/bin/python", "livekit-agents", "livekit.agents")
+    assert report == {"pip_ok": True, "pip_error": None, "import_ok": True, "import_error": None}
+
+
+def _p5_args(*, python314_bin="/fake/py314", python312_bin="/fake/py312", work_dir="/fake/workdir"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        target="dev-machine",
+        work_dir=work_dir,
+        python314_bin=python314_bin,
+        python312_bin=python312_bin,
+    )
+
+
+def test_probe_p5_sdk_compat_blocks_when_both_interpreters_missing():
+    from scripts.probe_m3_voice import probe_p5_sdk_compat
+
+    args = _p5_args(python314_bin=None, python312_bin=None)
+    with patch("scripts.probe_m3_voice.shutil.which", return_value=None):
+        result = probe_p5_sdk_compat(args)
+
+    assert result.conclusion == "阻塞"
+    assert result.metrics["reports"]["py314"]["skipped"] == "解释器未找到"
+    assert result.metrics["reports"]["py312"]["skipped"] == "解释器未找到"
+
+
+def test_probe_p5_sdk_compat_degrades_when_venv_creation_raises():
+    """subprocess.run([interp, '-m', 'venv', ...], check=True) raises
+    CalledProcessError when venv creation itself fails (e.g. disk full, broken
+    interpreter). This specific call sits inside the per-interpreter loop with
+    no surrounding try/except in the brief's literal reference code — the same
+    class of gap Task 4/5's task-reviews found and fixed in their own briefs'
+    reference code (an unwrapped external call that can raise). It must degrade
+    to a per-interpreter failure entry rather than let the exception propagate
+    past probe_p5_sdk_compat, and must not prevent the other interpreter from
+    being evaluated.
+    """
+    import subprocess
+
+    from scripts.probe_m3_voice import probe_p5_sdk_compat
+
+    args = _p5_args(python312_bin=None)
+    venv_error = subprocess.CalledProcessError(1, ["python3.14", "-m", "venv"], stderr="boom: disk full")
+
+    with (
+        patch("scripts.probe_m3_voice.shutil.which", side_effect=lambda p: p),
+        patch("scripts.probe_m3_voice.subprocess.run", side_effect=venv_error),
+    ):
+        result = probe_p5_sdk_compat(args)
+
+    assert result.conclusion == "阻塞"
+    assert result.metrics["reports"]["py314"]["import_ok"] is None
+    assert "venv" in result.metrics["reports"]["py314"]["skipped"]
+    assert "CalledProcessError" in result.metrics["reports"]["py314"]["skipped"]
+    assert result.metrics["reports"]["py312"]["skipped"] == "解释器未找到"
+
+
+def test_probe_p5_sdk_compat_passes_when_at_least_one_interpreter_succeeds():
+    from scripts.probe_m3_voice import probe_p5_sdk_compat
+
+    args = _p5_args()
+
+    def _fake_pip_install_and_import(venv_python, dist_name, module_name):
+        if "py314" in venv_python:
+            return {"pip_ok": True, "pip_error": None, "import_ok": True, "import_error": None}
+        return {"pip_ok": True, "pip_error": None, "import_ok": False, "import_error": "no cp312 wheel for av"}
+
+    with (
+        patch("scripts.probe_m3_voice.shutil.which", side_effect=lambda p: p),
+        patch("scripts.probe_m3_voice.subprocess.run", return_value=MagicMock(returncode=0)),
+        patch("scripts.probe_m3_voice._pip_install_and_import", side_effect=_fake_pip_install_and_import),
+    ):
+        result = probe_p5_sdk_compat(args)
+
+    assert result.conclusion == "通过"
+    assert result.blocking_reason is None
+    assert result.metrics["recommended_python"] == "py314"
+    assert result.metrics["reports"]["py314"]["import_ok"] is True
+    assert result.metrics["reports"]["py312"]["import_ok"] is False
+
+
+def test_probe_p5_sdk_compat_blocks_when_both_interpreters_fail_import():
+    from scripts.probe_m3_voice import probe_p5_sdk_compat
+
+    args = _p5_args()
+    fail_report = {"pip_ok": True, "pip_error": None, "import_ok": False, "import_error": "no cp3xx wheel for av"}
+
+    with (
+        patch("scripts.probe_m3_voice.shutil.which", side_effect=lambda p: p),
+        patch("scripts.probe_m3_voice.subprocess.run", return_value=MagicMock(returncode=0)),
+        patch("scripts.probe_m3_voice._pip_install_and_import", return_value=fail_report),
+    ):
+        result = probe_p5_sdk_compat(args)
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "3.14" in result.blocking_reason or "py314" in result.blocking_reason

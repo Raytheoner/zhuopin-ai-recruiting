@@ -722,6 +722,96 @@ def _add_p4_arguments(sub: argparse.ArgumentParser) -> None:
 probe_p4_llm_ttft.__wrapped_add_arguments__ = _add_p4_arguments  # type: ignore[attr-defined]
 
 
+def _pip_install_and_import(venv_python: str, dist_name: str, module_name: str) -> dict:
+    pip_result = subprocess.run(
+        [venv_python, "-m", "pip", "install", dist_name],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if pip_result.returncode != 0:
+        return {
+            "pip_ok": False,
+            "pip_error": pip_result.stderr[-1000:] or pip_result.stdout[-1000:],
+            "import_ok": None,
+            "import_error": None,
+        }
+
+    import_result = subprocess.run(
+        [venv_python, "-c", f"import {module_name}; print({module_name}.__name__)"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return {
+        "pip_ok": True,
+        "pip_error": None,
+        "import_ok": import_result.returncode == 0,
+        "import_error": None if import_result.returncode == 0 else (import_result.stderr[-1000:] or None),
+    }
+
+
+@register("p5-sdk-compat")
+def probe_p5_sdk_compat(args: argparse.Namespace) -> ProbeResult:
+    started = time.monotonic()
+    fp = env_fingerprint(target=args.target)
+
+    interpreters = {"py314": args.python314_bin, "py312": args.python312_bin}
+    reports: dict[str, dict] = {}
+    for label, interp in interpreters.items():
+        if not interp or not shutil.which(interp):
+            reports[label] = {"pip_ok": None, "import_ok": None, "skipped": "解释器未找到"}
+            continue
+        venv_dir = Path(args.work_dir) / f".venv-p5-{label}"
+        try:
+            subprocess.run([interp, "-m", "venv", str(venv_dir)], check=True, capture_output=True, text=True)
+            venv_python = str(venv_dir / "bin" / "python")
+            reports[label] = _pip_install_and_import(venv_python, "livekit-agents", "livekit.agents")
+        except Exception as exc:  # noqa: BLE001 — venv 创建（check=True 失败时抛
+            # CalledProcessError）或 pip/import 子进程本身（如 TimeoutExpired）的任何
+            # 异常都要转成该解释器的失败结果，而不是让异常穿透 probe_p5_sdk_compat，
+            # 否则 main() 走不到 write_result，docs/m3-voice-probe.md 不会更新——
+            # 与 P1/P2/P3/P4 的既有降级模式一致。两个解释器的 venv 相互独立，一个
+            # 失败不应阻断另一个继续被评估，所以异常只影响当前 label 这一条。
+            reports[label] = {
+                "pip_ok": None,
+                "import_ok": None,
+                "skipped": f"venv 创建或 pip/import 子进程失败: {type(exc).__name__}: {exc}",
+            }
+
+    any_pass = any(r.get("import_ok") for r in reports.values())
+    if not any_pass:
+        return ProbeResult(
+            item="P5",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=f"3.14 与 3.12 两个解释器上 livekit-agents 均未能成功安装+导入: {reports}",
+            metrics={"reports": reports},
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    return ProbeResult(
+        item="P5",
+        env_fingerprint=fp,
+        conclusion="通过",
+        metrics={
+            "reports": reports,
+            "recommended_python": "py314" if reports.get("py314", {}).get("import_ok") else "py312",
+        },
+        duration_ms=(time.monotonic() - started) * 1000,
+    )
+
+
+def _add_p5_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("--target", default="dev-machine")
+    sub.add_argument("--work-dir", default="data/m3-voice-probe")
+    sub.add_argument("--python314-bin", default=shutil.which("python3.14"))
+    sub.add_argument("--python312-bin", default=shutil.which("python3.12"))
+
+
+probe_p5_sdk_compat.__wrapped_add_arguments__ = _add_p5_arguments  # type: ignore[attr-defined]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M3 语音链路技术探针")
     parser.add_argument("--json", type=Path, default=None, help="额外把结果写成 JSON 文件")
