@@ -25,7 +25,7 @@
 | 场景 | 状态 |
 |---|---|
 | M1 需求解析与岗位画像 | 已在 `.51` 演示环境；两包 G2 已放行（Q-22/23），剩 9.1 画像质量验收等人事部 10 个历史岗位 |
-| M2 简历解析与评分排序 | U0 定型（抽取模型＝`deepseek-flash`）；U1 数据模型 Segment A 已合 main，**Segment B/C 在跑**（`0918B`）；已按「人事部可见优先」切出 **U2.5 可见薄片**（上传页＋解析结果列表＋逐字段 evidence 高亮＋校对，章 9，5 条任务），G2 已放行（Q-30）。**G3「M2 可见薄片」已预授权「发」**（条件写在定夺队列该行：三单元合 main＋全量测试 0 失败＋按 `docs/releases/2026-09-发版清单-51.md` 流程＋入库闸保持关闭＋发版后在本线报） |
+| M2 简历解析与评分排序 | U0 定型（抽取模型＝`deepseek-flash`）；U1 数据模型 Segment A 已合 main，Segment B＋C 已合 main（`0918B`／`66e3b97`，3092 passed·0 失败，2.4–2.8＋8.1 已勾）；已按「人事部可见优先」切出 **U2.5 可见薄片**（上传页＋解析结果列表＋逐字段 evidence 高亮＋校对，章 9，5 条任务），G2 已放行（Q-30）。**G3「M2 可见薄片」已预授权「发」**（条件写在定夺队列该行：三单元合 main＋全量测试 0 失败＋按 `docs/releases/2026-09-发版清单-51.md` 流程＋入库闸保持关闭＋发版后在本线报） |
 | M3 语音面试 | intent 定稿（Q-32/37）；包 `voice-structured-interview` 立完、G2 已放行（Q-46，75 条任务）。顺序：U0 探针 → U1 数据模型 → U2 出题 → U3 邀约同意 → U5 评分 → U4 实时语音 → U6 视图 → U7 合规开闸。🔴 语音主机规格与预算待探针实测后单独定夺 |
 | 后半程四场景 | `channel-resume-intake`／`interview-scheduling`／`offer-generation`／`onboarding-flow` 已立包，G2 **按 Shao Peishen 批注暂缓**：等 `人事部#3` 回件补齐现用流程与样例后回闸 |
 | 合规验收 #1 | 三份草稿在 `docs/compliance/`；法务对接人 **谷雨**；G5 暂缓，待她审阅后再签 |
@@ -34,7 +34,7 @@
 ### 三、下一步（新 session 直接接着做）
 
 1. 读 `docs/roadmap/定夺队列.md`「一、待答」——回本线时先报待答项。当前待答只剩外部输入类：Q-01 私信附件测试帧、Q-04 人事部#3 回件、Q-08 `.51` 冒烟、Q-10 群 webhook、Q-16 门户导航。
-2. 盯 `0918B`（M2 U1 Segment B/C）收敛 ⇒ 调度器自动接 U2 → U2.5 ⇒ 满足预授权条件即发版 ⇒ 在本线报结果。
+2. ✅ `0918B`（M2 U1 Segment B/C）已收敛合 main。当前：`0918E`（M2·U2 上传与解析管线出实现计划）在 `launch/queue/` 等 `0918F` 收敛后自动发车 ⇒ 调度器自动接 U2 建造 → U2.5 ⇒ 满足预授权条件即发版 ⇒ 在本线报结果。
 3. 汤丽萍回件到达 ⇒ 值守服务自动归档、拆件回灌 ⇒ 结论回填需求基线 ⇒ 后半程四场景 G2 回闸问 Shao Peishen。
 4. 口令「看看泳道」＝读泳道 results、调度器日志、定夺队列，逐条报。节奏与设备口径见 `docs/roadmap/一天标准工作流程.md`。
 
@@ -46,7 +46,7 @@
 ## 开场词（复制即用）
 
 ```
-[Mac]0918D-HR业务线接力
+[Mac]0918G-HR业务线接力
 【设置】执行环境: Cowork ｜ Session: 新开 ｜ 分支: main ｜ worktree: ❌ 不勾（Cowork 无 worktree，只做文档、编排与派单）｜ 工作区: 仓库根（/Users/paulshao/Projects/HumanResource）
 读 /Users/paulshao/Projects/HumanResource/docs/session接力.md 的「🔴 新 session 先看这一节（2026-09-18 08:5x）」恢复上下文，然后按【三、下一步】继续。
 ```
@@ -67,7 +67,7 @@
 ### 🆕 2026-09-18 `0918B` M2·U1 数据模型 Segment B＋C 已合 main（`66e3b97`，3092 passed，2.4–2.8＋8.1 已勾）
 - 【谁做】U2／U4 接手者【状态】9 条 Minor 延后【判据】见 `docs/findings/2026-09-18-0918B-M2U1-SegmentBC收口.md`「终审遗留」逐条关闭【不做会怎样】U2 写 `accessor` 与 U7 审计口径可能不一致；U4 落库前不校验 evidence_ref 偏移会存脏回指
 
-### 🆕 2026-09-18 `0918B` S-M3 立包 `voice-structured-interview`（G1 Q-37 放行后，无头）
+### 🆕 2026-09-18 S-M3 立包 `voice-structured-interview`（G1 Q-37 放行后，无头）〔原派车号 `0918B`，因号池体积闸登记被撤回（Q-43），该号已归 M2U1 建造；本条不占号〕
 - 包已立并过 `openspec validate --strict`：6 能力（`interview-prep-question-engine`／`interview-invite-and-consent`／`live-voice-interview-session`／`interview-scorecard`／`interview-recording-retention`／`m3-compliance-assertions`）／tasks 76 条（0.1 R-9 已勾，1/76）／🔴 7／design Open Questions **11**（OQ-1–4 待专员 `HR-G-NN` 四条、OQ-5 X5 探针、OQ-6 合规验收 #2、OQ-7 X6、OQ-8 对外通道、OQ-9 语音主机采购、OQ-10 短信通道与验证码门禁口径、OQ-11 内部模拟录音留存）。路线图 §二 M3 行改「已立包 1/76」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/voice-structured-interview/proposal.md`）
 - 【谁做】task-dispatcher【状态】待 G2（Open Questions 全部是待专员＋外部依赖原样转入，不阻塞 spec-to-plan；U0 探针与 U1–U3、U5 不依赖任何 OQ）【判据】Shao Peishen 在定夺队列对本包 G2 答「定」后派 spec-to-plan（从 U0 探针起）【不做会怎样】M3 停在 propose；X5 探针继续空等
 - ⚠️ **重复派发实证**：`0918B` 同一 opener 在 `4299785` 合入后又被无头起了一次（本行所在提交），后者开工自检发现包已在 main、四项交付物全在，按「让位给进度靠前的」规则未重跑、未覆盖，只登记本行。【谁做】task-dispatcher【状态】待查【判据】调度器派发前对号池台账查「已完成」标记并跳过【不做会怎样】每次重复派发白烧一份预算，且未跟踪产出可能互相冲掉
