@@ -205,6 +205,12 @@ def create_app(
         base_href = f"{root_path}/" if root_path else "/"
         return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
 
+    @router.get("/resumes/upload")
+    def upload_page():
+        html = (STATIC_DIR / "upload.html").read_text(encoding="utf-8")
+        base_href = f"{root_path}/" if root_path else "/"
+        return HTMLResponse(html.replace("<!--BASE_HREF-->", f'<base href="{base_href}">'))
+
     def _response_payload(message) -> dict:
         """
         对外响应统一过一遍归一化。为什么必须在读的这一侧做：outbox 里存着

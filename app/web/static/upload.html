@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <title>上传简历 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <h1>上传简历</h1>
+  <p>只能上传 <strong>合成替身 / 脱敏 / 历史离职</strong> 样本，真实在招简历（live）当前不开放上传。</p>
+  <form id="upload-form">
+    <label>目标岗位（只列已审批画像的岗位）
+      <select id="job-select" required></select>
+    </label>
+    <br>
+    <label>样本类别
+      <label><input type="radio" name="sample_class" value="synthetic" checked> 合成替身</label>
+      <label><input type="radio" name="sample_class" value="anonymized"> 脱敏样本</label>
+      <label><input type="radio" name="sample_class" value="departed"> 历史离职候选人</label>
+    </label>
+    <br>
+    <label>选择文件（可多选，支持 PDF / Word）
+      <input id="file-input" type="file" multiple accept=".pdf,.docx" required>
+    </label>
+    <br>
+    <button type="submit">上传</button>
+  </form>
+  <p id="error" style="color:red"></p>
+  <table id="result-table" border="1" style="display:none">
+    <thead><tr><th>文件名</th><th>结果</th></tr></thead>
+    <tbody id="result-body"></tbody>
+  </table>
+  <p><a id="to-list-link" href="#">上传完成后查看解析结果列表</a></p>
+
+  <script>
+    const jobSelect = document.getElementById("job-select");
+    const toListLink = document.getElementById("to-list-link");
+
+    async function loadJobs() {
+      const resp = await fetch("api/jobs");
+      const body = await resp.json();
+      const approved = (body.jobs || []).filter((j) => j.status === "approved");
+      jobSelect.innerHTML = "";
+      if (approved.length === 0) {
+        const opt = document.createElement("option");
+        opt.textContent = "暂无已审批画像的岗位";
+        opt.disabled = true;
+        jobSelect.appendChild(opt);
+        return;
+      }
+      for (const job of approved) {
+        const opt = document.createElement("option");
+        opt.value = job.job_id;
+        opt.textContent = job.title;
+        jobSelect.appendChild(opt);
+      }
+      toListLink.href = `jobs/${approved[0].job_id}/resumes`;
+    }
+
+    document.getElementById("upload-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      document.getElementById("error").textContent = "";
+      const jobId = jobSelect.value;
+      if (!jobId) {
+        document.getElementById("error").textContent = "请先选择岗位";
+        return;
+      }
+      const sampleClass = document.querySelector('input[name="sample_class"]:checked').value;
+      const files = document.getElementById("file-input").files;
+      const formData = new FormData();
+      formData.append("job_id", jobId);
+      formData.append("sample_class", sampleClass);
+      for (const f of files) {
+        formData.append("files", f);
+      }
+      const resp = await fetch("api/resumes/upload", { method: "POST", body: formData });
+      if (!resp.ok) {
+        document.getElementById("error").textContent = "上传失败，请确认已登录";
+        return;
+      }
+      const body = await resp.json();
+      const tbody = document.getElementById("result-body");
+      tbody.innerHTML = "";
+      for (const r of body.results) {
+        const tr = document.createElement("tr");
+        const nameTd = document.createElement("td");
+        nameTd.textContent = r.file_name;
+        const statusTd = document.createElement("td");
+        let label = r.status;
+        if (r.status === "accepted") label = `接收（${r.parse_status || "处理中"}）`;
+        if (r.status === "duplicate") label = "重复：已存在同一份简历";
+        if (r.status === "rejected") label = `拒收：${r.reason || ""}`;
+        statusTd.textContent = label;
+        tr.appendChild(nameTd);
+        tr.appendChild(statusTd);
+        tbody.appendChild(tr);
+      }
+      document.getElementById("result-table").style.display = "";
+      toListLink.href = `jobs/${jobId}/resumes`;
+    });
+
+    loadJobs();
+  </script>
+</body>
+</html>
