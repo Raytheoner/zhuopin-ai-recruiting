@@ -1,17 +1,18 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 506
+  条目数: 508
   按状态:
     待开: 238
-    在跑: 8
-    完成: 174
+    在跑: 9
+    完成: 175
     阻塞: 86
-  阻塞·决策: 49
+  阻塞·决策: 48
   阻塞·外部: 35
   conflicts:
   - channel-resume-intake/0.1
   - interview-scheduling/U1/plan
+  - interview-scheduling/U2/plan
   - m1-intake-quality-fixes/8.9
   - m1-intake-quality-fixes/U8/plan
   - m1-job-profile-intake/1.5b
@@ -33,8 +34,8 @@ summary:
   - relay:H-4
   - relay:R-10
   - relay:R-13
+  - relay:R-14
   - relay:R-6
-  - voice-structured-interview/U2/plan
   ready:
   - interview-scheduling/0.2
   - interview-scheduling/1.1
@@ -47,7 +48,7 @@ summary:
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
-  - relay:R-13
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - offer-generation/U1/plan ← G2 `offer-generation`（已答·未放行）
@@ -1328,7 +1329,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区:
   - app/agents/conflict_check.py
   状态: 待开
@@ -1344,7 +1345,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1358,7 +1359,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1373,7 +1374,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1387,7 +1388,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1401,7 +1402,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区:
   - tests/test_interview_history_invariant.py
   状态: 待开
@@ -1416,7 +1417,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1430,7 +1431,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1444,7 +1445,7 @@ tasks:
   单元: U2 时段登记与排期动作
   依赖:
   - interview-scheduling/U1
-  - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -1461,11 +1462,15 @@ tasks:
   触碰区:
   - docs/superpowers/plans/*-interview-scheduling-unit2-*.md
   状态: 阻塞
-  阻塞类型: 决策
-  产出判据: 【G2 闸门·已答·未放行】docs/superpowers/plans/ 下存在文件名含 unit2 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 interview-scheduling（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/interview-scheduling/tasks.md
   可见: false
   闸门: G2 interview-scheduling
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 完成
 - id: interview-scheduling/U2
   场景: interview-scheduling
   阶段: build
@@ -1485,6 +1490,7 @@ tasks:
   - interview-scheduling/2.9
   - interview-scheduling/U1
   - interview-scheduling/U2/plan
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   触碰区:
   - app/agents/conflict_check.py
   - tests/test_interview_history_invariant.py
@@ -5121,8 +5127,8 @@ tasks:
   标题: '`app/agents/interview_prep.py::generate(profile, rubric, resume_scores) -> PrepDraft`（纯函数，经 LLM 网关，`temperature=0`，输出 sc'
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区:
   - app/agents/interview_prep.py
   状态: 待开
@@ -5136,8 +5142,8 @@ tasks:
   标题: prompt 版本 v1：只用画像＋简历弱点；预留 few-shot 槽位（待 OQ-2 现用面试题回件后升 v2，⛔ 不硬编码题库）；无简历评分时走"通用题"分支并在 `rationale` 标注
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -5150,8 +5156,8 @@ tasks:
   标题: 难度曲线策略：岗位级配置 `prep_curve ∈ {easy_to_hard, by_dimension}`，默认 `easy_to_hard`；题量岗位级配置默认 10；测试：同输入同配置输出题序稳定
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -5164,8 +5170,8 @@ tasks:
   标题: LangGraph prep 子图：`compute_prep` → `interrupt()` → `effect_freeze_prep`（幂等键 `{application_id}:effect_freeze_prep:{versio
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -5179,8 +5185,8 @@ tasks:
   标题: '`effect_persist_prep_draft` 节点：把 draft 落 `prep_snapshot(status=draft)`＋`prep_question`（幂等键 `{application_id}:effect_pers'
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -5194,8 +5200,8 @@ tasks:
   标题: 题目确认页（业务经理，Web）：逐题看／改题面与 rubric／删／重生成／"全部采纳"；改过的题 `origin=ai_edited` 且 `ai_text` 保留；页面带 AI 生成标识；接口相对路径
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区: []
   状态: 阻塞
   阻塞类型: 外部
@@ -5208,8 +5214,8 @@ tasks:
   标题: 冻结与开场校验：`freeze(snapshot_id, confirmed_by)` 记确认人与时刻；开场入口校验 `status='frozen'` 否则 4xx 并留痕；画像升版 ⇒ 旧快照 `expired`、可生成新版本；测试穷举
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -5222,8 +5228,8 @@ tasks:
   标题: prep e2e 测试：合成画像＋M2 合成样本评分 → 生成 → 确认页改一题 → 冻结 → 开场校验通过；断言 `PrepInput` 不含身份字段
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/U1
-  - voice-structured-interview/U2/plan
   触碰区: []
   状态: 待开
   阻塞类型: 无
@@ -5239,23 +5245,21 @@ tasks:
   - voice-structured-interview/U1
   触碰区:
   - docs/superpowers/plans/*-voice-structured-interview-unit2-*.md
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 voice-structured-interview（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/voice-structured-interview/tasks.md
   可见: false
   闸门: G2 voice-structured-interview
-  conflicts:
-    状态:
-      台账: 在跑
-      真身: 待开
-  备注: 0918AH ｜ task-dispatcher·lanes-done-20260918-163444
+  备注: 0918AH ｜ task-dispatcher·lanes-done-20260918-163444 ｜ 0918 dispatcher 复核：plan 文件 2026-09-18-voice-structured-interview-unit2-prep-question-engine.md 已落（commit
+    2b04d0d），Task=9 含 Global Constraints，确认完成
 - id: voice-structured-interview/U2
   场景: voice-structured-interview
   阶段: build
   标题: 3. U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   单元: U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
   依赖:
+  - plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
   - voice-structured-interview/3.1
   - voice-structured-interview/3.2
   - voice-structured-interview/3.3
@@ -6576,6 +6580,17 @@ tasks:
   产出判据: Task 6–8 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit1-data-model.md
   可见: false
+- id: plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+  场景: 构建自动化
+  阶段: build
+  标题: voice-structured-interview-unit2-prep-question-engine Task 1–9
+  依赖: []
+  触碰区: []
+  状态: 待开
+  阻塞类型: 无
+  产出判据: Task 1–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-18-voice-structured-interview-unit2-prep-question-engine.md
+  可见: false
 - id: propose:S-M3
   场景: S-M3
   阶段: propose
@@ -7558,17 +7573,37 @@ tasks:
   依赖: []
   触碰区:
   - scripts/dispatcher_backlog.py
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: _match_plans() 对 change="interview-scheduling" 取 prefix="interview"，正则 `(?<![\w])interview-unit1(?!\.?\d)` 命中 `2026-09-18-voice-structured-interview-unit1-data-model`（该文件名内部子串
     `...structured-interview-unit1-data-model` 的 `-` 满足非单词边界），导致 interview-scheduling/U1/plan 被误判「完成」、interview-scheduling/1.1–1.7 依赖被错接到该外部 plan 的 seg1–3 从而假阳性 ready；需收紧前缀回退匹配（如要求
     prefix 后立即衔接 change 全名的其余部分，或限定只在 change 本身不含连字符时才用 prefix 回退）＋ 补回归测试固定此用例，并重跑 dispatcher_backlog.py 核对 interview-scheduling/U1/plan 与 1.1–1.7 状态改回正确值
   来源: 0918 dispatcher 复核 ready 集时手工发现（interview-scheduling/1.1–1.7 与 interview-scheduling/U1/plan 的 conflicts）
   可见: false
-  备注: 0918 dispatcher 发现，未派车（属工具链代码缺陷，需走正式 build lane 修复＋测试，不在本次台账刷新范围内）；修复前 interview-scheduling/1.1–1.7 ⛔ 不得当真 ready 派车，即便 --show ready 仍会列出
+  备注: 0918 dispatcher 发现；已并 relay:R-14 合派 0918AI（task-dispatcher·lanes-done-20260918-172527）；修复前 interview-scheduling/1.1–1.7 ⛔ 不得当真 ready 派车，即便 --show ready 仍会列出
   conflicts:
     状态:
-      台账: 待开
+      台账: 在跑
+      真身: 来源已消失或已勾选
+- id: relay:R-14
+  场景: 构建自动化
+  阶段: build
+  标题: scripts/dispatcher_backlog.py::parse_segments 无「## 建议拆段点」节时把整份 plan 当成一个 segment，未按 rules.md §2「每 3 Task 一段」兜底
+  依赖: []
+  触碰区:
+  - scripts/dispatcher_backlog.py
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: 'parse_segments()（scripts/dispatcher_backlog.py:521-543）第 541-542 行 `if not segments and task_count: segments = [(1, task_count)]`——没有「## 建议拆段点」节、且文本里也没有可解析的
+    `Task a–b` 列表项时，直接把 1..task_count 全部塞进一个 segment；实测 `2026-09-18-voice-structured-interview-unit2-prep-question-engine.md`（9 个 Task、无「建议拆段点」节）被生成为单条 `plan:.../seg1`（标题「Task
+    1–9」），与 rules.md §2 build 阶段判据「Task ≥ 5 ⇒ …无拆段节 ⇒ 每 3 Task 一段」不符；需改 fallback 为按 3 个一段切分（`range(1, task_count+1, 3)`），并补回归测试固定「无建议拆段点节 + 9 Task」用例 ⇒ 应生成 seg1(1-3)/seg2(4-6)/seg3(7-9)'
+  来源: 0918 dispatcher 派车前核 plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1 时手工发现
+  可见: false
+  备注: 0918 dispatcher 发现；已并 relay:R-13 合派 0918AI（task-dispatcher·lanes-done-20260918-172527）；修复前 plan:2026-09-18-voice-structured-interview-unit2-prep-question-engine/seg1
+    ⛔ 不当真 ready 派车（会把 9 个 Task 塞进一条泳道，且合并后台账会误判整个 U2 单元完成）
+  conflicts:
+    状态:
+      台账: 在跑
       真身: 来源已消失或已勾选
 - id: relay:R-6
   场景: M0
