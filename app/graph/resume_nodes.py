@@ -12,6 +12,7 @@ import logging
 import sqlite3
 import uuid
 
+from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.schemas.resume_fields import FIELD_NAMES, ResumeFields
 from app.storage.idempotency import idempotent_effect
 
@@ -161,16 +162,43 @@ def record_resume_access(
     conn.commit()
 
 
-def queue_reapplication_screening(resume_id: str) -> None:
-    """U3 硬门槛引擎的接入点空壳（tasks 3.10「触发该投递重判」，与
-    app/middleware/auth.py::AuthMiddleware 是同一种"空壳接入点"手法）。
+def queue_reapplication_screening(conn: sqlite3.Connection, resume_id: str) -> None:
+    """字段校对完成后重判（tasks 3.10 的空壳、U3 tasks 4.3 的真实实现，
+    hard-requirement-screening spec Scenario「依赖字段待校对」："校对完成
+    后该规则被重新判定"）。
 
-    ⛔ 本单元不实现重判逻辑——U3 还没有 compute_screen/effect_persist_flags。
-    这里只留一个签名稳定的调用点：字段校对提交后调它，U3 落地时只需要把
-    函数体换成真实的重判触发，⛔ 不改调用方（本函数所在 app/web/server.py 的
-    /resumes/{id}/fields/{field}/review 路由不用动）。
+    ⛔ 架构决策 10：3.10 原注释设想"函数体换掉、调用方签名不变"，但真实
+    重判必须查库（规则集、简历字段、待校对队列），离不开一个连接——本次
+    落地对签名做了唯一的背离：多接一个 conn 参数。唯一调用方
+    app/web/server.py::review_field 路由本来就在闭包里持有 conn，改动
+    只有一行。
     """
-    logger.info(
-        "resume_id=%s 的字段校对已完成，等待 U3 接入重判逻辑（当前为空壳）",
-        resume_id,
+    row = conn.execute(
+        "SELECT job_id, parser_version FROM resume WHERE id = ?", (resume_id,)
+    ).fetchone()
+    if row is None or row[1] is None:
+        logger.warning("resume_id=%s 未找到或尚未解析，跳过重判", resume_id)
+        return
+    job_id, parser_version = row
+
+    application_row = conn.execute(
+        "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
+    ).fetchone()
+    if application_row is None:
+        logger.warning("resume_id=%s 尚无投递记录，跳过重判", resume_id)
+        return
+    application_id = application_row[0]
+
+    profile_version = latest_approved_profile_version(conn, job_id)
+    if profile_version is None:
+        logger.warning("job_id=%s 尚无已确认画像版本，跳过重判", job_id)
+        return
+
+    screen_and_persist(
+        conn,
+        application_id=application_id,
+        resume_id=resume_id,
+        job_id=job_id,
+        profile_version=profile_version,
+        parse_version=parser_version,
     )

@@ -1300,7 +1300,7 @@ def create_app(
             (req.human_value, reviewer, row[0]),
         )
         conn.commit()
-        queue_reapplication_screening(resume_id)
+        queue_reapplication_screening(conn, resume_id)
         return {"ok": True, "already_reviewed": False}
 
     @router.get("/health")
