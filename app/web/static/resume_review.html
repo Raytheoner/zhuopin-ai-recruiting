@@ -35,18 +35,42 @@
     let rawText = "";
     let parsedFields = {};
 
-    function renderRawText(highlightSpans) {
+    // start/end 是后端 app/parsing/spans.py 按 Python 码点（code point）计算的
+    // 全文偏移。JS 字符串原生按 UTF-16 code unit 索引——当 rawText 里 span 之前
+    // 出现代理对字符（罕见 CJK 扩展 B 区汉字、emoji）时，两种索引会分道扬镳，
+    // 直接 slice 会静默高亮错的子串（违反"不许出现没有真实依据的高亮"这条证据
+    // 完整性约束）。用 Array.from 把字符串拆成码点数组再切片，与后端语义对齐。
+    function codePoints(text) {
+      return Array.from(text);
+    }
+
+    // 纯函数，不碰 DOM——便于脱离浏览器单独测试这段切片/校验逻辑。
+    function buildRawTextHtml(text, highlightSpans) {
+      const chars = codePoints(text);
       const spans = (highlightSpans || []).slice().sort((a, b) => a.start - b.start);
       let html = "";
       let cursor = 0;
       for (const span of spans) {
         if (span.start < cursor) continue; // 忽略与前一个 span 重叠的部分，MVP 不处理重叠
-        html += escapeHtml(rawText.slice(cursor, span.start));
-        html += `<mark>${escapeHtml(rawText.slice(span.start, span.end))}</mark>`;
+        html += escapeHtml(chars.slice(cursor, span.start).join(""));
+        const sliced = chars.slice(span.start, span.end).join("");
+        // 渲染前必须核对切出来的子串与持久化的 span.quote 逐字相等——不相等
+        // 说明偏移与原文对不上，不能当作真实依据渲染成 <mark>，否则就是在
+        // 展示一个编造出来的高亮。降级成纯文本提示，不让这一个 span 的问题
+        // 挡住其它 span 正常渲染。
+        if (sliced === span.quote) {
+          html += `<mark>${escapeHtml(sliced)}</mark>`;
+        } else {
+          html += escapeHtml(sliced) + escapeHtml("［回指偏移与原文不一致］");
+        }
         cursor = span.end;
       }
-      html += escapeHtml(rawText.slice(cursor));
-      document.getElementById("raw-text").innerHTML = html;
+      html += escapeHtml(chars.slice(cursor).join(""));
+      return html;
+    }
+
+    function renderRawText(highlightSpans) {
+      document.getElementById("raw-text").innerHTML = buildRawTextHtml(rawText, highlightSpans);
     }
 
     function selectField(fieldName) {
@@ -122,18 +146,28 @@
       }
     }
 
-    async function loadRawText() {
-      const resp = await fetch(`api/resumes/${resumeId}/text`);
+    // 会话过期时统一跳登录页（与 resume_list.html 的既有行为一致）。返回
+    // true 表示已跳转，调用方必须立刻停手，不能再往下渲染 401 响应体——
+    // 401 的 body 不是真实数据，渲染出来是"看起来没登录但界面正常"的假象。
+    function redirectIfUnauthorized(resp) {
       if (resp.status === 401) {
         window.location.href = "login";
-        return;
+        return true;
       }
+      return false;
+    }
+
+    async function loadRawText() {
+      const resp = await fetch(`api/resumes/${resumeId}/text`);
+      if (redirectIfUnauthorized(resp)) return false;
       const body = await resp.json();
       rawText = body.raw_text || "";
+      return true;
     }
 
     async function loadParsed() {
       const resp = await fetch(`api/resumes/${resumeId}/parsed`);
+      if (redirectIfUnauthorized(resp)) return false;
       const body = await resp.json();
       const parsed = body.parsed_json || {};
       parsedFields = {};
@@ -142,10 +176,12 @@
       }
       renderFields();
       renderRawText([]);
+      return true;
     }
 
     async function init() {
-      await loadRawText();
+      const rawOk = await loadRawText();
+      if (!rawOk) return; // 已跳登录页，不再继续加载/渲染
       await loadParsed();
     }
 
