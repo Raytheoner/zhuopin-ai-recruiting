@@ -20,14 +20,14 @@
 
 ## 2. U1 面试域数据模型（建表 ＋ 评分审计接线 ＋ 留存字段）
 
-- [ ] 2.1 `app/storage/db.py` 新增 `prep_snapshot`（`application_id, version, profile_version, resume_run_id, gen_run_id, confirmed_by, confirmed_at, status CHECK IN draft/frozen/expired`，`(application_id, version)` 唯一）与 `prep_question`（`snapshot_id, seq, dimension, difficulty, text, rubric_json, follow_ups_json, rationale, origin CHECK IN ai/ai_edited, ai_text`）；`CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`
-- [ ] 2.2 新增 `interview_session`（D4 列清单；`invite_token_hash` 唯一；`sample_class CHECK IN internal_sim/live`；`status CHECK IN pending/in_progress/completed/interrupted/abandoned/locked`；`retention_until` NOT NULL；`retention_policy_version` NOT NULL）
-- [ ] 2.3 新增 `interview_consent`（`session_id, kind CHECK IN ai_interview/identity_check, result CHECK IN accepted/declined, consent_version, at`；`(session_id, kind)` 唯一）与 `identity_check`（`session_id, result CHECK IN pass/fail/skipped, checked_at`；**无图像列**）；反证测试：向 `identity_check` 加图像列的迁移被测试拒绝
-- [ ] 2.4 新增 `interview_turn`（`session_id, seq, question_id, question_text, answer_text, answer_mode CHECK IN voice/text, audio_start_ms, audio_end_ms, latency_json, follow_up_of, interrupted_at_ms, asr_confidence, acoustic_ref`；`(session_id, seq)` 唯一；`answer_mode='text'` 时 `audio_*` 必空的 CHECK）
-- [ ] 2.5 新增 `interview_recording_deletion`（`session_id, deleted_at, scope, reason CHECK IN expired/withdrawn/terminated, actor`；`session_id` 唯一）与 `interview_access_log`（`accessor, session_id, access_type, at`，无内容列）
-- [ ] 2.6 `analysis_run.run_type` 增加 `interview` 取值约定；`criterion_score.evidence_ref` 解析工具函数支持 `{type:'interview_turn', id, start, end, quote}`，并校验 turn 存在与偏移合法；测试覆盖 resume 与 interview_turn 两种类型
-- [ ] 2.7 `interview_session` 的 AI 输入 schema（Pydantic）：`PrepInput`／`FollowUpInput`／`ScoreInput` 三个模型，字段白名单里**没有**姓名／手机号／核验字段／声学字段——测试用反射断言字段集合
-- [ ] 2.8 `tests/test_db_m3_schema.py`：新库建表齐全、老库（复制 `.51` demo.db 结构）升级后既有表一行不改、全部 CHECK 反证、`retention_until` 空值被拒
+- [x] 2.1 `app/storage/db.py` 新增 `prep_snapshot`（`application_id, version, profile_version, resume_run_id, gen_run_id, confirmed_by, confirmed_at, status CHECK IN draft/frozen/expired`，`(application_id, version)` 唯一）与 `prep_question`（`snapshot_id, seq, dimension, difficulty, text, rubric_json, follow_ups_json, rationale, origin CHECK IN ai/ai_edited, ai_text`）；`CREATE TABLE IF NOT EXISTS`，⛔ 不进 `_ADDED_COLUMNS`
+- [x] 2.2 新增 `interview_session`（D4 列清单；`invite_token_hash` 唯一；`sample_class CHECK IN internal_sim/live`；`status CHECK IN pending/in_progress/completed/interrupted/abandoned/locked`；`retention_until` NOT NULL；`retention_policy_version` NOT NULL）
+- [x] 2.3 新增 `interview_consent`（`session_id, kind CHECK IN ai_interview/identity_check, result CHECK IN accepted/declined, consent_version, at`；`(session_id, kind)` 唯一）与 `identity_check`（`session_id, result CHECK IN pass/fail/skipped, checked_at`；**无图像列**）；反证测试：向 `identity_check` 加图像列的迁移被测试拒绝
+- [x] 2.4 新增 `interview_turn`（`session_id, seq, question_id, question_text, answer_text, answer_mode CHECK IN voice/text, audio_start_ms, audio_end_ms, latency_json, follow_up_of, interrupted_at_ms, asr_confidence, acoustic_ref`；`(session_id, seq)` 唯一；`answer_mode='text'` 时 `audio_*` 必空的 CHECK）
+- [x] 2.5 新增 `interview_recording_deletion`（`session_id, deleted_at, scope, reason CHECK IN expired/withdrawn/terminated, actor`；`session_id` 唯一）与 `interview_access_log`（`accessor, session_id, access_type, at`，无内容列）
+- [x] 2.6 `analysis_run.run_type` 增加 `interview` 取值约定；`criterion_score.evidence_ref` 解析工具函数支持 `{type:'interview_turn', id, start, end, quote}`，并校验 turn 存在与偏移合法；测试覆盖 resume 与 interview_turn 两种类型
+- [x] 2.7 `interview_session` 的 AI 输入 schema（Pydantic）：`PrepInput`／`FollowUpInput`／`ScoreInput` 三个模型，字段白名单里**没有**姓名／手机号／核验字段／声学字段——测试用反射断言字段集合
+- [x] 2.8 `tests/test_db_m3_schema.py`：新库建表齐全、老库（复制 `.51` demo.db 结构）升级后既有表一行不改、全部 CHECK 反证、`retention_until` 空值被拒
 
 ## 3. U2 prep 出题引擎（生成 → 业务经理确认 → 冻结）
 
