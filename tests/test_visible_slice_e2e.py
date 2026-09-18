@@ -60,7 +60,7 @@ def _stub_parse(monkeypatch, *, name_confidence: float):
             education=EducationField(not_mentioned=True, value=None, confidence=1.0),
             expected_city=TextField(not_mentioned=True, value=None, confidence=1.0),
         )
-        return fields, LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat", attempts=1)
+        return fields, LLMCallMeta(latency_ms=1.0, response_model="deepseek-chat", attempts=1, run_id="run-id-stub")
 
     monkeypatch.setattr(server_mod, "compute_parse", _fake_compute_parse)
 

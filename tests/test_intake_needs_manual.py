@@ -152,7 +152,7 @@ class RecoveringGateway:
             profile_patch={"team_size": 5},
             unspecified_fields=[],
         )
-        meta = LLMCallMeta(latency_ms=1.0, response_model="stub-model", attempts=1)
+        meta = LLMCallMeta(latency_ms=1.0, response_model="stub-model", attempts=1, run_id="run-id-stub")
         return parsed, meta
 
 
