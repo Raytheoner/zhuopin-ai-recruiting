@@ -59,3 +59,83 @@ def latest_approved_profile_version(conn: sqlite3.Connection, job_id: str) -> in
         (job_id,),
     ).fetchone()
     return row[0] if row and row[0] is not None else None
+
+
+def compute_screen(
+    conn: sqlite3.Connection, *, resume_id: str, job_id: str, profile_version: int
+) -> list[RuleVerdict]:
+    """L4 读编排：组装 screen() 的三个入参并调用它（工程铁律 2，⛔ 本函数
+    只读不写）。"""
+    resume_row = conn.execute(
+        "SELECT parsed_json FROM resume WHERE id = ?", (resume_id,)
+    ).fetchone()
+    if resume_row is None or resume_row[0] is None:
+        raise ValueError(f"resume_id={resume_id} 尚未解析，无法判定硬门槛")
+    fields = ResumeFields.model_validate_json(resume_row[0])
+
+    pending_rows = conn.execute(
+        "SELECT field FROM field_review_queue WHERE resume_id = ? AND status = 'pending'",
+        (resume_id,),
+    ).fetchall()
+    review_queue = frozenset(row[0] for row in pending_rows)
+
+    rules = load_active_rules(conn, job_id=job_id, profile_version=profile_version)
+    return screen(fields, rules, review_queue)
+
+
+@idempotent_effect("effect_persist_flags")
+def effect_persist_flags(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    application_id: str,
+    profile_version: int,
+    verdicts: list[RuleVerdict],
+) -> int:
+    """唯一的写入点（tasks 4.3）。幂等键
+    {application_id}:effect_persist_flags:{profile_version}:{parse_version}
+    由调用方（screen_and_persist）拼好传入 business_key。
+
+    ⛔ 不在这里 conn.commit()——由 idempotent_effect 装饰器统一提交
+    （工程铁律 1）。重判（校对完成／画像升版）产生新一组 flags：不同
+    business_key 天然对应不同的 effect_key，旧组的行永远不会被本函数
+    删除或覆盖。
+    """
+    for verdict in verdicts:
+        conn.execute(
+            "INSERT INTO screening_flag "
+            "(id, application_id, profile_version, rule_ref, verdict, reason, evidence_ref) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()), application_id, profile_version,
+                verdict.rule_ref, verdict.verdict, verdict.reason, verdict.evidence_ref,
+            ),
+        )
+    return len(verdicts)
+
+
+def screen_and_persist(
+    conn: sqlite3.Connection,
+    *,
+    application_id: str,
+    resume_id: str,
+    job_id: str,
+    profile_version: int,
+    parse_version: str,
+) -> int | None:
+    """三个触发点（初次解析后／字段校对完成后／画像升版后）共用的唯一入口。
+    返回 effect_persist_flags 的返回值（写入的标记数，幂等命中时为 None）。
+    """
+    verdicts = compute_screen(
+        conn, resume_id=resume_id, job_id=job_id, profile_version=profile_version
+    )
+    business_key = f"{profile_version}:{parse_version}"
+    return effect_persist_flags(
+        conn,
+        thread_id=application_id,
+        business_key=business_key,
+        application_id=application_id,
+        profile_version=profile_version,
+        verdicts=verdicts,
+    )
