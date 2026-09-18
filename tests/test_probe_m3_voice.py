@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from scripts.probe_m3_voice import (
     PROBES,
@@ -552,3 +553,265 @@ def test_probe_p2_funasr_blocks_on_model_or_io_failure_instead_of_raising(tmp_pa
     assert result.conclusion == "阻塞"
     assert result.blocking_reason is not None
     assert "boom" in result.blocking_reason
+
+
+def test_follow_up_choice_valid_follow_up():
+    from scripts.probe_m3_voice import FollowUpChoice
+
+    choice = FollowUpChoice(action="follow_up", follow_up_index=1)
+    assert choice.follow_up_index == 1
+
+
+def test_follow_up_choice_valid_next_question():
+    from scripts.probe_m3_voice import FollowUpChoice
+
+    choice = FollowUpChoice(action="next_question", follow_up_index=None)
+    assert choice.follow_up_index is None
+
+
+def test_follow_up_choice_rejects_out_of_range_index():
+    from scripts.probe_m3_voice import FollowUpChoice
+
+    with pytest.raises(ValidationError):
+        FollowUpChoice(action="follow_up", follow_up_index=5)
+
+
+def test_follow_up_choice_rejects_index_with_next_question():
+    from scripts.probe_m3_voice import FollowUpChoice
+
+    with pytest.raises(ValidationError):
+        FollowUpChoice(action="next_question", follow_up_index=0)
+
+
+def test_follow_up_choice_rejects_missing_index_for_follow_up():
+    from scripts.probe_m3_voice import FollowUpChoice
+
+    with pytest.raises(ValidationError):
+        FollowUpChoice(action="follow_up", follow_up_index=None)
+
+
+def test_stream_first_token_latency_ms_measures_first_nonempty_delta():
+    from scripts.probe_m3_voice import _stream_first_token_latency_ms
+
+    class _FakeDelta:
+        def __init__(self, content):
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content):
+            self.delta = _FakeDelta(content)
+
+    class _FakeChunk:
+        def __init__(self, content):
+            self.choices = [_FakeChoice(content)]
+
+    def _fake_stream():
+        yield _FakeChunk(None)   # 首个 chunk 常是空 delta（角色声明），不算 TTFT
+        yield _FakeChunk("追")
+        yield _FakeChunk("问")
+
+    latency_ms = _stream_first_token_latency_ms(_fake_stream())
+    assert latency_ms >= 0
+
+
+def test_stream_first_token_latency_ms_raises_when_no_nonempty_delta():
+    from scripts.probe_m3_voice import _stream_first_token_latency_ms
+
+    class _FakeDelta:
+        def __init__(self, content):
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content):
+            self.delta = _FakeDelta(content)
+
+    class _FakeChunk:
+        def __init__(self, content):
+            self.choices = [_FakeChoice(content)]
+
+    def _fake_stream():
+        yield _FakeChunk(None)
+        yield _FakeChunk("")
+
+    with pytest.raises(RuntimeError):
+        _stream_first_token_latency_ms(_fake_stream())
+
+
+def test_schema_compliance_rate_counts_successes(monkeypatch):
+    from scripts.probe_m3_voice import FollowUpChoice, _schema_compliance_rate
+
+    gateway = MagicMock()
+    calls = {"n": 0}
+
+    def _side_effect(**kwargs):
+        calls["n"] += 1
+        if calls["n"] % 4 == 0:
+            from scripts.probe_m3_voice import SchemaExtractionFailed
+
+            raise SchemaExtractionFailed("越界")
+        return FollowUpChoice(action="next_question", follow_up_index=None)
+
+    gateway.extract_structured.side_effect = _side_effect
+    rate = _schema_compliance_rate(gateway, runs=8, system_prompt="s", user_prompt="u")
+    assert rate == pytest.approx(6 / 8)
+
+
+def _p4_args(*, runs: int = 3):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(target="dev-machine", runs=runs)
+
+
+def _fake_settings(*, api_key: str = "sk-fake"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        llm_api_key=api_key,
+        llm_base_url="https://api.deepseek.com/v1",
+        llm_model="deepseek-chat",
+        llm_supports_json_schema=False,
+    )
+
+
+def test_probe_p4_llm_ttft_blocks_when_api_key_missing():
+    from scripts.probe_m3_voice import probe_p4_llm_ttft
+
+    with patch("scripts.probe_m3_voice.get_settings", return_value=_fake_settings(api_key="")):
+        result = probe_p4_llm_ttft(_p4_args())
+
+    assert result.conclusion == "阻塞"
+    assert "llm_api_key" in result.blocking_reason
+
+
+def test_probe_p4_llm_ttft_blocks_when_get_settings_raises():
+    """get_settings() itself can raise (e.g. .env has a bad field type, or
+    validate_model_version() rejects a `latest` alias) — must degrade to 阻塞
+    rather than let the exception propagate past probe_p4_llm_ttft, mirroring the
+    pattern already established for probe_p1_livekit/p2_funasr/p3_cosyvoice.
+    """
+    from scripts.probe_m3_voice import probe_p4_llm_ttft
+
+    with patch("scripts.probe_m3_voice.get_settings", side_effect=RuntimeError("boom: bad .env")):
+        result = probe_p4_llm_ttft(_p4_args())
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "boom" in result.blocking_reason
+
+
+def _fake_stream_chunk(content):
+    class _Delta:
+        def __init__(self, content):
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content):
+            self.delta = _Delta(content)
+
+    class _Chunk:
+        def __init__(self, content):
+            self.choices = [_Choice(content)]
+
+    return _Chunk(content)
+
+
+def test_probe_p4_llm_ttft_blocks_on_stream_failure_instead_of_raising():
+    """A mid-stream network/API failure from the raw OpenAI client must become a
+    阻塞 ProbeResult, not an uncaught exception — otherwise main() never reaches
+    write_result() and docs/m3-voice-probe.md is left stale while the operator
+    sees a raw traceback. Mirrors the P1/P2/P3 connect-failure regression tests.
+    """
+    from scripts.probe_m3_voice import probe_p4_llm_ttft
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.side_effect = RuntimeError("boom: connection reset")
+
+    with (
+        patch("scripts.probe_m3_voice.get_settings", return_value=_fake_settings()),
+        patch("openai.OpenAI", return_value=fake_client),
+    ):
+        result = probe_p4_llm_ttft(_p4_args())
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "boom" in result.blocking_reason
+
+
+def test_probe_p4_llm_ttft_blocks_when_stream_never_yields_content():
+    """_stream_first_token_latency_ms raises RuntimeError when a stream completes
+    without ever producing a non-empty delta.content — this must also degrade to
+    阻塞 rather than propagate.
+    """
+    from scripts.probe_m3_voice import probe_p4_llm_ttft
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = iter(
+        [_fake_stream_chunk(None), _fake_stream_chunk("")]
+    )
+
+    with (
+        patch("scripts.probe_m3_voice.get_settings", return_value=_fake_settings()),
+        patch("openai.OpenAI", return_value=fake_client),
+    ):
+        result = probe_p4_llm_ttft(_p4_args())
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "非空" in result.blocking_reason
+
+
+def test_probe_p4_llm_ttft_blocks_when_gateway_construction_fails():
+    """LLMGateway.__init__ can raise (e.g. _rejects_latest_alias) — must degrade
+    to 阻塞 rather than propagate, since it happens after the streaming calls
+    already succeeded.
+    """
+    from scripts.probe_m3_voice import probe_p4_llm_ttft
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.side_effect = [
+        iter([_fake_stream_chunk(None), _fake_stream_chunk("追")]),
+        MagicMock(model="deepseek-chat"),
+    ]
+
+    with (
+        patch("scripts.probe_m3_voice.get_settings", return_value=_fake_settings()),
+        patch("openai.OpenAI", return_value=fake_client),
+        patch("scripts.probe_m3_voice.LLMGateway", side_effect=ValueError("boom: latest alias rejected")),
+    ):
+        result = probe_p4_llm_ttft(_p4_args(runs=1))
+
+    assert result.conclusion == "阻塞"
+    assert result.blocking_reason is not None
+    assert "boom" in result.blocking_reason
+
+
+def test_probe_p4_llm_ttft_success_path_computes_metrics():
+    from scripts.probe_m3_voice import FollowUpChoice, probe_p4_llm_ttft
+
+    fake_client = MagicMock()
+
+    def _create_side_effect(*, stream=False, **kwargs):
+        if stream:
+            return iter([_fake_stream_chunk(None), _fake_stream_chunk("追")])
+        return MagicMock(model="deepseek-chat")
+
+    fake_client.chat.completions.create.side_effect = _create_side_effect
+
+    fake_gateway = MagicMock()
+    fake_gateway.extract_structured.return_value = FollowUpChoice(action="next_question", follow_up_index=None)
+
+    with (
+        patch("scripts.probe_m3_voice.get_settings", return_value=_fake_settings()),
+        patch("openai.OpenAI", return_value=fake_client),
+        patch("scripts.probe_m3_voice.LLMGateway", return_value=fake_gateway),
+    ):
+        result = probe_p4_llm_ttft(_p4_args(runs=3))
+
+    assert result.conclusion == "通过"
+    assert result.blocking_reason is None
+    assert result.metrics["ttft_p50_ms"] >= 0
+    assert result.metrics["ttft_p95_ms"] >= 0
+    assert result.metrics["schema_compliance_rate"] == pytest.approx(1.0)
+    assert result.metrics["runs"] == 3
+    assert result.metrics["response_model"] == ["deepseek-chat"]
+    assert result.metrics["model_configured"] == "deepseek-chat"

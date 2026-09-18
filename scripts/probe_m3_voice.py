@@ -21,7 +21,11 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, model_validator
+
+from app.config import get_settings
 
 DEFAULT_DOC_PATH = Path("docs/m3-voice-probe.md")
 
@@ -526,6 +530,186 @@ def _add_p3_arguments(sub: argparse.ArgumentParser) -> None:
 
 
 probe_p3_cosyvoice.__wrapped_add_arguments__ = _add_p3_arguments  # type: ignore[attr-defined]
+
+
+# 与预埋追问列表长度绑定的下标范围。探针固定用 2 条预埋追问（见 _SAMPLE_FOLLOW_UPS），
+# 生产 D17 的 follow_up_selector.py 里这个上界是动态的（看当前题的 follow_ups 数组长度）。
+_VALID_FOLLOW_UP_INDICES = (0, 1)
+
+
+class FollowUpChoice(BaseModel):
+    """P4 探针专用测量模型，形状对应 design D17「输出 schema 是枚举
+    (follow_up_index | next_question)」，⛔ 不是生产的 follow_up_selector.py。"""
+
+    action: Literal["follow_up", "next_question"]
+    follow_up_index: int | None = None
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> "FollowUpChoice":
+        if self.action == "follow_up":
+            if self.follow_up_index not in _VALID_FOLLOW_UP_INDICES:
+                raise ValueError(
+                    f"action=follow_up 时 follow_up_index 必须是 {_VALID_FOLLOW_UP_INDICES} 之一"
+                )
+        elif self.follow_up_index is not None:
+            raise ValueError("action=next_question 时 follow_up_index 必须为空")
+        return self
+
+
+from app.llm.gateway import LLMGateway, NoopAuditHook, SchemaExtractionFailed  # noqa: E402
+
+
+def _stream_first_token_latency_ms(chunk_iter) -> float:
+    """chunk_iter 产出的每个 chunk 形如 OpenAI streaming 的
+    `choices[0].delta.content`；第一个非空 content 到达的耗时即 TTFT。
+    调用方负责在真正发起请求前记 `start = time.monotonic()`，本函数只做
+    "找第一个非空 delta" 的纯逻辑，方便脱离真实网络单测。
+    """
+    start = time.monotonic()
+    for chunk in chunk_iter:
+        content = chunk.choices[0].delta.content
+        if content:
+            return (time.monotonic() - start) * 1000
+    raise RuntimeError("流式响应结束但从未出现非空 delta.content")
+
+
+def _schema_compliance_rate(gateway: LLMGateway, *, runs: int, system_prompt: str, user_prompt: str) -> float:
+    successes = 0
+    for _ in range(runs):
+        try:
+            gateway.extract_structured(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                schema=FollowUpChoice,
+                prompt_version="probe-p4-v1",
+            )
+            successes += 1
+        except SchemaExtractionFailed:
+            continue
+    return successes / runs
+
+
+_SAMPLE_FOLLOW_UPS = ["能具体说说你在这个项目里遇到的最大技术难点吗？", "如果重新做一次，你会怎么改进这个方案？"]
+_SAMPLE_SYSTEM_PROMPT = (
+    "你是结构化面试的追问选择器。给定本题、预埋的追问选项列表、候选人本轮转写，"
+    "只能从预埋追问里选一条，或判断不需要追问直接进入下一题；不得生成新的追问内容。"
+)
+
+
+def _sample_user_prompt() -> str:
+    follow_ups_text = "\n".join(f"{i}. {q}" for i, q in enumerate(_SAMPLE_FOLLOW_UPS))
+    return (
+        "本题：请简单介绍你最近参与的一个项目。\n"
+        f"预埋追问：\n{follow_ups_text}\n"
+        "候选人本轮转写：我最近在做一个嵌入式项目，主要是写驱动，具体细节记不太清了。"
+    )
+
+
+@register("p4-llm-ttft")
+def probe_p4_llm_ttft(args: argparse.Namespace) -> ProbeResult:
+    started = time.monotonic()
+    fp = env_fingerprint(target=args.target)
+    try:
+        settings = get_settings()
+    except Exception as exc:  # noqa: BLE001 — .env 配置本身构不出来（字段类型不对、
+        # validate_model_version() 拒绝了 latest 别名等）同样要转成阻塞结论，
+        # 不能让异常穿透 probe_p4_llm_ttft。
+        return ProbeResult(
+            item="P4",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=f"get_settings() 失败（.env 配置有误）: {type(exc).__name__}: {exc}",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    if not settings.llm_api_key:
+        return ProbeResult(
+            item="P4",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason="Settings.llm_api_key 为空（.env 未配置 LLM_API_KEY），无法调用 DeepSeek",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    # 流式/非流式调用、网关构造、合规率统计的任何一步都可能因网络故障、鉴权失败、
+    # 供应商 5xx、流式响应从未出现非空 delta（_stream_first_token_latency_ms 的
+    # RuntimeError）等原因失败。任何一步异常都要落成「阻塞」结论而不是穿透
+    # probe_p4_llm_ttft，否则 main() 走不到 write_result，docs/m3-voice-probe.md
+    # 不会更新，操作者只看到裸 traceback——与 probe_p1_livekit/probe_p2_funasr/
+    # probe_p3_cosyvoice 的既有模式一致（brief 的 Step 7 参考代码本身没包这层，
+    # Task 2/3/4 的 task-review 已经在前三个探针上发现并修过同一类缺口）。
+    try:
+        from openai import OpenAI  # noqa: PLC0415
+
+        raw_client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+        user_prompt = _sample_user_prompt()
+
+        ttft_samples_ms: list[float] = []
+        response_models_seen: set[str] = set()
+        for _ in range(args.runs):
+            stream = raw_client.chat.completions.create(
+                model=settings.llm_model,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": _SAMPLE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                stream=True,
+            )
+            latency_ms = _stream_first_token_latency_ms(stream)
+            ttft_samples_ms.append(latency_ms)
+            # 流式响应体的 model 字段每个 chunk 都带，取最后见到的一个即可（铁律 5：
+            # 响应侧字段才可信，不看构造请求时传的 settings.llm_model 字面量）。
+        # 流式调用拿不到 usage/model 的稳定聚合点，这里单独补一次非流式调用只为取响应 model 字段。
+        probe_response = raw_client.chat.completions.create(
+            model=settings.llm_model,
+            temperature=0,
+            messages=[{"role": "system", "content": _SAMPLE_SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}],
+        )
+        response_models_seen.add(getattr(probe_response, "model", "unknown") or "unknown")
+
+        gateway = LLMGateway(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+            supports_json_schema=settings.llm_supports_json_schema,
+            max_retries=0,  # 测「第一次」合规率，不吃网关内建的 schema 重试红利
+            audit_hook=NoopAuditHook(),
+        )
+        compliance_rate = _schema_compliance_rate(
+            gateway, runs=args.runs, system_prompt=_SAMPLE_SYSTEM_PROMPT, user_prompt=user_prompt
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ProbeResult(
+            item="P4",
+            env_fingerprint=fp,
+            conclusion="阻塞",
+            blocking_reason=f"LLM 流式/非流式调用或合规率统计失败: {type(exc).__name__}: {exc}",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+
+    return ProbeResult(
+        item="P4",
+        env_fingerprint=fp,
+        conclusion="通过",
+        metrics={
+            "ttft_p50_ms": round(_percentile(ttft_samples_ms, 50)),
+            "ttft_p95_ms": round(_percentile(ttft_samples_ms, 95)),
+            "schema_compliance_rate": round(compliance_rate, 3),
+            "runs": args.runs,
+            "response_model": sorted(response_models_seen),
+            "model_configured": settings.llm_model,
+        },
+        duration_ms=(time.monotonic() - started) * 1000,
+    )
+
+
+def _add_p4_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument("--target", default="dev-machine")
+    sub.add_argument("--runs", type=int, default=20)
+
+
+probe_p4_llm_ttft.__wrapped_add_arguments__ = _add_p4_arguments  # type: ignore[attr-defined]
 
 
 def main(argv: list[str] | None = None) -> int:
