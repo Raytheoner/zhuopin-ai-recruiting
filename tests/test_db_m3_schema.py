@@ -716,6 +716,29 @@ def test_interview_access_log_access_type_rejects_unknown_value(conn):
         )
 
 
+# ── job_prep_config（tasks 2.6）────────────────────────────────────────────
+
+
+def test_job_prep_config_defaults_when_no_row(conn):
+    """没有 job_prep_config 行的岗位，读取端回落到默认值——那是
+    app/graph/interview_prep_nodes.py::load_prep_config()（Task 4）的事。
+    本测试只确认表本身**存在一行**时的列默认值是 'easy_to_hard'/10。"""
+    conn.execute("INSERT INTO job (id, title) VALUES ('job-1', '测试岗位')")
+    conn.execute("INSERT INTO job_prep_config (job_id) VALUES ('job-1')")
+    row = conn.execute(
+        "SELECT prep_curve, prep_question_count FROM job_prep_config WHERE job_id='job-1'"
+    ).fetchone()
+    assert row == ("easy_to_hard", 10)
+
+
+def test_job_prep_config_rejects_invalid_curve(conn):
+    conn.execute("INSERT INTO job (id, title) VALUES ('job-2', '测试岗位')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO job_prep_config (job_id, prep_curve) VALUES ('job-2', 'bogus')"
+        )
+
+
 # ── 老库升级：M3 U1 落地前的 .51 现网库真实形态 ───────────────────────────
 #
 # 基线不是从 SCHEMA 裁剪，而是刻意固定成 Task 1 生成的历史快照——它代表
@@ -728,7 +751,7 @@ _LEGACY_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "zp51_demo_db_schema
 _M3_NEW_TABLES = (
     "prep_snapshot", "prep_question", "interview_session", "interview_consent",
     "identity_check", "interview_turn", "interview_recording_deletion",
-    "interview_access_log",
+    "interview_access_log", "job_prep_config",
 )
 
 

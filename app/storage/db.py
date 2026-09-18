@@ -829,6 +829,21 @@ CREATE TABLE IF NOT EXISTS interview_access_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_interview_access_log_session ON interview_access_log (session_id);
+
+-- prep 出题的岗位级配置（voice-structured-interview U2 tasks 3.3）。新表，
+-- ⛔ 不直接给既有的 job 表加列——本包（M3）的字面判据是"老库升级后既有表
+-- 一行不改"（tests/test_db_m3_schema.py::
+-- test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched 逐字比对
+-- sqlite_master.sql 原文，job.parse_confidence_threshold 是 M2 已经加过的
+-- 列，M3 不能再往 job 上加新列）。没有对应行的岗位视为使用默认值（应用层
+-- 查询按 job_id 找不到行时回落到 'easy_to_hard'/10，见
+-- app/graph/interview_prep_nodes.py::load_prep_config）。
+CREATE TABLE IF NOT EXISTS job_prep_config (
+    job_id TEXT PRIMARY KEY NOT NULL REFERENCES job(id),
+    prep_curve TEXT NOT NULL DEFAULT 'easy_to_hard'
+        CHECK (prep_curve IN ('easy_to_hard', 'by_dimension')),
+    prep_question_count INTEGER NOT NULL DEFAULT 10
+);
 """
 
 
