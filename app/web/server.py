@@ -35,6 +35,7 @@ from app.graph.nodes import (
     revision_count,
 )
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
+from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
@@ -47,6 +48,7 @@ from app.parsing.spans import TextSpan
 from app.schemas.job_profile import JobProfile, field_label, field_labels
 from app.schemas.resume_fields import FIELD_LABELS, FIELD_NAMES
 from app.storage import job_queries
+from app.storage.appeal import AppealRecordNotFound, IllegalAppealTransition, transition_appeal
 from app.storage.auth_session import create_session, delete_session
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 from app.storage.hr_account import verify_password
@@ -103,6 +105,10 @@ class JDEditRequest(BaseModel):
 
 class FieldReviewRequest(BaseModel):
     human_value: str
+
+
+class AppealTransitionRequest(BaseModel):
+    to_status: str
 
 
 class TurnOutcome(NamedTuple):
@@ -1011,9 +1017,35 @@ def create_app(
             prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
+        resolved_application_id = application_id
+        if resolved_application_id is None:
+            existing_app = conn.execute(
+                "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
+            ).fetchone()
+            resolved_application_id = existing_app[0] if existing_app else None
+        screening_status = "deferred"
+        if resolved_application_id is not None:
+            profile_version = latest_approved_profile_version(conn, job_id)
+            if profile_version is not None:
+                try:
+                    screen_and_persist(
+                        conn,
+                        application_id=resolved_application_id,
+                        resume_id=resume_id,
+                        job_id=job_id,
+                        profile_version=profile_version,
+                        parse_version=parser_version,
+                    )
+                    screening_status = "ok"
+                except Exception:
+                    logger.exception(
+                        "job_id=%s resume_id=%s 硬门槛判定失败，简历已入库，"
+                        "留待人工/后续触发重判",
+                        job_id, resume_id,
+                    )
         return {"file_name": upload.filename, "status": "accepted",
                 "resume_id": resume_id, "application_id": application_id,
-                "parse_status": "parsed"}
+                "parse_status": "parsed", "screening_status": screening_status}
 
     @router.post("/api/resumes/{resume_id}/reparse")
     def reparse_resume(resume_id: str):
@@ -1077,8 +1109,34 @@ def create_app(
             prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
+        resolved_application_id = application_id
+        if resolved_application_id is None:
+            existing_app = conn.execute(
+                "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
+            ).fetchone()
+            resolved_application_id = existing_app[0] if existing_app else None
+        screening_status = "deferred"
+        if resolved_application_id is not None:
+            profile_version = latest_approved_profile_version(conn, job_id)
+            if profile_version is not None:
+                try:
+                    screen_and_persist(
+                        conn,
+                        application_id=resolved_application_id,
+                        resume_id=resume_id,
+                        job_id=job_id,
+                        profile_version=profile_version,
+                        parse_version=parser_version,
+                    )
+                    screening_status = "ok"
+                except Exception:
+                    logger.exception(
+                        "job_id=%s resume_id=%s 重解析后硬门槛判定失败，简历已"
+                        "重新解析入库，留待人工/后续触发重判",
+                        job_id, resume_id,
+                    )
         return {"resume_id": resume_id, "application_id": application_id,
-                "parser_version": parser_version}
+                "parser_version": parser_version, "screening_status": screening_status}
 
     def _require_resume(resume_id: str) -> tuple:
         row = conn.execute(
@@ -1118,6 +1176,67 @@ def create_app(
             parts = [str(value[k]) for k in ("degree", "school") if value.get(k)]
             return " ".join(parts) if parts else "未提及"
         return str(value)
+
+    @router.get("/api/applications/{application_id}/screening-flags")
+    def get_screening_flags(application_id: str) -> dict:
+        """硬门槛判定标记的最小只读接口（task-5-brief.md 附带范围）：只用于
+        黑盒验证「上传/重解析后立即判定」这个触发点是否生效，⛔ 不做任何
+        排序/淘汰相关的展示或聚合。"""
+        rows = conn.execute(
+            "SELECT profile_version, rule_ref, verdict, reason, evidence_ref, created_at "
+            "FROM screening_flag WHERE application_id = ? ORDER BY created_at",
+            (application_id,),
+        ).fetchall()
+        return {
+            "flags": [
+                {
+                    "profile_version": r[0], "rule_ref": r[1], "verdict": r[2],
+                    "reason": r[3], "evidence_ref": r[4], "created_at": r[5],
+                }
+                for r in rows
+            ]
+        }
+
+    @router.post("/api/applications/{application_id}/appeal")
+    def register_appeal(request: Request, application_id: str) -> dict:
+        """注册申诉（none→requested）。同一投递重复提交视为幂等——不产生
+        第二条流转事件（Task 8 transition_appeal 的 already_applied 语义），
+        ⛔ 不静默改判、不覆盖已有的申诉状态（合规红线「淘汰只由人确认并可
+        申诉」）。"""
+        row = conn.execute(
+            "SELECT id, appeal_status FROM rejection_record WHERE application_id = ? "
+            "ORDER BY decided_at DESC LIMIT 1",
+            (application_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="该投递没有拒绝记录，无法申诉")
+        rejection_id, appeal_status = row
+        actor = reviewer_of(request)
+        if appeal_status == "none":
+            result = transition_appeal(
+                conn, rejection_record_id=rejection_id, to_status="requested", actor=actor
+            )
+        else:
+            result = {"appeal_status": appeal_status, "already_applied": True}
+        return {"rejection_id": rejection_id, **result}
+
+    @router.post("/api/rejections/{rejection_id}/appeal/transition")
+    def transition_appeal_route(
+        request: Request, rejection_id: str, req: AppealTransitionRequest
+    ) -> dict:
+        """驱动申诉状态机的后续流转（requested→under_review→upheld|
+        overturned）。非法跳转 409、未知拒绝记录 404——两者都由 Task 8 的
+        transition_appeal 判定，这里只做异常到 HTTP 状态码的翻译。"""
+        try:
+            result = transition_appeal(
+                conn, rejection_record_id=rejection_id, to_status=req.to_status,
+                actor=reviewer_of(request),
+            )
+        except AppealRecordNotFound:
+            raise HTTPException(status_code=404, detail="拒绝记录不存在")
+        except IllegalAppealTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {"rejection_id": rejection_id, **result}
 
     @router.get("/api/resumes/by-job/{job_id}")
     def list_resumes_for_job(request: Request, job_id: str) -> dict:
@@ -1235,7 +1354,9 @@ def create_app(
                 (resume_id, field),
             ).fetchone()
             if already_reviewed is not None and already_reviewed[0] == req.human_value:
-                return {"ok": True, "already_reviewed": True}
+                # 重判在这个分支里根本没有再跑一次，谈不上失败——标 "ok" 只是
+                # 让响应形状与另外两个返回路径一致，不代表本次调用真的重判过。
+                return {"ok": True, "already_reviewed": True, "screening_status": "ok"}
             raise HTTPException(status_code=404, detail="该字段没有待校对记录")
 
         reviewer = reviewer_of(request)
@@ -1245,8 +1366,17 @@ def create_app(
             (req.human_value, reviewer, row[0]),
         )
         conn.commit()
-        queue_reapplication_screening(resume_id)
-        return {"ok": True, "already_reviewed": False}
+        screening_status = "deferred"
+        try:
+            queue_reapplication_screening(conn, resume_id)
+            screening_status = "ok"
+        except Exception:
+            logger.exception(
+                "resume_id=%s field=%s 字段校对后重判失败，校对结果已入库，"
+                "留待人工/后续触发重判",
+                resume_id, field,
+            )
+        return {"ok": True, "already_reviewed": False, "screening_status": screening_status}
 
     @router.get("/health")
     def health() -> dict:

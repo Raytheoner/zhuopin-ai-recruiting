@@ -47,12 +47,12 @@
 
 ## 4. U3 硬门槛引擎（标记＋依据＋申诉）
 
-- [ ] 4.1 `app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现；依赖字段在队列 ⇒ `skipped(待校对)`、`not_mentioned` ⇒ `skipped(未提及)`；`fail` 必带 `evidence_ref` 与 `human_readable`。测试：每个 operator × 三态；模块内 grep 不得出现 storage 写入
-- [ ] 4.2 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-ranking` spec「主观描述不入硬门槛」）；空规则集 ⇒ 全 pass 并注明
-- [ ] 4.3 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version}`，同事务；重判（校对完成／画像升版）产生新一组 flags，旧组保留带版本；测试：重跑不重复、三种触发点各一
-- [ ] 4.4 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_rule` 必带 `rule_ref`；测试：传 `ai_score` 在应用层被拒，绕过应用层在 CHECK 被拒
-- [ ] 4.5 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_history(actor_type=human)`；幂等：同记录同目标状态重复提交无第二条流转；原拒绝记录不删
-- [ ] 4.6 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 ✅ 已裁决 2026-09-17：HR 代候选人登记，本期不开候选人自助入口
+- [x] 4.1 `app/agents/hard_requirement_screening.py::screen(fields, rules, review_queue) -> list[RuleVerdict]` 纯函数：五种 operator 各实现；依赖字段在队列 ⇒ `skipped(待校对)`、`not_mentioned` ⇒ `skipped(未提及)`；`fail` 必带 `evidence_ref` 与 `human_readable`。测试：每个 operator × 三态；模块内 grep 不得出现 storage 写入
+- [x] 4.2 规则集加载器：按 `(job_id, profile_version)` 读 `hard_requirement`；命中 `is_subjective()` 的规则被标 blocking ⇒ 拒绝加载并可观测（`candidate-ranking` spec「主观描述不入硬门槛」）；空规则集 ⇒ 全 pass 并注明
+- [x] 4.3 节点 `compute_screen` → `effect_persist_flags`：幂等键 `{application_id}:effect_persist_flags:{profile_version}:{parse_version}`，同事务；重判（校对完成／画像升版）产生新一组 flags，旧组保留带版本；测试：重跑不重复、三种触发点各一
+- [x] 4.4 拒绝记录写入路径唯一：`app/storage/rejection.py::write_rejection(...)`，应用层校验 `reason_type ∈ {hard_rule, human_decision}` 且 `hard_rule` 必带 `rule_ref`；测试：传 `ai_score` 在应用层被拒，绕过应用层在 CHECK 被拒
+- [x] 4.5 申诉状态机：`none → requested → under_review → upheld | overturned`，非法跳转拒绝；`overturned` ⇒ 投递恢复到淘汰前阶段 ＋ 写 `application_stage_history(actor_type=human)`；幂等：同记录同目标状态重复提交无第二条流转；原拒绝记录不删
+- [x] 4.6 接口 `POST /applications/{id}/appeal`（登记）与 `POST /rejections/{id}/appeal/transition`（流转），均记操作人；Q4 ✅ 已裁决 2026-09-17：HR 代候选人登记，本期不开候选人自助入口
 
 ## 1. U0 模型对比定型（剩余项只前置 U4 召回精排；抽取模型已定型——本章在顺序链上排在 U3 之后、U4 之前，`0917BA`）
 
