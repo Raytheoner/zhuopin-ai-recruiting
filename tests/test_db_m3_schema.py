@@ -257,7 +257,7 @@ def test_interview_session_table_exists_with_expected_columns(conn):
         "phone_attempts", "recording_uri", "retention_until",
         "retention_policy_version", "sample_class", "status", "created_at",
         "phone_code_hash", "phone_code_expires_at",
-        "post_scoring_status", "post_scored_at",
+        "post_scoring_status", "post_scored_at", "recording_sha256",
     }
 
 
