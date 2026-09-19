@@ -210,3 +210,54 @@ def test_compute_score_raises_on_unknown_session(conn):
     )
     with pytest.raises(ValueError, match="interview_session 不存在"):
         compute_score(conn, session_id="no-such-session", aligned_turns=[], gateway=gateway)
+
+
+from app.agents.interview_scoring import ScoreCardDraft, ScoredDimensionDraft
+from app.graph.interview_scoring_nodes import (
+    AlignedTurn,
+    CorrectedCriterionScore,
+    ScoringEvidenceUnusable,
+    correct_evidence,
+)
+
+
+def _aligned_turn(turn_id="t1", seq=1, answer_text="做过三年 AUTOSAR CP 分层开发"):
+    return AlignedTurn(
+        turn_id=turn_id, seq=seq, question_id="q1", question_text="讲讲你的项目",
+        answer_text=answer_text, answer_mode="text", asr_confidence=None,
+        audio_start_ms=None, audio_end_ms=None, low_confidence=False,
+    )
+
+
+def _draft(dimension="AUTOSAR CP", score=4.0, turn_id="t1", quote="AUTOSAR CP 分层开发"):
+    return ScoreCardDraft(
+        dimensions=[ScoredDimensionDraft(dimension=dimension, score=score, rationale="r",
+                                          turn_id=turn_id, quote=quote)],
+        overall_summary="s", dropped_count=0, run_id="run-1", response_model="m",
+    )
+
+
+def test_correct_evidence_locates_exact_offset():
+    aligned = [_aligned_turn()]
+    corrected = correct_evidence(_draft(), aligned)
+
+    assert len(corrected) == 1
+    result = corrected[0]
+    assert isinstance(result, CorrectedCriterionScore)
+    assert result.dimension == "AUTOSAR CP"
+    assert result.quote == "AUTOSAR CP 分层开发"
+    answer_text = aligned[0].answer_text
+    assert answer_text[result.start:result.end] == "AUTOSAR CP 分层开发"
+
+
+def test_correct_evidence_raises_when_quote_not_found_in_turn_text():
+    aligned = [_aligned_turn(answer_text="完全不相关的回答内容")]
+    with pytest.raises(ScoringEvidenceUnusable, match="反查失败"):
+        correct_evidence(_draft(), aligned)
+
+
+def test_correct_evidence_raises_when_turn_id_not_in_session():
+    aligned = [_aligned_turn(turn_id="t1")]
+    draft = _draft(turn_id="t-not-in-session")
+    with pytest.raises(ScoringEvidenceUnusable, match="不属于本场次"):
+        correct_evidence(draft, aligned)

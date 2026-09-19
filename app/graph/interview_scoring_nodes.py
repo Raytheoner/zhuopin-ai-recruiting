@@ -16,6 +16,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from app.agents.interview_scoring import ScoreCardDraft, score
+from app.parsing.spans import TextSpan, locate_quote
 from app.schemas.interview_ai_input import ScoreInput, ScoreInputTurn
 
 
@@ -146,3 +147,50 @@ def compute_score(
             "rubric_snapshot": {"dimensions": rubric_dimensions},
         },
     )
+
+
+class ScoringEvidenceUnusable(Exception):
+    """某个维度的证据反查失败，或指向的 turn 不属于本场次——interview-scorecard
+    spec Scenario「模型未给出证据」：该次评分整体判不可用，不写入任何评分项。"""
+
+
+@dataclass(frozen=True)
+class CorrectedCriterionScore:
+    dimension: str
+    score: float
+    turn_id: str
+    start: int
+    end: int
+    quote: str
+
+
+def correct_evidence(
+    draft: ScoreCardDraft, aligned_turns: list[AlignedTurn]
+) -> list[CorrectedCriterionScore]:
+    """用 quote 在 turn 原文里反查校正偏移（interview-scorecard spec「回指
+    校正」）：模型给的 start/end 不采信，一律以反查结果为准。任一维度反查失败
+    或指向的 turn 不属于本场次，整次评分判不可用（抛异常，⛔ 不做部分写入）。
+    """
+    turns_by_id = {t.turn_id: t for t in aligned_turns}
+    corrected: list[CorrectedCriterionScore] = []
+
+    for dim in draft.dimensions:
+        turn = turns_by_id.get(dim.turn_id)
+        if turn is None:
+            raise ScoringEvidenceUnusable(
+                f"维度 {dim.dimension!r} 的证据指向不属于本场次的 turn: {dim.turn_id!r}"
+            )
+        span = TextSpan(span_id=0, start=0, end=len(turn.answer_text), text=turn.answer_text)
+        located = locate_quote(span, dim.quote)
+        if located is None:
+            raise ScoringEvidenceUnusable(
+                f"维度 {dim.dimension!r} 的证据摘录在 turn {dim.turn_id!r} 原文中反查失败: {dim.quote!r}"
+            )
+        start, end = located
+        corrected.append(
+            CorrectedCriterionScore(
+                dimension=dim.dimension, score=dim.score, turn_id=dim.turn_id,
+                start=start, end=end, quote=dim.quote,
+            )
+        )
+    return corrected
