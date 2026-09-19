@@ -592,6 +592,10 @@ class TestVerificationCode:
         ).fetchone()
         assert event is not None
 
-    def test_send_verification_code_is_unimplemented_stub(self):
+    def test_send_verification_code_is_unimplemented_stub(self, conn):
+        """0919T 补丁：`@idempotent_effect` 装饰器要求 `(conn, *, thread_id,
+        business_key, **kwargs)` 调用签名（铁律 1 全量覆盖，见
+        tests/test_effect_idempotency_suite.py），不能再零参数调用——桩本身
+        的行为（立刻 NotImplementedError，OQ-10 未决）不变。"""
         with pytest.raises(NotImplementedError):
-            effect_send_verification_code()
+            effect_send_verification_code(conn, thread_id="sess-1", business_key="1")

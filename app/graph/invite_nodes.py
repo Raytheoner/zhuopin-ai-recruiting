@@ -570,6 +570,7 @@ def effect_display_verification_code_to_hr(
     )
 
 
+@idempotent_effect("effect_send_verification_code")
 def effect_send_verification_code(*args, **kwargs):
     """短信通道自动发送节点（design D13）。⏸ 门禁口径 OQ-10（自动发送验证码
     是否属于"已人工确认邀约的从属动作"、可否免逐次门禁确认）未定前，本节点

@@ -763,7 +763,13 @@ def test_added_columns_tuple_still_only_touches_job_profile():
     from app.storage.db import _ADDED_COLUMNS
 
     tables_in_added_columns = {row[0] for row in _ADDED_COLUMNS}
-    assert tables_in_added_columns == {"job_profile", "job", "resume"}
+    assert tables_in_added_columns == {
+        "job_profile",
+        "job",
+        "resume",
+        "job_prep_config",
+        "interview_session",
+    }
 
 
 def test_fresh_and_legacy_upgraded_schemas_have_identical_m2_u1_tables(tmp_path):
