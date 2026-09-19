@@ -743,3 +743,74 @@ def test_parse_segments_without_section_falls_back_to_groups_of_three_not_one_gi
     text = "\n".join(f"### Task {n}: xxx（tasks {n}.1）" for n in range(1, 10))
     segments = db.parse_segments(text, 9)
     assert segments == [(1, 3), (4, 6), (7, 9)]
+
+
+# ── ⑧ TAG4 四标签正则双格式兼容（0919P，Q-47）──
+#
+# `docs/session接力.md` 里的四标签待办行漂移出了「标签内无冒号＋｜分隔」的新格式，
+# 旧正则（标签内必须带冒号）对新格式命中数＝0（漏派）。两种格式必须能被同一条解析
+# 路径同时吃下，且互不干扰、互不误裂。
+
+
+def _tag_count(text: str) -> int:
+    sys.path.insert(0, str(SCRIPT.parent))
+    import dispatcher_backlog as db  # noqa: E402
+
+    entries = db.parse_relay(text, "docs/session接力.md")
+    return len([e for e in entries if e.id.startswith("relay:tag#")])
+
+
+def test_tag4_old_format_all_fields_still_parsed():
+    text = (
+        "# 接力\n\n"
+        "- 【谁做：Shao Peishen】【状态：待人】\n"
+        "  【判据：两份草稿要不要发，请定】\n"
+        "  【不做会怎样：文件留在工作区】\n"
+    )
+    assert _tag_count(text) == 1
+
+
+def test_tag4_new_format_all_fields_parsed():
+    text = (
+        "# 接力\n\n"
+        "- 【谁做】Cowork 派泳道｜【状态】待派发｜【判据】四条测试转绿｜【不做会怎样】铁律1 失去覆盖\n"
+    )
+    assert _tag_count(text) == 1
+
+
+def test_tag4_old_and_new_format_mixed_text_both_counted():
+    text = (
+        "# 接力\n\n"
+        "- 【谁做：Shao Peishen】【状态：待人】【判据：两份草稿，请定】【不做会怎样：留在工作区】\n"
+        "- 【谁做】Cowork 派泳道｜【状态】待派发｜【判据】四条测试转绿｜【不做会怎样】铁律1 失去覆盖\n"
+    )
+    assert _tag_count(text) == 2
+
+
+def test_tag4_new_format_field_value_with_colons_not_misparsed():
+    """新格式字段值本身含全角/半角冒号时（如时间戳、commit 说明）不应提前截断——
+    新格式只以【标签】与｜分界，冒号不是分界符。"""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import dispatcher_backlog as db  # noqa: E402
+
+    text = (
+        "【谁做】task-dispatcher｜【状态】待 09:30 到期后派｜"
+        "【判据】commit hash：5c8ed9c 已合入｜【不做会怎样】全量 pytest 持续红"
+    )
+    m = db.TAG4_RE_NEW.search(text)
+    assert m is not None
+    who, status, judge, consequence = m.groups()
+    assert who == "task-dispatcher"
+    assert status == "待 09:30 到期后派"
+    assert judge == "commit hash：5c8ed9c 已合入"
+    assert consequence == "全量 pytest 持续红"
+
+
+def test_tag4_old_format_unaffected_by_unrelated_pipe_character_elsewhere():
+    """旧格式条目附近若出现与本条无关的全角｜（如表格残留），不得被新格式正则跨行误吃。"""
+    text = (
+        "# 接力\n\n"
+        "| 字段A｜字段B |\n\n"
+        "- 【谁做：Shao Peishen】【状态：待人】【判据：两份草稿，请定】【不做会怎样：留在工作区】\n"
+    )
+    assert _tag_count(text) == 1

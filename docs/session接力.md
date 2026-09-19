@@ -90,21 +90,21 @@
 
 `0918AB` 全量 pytest 实测（main `8e4574f`＝本分支 HEAD，`git rev-list --count main...HEAD`＝0）：**5 failed**（非 opener 预期的 4 条，且均与 reportlab/Pillow 无关）——1 条真回归 `tests/test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree`（`EFFECT_NODE_MANIFEST` 漏登 M2U3 合并带入的 `effect_persist_flags`）；4 条环境缺口 `tests/test_probe_m3_voice.py`（`funasr`／`livekit` 未装，`requirements-m3-u0.txt` 未装进共享 venv）。按 opener 预案「真回归⇒立刻停，不顺手改业务代码」，本条到此为止，两项登记待派发：
 
-- 【谁做】M2U3 后续 lane／下一次 task-dispatcher 唤醒｜【状态】待派发｜【判据】`EFFECT_NODE_MANIFEST` 补上 `effect_persist_flags` ＋ `build_recipes()` 加对应崩溃-恢复配方，该测试转绿｜【不做会怎样】铁律1（每个 effect_* 节点须被强制中断验证过）对新节点失去覆盖，且全量 pytest 持续红，掩盖后续真回归信号
-- 【谁做】M3 U0/U1 建造 lane 开工前｜【状态】待派发｜【判据】`requirements-m3-u0.txt` 装进共享 venv，或测试改 `pytest.importorskip` 使懒加载生效，4 条转绿或规范 skip｜【不做会怎样】全量 pytest 持续非 0 failed，同样掩盖真回归信号
+- 【谁做】M2U3 后续 lane／下一次 task-dispatcher 唤醒｜【状态】✅ 已闭环（`0919P` 2026-09-19 核实：`effect_persist_flags` 已在 `EFFECT_NODE_MANIFEST` 且专属测试转绿，`test_manifest_matches_the_source_tree` 现存失败是另一批 18 个 M3 新节点缺口，见下方 09-19 `0919O` 条目，非本项范围）｜【判据】`EFFECT_NODE_MANIFEST` 补上 `effect_persist_flags` ＋ `build_recipes()` 加对应崩溃-恢复配方，该测试转绿｜【不做会怎样】铁律1（每个 effect_* 节点须被强制中断验证过）对新节点失去覆盖，且全量 pytest 持续红，掩盖后续真回归信号
+- 【谁做】M3 U0/U1 建造 lane 开工前｜【状态】✅ 已闭环（`0919P` 2026-09-19 核实：`tests/test_probe_m3_voice.py` 现状 47 passed／4 skipped，无 failed）｜【判据】`requirements-m3-u0.txt` 装进共享 venv，或测试改 `pytest.importorskip` 使懒加载生效，4 条转绿或规范 skip｜【不做会怎样】全量 pytest 持续非 0 failed，同样掩盖真回归信号
 
 ### 🆕 2026-09-18 `0918B` M2·U1 数据模型 Segment B＋C 已合 main（`66e3b97`，3092 passed，2.4–2.8＋8.1 已勾）
 - 【谁做】U2／U4 接手者【状态】9 条 Minor 延后【判据】见 `docs/findings/2026-09-18-0918B-M2U1-SegmentBC收口.md`「终审遗留」逐条关闭【不做会怎样】U2 写 `accessor` 与 U7 审计口径可能不一致；U4 落库前不校验 evidence_ref 偏移会存脏回指
 
 ### 🆕 2026-09-18 S-M3 立包 `voice-structured-interview`（G1 Q-37 放行后，无头）〔原派车号 `0918B`，因号池体积闸登记被撤回（Q-43），该号已归 M2U1 建造；本条不占号〕
 - 包已立并过 `openspec validate --strict`：6 能力（`interview-prep-question-engine`／`interview-invite-and-consent`／`live-voice-interview-session`／`interview-scorecard`／`interview-recording-retention`／`m3-compliance-assertions`）／tasks 76 条（0.1 R-9 已勾，1/76）／🔴 7／design Open Questions **11**（OQ-1–4 待专员 `HR-G-NN` 四条、OQ-5 X5 探针、OQ-6 合规验收 #2、OQ-7 X6、OQ-8 对外通道、OQ-9 语音主机采购、OQ-10 短信通道与验证码门禁口径、OQ-11 内部模拟录音留存）。路线图 §二 M3 行改「已立包 1/76」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/voice-structured-interview/proposal.md`）
-- 【谁做】task-dispatcher【状态】待 G2（Open Questions 全部是待专员＋外部依赖原样转入，不阻塞 spec-to-plan；U0 探针与 U1–U3、U5 不依赖任何 OQ）【判据】Shao Peishen 在定夺队列对本包 G2 答「定」后派 spec-to-plan（从 U0 探针起）【不做会怎样】M3 停在 propose；X5 探针继续空等
+- ✅ 已闭环（`0919P` 2026-09-19 核实：`定夺队列` `Q-46` 已答「定」，M3 语音面试 U2/U3/U4 已合 main，见上方 09-19 `0919O` 条目，本行「待 G2」描述已过时）【谁做】task-dispatcher【状态】待 G2（Open Questions 全部是待专员＋外部依赖原样转入，不阻塞 spec-to-plan；U0 探针与 U1–U3、U5 不依赖任何 OQ）【判据】Shao Peishen 在定夺队列对本包 G2 答「定」后派 spec-to-plan（从 U0 探针起）【不做会怎样】M3 停在 propose；X5 探针继续空等
 - ⚠️ **重复派发实证**：`0918B` 同一 opener 在 `4299785` 合入后又被无头起了一次（本行所在提交），后者开工自检发现包已在 main、四项交付物全在，按「让位给进度靠前的」规则未重跑、未覆盖，只登记本行。【谁做】task-dispatcher【状态】待查【判据】调度器派发前对号池台账查「已完成」标记并跳过【不做会怎样】每次重复派发白烧一份预算，且未跟踪产出可能互相冲掉
 - ⚠️ 本文件追加后 ≈55 KB，闸 58 KB（`tests/test_doc_size_budget.py` 现值，5 passed）——余量 < 3 KB，下一条追加前宜先打「【已闭环】」跑 `scripts/archive_docs.py --apply`
 
 ### 🆕 2026-09-17 `0917BF` 四场景立包完成（G1 Q-33–36 放行后，无头单条串行）
 - 四包已立并过 `openspec validate --strict`：`interview-scheduling`（4 能力／42 条／🔴 6／OQ 8）、`offer-generation`（4 新能力＋`outbound-approval-gate` delta 增 `offer_letter`／40 条／🔴 4／OQ 7）、`onboarding-flow`（4 能力／34 条／🔴 6／OQ 7）、`channel-resume-intake`（4 能力／28 条／🔴 4／OQ 7）。四份 intent `status` 已改「已确认（G1 Q-xx）」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/interview-scheduling/proposal.md`）
-- 【谁做】task-dispatcher【状态】待 G2（四包 design 各留 7–8 条 Open Questions，全部是「待专员」＋外部依赖原样转入，不阻塞 spec-to-plan）【判据】Shao Peishen 在定夺队列对四包 G2 答「定」后派 spec-to-plan【不做会怎样】四包停在 propose，波次 5 无法开工。路线图 §二 无四场景行，按 opener 预案跳过不新建
+- ⚠️ 已由 `Q-39`／`Q-40`／`Q-41`／`Q-42` 覆盖跟踪（`0919P` 2026-09-19 核实：四包均已答「改：等人事部#3 回件补齐现用流程与样例后再定稿」，非本行所写的「待 G2 答定」——阻塞原因已从「待决策」变为「待外部回件」，本行描述过时，不再单独跟踪，四包 tasks.md 现状仍 0/N）【谁做】task-dispatcher【状态】待 G2（四包 design 各留 7–8 条 Open Questions，全部是「待专员」＋外部依赖原样转入，不阻塞 spec-to-plan）【判据】Shao Peishen 在定夺队列对四包 G2 答「定」后派 spec-to-plan【不做会怎样】四包停在 propose，波次 5 无法开工。路线图 §二 无四场景行，按 opener 预案跳过不新建
 
 ### 🆕 2026-09-17 `0917Y` G3 泳道结果私信本人——代码已合，待重启值守服务后观察首条真发
 

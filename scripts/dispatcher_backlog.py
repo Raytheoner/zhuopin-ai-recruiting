@@ -643,7 +643,10 @@ def plan_entries(plans: dict[str, PlanInfo], unit_status: dict[str, str], seg_st
 
 # ───────────────────────── session接力 ─────────────────────────
 
-TAG4_RE = re.compile(r"【谁做[：:]\s*(.*?)】\s*【状态[：:]\s*(.*?)】\s*【判据[：:]\s*(.*?)】\s*【不做会怎样[：:]\s*(.*?)】", re.S)
+# 旧格式：标签内带冒号，值括在【】内，如「【谁做：x】【状态：y】…」
+TAG4_RE_OLD = re.compile(r"【谁做[：:]\s*(.*?)】\s*【状态[：:]\s*(.*?)】\s*【判据[：:]\s*(.*?)】\s*【不做会怎样[：:]\s*(.*?)】", re.S)
+# 新格式（0919P，Q-47）：标签内无冒号，值不带外层【】，字段间用全角｜分隔，如「【谁做】x｜【状态】y…」
+TAG4_RE_NEW = re.compile(r"【谁做】([^｜\n]*)｜【状态】([^｜\n]*)｜【判据】([^｜\n]*)｜【不做会怎样】([^\n]*)")
 
 
 def parse_relay(text: str, rel: str) -> list[Entry]:
@@ -703,9 +706,13 @@ def parse_relay(text: str, rel: str) -> list[Entry]:
                 )
             continue
         in_table = False
-    # 四标签行式待办
+    # 四标签行式待办：新旧两种格式并存，按出现顺序合并（不重复匹配同一段文本）
     n = 0
-    for m in TAG4_RE.finditer(text):
+    tag4_matches = sorted(
+        list(TAG4_RE_OLD.finditer(text)) + list(TAG4_RE_NEW.finditer(text)),
+        key=lambda m: m.start(),
+    )
+    for m in tag4_matches:
         n += 1
         who, status_txt, judge, _ = (re.sub(r"\s+", " ", strip_md(x)) for x in m.groups())
         status = status_from_marks(status_txt)
