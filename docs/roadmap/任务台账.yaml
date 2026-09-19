@@ -70,8 +70,7 @@ summary:
   - 2026-09-10-liaison-unpack-dispatch
   - 2026-09-18-voice-interview-u3-invite-consent
   - 2026-09-19-u5-post-scoring
-  缺任务映射:
-  - Q-47a
+  缺任务映射: []
 tasks:
 - id: scene:M0
   场景: M0
