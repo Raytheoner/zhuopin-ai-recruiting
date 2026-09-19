@@ -70,7 +70,8 @@ summary:
   - 2026-09-10-liaison-unpack-dispatch
   - 2026-09-18-voice-interview-u3-invite-consent
   - 2026-09-19-u5-post-scoring
-  缺任务映射: []
+  缺任务映射:
+  - Q-47a
 tasks:
 - id: scene:M0
   场景: M0
@@ -6559,7 +6560,7 @@ tasks:
   - docs/deploy-51-server.md
   状态: 完成
   阻塞类型: 决策
-  产出判据: 【G3 闸门·待答】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 上该表建表语句含跨字段 CHECK，发版记录落 `docs/deploy-51-server.md`
+  产出判据: 【G3 闸门·已答·未放行】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 上该表建表语句含跨字段 CHECK，发版记录落 `docs/deploy-51-server.md`
   来源: docs/roadmap/定夺队列.md:28 Q-12a
   可见: false
   闸门: G3 .51
@@ -6574,7 +6575,7 @@ tasks:
   - docs/deploy-51-server.md
   状态: 在跑
   阻塞类型: 决策
-  产出判据: 【G3 闸门·待答】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
+  产出判据: 【G3 闸门·已答·未放行】随下次 `.51` 发版一并执行（G3 发版决定不可代，⛔ 不单独发车）；`.51` 计划任务列表含每日快照项且次日目录出现新快照，落 `docs/audit-and-outbound-ops.md` 第五节
   来源: docs/roadmap/定夺队列.md:30 Q-14a
   可见: false
   闸门: G3 .51
