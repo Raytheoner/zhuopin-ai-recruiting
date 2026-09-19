@@ -18,6 +18,8 @@ from app.agents.intake_question import normalize_question_payload
 from app.agents.interview_prep import PrepGenerationFailed, regenerate_one
 from app.agents.jd_grounding import verify_jd_grounding
 from app.agents.resume_parser import PARSE_PROMPT_VERSION, compute_parse
+from app.audit.recorder import AuditRecorder
+from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
 from app.graph.jd_nodes import (
@@ -46,6 +48,30 @@ from app.graph.interview_prep_nodes import (
     load_application_job,
     next_prep_version,
 )
+from app.graph.invite_nodes import (
+    CONSENT_KINDS,
+    ContactVaultUnavailableError,
+    InviteTokenInvalidError,
+    LiveInterviewNotEnabledError,
+    PrepSnapshotNotFrozenForInviteError,
+    SessionLockedError,
+    VerificationExpiredError,
+    VerificationIncorrectError,
+    VerificationLockedError,
+    assert_invite_issuance_allowed,
+    compose_invite_draft,
+    compute_new_invite_token,
+    compute_new_session,
+    effect_create_interview_session,
+    effect_deliver_invitation,
+    effect_display_verification_code_to_hr,
+    effect_issue_invite,
+    effect_record_consent,
+    issue_verification_code,
+    open_invite,
+    open_resume,
+    verify_phone_code,
+)
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
@@ -63,6 +89,8 @@ from app.schemas.resume_fields import FIELD_LABELS, FIELD_NAMES
 from app.storage import job_queries
 from app.storage.appeal import AppealRecordNotFound, IllegalAppealTransition, transition_appeal
 from app.storage.auth_session import create_session, delete_session
+from app.storage.consent_terms import load_consent_term, latest_consent_version
+from app.storage.contact_source import resolve_live_candidate_phone
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 from app.storage.hr_account import verify_password
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
@@ -129,6 +157,21 @@ class PrepQuestionEditRequest(BaseModel):
     rubric: str
 
 
+class InterviewSessionCreateRequest(BaseModel):
+    prep_snapshot_version: int
+    sample_class: str
+    request_id: str
+
+
+class ConsentSubmitRequest(BaseModel):
+    kind: str
+    result: str
+
+
+class VerifyCodeRequest(BaseModel):
+    code: str
+
+
 class TurnOutcome(NamedTuple):
     """一轮采集的结果：给通道的消息 + L3 判定的"这是不是用人需求"。
 
@@ -179,12 +222,22 @@ def create_app(
     # 提前拉入的最小 constructor 装配（本任务只做到"目录存在"，上传路由与解析
     # 摄取逻辑属于后续任务范围）：不传时落回 Settings.resume_storage_dir 的
     # 默认值，测试可用 tmp_path 显式覆盖，避免把上传文件真的写进仓库工作区。
-    from app.config import get_settings
+    from app.config import get_settings, is_candidate_outbound_enabled
 
     _resume_storage_dir = Path(resume_storage_dir or get_settings().resume_storage_dir)
     _resume_storage_dir.mkdir(parents=True, exist_ok=True)
 
     channel = WebChannel(conn)
+    # 邀约投递的外发留痕（U3 tasks 4.4）：SqliteSink 复用应用共享连接——投递
+    # 发生在单次 HTTP 请求内的同步调用链里，不跨事务边界触发，不需要专属
+    # 连接（LLM 网关那条独立留痕连接的成因见 app/audit/hook.py 模块
+    # docstring，此处不适用）。
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(get_settings().audit_jsonl_path))
+    outbound_enabled = is_candidate_outbound_enabled
+    # 验证码明文的临时暂存（U3 tasks 4.7/4.8）：数据库按设计只存哈希
+    # （effect_issue_verification_code docstring），候选人请求生成的明文必须
+    # 在进程内先落一处，才能被 HR 工作台的读取端点接住转告候选人。
+    _pending_verification_codes: dict[str, str] = {}
 
     # gateway 与 graph 的构造从"每次请求一次"上提到"应用启动一次"，与 conn/
     # channel 的现有生命周期对齐。方向 A 让 build_intake_graph() 内部为
@@ -1573,6 +1626,203 @@ def create_app(
     @router.get("/applications/{application_id}/prep/{version}/review")
     def prep_review_page(application_id: str, version: int):
         return _render_static_page("interview_prep_review.html", root_path)
+
+    # ── U3 tasks 4.11：HR 签发页 + 候选人端路由 ──────────────────────────
+    # 三个 HR 侧端点在 /api/applications 前缀下，AuthMiddleware 自动要求登录
+    # （app/middleware/auth.py PROTECTED_PATH_PREFIXES）；候选人侧端点刻意
+    # 不挂在该前缀下——候选人没有 hr_session，挂上去会让候选人打不开自己的
+    # 一次性链接。`/api/interview-sessions/*` 不在保护前缀表里，
+    # 验证码明文查看端点因此单独做一次登录检查（见 _require_hr_login）。
+
+    def _require_hr_login(request: Request) -> None:
+        auth = getattr(request.state, "auth", None)
+        if not getattr(auth, "authenticated", False):
+            raise HTTPException(status_code=401, detail="未登录")
+
+    @router.post("/api/applications/{application_id}/interview-sessions")
+    def create_interview_session(
+        application_id: str, req: InterviewSessionCreateRequest, request: Request
+    ):
+        try:
+            assert_invite_issuance_allowed(conn, sample_class=req.sample_class)
+        except LiveInterviewNotEnabledError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ContactVaultUnavailableError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+        try:
+            session = compute_new_session(
+                conn, application_id=application_id,
+                prep_snapshot_version=req.prep_snapshot_version, sample_class=req.sample_class,
+            )
+        except PrepSnapshotNotFrozenForInviteError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        session_id = effect_create_interview_session(
+            conn, thread_id=application_id, business_key=req.request_id, session=session
+        )
+        if session_id is None:
+            row = conn.execute(
+                "SELECT id FROM interview_session WHERE application_id = ? "
+                "AND prep_snapshot_version = ? ORDER BY created_at DESC LIMIT 1",
+                (application_id, req.prep_snapshot_version),
+            ).fetchone()
+            session_id = row[0]
+
+        job_row = conn.execute(
+            "SELECT job.id, job.title FROM application JOIN job ON job.id = application.job_id "
+            "WHERE application.id = ?",
+            (application_id,),
+        ).fetchone()
+        if job_row is None:
+            raise HTTPException(status_code=404, detail="投递不存在")
+        job_id, job_title = job_row
+
+        token, token_hash, expires_at = compute_new_invite_token(conn, job_id=job_id)
+        effect_issue_invite(
+            conn, thread_id=session_id, business_key=token_hash,
+            session_id=session_id, token_hash=token_hash, expires_at=expires_at,
+        )
+
+        # 候选人链接必须指向候选人端的 HTML 页面（/interview/{token}），不是
+        # 下面 open_interview_invite 那个 JSON 端点——两者路径不同：页面加载
+        # 后由它自己的前端脚本再去调 JSON 端点打开令牌（interview_consent.html
+        # 里的 fetch("interview/invite/...")）。链接指错会让候选人点开看到一坨
+        # JSON 而不是同意页。
+        candidate_link = f"{root_path}/interview/{token}"
+        draft_id, invite_body = compose_invite_draft(candidate_link=candidate_link, job_title=job_title)
+        reviewer = reviewer_of(request)
+
+        if req.sample_class == "live":
+            recipient = resolve_live_candidate_phone(conn, application_id=application_id)
+            if recipient is None:
+                raise HTTPException(
+                    status_code=422, detail="无法从 candidate-contact-vault 读取该候选人手机号"
+                )
+        else:
+            recipient = f"candidate:{application_id}"
+
+        effect_deliver_invitation(
+            conn, thread_id=session_id, business_key=draft_id,
+            session_id=session_id, recipient=recipient, body=invite_body,
+            channel=channel, recorder=recorder, outbound_enabled=outbound_enabled,
+            confirmed_by=reviewer,
+        )
+        event = conn.execute(
+            "SELECT event_type FROM interview_invite_event WHERE session_id = ? "
+            "ORDER BY at DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        delivery_mode = "delivered" if event and event[0] == "delivered" else "manual_handoff"
+
+        return {
+            "session_id": session_id,
+            "invite_token": token,
+            "invite_expires_at": expires_at,
+            "delivery_mode": delivery_mode,
+            "candidate_link": candidate_link,
+        }
+
+    @router.get("/interview/invite/{token}")
+    def open_interview_invite(token: str):
+        try:
+            session_id = open_invite(conn, token)
+        except InviteTokenInvalidError:
+            # 统一失效页：⛔ 不区分未知/已用/已过期，三种原因对候选人展示同一
+            # 文案（spec「MUST NOT 泄露场次或候选人信息」，Task 5 review 已就
+            # 这点专门留意 Task 10 是否遵守）。
+            raise HTTPException(status_code=410, detail="链接已失效，请联系 HR 重新获取邀约")
+        return {
+            "session_id": session_id,
+            "consent_terms": [
+                {
+                    "kind": kind,
+                    "version": (version := latest_consent_version(kind)),
+                    "text": load_consent_term(kind, version).text,
+                }
+                for kind in CONSENT_KINDS
+            ],
+        }
+
+    @router.get("/interview/resume/{token}")
+    def open_interview_resume(token: str):
+        try:
+            session_id, next_seq = open_resume(conn, token)
+        except InviteTokenInvalidError:
+            raise HTTPException(status_code=410, detail="续入链接已失效")
+        return {"session_id": session_id, "next_seq": next_seq}
+
+    @router.post("/interview/sessions/{session_id}/consent")
+    def submit_consent(session_id: str, req: ConsentSubmitRequest):
+        if req.kind not in CONSENT_KINDS:
+            raise HTTPException(status_code=422, detail="未知的同意类型")
+        if req.result not in ("accepted", "declined"):
+            raise HTTPException(status_code=422, detail="result 必须是 accepted 或 declined")
+        version = latest_consent_version(req.kind)
+        effect_record_consent(
+            conn, thread_id=session_id, business_key=f"{req.kind}:{version}",
+            session_id=session_id, kind=req.kind, result=req.result, version=version,
+        )
+        return {"ok": True, "kind": req.kind, "result": req.result, "version": version}
+
+    @router.post("/interview/sessions/{session_id}/verification-code/request")
+    def request_verification_code(session_id: str):
+        try:
+            code = issue_verification_code(conn, session_id=session_id)
+        except SessionLockedError as exc:
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
+        _pending_verification_codes[session_id] = code
+        return {"ok": True}
+
+    @router.post("/interview/sessions/{session_id}/verification-code/verify")
+    def verify_verification_code(session_id: str, req: VerifyCodeRequest):
+        try:
+            verify_phone_code(conn, session_id=session_id, submitted_code=req.code)
+        except VerificationLockedError as exc:
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
+        except VerificationExpiredError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except VerificationIncorrectError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _pending_verification_codes.pop(session_id, None)
+        return {"ok": True}
+
+    @router.get("/api/interview-sessions/{session_id}/verification-code")
+    def hr_view_verification_code(session_id: str, request: Request):
+        # 明文验证码只在候选人请求时短暂存在于 _pending_verification_codes——
+        # 数据库按设计只存哈希（effect_issue_verification_code docstring）。
+        # 这个端点把明文转告 HR，因此必须验证登录态：不加这道检查，任何人
+        # 不经 HR 就能拿到验证码，直接绕过手机号弱核验（合规红线相邻风险）。
+        _require_hr_login(request)
+        code = _pending_verification_codes.get(session_id)
+        if code is None:
+            raise HTTPException(status_code=404, detail="验证码尚未生成或已被使用")
+        effect_display_verification_code_to_hr(
+            conn, thread_id=session_id, business_key=uuid.uuid4().hex,
+            session_id=session_id, accessor=reviewer_of(request),
+        )
+        return {"code": code}
+
+    @router.get("/api/interview-sessions/{session_id}")
+    def get_interview_session_status(session_id: str):
+        row = conn.execute(
+            "SELECT status, sample_class, invite_expires_at FROM interview_session WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="场次不存在")
+        return {
+            "session_id": session_id, "status": row[0],
+            "sample_class": row[1], "invite_expires_at": row[2],
+        }
+
+    @router.get("/applications/{application_id}/interview-invite")
+    def interview_invite_issue_page(application_id: str):
+        return _render_static_page("interview_invite_issue.html", root_path)
+
+    @router.get("/interview/{token}")
+    def interview_consent_page(token: str):
+        return _render_static_page("interview_consent.html", root_path)
 
     @router.get("/")
     def index() -> HTMLResponse:

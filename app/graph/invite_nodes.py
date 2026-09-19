@@ -1,0 +1,580 @@
+"""U3 邀约与同意流程 L4 编排层（voice-structured-interview tasks 4.1-4.11,
+design D5/D6/D13/D14/D20）。
+
+与 app/graph/interview_prep_nodes.py 同一形态：Web 通道下"挂起等人确认"由
+HTTP 端点直接调用普通 Python 函数达成，不建真实 LangGraph interrupt()
+（2026-08-26 判例，见 interview_prep_nodes.py 模块 docstring）。
+
+thread_id 统一取 session_id（design D20 invite 子图定义）。本文件按 tasks.md
+4.1→4.11 顺序组织：场次创建/令牌签发/令牌校验/续入令牌/邀约投递/同意/
+验证码/HR 展示。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import secrets
+import sqlite3
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from app.agents.jd_agent import AI_LABEL_TEMPLATE
+from app.outbound.delivery import deliver_candidate_message
+from app.outbound.messages import CandidateOutboundMessage
+from app.storage.contact_source import is_contact_vault_available
+from app.storage.idempotency import idempotent_effect
+from app.storage.live_interview_gate import is_live_interview_enabled
+
+logger = logging.getLogger(__name__)
+
+TOKEN_BYTES = 32
+DEFAULT_INVITE_EXPIRY_DAYS = 7
+RETENTION_DAYS = 90
+RETENTION_POLICY_VERSION = "v1-90d"  # design D18 起步值
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_iso(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+# ── 4.1 前置：场次创建 ──────────────────────────────────────────────
+
+class PrepSnapshotNotFrozenForInviteError(Exception):
+    """选中的投递没有已冻结的 prep 快照，不能签发邀约（tasks 4.11 前置）。"""
+
+
+def compute_new_session(
+    conn: sqlite3.Connection, *, application_id: str, prep_snapshot_version: int, sample_class: str
+) -> dict[str, Any]:
+    """纯计算：组装新场次的字段，不写库。retention_until 在这里算好——铁律
+    要求留存期限必须在场次建立那一刻由应用层写入，不允许留空（U1 已有的
+    NOT NULL 约束）。"""
+    row = conn.execute(
+        "SELECT status FROM prep_snapshot WHERE application_id = ? AND version = ?",
+        (application_id, prep_snapshot_version),
+    ).fetchone()
+    if row is None or row[0] != "frozen":
+        raise PrepSnapshotNotFrozenForInviteError(
+            f"投递 {application_id!r} 版本 {prep_snapshot_version} 的 prep 快照未冻结"
+        )
+    retention_until = (_utcnow() + timedelta(days=RETENTION_DAYS)).isoformat()
+    return {
+        "id": str(uuid.uuid4()),
+        "application_id": application_id,
+        "prep_snapshot_version": prep_snapshot_version,
+        "sample_class": sample_class,
+        "retention_until": retention_until,
+        "retention_policy_version": RETENTION_POLICY_VERSION,
+    }
+
+
+@idempotent_effect("effect_create_interview_session")
+def effect_create_interview_session(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session: dict[str, Any]
+) -> str:
+    """effect_* 节点：写 interview_session 一行，status='pending'。business_key
+    由调用方传 HR 点击签发时生成的 request_id（每次点击必须产生一次意图，即使
+    参数逐字相同——与 effect_regenerate_prep_question 的 request_id 用法同一
+    先例）。"""
+    conn.execute(
+        "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+        "retention_until, retention_policy_version, sample_class, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+        (
+            session["id"], session["application_id"], session["prep_snapshot_version"],
+            session["retention_until"], session["retention_policy_version"], session["sample_class"],
+        ),
+    )
+    return session["id"]
+
+
+# ── 4.9 / 4.10：签发前置闸 ───────────────────────────────────────────
+
+class LiveInterviewNotEnabledError(Exception):
+    """真实候选人开闸未开启，live 场次签发被拒（design D14，tasks 4.9）。"""
+
+
+class ContactVaultUnavailableError(Exception):
+    """candidate-contact-vault 未开启/未交付，live 场次签发被拒（tasks 4.10）。"""
+
+
+def assert_invite_issuance_allowed(conn: sqlite3.Connection, *, sample_class: str) -> None:
+    """签发前的结构性前置校验。internal_sim 场次不受这两道闸约束（spec
+    「开关关闭时只允许为内部模拟场次签发」）；live 场次必须两道闸都通过。
+    ⛔ 不在这里捕获异常——调用方（Web 路由）据异常类型返回 4xx 并留痕。"""
+    if sample_class != "live":
+        return
+    if not is_live_interview_enabled():
+        raise LiveInterviewNotEnabledError("真实候选人开闸未开启")
+    if not is_contact_vault_available():
+        raise ContactVaultUnavailableError("candidate-contact-vault 未开启，live 场次签发被拒")
+
+
+# ── 4.1：令牌签发 ───────────────────────────────────────────────────
+
+def generate_invite_token() -> str:
+    """32 字节随机、URL-safe 编码（spec「MUST 不可猜测」）。"""
+    return secrets.token_urlsafe(TOKEN_BYTES)
+
+
+def load_invite_expiry_days(conn: sqlite3.Connection, job_id: str) -> int:
+    row = conn.execute(
+        "SELECT invite_expiry_days FROM job_prep_config WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    if row is None or row[0] is None:
+        return DEFAULT_INVITE_EXPIRY_DAYS
+    return row[0]
+
+
+def compute_new_invite_token(conn: sqlite3.Connection, *, job_id: str) -> tuple[str, str, str]:
+    """纯计算：生成明文令牌、其哈希、到期时刻（ISO8601 UTC）。不写库。
+    返回 (明文令牌, 哈希, 到期时刻字符串)——明文令牌只在这一次调用里出现，
+    调用方负责把它拼进候选人链接，之后系统只认哈希。"""
+    token = generate_invite_token()
+    token_hash = _hash_token(token)
+    days = load_invite_expiry_days(conn, job_id)
+    expires_at = (_utcnow() + timedelta(days=days)).isoformat()
+    return token, token_hash, expires_at
+
+
+@idempotent_effect("effect_issue_invite")
+def effect_issue_invite(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, token_hash: str, expires_at: str,
+) -> None:
+    """effect_* 节点：business_key = token_hash（tasks 4.1 字面幂等键公式）。
+    "同一场次重复签发 ⇒ 旧令牌作废" 由 UPDATE 覆盖旧哈希实现——旧哈希一旦被
+    覆盖，任何用旧明文令牌算出的哈希都查不到匹配行，天然作废，不需要额外
+    的"已作废"标记。"并留痕" 由 interview_invite_event 承担。"""
+    prior = conn.execute(
+        "SELECT invite_token_hash FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    was_reissue = prior is not None and prior[0] is not None
+    conn.execute(
+        "UPDATE interview_session SET invite_token_hash = ?, invite_expires_at = ? WHERE id = ?",
+        (token_hash, expires_at, session_id),
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), session_id, "reissued" if was_reissue else "issued", token_hash),
+    )
+
+
+# ── 4.2：令牌校验端点 ────────────────────────────────────────────────
+
+class InviteTokenInvalidError(Exception):
+    """统一失效页情形：令牌未知、已用、已过期。⛔ 三种原因对候选人展示同一个
+    页面文案（spec「MUST NOT 泄露场次或候选人信息」），区分只在留痕里。"""
+
+
+def find_session_by_token(conn: sqlite3.Connection, token: str) -> str | None:
+    token_hash = _hash_token(token)
+    row = conn.execute(
+        "SELECT id FROM interview_session WHERE invite_token_hash = ?", (token_hash,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+@idempotent_effect("effect_log_invite_access_denied")
+def effect_log_invite_access_denied(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, reason: str
+) -> None:
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type) VALUES (?, ?, ?)",
+        (str(uuid.uuid4()), session_id, reason),
+    )
+
+
+@idempotent_effect("effect_open_invite")
+def effect_open_invite(conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str) -> None:
+    """首次打开：status pending → in_progress。这一步状态转移本身就是"令牌
+    已使用"的落点——第二次打开时 open_invite() 会看到 status != 'pending'
+    并拒绝，等价于 spec 要求的"打开即失效"，不需要额外的 used_at 列。"""
+    conn.execute(
+        "UPDATE interview_session SET status = 'in_progress' WHERE id = ? AND status = 'pending'",
+        (session_id,),
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type) VALUES (?, ?, 'opened')",
+        (str(uuid.uuid4()), session_id),
+    )
+
+
+def open_invite(conn: sqlite3.Connection, token: str) -> str:
+    """L4 编排：查找 → 校验过期 → 校验未用 → 标记已用，四步必须在同一次
+    请求内顺序发生（单连接 SQLite，无并发行锁问题，见 app/storage/db.py
+    的单连接模型）。返回 session_id；任何一步不满足抛 InviteTokenInvalidError。
+    """
+    session_id = find_session_by_token(conn, token)
+    if session_id is None:
+        raise InviteTokenInvalidError("令牌无效")
+
+    row = conn.execute(
+        "SELECT invite_expires_at, status FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    expires_at_raw, status = row
+
+    if _utcnow() > _parse_iso(expires_at_raw):
+        effect_log_invite_access_denied(
+            conn, thread_id=session_id, business_key=f"expired:{uuid.uuid4().hex}",
+            session_id=session_id, reason="expired_access",
+        )
+        raise InviteTokenInvalidError("令牌已过期")
+
+    if status != "pending":
+        effect_log_invite_access_denied(
+            conn, thread_id=session_id, business_key=f"reused:{uuid.uuid4().hex}",
+            session_id=session_id, reason="reused_access",
+        )
+        raise InviteTokenInvalidError("令牌已使用")
+
+    effect_open_invite(conn, thread_id=session_id, business_key="open", session_id=session_id)
+    return session_id
+
+
+# ── 4.3：续入令牌 ───────────────────────────────────────────────
+
+MAX_RESUME_ISSUANCES = 3
+
+
+class ResumeTokenLimitExceededError(Exception):
+    """续入令牌签发次数已达上限（tasks 4.3：一次性、上限 3 次）。"""
+
+
+def resume_issuance_count(conn: sqlite3.Connection, session_id: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM interview_invite_event WHERE session_id = ? AND event_type = 'resume_issued'",
+        (session_id,),
+    ).fetchone()
+    return row[0]
+
+
+def compute_new_resume_token(conn: sqlite3.Connection, *, session_id: str) -> tuple[str, str]:
+    """纯计算：生成续入令牌明文与哈希。不写库；上限校验在这里抛出——签发
+    次数是只读查询，不需要等到 effect 节点才发现超限。"""
+    if resume_issuance_count(conn, session_id) >= MAX_RESUME_ISSUANCES:
+        raise ResumeTokenLimitExceededError(
+            f"场次 {session_id!r} 续入令牌已达上限 {MAX_RESUME_ISSUANCES} 次"
+        )
+    token = generate_invite_token()
+    token_hash = _hash_token(token)
+    return token, token_hash
+
+
+@idempotent_effect("effect_issue_resume_token")
+def effect_issue_resume_token(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, token_hash: str
+) -> None:
+    """business_key = token_hash。旧续入令牌（若有）同样被覆盖作废——同一
+    场次同一时刻只有一枚有效续入令牌，与主令牌同一手法。"""
+    conn.execute(
+        "UPDATE interview_session SET resume_token_hash = ? WHERE id = ?", (token_hash, session_id)
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) "
+        "VALUES (?, ?, 'resume_issued', ?)",
+        (str(uuid.uuid4()), session_id, token_hash),
+    )
+
+
+@idempotent_effect("effect_consume_resume_token")
+def effect_consume_resume_token(conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str) -> None:
+    """一次性消费：清空 resume_token_hash，场次回到 in_progress。
+    business_key 由调用方传 token_hash——同一枚令牌只能被消费一次，
+    第二次打开同一 token 时 open_resume() 在查找阶段就已经因
+    resume_token_hash 已被清空而查不到 session，不会重复走到这里。"""
+    conn.execute(
+        "UPDATE interview_session SET resume_token_hash = NULL, status = 'in_progress' WHERE id = ?",
+        (session_id,),
+    )
+
+
+def open_resume(conn: sqlite3.Connection, token: str) -> tuple[str, int]:
+    """L4 编排：校验续入令牌并返回 (session_id, next_seq)。next_seq = 该场次
+    已落库 interview_turn 的最大 seq + 1（没有 turn 时为 1）——⛔ 不重复
+    出题：出题内容仍是冻结快照里原来的题，本函数只决定从第几题继续
+    （与 5.9 联动，本单元只交付这个查询本身）。"""
+    token_hash = _hash_token(token)
+    row = conn.execute(
+        "SELECT id, status FROM interview_session WHERE resume_token_hash = ?", (token_hash,)
+    ).fetchone()
+    if row is None:
+        raise InviteTokenInvalidError("续入令牌无效")
+    session_id, status = row
+    if status not in ("interrupted", "in_progress"):
+        raise InviteTokenInvalidError("续入令牌已失效")
+
+    turn_row = conn.execute(
+        "SELECT MAX(seq) FROM interview_turn WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    next_seq = (turn_row[0] or 0) + 1
+
+    effect_consume_resume_token(conn, thread_id=session_id, business_key=token_hash, session_id=session_id)
+    return session_id, next_seq
+
+
+# ── 4.4：邀约投递（经既有外发门禁） ──────────────────────────────────
+
+def render_invite_body(*, candidate_link: str, job_title: str) -> str:
+    """草稿正文，复用 jd_agent 的 AI 生成标识模板（design D6：不另写一套）。"""
+    generated_at = _utcnow().isoformat()
+    label = AI_LABEL_TEMPLATE.format(generated_at=generated_at)
+    return (
+        f"您好，您已进入「{job_title}」岗位的 AI 结构化面试环节。\n"
+        f"请点击以下链接开始（链接仅可使用一次，请勿转发给他人）：\n{candidate_link}\n\n"
+        f"{label}"
+    )
+
+
+def compose_invite_draft(*, candidate_link: str, job_title: str) -> tuple[str, str]:
+    """返回 (draft_id, body)。draft_id 是这次拟稿的稳定标识，用作
+    effect_deliver_invitation 的幂等键（tasks 4.4 字面公式
+    `{session_id}:effect_deliver_invitation:{draft_id}`）——同一次拟稿只投递
+    一次，重新拟稿（如改了文案）产生新 draft_id，允许重新走一次门禁。"""
+    draft_id = uuid.uuid4().hex
+    body = render_invite_body(candidate_link=candidate_link, job_title=job_title)
+    return draft_id, body
+
+
+@idempotent_effect("effect_deliver_invitation")
+def effect_deliver_invitation(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, recipient: str, body: str, channel, recorder,
+    outbound_enabled, confirmed_by: str | None = None,
+) -> None:
+    """effect_* 节点：调既有门禁唯一入口 deliver_candidate_message()。
+    ⛔ 本函数不绕过门禁直连任何通道实现的投递方法——反证测试
+    test_no_direct_channel_deliver_import 会源码级扫描本文件确认不出现
+    绕开 deliver_candidate_message 的直连 import。
+
+    总开关关闭 ⇒ 门禁拒绝（REASON_OUTBOUND_DISABLED）⇒ 留 'manual_handoff'
+    事件，链接由调用方（Web 路由）已经拿在手里、直接展示在 HR 工作台，不需要
+    本函数额外处理；总开关开启且 confirmed_by 非空 ⇒ 门禁放行 ⇒ 留
+    'delivered' 事件。"""
+    message = CandidateOutboundMessage(
+        message_type="interview_invitation",
+        recipient=recipient,
+        body=body,
+        confirmed_by=confirmed_by,
+    )
+    decision = deliver_candidate_message(
+        conn, thread_id=thread_id, message=message, channel=channel,
+        recorder=recorder, outbound_enabled=outbound_enabled,
+    )
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) VALUES (?, ?, ?, ?)",
+        (
+            str(uuid.uuid4()), session_id,
+            "delivered" if decision.allowed else "manual_handoff",
+            decision.reason or "",
+        ),
+    )
+
+
+# ── 4.6：双同意记录 ─────────────────────────────────────────────────
+
+CONSENT_KINDS: tuple[str, ...] = ("ai_interview", "identity_check")
+
+
+@idempotent_effect("effect_record_consent")
+def effect_record_consent(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, kind: str, result: str, version: str,
+) -> None:
+    """effect_* 节点：business_key = f"{kind}:{version}"（tasks 4.6 字面幂等
+    键公式 `{session_id}:effect_record_consent:{kind}:{version}`）。同一
+    (session_id, kind) 重复提交按 UPSERT 处理（候选人改主意重新勾选）。
+    任一拒绝 ⇒ 场次 abandoned ⇒ 留痕——spec「任一拒绝 ⇒ 场次不开始」，
+    每次调用独立判断，顺序不敏感（不管先提交哪一项，只要某一项是拒绝，
+    场次就会被置为 abandoned）。"""
+    conn.execute(
+        "INSERT INTO interview_consent (session_id, kind, result, consent_version) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(session_id, kind) DO UPDATE SET "
+        "result = excluded.result, consent_version = excluded.consent_version, at = datetime('now')",
+        (session_id, kind, result, version),
+    )
+    if result == "declined":
+        conn.execute(
+            "UPDATE interview_session SET status = 'abandoned' WHERE id = ? AND status != 'abandoned'",
+            (session_id,),
+        )
+        conn.execute(
+            "INSERT INTO interview_invite_event (id, session_id, event_type, detail) "
+            "VALUES (?, ?, 'consent_declined', ?)",
+            (str(uuid.uuid4()), session_id, kind),
+        )
+
+
+# ── 4.7 / 4.8：手机号验证码 ──────────────────────────────────────────
+
+CODE_LENGTH = 6
+CODE_TTL_MINUTES = 5
+MAX_CODE_ATTEMPTS = 5
+
+
+def _hash_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def generate_verification_code() -> str:
+    return f"{secrets.randbelow(10 ** CODE_LENGTH):0{CODE_LENGTH}d}"
+
+
+@idempotent_effect("effect_issue_verification_code")
+def effect_issue_verification_code(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    session_id: str, code_hash: str, expires_at: str,
+) -> None:
+    """签发新验证码：落哈希与过期时刻，尝试次数清零（重新签发即重新给
+    5 次机会——候选人请求新码是自己的选择，不是绕过锁定，锁定后场次
+    status='locked'，签发前的编排函数会先挡住已锁定场次，见
+    issue_verification_code）。"""
+    conn.execute(
+        "UPDATE interview_session SET phone_code_hash = ?, phone_code_expires_at = ?, "
+        "phone_attempts = 0 WHERE id = ?",
+        (code_hash, expires_at, session_id),
+    )
+
+
+class SessionLockedError(Exception):
+    """场次已锁定，不能再签发新验证码。"""
+
+
+def issue_verification_code(conn: sqlite3.Connection, *, session_id: str) -> str:
+    """L4 编排：生成新验证码、落库、返回明文（仅此一次）。调用方决定展示给
+    谁：短信通道未配置（本单元现状）⇒ 调用方接着调
+    effect_display_verification_code_to_hr 展示在 HR 工作台；短信通道配置了
+    ⇒ 调用方改调 effect_send_verification_code（本单元只留接口，OQ-10 未定
+    前不接线，见该函数）。"""
+    status_row = conn.execute(
+        "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    if status_row is not None and status_row[0] == "locked":
+        raise SessionLockedError(f"场次 {session_id!r} 已锁定，不能签发新验证码")
+
+    code = generate_verification_code()
+    code_hash = _hash_code(code)
+    expires_at = (_utcnow() + timedelta(minutes=CODE_TTL_MINUTES)).isoformat()
+    effect_issue_verification_code(
+        conn, thread_id=session_id, business_key=uuid.uuid4().hex,
+        session_id=session_id, code_hash=code_hash, expires_at=expires_at,
+    )
+    return code
+
+
+class VerificationLockedError(Exception):
+    """场次已锁定（连续输错超限）。"""
+
+
+class VerificationExpiredError(Exception):
+    """验证码未签发、或已过期。"""
+
+
+class VerificationIncorrectError(Exception):
+    """验证码错误（未超限时的单次失败）。"""
+
+
+@idempotent_effect("effect_verify_phone")
+def effect_verify_phone(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, correct: bool
+) -> None:
+    """business_key = str(attempt_no)（tasks 4.7 字面幂等键公式
+    `{session_id}:effect_verify_phone:{attempt_no}`）。correct 由调用方
+    （verify_phone_code，纯比对哈希）算好传入——本节点只做落库这一件事：
+    通过则写 phone_verified_at + identity_check(result=skipped)；不通过则
+    计数，超限则锁定场次并留痕。"""
+    if correct:
+        conn.execute(
+            "UPDATE interview_session SET phone_verified_at = datetime('now') WHERE id = ?",
+            (session_id,),
+        )
+        conn.execute(
+            "INSERT INTO identity_check (session_id, result) VALUES (?, 'skipped') "
+            "ON CONFLICT(session_id) DO NOTHING",
+            (session_id,),
+        )
+        return
+
+    conn.execute(
+        "UPDATE interview_session SET phone_attempts = phone_attempts + 1 WHERE id = ?", (session_id,)
+    )
+    attempts = conn.execute(
+        "SELECT phone_attempts FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()[0]
+    if attempts >= MAX_CODE_ATTEMPTS:
+        conn.execute("UPDATE interview_session SET status = 'locked' WHERE id = ?", (session_id,))
+        conn.execute(
+            "INSERT INTO interview_invite_event (id, session_id, event_type) VALUES (?, ?, 'verification_locked')",
+            (str(uuid.uuid4()), session_id),
+        )
+
+
+def verify_phone_code(conn: sqlite3.Connection, *, session_id: str, submitted_code: str) -> None:
+    """L4 编排：过期/锁定校验 → 比对哈希 → 落库。⛔ 不返回布尔，抛出对应
+    异常——调用方（Web 路由）据异常类型映射 HTTP 状态与候选人文案。"""
+    row = conn.execute(
+        "SELECT status, phone_code_hash, phone_code_expires_at, phone_attempts "
+        "FROM interview_session WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    status, code_hash, expires_at_raw, attempts = row
+
+    if status == "locked":
+        raise VerificationLockedError("场次已锁定")
+    if code_hash is None or expires_at_raw is None:
+        raise VerificationExpiredError("验证码未签发或已失效")
+    if _utcnow() > _parse_iso(expires_at_raw):
+        raise VerificationExpiredError("验证码已过期")
+
+    attempt_no = attempts + 1
+    correct = _hash_code(submitted_code) == code_hash
+    effect_verify_phone(
+        conn, thread_id=session_id, business_key=str(attempt_no),
+        session_id=session_id, correct=correct,
+    )
+    if not correct:
+        post_row = conn.execute(
+            "SELECT status FROM interview_session WHERE id = ?", (session_id,)
+        ).fetchone()
+        if post_row[0] == "locked":
+            raise VerificationLockedError("连续输错已达上限，场次锁定")
+        raise VerificationIncorrectError("验证码错误")
+
+
+@idempotent_effect("effect_display_verification_code_to_hr")
+def effect_display_verification_code_to_hr(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, accessor: str
+) -> None:
+    """短信通道未配置时的降级路径（tasks 4.8）：验证码在候选人请求时生成，
+    本节点只留痕"HR 看过这个场次的验证码"这件事，⛔ 不落验证码明文本身——
+    明文已经在 issue_verification_code 的返回值里，由 Web 路由直接吐给
+    HR 工作台的响应体，不进数据库。"""
+    conn.execute(
+        "INSERT INTO interview_invite_event (id, session_id, event_type, detail) VALUES (?, ?, 'code_displayed_to_hr', ?)",
+        (str(uuid.uuid4()), session_id, accessor),
+    )
+
+
+def effect_send_verification_code(*args, **kwargs):
+    """短信通道自动发送节点（design D13）。⏸ 门禁口径 OQ-10（自动发送验证码
+    是否属于"已人工确认邀约的从属动作"、可否免逐次门禁确认）未定前，本节点
+    只留接口、默认不启用、不接线——tasks 4.8 字面要求"该节点只留接口"。
+    ⛔ 不消费任何真实短信供应商 API（当前无供应商可消费）。调用方（Web 路由）
+    不得引用这个函数；本单元的候选人验证码路径只有
+    effect_display_verification_code_to_hr 一条。"""
+    raise NotImplementedError("短信验证码通道未采购/未接线（OQ-10 未决），本单元不启用")

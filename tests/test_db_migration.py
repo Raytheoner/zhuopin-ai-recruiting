@@ -55,11 +55,46 @@ CREATE TABLE resume (
 );
 """
 
+# U2 建表的 job_prep_config，不含 invite_expiry_days——该列由 U3 task 1
+# 通过 _ADDED_COLUMNS 加入老库。
+_LEGACY_JOB_PREP_CONFIG_DDL = """
+CREATE TABLE job_prep_config (
+    job_id TEXT PRIMARY KEY NOT NULL REFERENCES job(id),
+    prep_curve TEXT NOT NULL DEFAULT 'easy_to_hard'
+        CHECK (prep_curve IN ('easy_to_hard', 'by_dimension')),
+    prep_question_count INTEGER NOT NULL DEFAULT 10
+);
+"""
+
+# M3 U1 建表的 interview_session（注：M3 整个 M3 阶段新建的表，但该表本身
+# 属 U1 范畴），不含 phone_code_hash/phone_code_expires_at——这两列由 U3 task 1
+# 通过 _ADDED_COLUMNS 加入老库。
+_LEGACY_INTERVIEW_SESSION_DDL = """
+CREATE TABLE IF NOT EXISTS interview_session (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    prep_snapshot_version INTEGER NOT NULL,
+    invite_token_hash TEXT,
+    invite_expires_at TEXT,
+    resume_token_hash TEXT,
+    phone_verified_at TEXT,
+    phone_attempts INTEGER NOT NULL DEFAULT 0,
+    recording_uri TEXT,
+    retention_until TEXT NOT NULL,
+    retention_policy_version TEXT NOT NULL,
+    sample_class TEXT NOT NULL CHECK (sample_class IN ('internal_sim', 'live')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        status IN ('pending', 'in_progress', 'completed', 'interrupted', 'abandoned', 'locked')
+    ),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 # 漂移守卫覆盖的表：凡是"既可能来自 SCHEMA 的 CREATE TABLE（新库）、又可能
 # 早就存在于老库里"的表都要进这个名单，新加一张这样的表就往这里加一行，并在
 # _legacy_db 里补上它的历史 DDL。⛔ 不要只写当下出过事的那张表——本守卫防的是
 # "往 CREATE TABLE 加列却不登记 _ADDED_COLUMNS"这一整类错法，不是某一次事故。
-_DRIFT_GUARDED_TABLES = ("job_profile", "resume")
+_DRIFT_GUARDED_TABLES = ("job_profile", "resume", "job_prep_config", "interview_session")
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -69,7 +104,34 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _legacy_db(tmp_path) -> sqlite3.Connection:
     """建一个"老 schema + 已有数据"的库，模拟 .51 上的 data/demo.db。"""
     conn = get_connection(str(tmp_path / "legacy.db"))
-    conn.executescript(_LEGACY_JOB_DDL + _LEGACY_JOB_PROFILE_DDL + _LEGACY_RESUME_DDL)
+    conn.executescript(
+        _LEGACY_JOB_DDL
+        + _LEGACY_JOB_PROFILE_DDL
+        + _LEGACY_RESUME_DDL
+        + _LEGACY_JOB_PREP_CONFIG_DDL
+    )
+    # 为了测试 interview_session 迁移列，需要创建它的 FK 依赖（candidate、application、stage）
+    # 这些表在实际 .51 上早就存在
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS candidate "
+        "(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, phone_hash TEXT, "
+        "created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stage "
+        "(id TEXT PRIMARY KEY, name TEXT NOT NULL, stage_type TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO stage (id, name, stage_type) VALUES ('initial', '初筛', 'initial')"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS application "
+        "(id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL REFERENCES candidate(id), "
+        "job_id TEXT NOT NULL REFERENCES job(id), resume_id TEXT NOT NULL REFERENCES resume(id), "
+        "current_stage_id TEXT NOT NULL REFERENCES stage(id))"
+    )
+    conn.executescript(_LEGACY_INTERVIEW_SESSION_DDL)
+
     conn.execute(
         "INSERT INTO job (id, title, status) VALUES ('old-job', '采购工程师', 'approved')"
     )
@@ -84,6 +146,17 @@ def _legacy_db(tmp_path) -> sqlite3.Connection:
             json.dumps({"job_title": "采购工程师"}, ensure_ascii=False),
             json.dumps(["toolchain"], ensure_ascii=False),
         ),
+    )
+    conn.execute("INSERT INTO job_prep_config (job_id) VALUES ('old-job')")
+    conn.execute("INSERT INTO candidate (id, name, phone_hash) VALUES ('old-candidate', '张三', NULL)")
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('old-app', 'old-candidate', 'old-job', 'old-resume', 'initial')"
+    )
+    conn.execute(
+        "INSERT INTO interview_session "
+        "(id, application_id, prep_snapshot_version, retention_until, retention_policy_version, sample_class) "
+        "VALUES ('old-session', 'old-app', 1, '2027-01-01T00:00:00+00:00', 'v1-90d', 'internal_sim')"
     )
     conn.commit()
     return conn
@@ -133,7 +206,7 @@ def test_apply_column_migrations_is_idempotent(tmp_path):
     first = apply_column_migrations(conn)
     second = apply_column_migrations(conn)
 
-    assert set(first) == {column for _table, column, _ddl in _ADDED_COLUMNS}
+    assert set(first) == {f"{table}.{column}" for table, column, _ddl in _ADDED_COLUMNS}
     assert second == []  # 第二次一列都不加，且不抛 "duplicate column name"
 
     init_schema(conn)  # 重复跑整个 init_schema 同样不能报错
@@ -309,9 +382,14 @@ def test_audit_tables_never_enter_the_add_column_path(tmp_path):
     "老表缺列"，必须走加列路径。判定逻辑仍然不变——进这个集合的表必须在
     SCHEMA 里已有 CREATE TABLE IF NOT EXISTS，且在 _legacy_db 夹具里有对应的
     历史 DDL。
+
+    U3 task 1 进一步扩大到包含 job_prep_config 与 interview_session：job_prep_config
+    于 U2 建表（早于 U3），interview_session 于 M3 U1 建表。两张表都已在老库中存在，
+    新加的 invite_expiry_days / phone_code_hash / phone_code_expires_at 属于"老表缺列"，
+    走加列路径。
     """
     assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {
-        "job_profile", "job", "resume"
+        "job_profile", "job", "resume", "job_prep_config", "interview_session"
     }
 
 

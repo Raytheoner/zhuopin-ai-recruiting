@@ -844,6 +844,27 @@ CREATE TABLE IF NOT EXISTS job_prep_config (
         CHECK (prep_curve IN ('easy_to_hard', 'by_dimension')),
     prep_question_count INTEGER NOT NULL DEFAULT 10
 );
+
+-- 邀约与同意的场次级事件留痕（voice-structured-interview U3 tasks
+-- 4.1/4.2/4.3/4.6/4.7/4.8）。⛔ 不与 interview_access_log 合并：
+-- interview_access_log 记的是"面试官/HR 读取录音/转写/ScoreCard 内容"这四类
+-- 固定入口（interview-recording-retention spec），本表记的是"场次生命周期里
+-- 发生了什么事件"，语义不同、增长速率不同，合并会让内容访问留痕表的
+-- CHECK 枚举无限膨胀。
+CREATE TABLE IF NOT EXISTS interview_invite_event (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES interview_session(id),
+    event_type TEXT NOT NULL CHECK (event_type IN (
+        'issued', 'reissued', 'opened', 'expired_access', 'reused_access',
+        'resume_issued', 'consent_declined', 'verification_locked',
+        'manual_handoff', 'delivered', 'code_displayed_to_hr'
+    )),
+    detail TEXT,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_invite_event_session
+    ON interview_invite_event (session_id);
 """
 
 
@@ -880,6 +901,14 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 的表彻底无效，不在这里登记的话老库上每一次上传都会在
     # "UPDATE resume SET raw_text = ?" 上 500（final review 发现）。
     ("resume", "raw_text", "TEXT"),
+    # voice-structured-interview U3 tasks 4.1：邀约有效期是岗位级配置，
+    # 默认 7 天。job_prep_config 在 U2 已建表并可能已存在于任何一个 U2 之后
+    # 建的库里，CREATE TABLE IF NOT EXISTS 对已存在的表无效，必须走加列迁移。
+    ("job_prep_config", "invite_expiry_days", "INTEGER NOT NULL DEFAULT 7"),
+    # tasks 4.7：验证码本身不落明文，只存哈希与过期时刻；phone_attempts 与
+    # phone_verified_at 已在 U1 建好，这两列是本单元独有的新增。
+    ("interview_session", "phone_code_hash", "TEXT"),
+    ("interview_session", "phone_code_expires_at", "TEXT"),
 )
 
 
@@ -889,7 +918,7 @@ def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def apply_column_migrations(conn: sqlite3.Connection) -> list[str]:
     """
-    幂等加列：逐列独立判断、缺哪列补哪列，返回本次真的加上的列名。
+    幂等加列：逐列独立判断、缺哪列补哪列，返回本次真的加上的列（格式 table.column）。
 
     逐列独立是刻意的（design.md 风险表「服务器 SQLite 加列失败或部分成功」）：
     一列失败不影响其余列，重跑一次会把上次没加上的补齐。
@@ -899,7 +928,7 @@ def apply_column_migrations(conn: sqlite3.Connection) -> list[str]:
         if column in _existing_columns(conn, table):
             continue
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
-        added.append(column)
+        added.append(f"{table}.{column}")
     return added
 
 

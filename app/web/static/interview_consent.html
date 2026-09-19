@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <title>AI 结构化面试 · 卓品智能招聘助手</title>
+  <style>
+    .term { border: 1px solid #ccc; padding: 12px; margin-bottom: 12px; white-space: pre-wrap; }
+    #error { color: red; }
+    #invalid-page, #consent-step, #phone-step, #done-step { display: none; }
+    .actions button { margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <h1>AI 结构化面试</h1>
+  <div id="loading">加载中…</div>
+
+  <div id="invalid-page">
+    <p>链接已失效或已被使用。如需重新获取邀约，请联系 HR。</p>
+  </div>
+
+  <div id="consent-step">
+    <p>本环节由 AI 主持结构化面试，结果仅供业务经理参考，不作为自动淘汰依据。请分别确认以下两项：</p>
+    <div id="terms"></div>
+    <div class="actions">
+      <button id="submit-consent-btn">提交</button>
+    </div>
+  </div>
+
+  <div id="phone-step">
+    <p>请点击下方按钮请求验证码，随后 HR 会通过电话/企微告知您 6 位验证码，收到后填入并提交：</p>
+    <div class="actions">
+      <button id="request-code-btn">请求验证码</button>
+    </div>
+    <input id="code-input" maxlength="6" placeholder="6 位验证码">
+    <div class="actions">
+      <button id="verify-btn">提交验证码</button>
+    </div>
+  </div>
+
+  <div id="done-step">
+    <p>验证通过，请等待 HR 通知开始面试。</p>
+  </div>
+
+  <p id="error"></p>
+
+  <script>
+    function tokenFromPath() {
+      const m = window.location.pathname.match(/\/interview\/([^/]+)\/?$/);
+      return m ? m[1] : null;
+    }
+
+    const token = tokenFromPath();
+    const errorEl = document.getElementById("error");
+    let sessionId = null;
+
+    function showError(message) {
+      errorEl.textContent = message;
+    }
+
+    function showStep(id) {
+      ["loading", "invalid-page", "consent-step", "phone-step", "done-step"].forEach((stepId) => {
+        document.getElementById(stepId).style.display = stepId === id ? "block" : "none";
+      });
+    }
+
+    function renderTerms(terms) {
+      const container = document.getElementById("terms");
+      container.innerHTML = "";
+      terms.forEach((term) => {
+        const label = term.kind === "ai_interview"
+          ? "AI 面试同意（含结果仅供参考、可申请人工面试说明）"
+          : "身份核验同意（手机号验证码）";
+        const div = document.createElement("div");
+        div.className = "term";
+        div.innerHTML = `
+          <strong>${label}（版本 ${term.version}）</strong>
+          <div>${term.text}</div>
+          <label><input type="checkbox" class="consent-checkbox" data-kind="${term.kind}"> 我已阅读并同意</label>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    async function openInvite() {
+      const resp = await fetch(`interview/invite/${token}`);
+      if (!resp.ok) {
+        showStep("invalid-page");
+        return;
+      }
+      const data = await resp.json();
+      sessionId = data.session_id;
+      renderTerms(data.consent_terms);
+      showStep("consent-step");
+    }
+
+    document.getElementById("submit-consent-btn").addEventListener("click", async () => {
+      showError("");
+      const checkboxes = document.querySelectorAll(".consent-checkbox");
+      let anyDeclined = false;
+      for (const box of checkboxes) {
+        const result = box.checked ? "accepted" : "declined";
+        if (!box.checked) anyDeclined = true;
+        const resp = await fetch(`interview/sessions/${sessionId}/consent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: box.dataset.kind, result }),
+        });
+        if (!resp.ok) {
+          showError("提交同意失败：" + (await resp.text()));
+          return;
+        }
+      }
+      if (anyDeclined) {
+        showError("您已拒绝其中一项，本次面试已取消。如需人工面试请联系 HR 改约。");
+        return;
+      }
+      showStep("phone-step");
+    });
+
+    document.getElementById("request-code-btn").addEventListener("click", async () => {
+      showError("");
+      const resp = await fetch(`interview/sessions/${sessionId}/verification-code/request`, {
+        method: "POST",
+      });
+      if (!resp.ok) {
+        showError("请求验证码失败：" + (await resp.text()));
+        return;
+      }
+      showError("已请求，请联系 HR 获取验证码。");
+    });
+
+    document.getElementById("verify-btn").addEventListener("click", async () => {
+      showError("");
+      const code = document.getElementById("code-input").value.trim();
+      const resp = await fetch(`interview/sessions/${sessionId}/verification-code/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      if (!resp.ok) {
+        showError("验证失败：" + (await resp.text()));
+        return;
+      }
+      showStep("done-step");
+    });
+
+    if (token) {
+      openInvite();
+    } else {
+      showStep("invalid-page");
+    }
+  </script>
+</body>
+</html>
