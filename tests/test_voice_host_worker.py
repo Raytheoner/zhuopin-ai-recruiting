@@ -9,6 +9,7 @@ from app.llm.gateway import LLMGateway
 from app.schemas.session_bundle import SessionBundle, SessionBundleQuestion
 from voice_host import queue_store
 from voice_host.adapters import FakeASRAdapter, FakeTTSAdapter, TranscriptResult
+from voice_host.recording import FakeRecordingAdapter, RecordingStartFailed
 from voice_host.worker import run_session
 
 
@@ -64,7 +65,7 @@ def _bundle():
     )
 
 
-def test_run_session_no_follow_up_two_questions(conn):
+def test_run_session_no_follow_up_two_questions(conn, tmp_path):
     queue_store.open_session(conn, session_id="s1", bundle_json="{}")
     next_question_body = json.dumps({"decision": "next_question"}, ensure_ascii=False)
     gateway = _gateway([next_question_body])
@@ -75,7 +76,10 @@ def test_run_session_no_follow_up_two_questions(conn):
         TranscriptResult(text="每周同步进度", confidence=0.85, endpoint_detection_ms=280, asr_ms=140),
     ])
 
-    status = run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr)
+    status = run_session(
+        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+        recorder=FakeRecordingAdapter(data_dir=tmp_path),
+    )
 
     assert status == "completed"
     events = queue_store.events_since(conn, session_id="s1", since_seq=0)
@@ -85,7 +89,7 @@ def test_run_session_no_follow_up_two_questions(conn):
     assert queue_store.get_session_status(conn, session_id="s1") == "completed"
 
 
-def test_run_session_triggers_one_follow_up(conn):
+def test_run_session_triggers_one_follow_up(conn, tmp_path):
     queue_store.open_session(conn, session_id="s1", bundle_json="{}")
     follow_up_body = json.dumps({"decision": "follow_up", "follow_up_index": 0}, ensure_ascii=False)
     next_question_body = json.dumps({"decision": "next_question"}, ensure_ascii=False)
@@ -98,7 +102,10 @@ def test_run_session_triggers_one_follow_up(conn):
         TranscriptResult(text="每周同步", confidence=0.85, endpoint_detection_ms=280, asr_ms=140),  # 题2
     ])
 
-    status = run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr)
+    status = run_session(
+        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+        recorder=FakeRecordingAdapter(data_dir=tmp_path),
+    )
 
     assert status == "completed"
     events = queue_store.events_since(conn, session_id="s1", since_seq=0)
@@ -108,7 +115,7 @@ def test_run_session_triggers_one_follow_up(conn):
     assert events[2]["question_id"] == "q2"  # 追问后正确推进到下一题
 
 
-def test_run_session_records_interrupted_offset(conn):
+def test_run_session_records_interrupted_offset(conn, tmp_path):
     queue_store.open_session(conn, session_id="s1", bundle_json="{}")
     gateway = _gateway([json.dumps({"decision": "next_question"}, ensure_ascii=False)])
     tts = FakeTTSAdapter(first_frame_ms_sequence=[80])
@@ -117,13 +124,16 @@ def test_run_session_records_interrupted_offset(conn):
         TranscriptResult(text="正常回答", confidence=0.9, endpoint_detection_ms=300, asr_ms=150),
     ])
 
-    run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr)
+    run_session(
+        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+        recorder=FakeRecordingAdapter(data_dir=tmp_path),
+    )
 
     events = queue_store.events_since(conn, session_id="s1", since_seq=0)
     assert events[0]["interrupted_at_ms"] == 180
 
 
-def test_run_session_falls_back_to_next_question_on_schema_extraction_failure(conn):
+def test_run_session_falls_back_to_next_question_on_schema_extraction_failure(conn, tmp_path):
     queue_store.open_session(conn, session_id="s1", bundle_json="{}")
     # 三次都返回非法 JSON，网关重试耗尽抛 SchemaExtractionFailed——worker 必须
     # 兜底成"进入下一题"，不能让整场面试卡死（本计划「设计决策 11」）。
@@ -134,14 +144,17 @@ def test_run_session_falls_back_to_next_question_on_schema_extraction_failure(co
         TranscriptResult(text="每周同步", confidence=0.85, endpoint_detection_ms=280, asr_ms=140),
     ])
 
-    status = run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr)
+    status = run_session(
+        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+        recorder=FakeRecordingAdapter(data_dir=tmp_path),
+    )
 
     assert status == "completed"
     events = queue_store.events_since(conn, session_id="s1", since_seq=0)
     assert [e["seq"] for e in events] == [1, 2]  # 没有触发追问，直接进入下一题
 
 
-def test_run_session_replays_question_without_counting_as_follow_up(conn):
+def test_run_session_replays_question_without_counting_as_follow_up(conn, tmp_path):
     queue_store.open_session(conn, session_id="s1", bundle_json="{}")
     gateway = _gateway([json.dumps({"decision": "next_question"}, ensure_ascii=False)])
     tts = FakeTTSAdapter(first_frame_ms_sequence=[80])
@@ -151,7 +164,10 @@ def test_run_session_replays_question_without_counting_as_follow_up(conn):
         TranscriptResult(text="每周同步", confidence=0.85, endpoint_detection_ms=280, asr_ms=140),
     ])
 
-    status = run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr)
+    status = run_session(
+        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+        recorder=FakeRecordingAdapter(data_dir=tmp_path),
+    )
 
     assert status == "completed"
     # 重听不产生新 turn、不计入追问：仍然只有 2 条 turn（两道题各一条）
@@ -162,7 +178,7 @@ def test_run_session_replays_question_without_counting_as_follow_up(conn):
     assert tts.played.count("讲讲你的 AUTOSAR 项目") == 2
 
 
-def test_run_session_gives_up_after_max_replay_attempts(conn):
+def test_run_session_gives_up_after_max_replay_attempts(conn, tmp_path):
     queue_store.open_session(conn, session_id="s1", bundle_json="{}")
     gateway = _gateway([json.dumps({"decision": "next_question"}, ensure_ascii=False)])
     tts = FakeTTSAdapter(first_frame_ms_sequence=[80])
@@ -176,9 +192,44 @@ def test_run_session_gives_up_after_max_replay_attempts(conn):
         TranscriptResult(text="每周同步", confidence=0.85, endpoint_detection_ms=280, asr_ms=140),
     ])
 
-    status = run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr)
+    status = run_session(
+        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+        recorder=FakeRecordingAdapter(data_dir=tmp_path),
+    )
 
     assert status == "completed"
     assert tts.played.count("讲讲你的 AUTOSAR 项目") == 4  # 1 次首播 + 3 次重听
     events = queue_store.events_since(conn, session_id="s1", since_seq=0)
     assert events[0]["answer_text"] == "仍然是重听请求但已达上限直接采纳"
+
+
+def test_run_session_finalizes_recording_on_success(conn, tmp_path):
+    queue_store.open_session(conn, session_id="s1", bundle_json="{}")
+    gateway = _gateway([json.dumps({"decision": "next_question"}, ensure_ascii=False)])
+    tts = FakeTTSAdapter(first_frame_ms_sequence=[80])
+    asr = FakeASRAdapter(results=[
+        TranscriptResult(text="做过三年", confidence=0.9, endpoint_detection_ms=300, asr_ms=150),
+        TranscriptResult(text="每周同步", confidence=0.85, endpoint_detection_ms=280, asr_ms=140),
+    ])
+    recorder = FakeRecordingAdapter(data_dir=tmp_path)
+
+    status = run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr, recorder=recorder)
+
+    assert status == "completed"
+    assert recorder.started == ["s1"]
+    info = queue_store.get_recording_file(conn, session_id="s1")
+    assert info is not None
+
+
+def test_run_session_marks_interrupted_when_recording_fails_to_start(conn, tmp_path):
+    queue_store.open_session(conn, session_id="s1", bundle_json="{}")
+    gateway = _gateway([])
+    tts = FakeTTSAdapter()
+    asr = FakeASRAdapter(results=[])
+    recorder = FakeRecordingAdapter(data_dir=tmp_path, fail_on_start=True)
+
+    status = run_session(conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr, recorder=recorder)
+
+    assert status == "interrupted"
+    assert queue_store.get_session_status(conn, session_id="s1") == "interrupted"
+    assert queue_store.events_since(conn, session_id="s1", since_seq=0) == []

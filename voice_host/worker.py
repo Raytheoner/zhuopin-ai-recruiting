@@ -29,6 +29,7 @@ from app.schemas.session_bundle import SessionBundle, SessionBundleQuestion
 from voice_host import queue_store
 from voice_host.adapters import ASRAdapter, TTSAdapter
 from voice_host.turn_cycle import TurnCycleController
+from voice_host.recording import RecordingAdapter, RecordingStartFailed
 
 
 @dataclass
@@ -124,11 +125,25 @@ def _persist(conn, *, session_id: str, result: WorkerTurnResult) -> None:
     )
 
 
-def run_session(*, conn, bundle: SessionBundle, gateway: LLMGateway, tts: TTSAdapter, asr: ASRAdapter) -> str:
-    """跑完整场次（语音模式）：按 `bundle.questions` 顺序逐题问答，每题结束
-    后落一条事件，返回最终状态 `'completed'`。录制接线在 Task 12（修改本
-    函数加 `recorder` 参数），文本降级分支在 Task 13（修改 `_ask_one_turn`
-    加 `answer_mode` 参数）。"""
+def run_session(
+    *, conn, bundle: SessionBundle, gateway: LLMGateway, tts: TTSAdapter, asr: ASRAdapter,
+    recorder: RecordingAdapter,
+) -> str:
+    """跑完整场次（语音模式）：先启动录制（失败 ⇒ 直接 interrupted，不问
+    一句），再按 `bundle.questions` 顺序逐题问答，正常结束后停止录制并登记
+    哈希。文本降级分支在 Task 13（修改 `_ask_one_turn` 加 `answer_mode`
+    参数）。"""
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        recorder.start(session_id=bundle.session_id)
+    except RecordingStartFailed:
+        logger.exception("场次 %s 录制启动失败，场次进入 interrupted", bundle.session_id)
+        queue_store.close_session(conn, session_id=bundle.session_id, status="interrupted")
+        return "interrupted"
+
     seq = 0
     for question in bundle.questions:
         seq += 1
@@ -162,6 +177,10 @@ def run_session(*, conn, bundle: SessionBundle, gateway: LLMGateway, tts: TTSAda
 
             last_turn_seq_for_question = seq
             result = follow_up_result
+
+    path = recorder.stop(session_id=bundle.session_id)
+    from voice_host.recording import finalize_recording
+    finalize_recording(conn, session_id=bundle.session_id, path=path)
 
     queue_store.close_session(conn, session_id=bundle.session_id, status="completed")
     return "completed"
