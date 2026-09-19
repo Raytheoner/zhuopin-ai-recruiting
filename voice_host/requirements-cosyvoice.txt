@@ -1,0 +1,5 @@
+# CosyVoice 官方仓库无 PyPI 发行版，本清单只声明修复已知阻塞需要的前置包；
+# 真正的依赖树由 CosyVoice 仓库自带的 requirements.txt 提供，见
+# scripts/provision_voice_host.sh 的安装步骤。
+setuptools<81
+wheel
