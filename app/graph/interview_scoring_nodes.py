@@ -15,9 +15,15 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import uuid
 from dataclasses import dataclass
 
 from app.agents.interview_scoring import ScoreCardDraft, score
+from app.audit.evidence_ref import (
+    InterviewTurnEvidenceRef,
+    format_interview_turn_evidence_ref,
+    validate_interview_turn_evidence,
+)
 from app.parsing.spans import TextSpan, locate_quote
 from app.schemas.interview_ai_input import ScoreInput, ScoreInputTurn
 from app.storage.idempotency import idempotent_effect
@@ -302,3 +308,121 @@ def effect_write_acoustic_refs(
                 "UPDATE interview_turn SET acoustic_ref = ? WHERE id = ?",
                 (acoustic_ref, turn.turn_id),
             )
+
+
+@idempotent_effect("effect_persist_scorecard")
+def effect_persist_scorecard(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    session_id: str,
+    corrected_scores: list[CorrectedCriterionScore],
+    overall_summary: str,
+    talking_points: list[TalkingPoint],
+    analysis_run_id: str,
+) -> None:
+    """effect_* 节点：写 analysis_run(已由 gateway 落库)＋criterion_score＋
+    interview_scorecard＋interview_scorecard_tip，同事务、独占、幂等（interview-
+    scorecard spec「逐维评分带 turn 回指」；design D4/D20）。business_key 传
+    analysis_run_id（字面幂等键 `{session_id}:effect_persist_scorecard:
+    {analysis_run_id}`）。
+
+    悬空/越界的证据回指在这里被 validate_interview_turn_evidence 拒绝（抛
+    ValueError）——@idempotent_effect 装饰器会回滚本次调用已经写入的行，
+    ⛔ 不会有部分写入残留。
+    """
+    for cs in corrected_scores:
+        ref = InterviewTurnEvidenceRef(id=cs.turn_id, start=cs.start, end=cs.end, quote=cs.quote)
+        validate_interview_turn_evidence(conn, ref)
+        conn.execute(
+            "INSERT INTO criterion_score (id, analysis_run_id, criterion_key, score, evidence_ref) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()), analysis_run_id, cs.dimension, cs.score,
+                format_interview_turn_evidence_ref(cs.turn_id, cs.start, cs.end, cs.quote),
+            ),
+        )
+
+    scorecard_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO interview_scorecard (id, session_id, analysis_run_id, summary) VALUES (?, ?, ?, ?)",
+        (scorecard_id, session_id, analysis_run_id, overall_summary),
+    )
+    for seq, tip in enumerate(talking_points, start=1):
+        conn.execute(
+            "INSERT INTO interview_scorecard_tip (id, scorecard_id, dimension, turn_id, tip_text, seq) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), scorecard_id, tip.dimension, tip.turn_id, tip.tip_text, seq),
+        )
+
+    conn.execute(
+        "UPDATE interview_session SET post_scoring_status = 'scored', "
+        "post_scored_at = datetime('now') WHERE id = ?",
+        (session_id,),
+    )
+
+
+@idempotent_effect("effect_mark_scoring_failed")
+def effect_mark_scoring_failed(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str, session_id: str, reason: str
+) -> None:
+    """effect_* 节点：把场次标注「评分失败待重试」并记日志，可观测（interview-
+    scorecard spec Scenario「模型未给出证据」）。business_key 用调用方传入的
+    一次性 uuid——每次失败尝试都要能独立落一条 effect_log（语义类比
+    app/graph/invite_nodes.py::effect_log_invite_access_denied 这类可重复
+    事件，不是"只能发生一次"的语义）。"""
+    logger.warning("post 评分失败，场次 %s 标记 failed_retry：%s", session_id, reason)
+    conn.execute(
+        "UPDATE interview_session SET post_scoring_status = 'failed_retry' WHERE id = ?",
+        (session_id,),
+    )
+
+
+def run_post_scoring(conn: sqlite3.Connection, *, session_id: str, gateway) -> str:
+    """post 子图编排（design D20，普通函数链，不建真实 StateGraph——见设计
+    决策 7）：compute_align → effect_write_acoustic_refs → compute_score →
+    correct_evidence → effect_persist_scorecard（成功）/ effect_mark_scoring_
+    failed（证据不可用或全维度越界丢弃）。返回 "scored" 或 "failed_retry"，
+    供批处理脚本记日志。
+
+    入口先查 post_scoring_status——本函数自身必须是幂等的，不能只依赖批处理
+    脚本的 WHERE 过滤（scripts/run_interview_post_scoring.py::_due_sessions）：
+    interview_scorecard 有 UNIQUE(session_id)，已 scored 的场次若不在这里
+    短路，重复调用会在 effect_persist_scorecard 里撞唯一键报错。
+    """
+    from app.agents.interview_scoring import ScoringGenerationFailed  # 避免模块顶层循环 import
+
+    status_row = conn.execute(
+        "SELECT post_scoring_status FROM interview_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    if status_row is None:
+        raise ValueError(f"interview_session 不存在: {session_id!r}")
+    if status_row[0] == "scored":
+        return "scored"
+
+    aligned_turns = compute_align(conn, session_id=session_id)
+    effect_write_acoustic_refs(
+        conn, thread_id=f"{session_id}:post", business_key=session_id,
+        session_id=session_id, aligned_turns=aligned_turns,
+    )
+
+    try:
+        draft = compute_score(conn, session_id=session_id, aligned_turns=aligned_turns, gateway=gateway)
+        corrected_scores = correct_evidence(draft, aligned_turns)
+    except (ScoringEvidenceUnusable, ScoringGenerationFailed) as exc:
+        effect_mark_scoring_failed(
+            conn, thread_id=f"{session_id}:post", business_key=str(uuid.uuid4()),
+            session_id=session_id, reason=str(exc),
+        )
+        return "failed_retry"
+
+    _, low_score_threshold = _load_thresholds(conn, session_id)
+    talking_points = derive_talking_points(corrected_scores, aligned_turns, low_score_threshold=low_score_threshold)
+
+    effect_persist_scorecard(
+        conn, thread_id=f"{session_id}:post", business_key=draft.run_id,
+        session_id=session_id, corrected_scores=corrected_scores, overall_summary=draft.overall_summary,
+        talking_points=talking_points, analysis_run_id=draft.run_id,
+    )
+    return "scored"

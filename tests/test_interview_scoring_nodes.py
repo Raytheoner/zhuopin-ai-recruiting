@@ -409,3 +409,154 @@ def test_effect_write_acoustic_refs_is_idempotent_with_multiple_turns(conn):
     assert log_count_2 == 1  # effect_log 不增加（幂等性）
     assert ref1_second == ref1_first  # 业务行内容不变
     assert ref2_second == ref2_first
+
+
+import uuid
+
+from app.audit.evidence_ref import parse_evidence_ref
+from app.graph.interview_scoring_nodes import (
+    effect_mark_scoring_failed,
+    effect_persist_scorecard,
+    run_post_scoring,
+)
+
+
+def test_effect_persist_scorecard_writes_criterion_score_and_scorecard(conn):
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_text="做过三年 AUTOSAR CP")
+    conn.execute(
+        "INSERT INTO analysis_run (id, application_id, job_id, configured_model, "
+        "prompt_version, temperature, input_hash, raw_response) VALUES "
+        "('score-run-1', 'app-1', 'job-1', 'deepseek-chat', 'interview-score-v1', 0, 'h', '{}')"
+    )
+    conn.commit()
+    corrected = [CorrectedCriterionScore(dimension="AUTOSAR CP", score=4.0, turn_id="t1",
+                                          start=0, end=5, quote="做过三年")]
+    tips = [TalkingPoint(dimension="AUTOSAR CP", turn_id="t1", tip_text="建议追问")]
+
+    effect_persist_scorecard(
+        conn, thread_id="sess-1:post", business_key="score-run-1", session_id="sess-1",
+        corrected_scores=corrected, overall_summary="整体表现良好", talking_points=tips,
+        analysis_run_id="score-run-1",
+    )
+
+    cs_row = conn.execute(
+        "SELECT criterion_key, score, evidence_ref FROM criterion_score WHERE analysis_run_id = 'score-run-1'"
+    ).fetchone()
+    assert cs_row[0] == "AUTOSAR CP"
+    ref = parse_evidence_ref(cs_row[2])
+    assert ref.id == "t1"
+
+    sc_row = conn.execute(
+        "SELECT summary FROM interview_scorecard WHERE session_id = 'sess-1'"
+    ).fetchone()
+    assert sc_row[0] == "整体表现良好"
+
+    tip_row = conn.execute(
+        "SELECT tip_text FROM interview_scorecard_tip"
+    ).fetchone()
+    assert tip_row[0] == "建议追问"
+
+    session_row = conn.execute(
+        "SELECT post_scoring_status, post_scored_at FROM interview_session WHERE id = 'sess-1'"
+    ).fetchone()
+    assert session_row[0] == "scored"
+    assert session_row[1] is not None
+
+
+def test_effect_persist_scorecard_rejects_dangling_evidence_ref(conn):
+    _seed_job_application_session(conn)
+    conn.execute(
+        "INSERT INTO analysis_run (id, application_id, job_id, configured_model, "
+        "prompt_version, temperature, input_hash, raw_response) VALUES "
+        "('score-run-2', 'app-1', 'job-1', 'deepseek-chat', 'interview-score-v1', 0, 'h', '{}')"
+    )
+    conn.commit()
+    corrected = [CorrectedCriterionScore(dimension="AUTOSAR CP", score=4.0, turn_id="no-such-turn",
+                                          start=0, end=5, quote="做过三年")]
+
+    with pytest.raises(ValueError, match="interview_turn 不存在"):
+        effect_persist_scorecard(
+            conn, thread_id="sess-1:post", business_key="score-run-2", session_id="sess-1",
+            corrected_scores=corrected, overall_summary="s", talking_points=[],
+            analysis_run_id="score-run-2",
+        )
+    assert conn.execute("SELECT COUNT(*) FROM criterion_score").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM interview_scorecard").fetchone()[0] == 0
+
+
+def test_effect_mark_scoring_failed_sets_failed_retry_status(conn):
+    _seed_job_application_session(conn)
+
+    effect_mark_scoring_failed(
+        conn, thread_id="sess-1:post", business_key=str(uuid.uuid4()),
+        session_id="sess-1", reason="维度证据反查失败",
+    )
+
+    row = conn.execute("SELECT post_scoring_status FROM interview_session WHERE id = 'sess-1'").fetchone()
+    assert row[0] == "failed_retry"
+
+
+def test_run_post_scoring_succeeds_and_marks_scored(conn):
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_text="做过三年 AUTOSAR CP 分层开发")
+    gateway = LLMGateway(
+        api_key="k", base_url="https://example.com", model="deepseek-chat",
+        supports_json_schema=False,
+        client=_ScriptedClient([_score_body(quote="做过三年 AUTOSAR CP 分层开发")]),
+        audit_hook=_RecordingHook(conn),
+    )
+
+    result = run_post_scoring(conn, session_id="sess-1", gateway=gateway)
+
+    assert result == "scored"
+    status = conn.execute(
+        "SELECT post_scoring_status FROM interview_session WHERE id = 'sess-1'"
+    ).fetchone()[0]
+    assert status == "scored"
+    assert conn.execute("SELECT COUNT(*) FROM criterion_score").fetchone()[0] == 1
+
+
+def test_run_post_scoring_marks_failed_retry_when_evidence_unusable(conn):
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_text="完全不相关的内容")
+    gateway = LLMGateway(
+        api_key="k", base_url="https://example.com", model="deepseek-chat",
+        supports_json_schema=False,
+        client=_ScriptedClient([_score_body(quote="AUTOSAR CP 分层开发")]),  # quote 在 turn 原文里反查不到
+        audit_hook=_RecordingHook(conn),
+    )
+
+    result = run_post_scoring(conn, session_id="sess-1", gateway=gateway)
+
+    assert result == "failed_retry"
+    status = conn.execute(
+        "SELECT post_scoring_status FROM interview_session WHERE id = 'sess-1'"
+    ).fetchone()[0]
+    assert status == "failed_retry"
+    assert conn.execute("SELECT COUNT(*) FROM criterion_score").fetchone()[0] == 0
+
+
+def test_run_post_scoring_is_idempotent_and_does_not_rescore_after_success(conn):
+    """run_post_scoring 自身必须是幂等的，不能只依赖批处理脚本的 WHERE 过滤：
+    interview_scorecard 有 UNIQUE(session_id)，对已 scored 的场次重复调用若
+    不做短路会撞唯一键报错，必须在函数入口检查状态并直接返回 "scored"，
+    ⛔ 不产出第二条 criterion_score。"""
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_text="做过三年 AUTOSAR CP 分层开发")
+    gateway = LLMGateway(
+        api_key="k", base_url="https://example.com", model="deepseek-chat",
+        supports_json_schema=False,
+        client=_ScriptedClient([_score_body(quote="做过三年 AUTOSAR CP 分层开发")]),
+        audit_hook=_RecordingHook(conn),
+    )
+
+    first = run_post_scoring(conn, session_id="sess-1", gateway=gateway)
+    assert first == "scored"
+
+    # 第二次调用不应该再消费 gateway 的脚本化响应（只喂了一条）——如果实现
+    # 没有在入口短路，这里会因为 ScriptedClient 的响应列表耗尽而报 IndexError，
+    # 而不是命中 UNIQUE 约束，两种失败都足以说明幂等短路没生效。
+    second = run_post_scoring(conn, session_id="sess-1", gateway=gateway)
+    assert second == "scored"
+    assert conn.execute("SELECT COUNT(*) FROM criterion_score").fetchone()[0] == 1
