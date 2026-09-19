@@ -15,6 +15,9 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from app.agents.interview_scoring import ScoreCardDraft, score
+from app.schemas.interview_ai_input import ScoreInput, ScoreInputTurn
+
 
 @dataclass(frozen=True)
 class AlignedTurn:
@@ -74,3 +77,72 @@ def compute_align(conn: sqlite3.Connection, *, session_id: str) -> list[AlignedT
             )
         )
     return aligned
+
+
+def _load_session_context(conn: sqlite3.Connection, session_id: str) -> tuple[str, str, str]:
+    """返回 (application_id, job_id, prep_snapshot 的 id)。"""
+    row = conn.execute(
+        "SELECT s.application_id, a.job_id, s.prep_snapshot_version "
+        "FROM interview_session s JOIN application a ON a.id = s.application_id "
+        "WHERE s.id = ?",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"interview_session 不存在: {session_id!r}")
+    application_id, job_id, snapshot_version = row
+
+    snap_row = conn.execute(
+        "SELECT id FROM prep_snapshot WHERE application_id = ? AND version = ?",
+        (application_id, snapshot_version),
+    ).fetchone()
+    if snap_row is None:
+        raise ValueError(
+            f"prep_snapshot 不存在: application_id={application_id!r} version={snapshot_version!r}"
+        )
+    return application_id, job_id, snap_row[0]
+
+
+def _load_rubric_dimensions(conn: sqlite3.Connection, snapshot_id: str) -> list[str]:
+    """按 seq 顺序取该快照的去重维度列表。⛔ 不用 SELECT DISTINCT ... ORDER BY
+    seq——DISTINCT 折叠重复维度后 ORDER BY 引用的 seq 取哪一行未定义，改用
+    Python 去重保序。"""
+    rows = conn.execute(
+        "SELECT dimension FROM prep_question WHERE snapshot_id = ? ORDER BY seq",
+        (snapshot_id,),
+    ).fetchall()
+    dimensions: list[str] = []
+    for (dimension,) in rows:
+        if dimension not in dimensions:
+            dimensions.append(dimension)
+    return dimensions
+
+
+def compute_score(
+    conn: sqlite3.Connection, *, session_id: str, aligned_turns: list[AlignedTurn], gateway
+) -> ScoreCardDraft:
+    """L4 compute_* 节点：只读查库组装 ScoreInput，调 L3 Agent 评分（interview-
+    scorecard spec「逐维评分带 turn 回指」）。"""
+    application_id, job_id, snapshot_id = _load_session_context(conn, session_id)
+    rubric_dimensions = _load_rubric_dimensions(conn, snapshot_id)
+
+    score_input = ScoreInput(
+        rubric_dimensions=rubric_dimensions,
+        turns=[
+            ScoreInputTurn(
+                turn_id=t.turn_id, seq=t.seq, question_text=t.question_text, answer_text=t.answer_text
+            )
+            for t in aligned_turns
+        ],
+    )
+    return score(
+        gateway,
+        score_input,
+        audit_context={
+            "thread_id": f"{session_id}:post",
+            "node": "compute_score",
+            "application_id": application_id,
+            "job_id": job_id,
+            "rubric_version": snapshot_id,
+            "rubric_snapshot": {"dimensions": rubric_dimensions},
+        },
+    )

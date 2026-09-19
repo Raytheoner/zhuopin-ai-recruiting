@@ -115,3 +115,98 @@ def test_compute_align_text_turn_has_no_low_confidence_flag(conn):
 
     assert aligned[0].low_confidence is False  # asr_confidence 为 None，文本作答 turn 恒不标记
     assert aligned[0].audio_start_ms is None and aligned[0].audio_end_ms is None
+
+
+import json
+
+from app.graph.interview_scoring_nodes import compute_score
+from app.llm.gateway import LLMGateway
+
+
+class _ScriptedClient:
+    def __init__(self, bodies):
+        self._bodies = list(bodies)
+        self.chat = self
+        self.completions = self
+
+    def create(self, **kwargs):
+        body = self._bodies.pop(0)
+
+        class _Msg:
+            content = body
+
+        class _Choice:
+            message = _Msg()
+
+        class _Usage:
+            prompt_tokens = 1
+            completion_tokens = 1
+
+        class _Resp:
+            choices = [_Choice()]
+            model = "deepseek-chat-241226"
+            system_fingerprint = "fp_1"
+            usage = _Usage()
+
+        return _Resp()
+
+
+class _RecordingHook:
+    def __init__(self, conn):
+        self._conn = conn
+        self._seq = 0
+
+    def record(self, **kwargs):
+        self._seq += 1
+        run_id = f"run-{self._seq}"
+        audit_context = kwargs.get("audit_context") or {}
+        self._conn.execute(
+            "INSERT INTO analysis_run (id, application_id, job_id, configured_model, "
+            "prompt_version, temperature, input_hash, raw_response, created_at) "
+            "VALUES (?, ?, ?, 'deepseek-chat', ?, 0, 'hash', ?, datetime('now'))",
+            (run_id, audit_context.get("application_id"), audit_context.get("job_id"),
+             kwargs["prompt_version"], kwargs["raw_response"]),
+        )
+        self._conn.commit()
+        return run_id
+
+
+def _score_body(dimension="AUTOSAR CP", turn_id="t1", quote="第一题回答"):
+    return json.dumps(
+        {
+            "dimensions": [
+                {"dimension": dimension, "score": 4.0, "rationale": "回答扎实",
+                 "evidence": {"turn_id": turn_id, "quote": quote}},
+            ],
+            "overall_summary": "整体表现良好",
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_compute_score_builds_score_input_from_frozen_snapshot_dimensions(conn):
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_text="第一题回答")
+    gateway = LLMGateway(
+        api_key="k", base_url="https://example.com", model="deepseek-chat",
+        supports_json_schema=False, client=_ScriptedClient([_score_body()]), audit_hook=_RecordingHook(conn),
+    )
+
+    aligned = compute_align(conn, session_id="sess-1")
+    draft = compute_score(conn, session_id="sess-1", aligned_turns=aligned, gateway=gateway)
+
+    assert draft.dimensions[0].dimension == "AUTOSAR CP"
+    assert draft.dimensions[0].turn_id == "t1"
+    run_row = conn.execute(
+        "SELECT application_id, job_id, prompt_version FROM analysis_run WHERE id = ?", (draft.run_id,)
+    ).fetchone()
+    assert run_row == ("app-1", "job-1", "interview-score-v1")
+
+
+def test_compute_score_raises_on_unknown_session(conn):
+    gateway = LLMGateway(
+        api_key="k", base_url="https://example.com", model="deepseek-chat",
+        supports_json_schema=False, client=_ScriptedClient([]), audit_hook=_RecordingHook(conn),
+    )
+    with pytest.raises(ValueError, match="interview_session 不存在"):
+        compute_score(conn, session_id="no-such-session", aligned_turns=[], gateway=gateway)
