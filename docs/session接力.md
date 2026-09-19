@@ -70,6 +70,14 @@
 - 【谁做】下一条收敛 opener（需人工判断合并策略：三方合并或重新 rebase 到当前 main）｜【状态】待派发｜【判据】`git merge origin/lane-0919p-tag4-regex` 与 `origin/lane-0919q-queue-digest`（非 ff-only）分别验证无冲突（两分支改动路径与 main 新增的 4 个提交路径已核对无交集，见下方文件清单）后合并、测试 0 failed、push 成功｜【不做会怎样】`0919P`（TAG4 正则修复）与 `0919Q`（定夺队列过滤工具）持续游离在 main 之外，`Q-47` 的修复成果实际未生效
 - 附本次核对的文件差集：main 独有 4 个提交只动 `docs/openers/**`／`docs/roadmap/任务台账.yaml`／`docs/roadmap/定夺队列.md`／`docs/session接力.md`（滚动台账类）；`0919P` 独有改动 `scripts/dispatcher_backlog.py`／`tests/test_dispatcher_backlog.py` ＋ 同类滚动台账文件；`0919Q` 独有改动 `scripts/queue_pending.py`／`scripts/handoff_digest.py`／两个新 test 文件 ＋ 同类滚动台账文件——代码文件三方各不相同，冲突大概率只出现在滚动台账文件（`session接力.md`／`定夺队列.md`／`任务台账.yaml`）内部，需人工核对合并
 
+### ✅ 2026-09-19 `0919S` 泳道收敛完成——`0919P`/`0919Q` 已用 `--no-ff` 真合并回 main，两次 push 均成功
+
+`0919S`（无头，`run-lanes` 起）接续 `0919R` 的精确定位结果，改用 `--no-ff` 真合并（不再尝试 `ff-only`）。开工先核发现 main 已比 `0919R` 收工时（`695170d`）多 2 个提交（`da1dcfa`／`d05b3c5`，均只动 `docs/openers/**`），重新核对确认与两分支改动路径无交集，预判不变，按原计划执行：
+
+- **Step 1**（`lane-0919q-queue-digest` → `41222b3`）：`git merge --no-ff`，**零冲突**（与预判一致）。`tests/test_queue_pending.py`／`tests/test_handoff_digest.py` 8 passed，`tests/test_doc_size_budget.py` 5 passed。merge commit `b17c2a1`，`git push origin main` 成功（`d05b3c5..b17c2a1`）。
+- **Step 2**（`lane-0919p-tag4-regex` → `bc8b0d3`）：`git merge --no-ff`，**唯一冲突**恰好命中预判的 `docs/roadmap/定夺队列.md` `Q-47` 行（`docs/session接力.md` 按预判自动合并、无冲突），已按预案整体取分支侧（incoming，0919P 完整核实报告）解决。`tests/test_dispatcher_backlog.py`／`tests/test_dispatcher_answers.py` 68 passed，`tests/test_doc_size_budget.py` 5 passed。merge commit `e5d3441`，`git push origin main` 成功（`b17c2a1..e5d3441`）。
+- `Q-47`／`Q-48` 修复成果（`TAG4_RE` 双格式兼容、定夺队列过滤+handoff摘要工具）现已生效于 main，不再游离。两条 worktree／远端分支按红线未删除，留待例行清理。
+
 ### 🆕 2026-09-19 `0919O` M2·U3 发版执行自核拦停——`Q-49` 引用的「5 failed 已知无关」名单本身失真，未发版、`.51` 未动
 
 `0919O`（无头，`run-lanes` 起）执行发版前置自核第一步「全量 pytest 重跑」，main HEAD 为本次执行时刻（`182383d` 及其后合入的 M3 语音面试 U2/U3/U4 与调度器修复均已在内）：**3662 passed／4 failed／10 skipped**（85.59s，`venv` 内 `python -m pytest -q`）。逐条比对 `0918AB` 记录的原始「5 failed」名单（`docs/session接力.md` 09-18 条目，本节上方保留）：4 条新失败**没有一条**在原名单里，且原名单里唯一被标「真回归」的 `test_manifest_matches_the_source_tree` 从未修过、这次仍在失败列表里（换了报错内容——现在缺 18 个 M3 节点，当时缺 1 个 `effect_persist_flags`），另 4 条环境缺口已消失（`funasr`／`livekit` 大概率已补装）。按 `0919O` 预案「逐条比对，任一条不在原名单 ⇒ 停，不得发版」，本条到此为止，**未进入锁定发版 commit／sync/冒烟任何一步，`.51` 现网未受影响，无需回滚**。四条失败详情：
