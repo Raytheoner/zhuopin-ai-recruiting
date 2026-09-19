@@ -63,6 +63,13 @@
 
 ## 二、下一步
 
+### 🆕 2026-09-19 `0919R` 泳道收敛 `0919P`/`0919Q` 回 main 尝试——ff-only 失败，两分支均未合并
+
+`0919R`（无头，`run-lanes` 起）按 `0919P`/`0919Q` 收工报告执行收敛，实测 `git merge --ff-only` 对两个分支均 `fatal: Not possible to fast-forward`。根因：merge-base(main, 两分支) 均为 `8bfe582`，但 main 在此之后已推进 4 个提交（`9c10a03`／`54225ec`／`1bb055a`／`da34e94`，均为 task-dispatcher 台账刷新与 `Q-50` 答复），与 `0919P`（`53ed69a`／`bc8b0d3`）、`0919Q`（`41222b3`）各自独立分叉，非快进关系（`git merge-base --is-ancestor` 双向皆 NO）。按红线③「不改用 `--no-ff`、不 rebase、不追问」，本条到此为止，main 未变（仍为 `da34e94`），两分支代码改动（`scripts/dispatcher_backlog.py`／`scripts/queue_pending.py`／`scripts/handoff_digest.py` 等）仍只存在于各自远端分支，**尚未进入 main**。
+
+- 【谁做】下一条收敛 opener（需人工判断合并策略：三方合并或重新 rebase 到当前 main）｜【状态】待派发｜【判据】`git merge origin/lane-0919p-tag4-regex` 与 `origin/lane-0919q-queue-digest`（非 ff-only）分别验证无冲突（两分支改动路径与 main 新增的 4 个提交路径已核对无交集，见下方文件清单）后合并、测试 0 failed、push 成功｜【不做会怎样】`0919P`（TAG4 正则修复）与 `0919Q`（定夺队列过滤工具）持续游离在 main 之外，`Q-47` 的修复成果实际未生效
+- 附本次核对的文件差集：main 独有 4 个提交只动 `docs/openers/**`／`docs/roadmap/任务台账.yaml`／`docs/roadmap/定夺队列.md`／`docs/session接力.md`（滚动台账类）；`0919P` 独有改动 `scripts/dispatcher_backlog.py`／`tests/test_dispatcher_backlog.py` ＋ 同类滚动台账文件；`0919Q` 独有改动 `scripts/queue_pending.py`／`scripts/handoff_digest.py`／两个新 test 文件 ＋ 同类滚动台账文件——代码文件三方各不相同，冲突大概率只出现在滚动台账文件（`session接力.md`／`定夺队列.md`／`任务台账.yaml`）内部，需人工核对合并
+
 ### 🆕 2026-09-19 `0919O` M2·U3 发版执行自核拦停——`Q-49` 引用的「5 failed 已知无关」名单本身失真，未发版、`.51` 未动
 
 `0919O`（无头，`run-lanes` 起）执行发版前置自核第一步「全量 pytest 重跑」，main HEAD 为本次执行时刻（`182383d` 及其后合入的 M3 语音面试 U2/U3/U4 与调度器修复均已在内）：**3662 passed／4 failed／10 skipped**（85.59s，`venv` 内 `python -m pytest -q`）。逐条比对 `0918AB` 记录的原始「5 failed」名单（`docs/session接力.md` 09-18 条目，本节上方保留）：4 条新失败**没有一条**在原名单里，且原名单里唯一被标「真回归」的 `test_manifest_matches_the_source_tree` 从未修过、这次仍在失败列表里（换了报错内容——现在缺 18 个 M3 节点，当时缺 1 个 `effect_persist_flags`），另 4 条环境缺口已消失（`funasr`／`livekit` 大概率已补装）。按 `0919O` 预案「逐条比对，任一条不在原名单 ⇒ 停，不得发版」，本条到此为止，**未进入锁定发版 commit／sync/冒烟任何一步，`.51` 现网未受影响，无需回滚**。四条失败详情：
