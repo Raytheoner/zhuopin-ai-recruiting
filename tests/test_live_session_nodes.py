@@ -141,6 +141,16 @@ def test_effect_persist_turn_is_idempotent_on_repeat_seq(conn):
     assert count == 1
 
 
+def test_effect_persist_turn_raises_when_follow_up_of_seq_not_found(conn):
+    _seed_ready_session(conn)
+    event = LiveTurnEvent(
+        seq=1, question_id="q1", question_text="t", answer_text="a", answer_mode="text",
+        follow_up_of_seq=99,  # no turn with seq=99 exists yet
+    )
+    with pytest.raises(ValueError):
+        effect_persist_turn(conn, thread_id="sess-1", business_key="1", session_id="sess-1", event=event)
+
+
 def test_effect_close_session_updates_status(conn):
     _seed_ready_session(conn)
     effect_close_session(conn, thread_id="sess-1", business_key="close", session_id="sess-1", final_status="completed")
