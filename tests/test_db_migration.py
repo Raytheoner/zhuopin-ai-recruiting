@@ -387,6 +387,9 @@ def test_audit_tables_never_enter_the_add_column_path(tmp_path):
     于 U2 建表（早于 U3），interview_session 于 M3 U1 建表。两张表都已在老库中存在，
     新加的 invite_expiry_days / phone_code_hash / phone_code_expires_at 属于"老表缺列"，
     走加列路径。
+
+    U5 task 1 继续往 job_prep_config / interview_session 加列（低置信度阈值、
+    低分阈值、post 评分状态机），两张表都已在这个集合里，assert 本身不变。
     """
     assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {
         "job_profile", "job", "resume", "job_prep_config", "interview_session"
