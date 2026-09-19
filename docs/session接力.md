@@ -78,6 +78,16 @@
 - **Step 2**（`lane-0919p-tag4-regex` → `bc8b0d3`）：`git merge --no-ff`，**唯一冲突**恰好命中预判的 `docs/roadmap/定夺队列.md` `Q-47` 行（`docs/session接力.md` 按预判自动合并、无冲突），已按预案整体取分支侧（incoming，0919P 完整核实报告）解决。`tests/test_dispatcher_backlog.py`／`tests/test_dispatcher_answers.py` 68 passed，`tests/test_doc_size_budget.py` 5 passed。merge commit `e5d3441`，`git push origin main` 成功（`b17c2a1..e5d3441`）。
 - `Q-47`／`Q-48` 修复成果（`TAG4_RE` 双格式兼容、定夺队列过滤+handoff摘要工具）现已生效于 main，不再游离。两条 worktree／远端分支按红线未删除，留待例行清理。
 
+### ✅ 2026-09-19 `0919T` M3 语音面试 effect 测试覆盖补齐——`0919O` 登记的四条测试已转绿，全量 pytest 0 failed
+
+`0919T`（无头，`run-lanes` 起，worktree）接续 `0919O` 登记的两项待派发，逐条修复：`_ADDED_COLUMNS` 护栏集合放宽到含 `job_prep_config`／`interview_session`（两表均已有 `CREATE TABLE IF NOT EXISTS`，只是护栏预期表集合漏更新）；`tests/test_db_m2_u2_schema.py` 补两张空壳表并顺带修正一处与本条同根因的陈旧断言（`apply_column_migrations` 返回值早改成 `table.column` 格式，该断言仍用裸列名，U3 改格式那次漏改）；`effect_send_verification_code`（OQ-10 未决占位桩）补 `@idempotent_effect` 装饰器（不改签名/行为）；`EFFECT_NODE_MANIFEST` 补齐 M3 U3/U4/U5 合入的 18 个 effect 节点＋各自崩溃-恢复配方（`invite_nodes.py` 11 个、`live_session_nodes.py` 4 个、`interview_scoring_nodes.py` 3 个）。
+
+补装饰器后连带发现 `effect_send_verification_code` 这个永久占位桩（函数体恒 raise NotImplementedError，走不到 `effect_log` INSERT/commit）结构上无法套用两条通用崩溃-恢复协议——已在 `tests/test_effect_idempotency_suite.py` 新增 `_PERMANENTLY_UNIMPLEMENTED_STUBS` 常量把它排除在通用 parametrize 外，改用一条专属用例固化"异常原样透传、不留痕"，并同步修了 `tests/test_invite_nodes.py` 里一处因装饰器改变调用签名而报错的既有测试（零参调用改传 `conn`/`thread_id`/`business_key`，行为断言不变）。全部改动只在 `tests/` 与一行装饰器，未碰任何生产逻辑。
+
+全量 `pytest -q`：**3716 passed, 0 failed, 10 skipped**（`0919O` 记录的基线 3662 passed／4 failed／10 skipped）。`git merge --no-ff` 回 main（merge commit `a6df909`），`git push origin main` 一次成功。
+
+- 【谁做】下一次 `Q-49` 重新授权前｜【状态】待派发｜【判据】在定夺队列新增一行请 Shao Peishen 针对「本条重新核实过的 0 failed 全量结果」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener｜【不做会怎样】`Q-49` 现有「发」的答复文本引用的判据已知失真，继续按它直接发版等于绕过自核（本条已在下方定夺队列登记）
+
 ### 🆕 2026-09-19 `0919O` M2·U3 发版执行自核拦停——`Q-49` 引用的「5 failed 已知无关」名单本身失真，未发版、`.51` 未动
 
 `0919O`（无头，`run-lanes` 起）执行发版前置自核第一步「全量 pytest 重跑」，main HEAD 为本次执行时刻（`182383d` 及其后合入的 M3 语音面试 U2/U3/U4 与调度器修复均已在内）：**3662 passed／4 failed／10 skipped**（85.59s，`venv` 内 `python -m pytest -q`）。逐条比对 `0918AB` 记录的原始「5 failed」名单（`docs/session接力.md` 09-18 条目，本节上方保留）：4 条新失败**没有一条**在原名单里，且原名单里唯一被标「真回归」的 `test_manifest_matches_the_source_tree` 从未修过、这次仍在失败列表里（换了报错内容——现在缺 18 个 M3 节点，当时缺 1 个 `effect_persist_flags`），另 4 条环境缺口已消失（`funasr`／`livekit` 大概率已补装）。按 `0919O` 预案「逐条比对，任一条不在原名单 ⇒ 停，不得发版」，本条到此为止，**未进入锁定发版 commit／sync/冒烟任何一步，`.51` 现网未受影响，无需回滚**。四条失败详情：
