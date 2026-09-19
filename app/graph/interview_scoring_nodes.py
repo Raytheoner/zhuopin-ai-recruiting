@@ -12,12 +12,17 @@ app/graph/interview_prep_nodes.py 顶部 docstring（2026-08-26 定「行为等�
 """
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 
 from app.agents.interview_scoring import ScoreCardDraft, score
 from app.parsing.spans import TextSpan, locate_quote
 from app.schemas.interview_ai_input import ScoreInput, ScoreInputTurn
+from app.storage.idempotency import idempotent_effect
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -194,3 +199,106 @@ def correct_evidence(
             )
         )
     return corrected
+
+
+@dataclass(frozen=True)
+class TalkingPoint:
+    dimension: str
+    turn_id: str
+    tip_text: str
+
+
+def derive_talking_points(
+    corrected_scores: list[CorrectedCriterionScore],
+    aligned_turns: list[AlignedTurn],
+    *,
+    low_score_threshold: float,
+) -> list[TalkingPoint]:
+    """规则派生要点提示（interview-scorecard spec「ScoreCard 与要点提示只作
+    参考」），不再调 LLM。两类来源：① 低分维度 ② 低置信度语音 turn；同一
+    (dimension, turn_id) 只保留一条，低分文案优先（低分维度先写入 dict，
+    低置信度检查时 `if key not in seen` 短路，不覆盖）。"""
+    seen: dict[tuple[str, str], TalkingPoint] = {}
+
+    for cs in corrected_scores:
+        if cs.score < low_score_threshold:
+            key = (cs.dimension, cs.turn_id)
+            seen[key] = TalkingPoint(
+                dimension=cs.dimension, turn_id=cs.turn_id,
+                tip_text=(
+                    f"建议终面追问：候选人在【{cs.dimension}】维度得分偏低（{cs.score}），"
+                    "可结合本轮回答当面深挖"
+                ),
+            )
+
+    dimension_by_turn: dict[str, str] = {cs.turn_id: cs.dimension for cs in corrected_scores}
+    for turn in aligned_turns:
+        if turn.answer_mode == "voice" and turn.low_confidence:
+            dimension = dimension_by_turn.get(turn.turn_id, f"第 {turn.seq} 题")
+            key = (dimension, turn.turn_id)
+            if key not in seen:
+                seen[key] = TalkingPoint(
+                    dimension=dimension, turn_id=turn.turn_id,
+                    tip_text="该 turn 转写置信度低，建议面试官当面复核候选人在此题的实际回答",
+                )
+
+    return list(seen.values())
+
+
+# 普通话正常语速的经验值（字/秒），用于估算"预期朗读时长"——非实测校准，
+# 是"没有逐词时间戳时的近似基线"，不是精确测量（design 决策 4）。
+BASELINE_CHARS_PER_SECOND = 4.5
+
+
+def compute_acoustic_ref(
+    *, answer_text: str, audio_start_ms: int | None, audio_end_ms: int | None
+) -> str | None:
+    """turn 级近似估算语速/停顿/静默（interview-scorecard spec「声学信号只
+    展示不计分」）。⚠️ 这是启发式近似，不是逐词 VAD——interview_turn 只有
+    turn 级起止毫秒，没有逐词时间戳，无法做真正的停顿检测。文本作答 turn
+    （音频起止任一为空）恒返回 None。"""
+    if audio_start_ms is None or audio_end_ms is None:
+        return None
+    duration_ms = audio_end_ms - audio_start_ms
+    if duration_ms <= 0:
+        return None
+
+    char_count = len(answer_text or "")
+    speech_rate_cpm = char_count / (duration_ms / 60000)
+    expected_speaking_ms = (char_count / BASELINE_CHARS_PER_SECOND) * 1000
+    pause_ratio = max(0.0, min(1.0, (duration_ms - expected_speaking_ms) / duration_ms))
+
+    return json.dumps(
+        {
+            "speech_rate_cpm": round(speech_rate_cpm, 1),
+            "pause_ratio": round(pause_ratio, 3),
+            "silence_ratio": round(pause_ratio, 3),
+            "note": "turn 级近似估算，非逐词 VAD；停顿与静默取同一近似值",
+        },
+        ensure_ascii=False,
+    )
+
+
+@idempotent_effect("effect_write_acoustic_refs")
+def effect_write_acoustic_refs(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    session_id: str,
+    aligned_turns: list[AlignedTurn],
+) -> None:
+    """effect_* 节点：把每个 turn 的声学参考写入 interview_turn.acoustic_ref
+    （只读展示字段）。独立于评分成败——即便评分失败待重试，面试官也应该能看到
+    已完成场次的声学参考，故本节点不依赖 compute_score 的结果。"""
+    for turn in aligned_turns:
+        acoustic_ref = compute_acoustic_ref(
+            answer_text=turn.answer_text,
+            audio_start_ms=turn.audio_start_ms,
+            audio_end_ms=turn.audio_end_ms,
+        )
+        if acoustic_ref is not None:
+            conn.execute(
+                "UPDATE interview_turn SET acoustic_ref = ? WHERE id = ?",
+                (acoustic_ref, turn.turn_id),
+            )

@@ -261,3 +261,115 @@ def test_correct_evidence_raises_when_turn_id_not_in_session():
     draft = _draft(turn_id="t-not-in-session")
     with pytest.raises(ScoringEvidenceUnusable, match="不属于本场次"):
         correct_evidence(draft, aligned)
+
+
+from app.graph.interview_scoring_nodes import (
+    TalkingPoint,
+    compute_acoustic_ref,
+    derive_talking_points,
+    effect_write_acoustic_refs,
+)
+
+
+def test_derive_talking_points_flags_low_score_dimension():
+    corrected = [CorrectedCriterionScore(dimension="AUTOSAR CP", score=1.5, turn_id="t1",
+                                          start=0, end=5, quote="做过三年")]
+    aligned = [_aligned_turn(turn_id="t1")]
+
+    tips = derive_talking_points(corrected, aligned, low_score_threshold=2.0)
+
+    assert len(tips) == 1
+    assert tips[0].dimension == "AUTOSAR CP"
+    assert tips[0].turn_id == "t1"
+    assert "得分偏低" in tips[0].tip_text
+
+
+def test_derive_talking_points_ignores_dimension_above_threshold():
+    corrected = [CorrectedCriterionScore(dimension="AUTOSAR CP", score=4.0, turn_id="t1",
+                                          start=0, end=5, quote="做过三年")]
+    aligned = [_aligned_turn(turn_id="t1")]
+
+    tips = derive_talking_points(corrected, aligned, low_score_threshold=2.0)
+
+    assert tips == []
+
+
+def test_derive_talking_points_flags_low_confidence_voice_turn():
+    corrected = [CorrectedCriterionScore(dimension="AUTOSAR CP", score=4.0, turn_id="t1",
+                                          start=0, end=5, quote="做过三年")]
+    low_conf_turn = AlignedTurn(
+        turn_id="t2", seq=2, question_id="q2", question_text="沟通方式",
+        answer_text="转写内容", answer_mode="voice", asr_confidence=0.3,
+        audio_start_ms=0, audio_end_ms=5000, low_confidence=True,
+    )
+    aligned = [_aligned_turn(turn_id="t1"), low_conf_turn]
+
+    tips = derive_talking_points(corrected, aligned, low_score_threshold=2.0)
+
+    assert any(t.turn_id == "t2" and "置信度低" in t.tip_text for t in tips)
+
+
+def test_derive_talking_points_dedupes_same_dimension_and_turn():
+    low_score_low_conf_turn = AlignedTurn(
+        turn_id="t1", seq=1, question_id="q1", question_text="讲讲你的项目",
+        answer_text="做过三年", answer_mode="voice", asr_confidence=0.3,
+        audio_start_ms=0, audio_end_ms=5000, low_confidence=True,
+    )
+    corrected = [CorrectedCriterionScore(dimension="AUTOSAR CP", score=1.0, turn_id="t1",
+                                          start=0, end=5, quote="做过三年")]
+
+    tips = derive_talking_points(corrected, [low_score_low_conf_turn], low_score_threshold=2.0)
+
+    assert len(tips) == 1  # 同一 (dimension, turn_id) 只保留一条，低分文案优先
+    assert "得分偏低" in tips[0].tip_text
+
+
+def test_compute_acoustic_ref_returns_none_for_text_answer():
+    assert compute_acoustic_ref(answer_text="文本作答", audio_start_ms=None, audio_end_ms=None) is None
+
+
+def test_compute_acoustic_ref_computes_speech_rate_and_pause_ratio():
+    ref_json = compute_acoustic_ref(answer_text="做过三年 AUTOSAR CP 分层开发", audio_start_ms=0, audio_end_ms=10000)
+    assert ref_json is not None
+    ref = json.loads(ref_json)
+    assert "speech_rate_cpm" in ref
+    assert "pause_ratio" in ref
+    assert ref["pause_ratio"] == ref["silence_ratio"]
+    assert 0.0 <= ref["pause_ratio"] <= 1.0
+    assert "note" in ref
+
+
+def test_effect_write_acoustic_refs_writes_only_voice_turns_with_audio(conn):
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_mode="voice",
+                 answer_text="语音作答内容", audio_start_ms=0, audio_end_ms=8000)
+    _insert_turn(conn, turn_id="t2", session_id="sess-1", seq=2, answer_mode="text", answer_text="文本作答")
+
+    aligned = compute_align(conn, session_id="sess-1")
+    effect_write_acoustic_refs(
+        conn, thread_id="sess-1:post", business_key="sess-1", session_id="sess-1", aligned_turns=aligned
+    )
+
+    row1 = conn.execute("SELECT acoustic_ref FROM interview_turn WHERE id = 't1'").fetchone()
+    row2 = conn.execute("SELECT acoustic_ref FROM interview_turn WHERE id = 't2'").fetchone()
+    assert row1[0] is not None
+    assert row2[0] is None
+
+
+def test_effect_write_acoustic_refs_is_idempotent(conn):
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_mode="voice",
+                 answer_text="语音作答内容", audio_start_ms=0, audio_end_ms=8000)
+    aligned = compute_align(conn, session_id="sess-1")
+
+    effect_write_acoustic_refs(
+        conn, thread_id="sess-1:post", business_key="sess-1", session_id="sess-1", aligned_turns=aligned
+    )
+    log_count_1 = conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0]
+
+    effect_write_acoustic_refs(
+        conn, thread_id="sess-1:post", business_key="sess-1", session_id="sess-1", aligned_turns=aligned
+    )
+    log_count_2 = conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0]
+
+    assert log_count_1 == log_count_2 == 1  # 第二次调用命中幂等键，effect_log 不再增加
