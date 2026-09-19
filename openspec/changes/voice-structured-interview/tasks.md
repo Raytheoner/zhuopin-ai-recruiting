@@ -1,4 +1,4 @@
-**进度：9/76**（2026-09-18 `0918B` 立包。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决或待专员／外部依赖，对应 `design.md` Open Questions（当前 11 条）；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支；物理顺序 0→U0→U1→U2→U3→U5(第 6 章)→U4(第 5 章)→U6→U7，章号不改。涉及副作用的任务已逐条写幂等策略。）
+**进度：36/76**（2026-09-18 `0918B` 立包。🔴 = 不可代项（括号内写谁做）；⏸ = 待 Shao Peishen 裁决或待专员／外部依赖，对应 `design.md` Open Questions（当前 11 条）；每章 = 一个交付单元 = 一份 superpowers plan = 一条 worktree 分支；物理顺序 0→U0→U1→U2→U3→U5(第 6 章)→U4(第 5 章)→U6→U7，章号不改。涉及副作用的任务已逐条写幂等策略。）
 
 ## 0. 前置门槛（不写代码；任一未过则对应下游单元不得发车）
 
@@ -42,17 +42,17 @@
 
 ## 4. U3 邀约与同意流程（一次性链接 ＋ 门禁接线 ＋ 双同意 ＋ 验证码）
 
-- [ ] 4.1 令牌签发：32 字节随机、库存哈希、`invite_expires_at` 岗位级配置默认 7 天；`effect_issue_invite`（幂等键 `{session_id}:effect_issue_invite:{token_hash}`）；同一场次重复签发 ⇒ 旧令牌作废并留痕
-- [ ] 4.2 令牌校验端点：首次打开置 `used_at`；重复／过期 ⇒ 统一失效页（不泄露场次信息）＋留痕；测试三种路径
-- [ ] 4.3 续入令牌：中断时签发 `resume_token`（一次性、上限 3 次、随场次过期）；测试续入不重复出题（与 5.9 联动）
-- [ ] 4.4 `effect_deliver_invitation`：调 `deliver_candidate_message(type='interview_invitation')`，草稿带 AI 生成标识；总开关关 ⇒ 返回「人工转达」并把链接展示在 HR 工作台；幂等键 `{session_id}:effect_deliver_invitation:{draft_id}`；反证测试：代码中不得 import `channel.deliver`
-- [ ] 4.5 同意条款文件 `config/consent/ai_interview-v1.md`、`identity_check-v1.md`（占位文本，标「待法务 #2 定稿」）；版本号解析与展示；升版后新场次用新版本、旧记录不变
-- [ ] 4.6 同意页（候选人端）：两个独立勾选、告知留存期限／AI 只作参考／可申请人工面试；提交写两条 `interview_consent`；任一拒绝 ⇒ 场次 `abandoned`＋留痕＋HR 工作台提示改约；幂等键 `{session_id}:effect_record_consent:{kind}:{version}`
-- [ ] 4.7 验证码：6 位、5 分钟、错 5 次锁场次（`status=locked`＋留痕）；通过写 `phone_verified_at`＋`identity_check(result=skipped)`；幂等键 `{session_id}:effect_verify_phone:{attempt_no}`
-- [ ] 4.8 验证码送达：短信通道未配置 ⇒ 候选人请求时生成并在 HR 工作台展示（展示留痕）；配置了 ⇒ `effect_send_verification_code` 节点（⏸ 门禁口径 OQ-10 未定前该节点只留接口、默认不启用）
-- [ ] 4.9 真实候选人开闸：`Settings.live_interview_enabled` 默认 `False`，每次签发求值，AND 合规验收 #2 签认文件存在；关闭时只允许 `sample_class=internal_sim`；测试：关闭时签发 live 被拒并留痕
-- [ ] 4.10 手机号来源接线：`live` 场次从 `candidate-contact-vault` 读（vault 开关关 ⇒ 签发被拒）；`internal_sim` 场次不经 vault；本包任何表不存明文手机号（grep 断言）
-- [ ] 4.11 HR 签发页（Web）：选投递（须有 frozen 快照）→ 签发 → 展示链接／验证码（人工转达模式）→ 状态；e2e：签发 → 打开 → 双同意 → 验证码 → 场次 `pending→in_progress` 前置校验通过
+- [x] 4.1 令牌签发：32 字节随机、库存哈希、`invite_expires_at` 岗位级配置默认 7 天；`effect_issue_invite`（幂等键 `{session_id}:effect_issue_invite:{token_hash}`）；同一场次重复签发 ⇒ 旧令牌作废并留痕
+- [x] 4.2 令牌校验端点：首次打开置 `used_at`；重复／过期 ⇒ 统一失效页（不泄露场次信息）＋留痕；测试三种路径
+- [x] 4.3 续入令牌：中断时签发 `resume_token`（一次性、上限 3 次、随场次过期）；测试续入不重复出题（与 5.9 联动）
+- [x] 4.4 `effect_deliver_invitation`：调 `deliver_candidate_message(type='interview_invitation')`，草稿带 AI 生成标识；总开关关 ⇒ 返回「人工转达」并把链接展示在 HR 工作台；幂等键 `{session_id}:effect_deliver_invitation:{draft_id}`；反证测试：代码中不得 import `channel.deliver`
+- [x] 4.5 同意条款文件 `config/consent/ai_interview-v1.md`、`identity_check-v1.md`（占位文本，标「待法务 #2 定稿」）；版本号解析与展示；升版后新场次用新版本、旧记录不变
+- [x] 4.6 同意页（候选人端）：两个独立勾选、告知留存期限／AI 只作参考／可申请人工面试；提交写两条 `interview_consent`；任一拒绝 ⇒ 场次 `abandoned`＋留痕＋HR 工作台提示改约；幂等键 `{session_id}:effect_record_consent:{kind}:{version}`
+- [x] 4.7 验证码：6 位、5 分钟、错 5 次锁场次（`status=locked`＋留痕）；通过写 `phone_verified_at`＋`identity_check(result=skipped)`；幂等键 `{session_id}:effect_verify_phone:{attempt_no}`
+- [x] 4.8 验证码送达：短信通道未配置 ⇒ 候选人请求时生成并在 HR 工作台展示（展示留痕）；配置了 ⇒ `effect_send_verification_code` 节点（⏸ 门禁口径 OQ-10 未定前该节点只留接口、默认不启用）
+- [x] 4.9 真实候选人开闸：`Settings.live_interview_enabled` 默认 `False`，每次签发求值，AND 合规验收 #2 签认文件存在；关闭时只允许 `sample_class=internal_sim`；测试：关闭时签发 live 被拒并留痕
+- [x] 4.10 手机号来源接线：`live` 场次从 `candidate-contact-vault` 读（vault 开关关 ⇒ 签发被拒）；`internal_sim` 场次不经 vault；本包任何表不存明文手机号（grep 断言）
+- [x] 4.11 HR 签发页（Web）：选投递（须有 frozen 快照）→ 签发 → 展示链接／验证码（人工转达模式）→ 状态；e2e：签发 → 打开 → 双同意 → 验证码 → 场次 `pending→in_progress` 前置校验通过
 
 ## 6. U5 post 转写对齐 ＋ rubric 评分 ＋ ScoreCard（物理顺序在第 5 章 U4 之前；先用文本作答场次验证）
 
