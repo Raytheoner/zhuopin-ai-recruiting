@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <title>面试邀约签发 · 卓品智能招聘助手</title>
+  <style>
+    .field { margin-bottom: 8px; }
+    label { display: inline-block; min-width: 100px; }
+    #link-box { padding: 8px; background: #d3f9d8; margin-top: 8px; word-break: break-all; display: none; }
+    #code-box { padding: 8px; background: #fff3bf; margin-top: 8px; font-size: 20px; font-weight: bold; display: none; }
+    #error { color: red; }
+  </style>
+</head>
+<body>
+  <h1>面试邀约签发</h1>
+  <p>为已冻结题目快照的投递签发一次性面试邀请链接。</p>
+  <form id="issue-form">
+    <div class="field"><label>投递 ID：</label><input name="application_id" id="application-id-input" required></div>
+    <div class="field"><label>题目快照版本：</label><input name="prep_snapshot_version" type="number" value="1" required></div>
+    <div class="field">
+      <label>场次类型：</label>
+      <select name="sample_class">
+        <option value="internal_sim">内部模拟</option>
+        <option value="live">真实候选人</option>
+      </select>
+    </div>
+    <button type="submit">签发</button>
+  </form>
+  <div id="link-box"></div>
+  <hr>
+  <p>验证码（短信通道未配置时的降级路径：候选人在同意页请求验证码后，HR 点击下方按钮读取明文，
+     通过电话/企微人工告知候选人）：</p>
+  <button id="code-btn" disabled>查看验证码</button>
+  <div id="code-box"></div>
+  <p id="error"></p>
+
+  <script>
+    function applicationIdFromPath() {
+      const m = window.location.pathname.match(/\/applications\/([^/]+)\/interview-invite\/?$/);
+      return m ? m[1] : null;
+    }
+
+    const pathApplicationId = applicationIdFromPath();
+    const appIdInput = document.getElementById("application-id-input");
+    if (pathApplicationId) {
+      appIdInput.value = pathApplicationId;
+      appIdInput.readOnly = true;
+    }
+
+    const errorEl = document.getElementById("error");
+    const linkBox = document.getElementById("link-box");
+    const codeBox = document.getElementById("code-box");
+    const codeBtn = document.getElementById("code-btn");
+    let currentSessionId = null;
+
+    function showError(message) {
+      errorEl.textContent = message;
+    }
+
+    document.getElementById("issue-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      showError("");
+      const form = new FormData(e.target);
+      const applicationId = appIdInput.value.trim();
+      const resp = await fetch(`api/applications/${applicationId}/interview-sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prep_snapshot_version: Number(form.get("prep_snapshot_version")),
+          sample_class: form.get("sample_class"),
+          request_id: crypto.randomUUID(),
+        }),
+      });
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return;
+      }
+      if (!resp.ok) {
+        showError("签发失败：" + (await resp.text()));
+        return;
+      }
+      const data = await resp.json();
+      currentSessionId = data.session_id;
+      codeBtn.disabled = false;
+      linkBox.style.display = "block";
+      linkBox.textContent = `候选人链接（仅此一次显示，重新签发会作废旧链接）：${data.candidate_link}`
+        + ` · 投递状态：${data.delivery_mode}`;
+    });
+
+    codeBtn.addEventListener("click", async () => {
+      showError("");
+      if (!currentSessionId) {
+        showError("请先签发邀约");
+        return;
+      }
+      const resp = await fetch(`api/interview-sessions/${currentSessionId}/verification-code`);
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return;
+      }
+      if (!resp.ok) {
+        showError("获取验证码失败：" + (await resp.text()));
+        return;
+      }
+      const data = await resp.json();
+      codeBox.style.display = "block";
+      codeBox.textContent = `验证码：${data.code}（5 分钟内有效，请通过电话/企微人工告知候选人）`;
+    });
+  </script>
+</body>
+</html>
