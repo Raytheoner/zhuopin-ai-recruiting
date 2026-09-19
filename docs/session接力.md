@@ -14,13 +14,13 @@
 ### 一、今天最要紧的三件
 
 1. **`0918V` 已完成，不再是「仍欠」**：task-dispatcher 无头会话（`dispatcher-20260919-082121`）发现引用块从未挂进 `OP-0820`（连续两轮「缺映射」误报的根因），补挂并经 `handoff-inbox` 发车，`commit 7a2b460` 已合 main。`Q-27`／`Q-38` 答复→任务映射已补齐、答复键归一化已落地（`Q-29`／`Q-45` 答复列已追记）。
-2. **M2·U3 硬门槛引擎已建造完成，等发布闸**：`0918X/Y/Z` 三条 opener 建造，`commit 182383d` 已合 main；`tasks.md` 4.1–4.6 全勾；全量 pytest **3322 passed／5 failed（已知无关既有缺口）／6 skipped**；已接线到 `.51` 现网上传/重解析流程但**未接线激活**（惰性代码，上次 `0918AM` 发版时已随磁盘同步但未启用）。⇒ 定夺队列新增 **`Q-49` 待答**：是否「发」放行上线（同 `0918AM` 款流程：快照→依赖→sync→G-e→冒烟，不过即回滚）。
+2. **M2·U3 硬门槛引擎 `Q-49` 已答「发」，但 `0919O` 发版执行自核第一步即拦停，未发版**：`Q-49` 答复文本引用的「全量 pytest 3322 passed／5 failed（均为已知无关既有缺口）」与实测不符——`0919O` 在主检出重跑全量 pytest 得 **3662 passed／4 failed／10 skipped**，逐条核对后 4 条里**没有一条**是 `0918AB` 原始「5 failed」名单里的项（该名单本身也不是「全部已知无关」：其中 1 条 `test_manifest_matches_the_source_tree` 当时就被标记为**真回归待修**，非「无关」，且从未修过；另 4 条 `test_probe_m3_voice.py` 环境缺口现已不在失败列表里，说明 funasr/livekit 依赖已补齐）。本次 4 条失败：`test_db_m2_schema.py::test_added_columns_tuple_still_only_touches_job_profile`、`test_db_m2_u2_schema.py::test_old_job_table_gains_parse_confidence_threshold_via_migration`（`job_prep_config` 表缺失，`_ADDED_COLUMNS` 收录了它但 `SCHEMA` 里没有对应 `CREATE TABLE IF NOT EXISTS`）、`test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree`（`EFFECT_NODE_MANIFEST` 漏登 M3 语音面试合入的 18 个 effect 节点）、`test_effect_idempotency_suite.py::test_every_effect_named_function_is_decorated_with_idempotent_effect`（`effect_send_verification_code`@`app/graph/invite_nodes.py:573` 缺 `@idempotent_effect` 装饰器）——**全部指向 M3 语音面试包合并带入的既有缺口，不是 M2·U3 本身的回归，但也不在 `Q-49` 授权时引用的「已核实名单」内**，按 `0919O` 预案「新增失败 ⇒ 停，不得发版」原地拦停，**`.51` 未改动，无回滚需要**。M2·U3 代码本身（`182383d`）就绪状态不变，仅缺一次"重新核实失败名单后再授权发"的动作。⇒ 登记见下方待办。
 3. **M3 语音面试建造大幅推进（今日 09-19 seg1–5 全串行完成）**：U2 出题引擎（章节 2–3）、U3 候选人邀请/同意（章节 4）已全部合 main；**U4 语音链路/live（章节 5–6）今日新合 main**（`31eb5d8`），5.1–5.10 已回勾，仅 **5.11（live e2e 真实一场）留白**——阻塞原因＝`0.4 语音主机采购` 未办（🔴 须 Shao Peishen 本人）。`tasks.md` 进度 **36/76**。章节 7（面试官端 ScoreCard/回放）尚未出 plan，为下一自然单元，不受 5.11／0.4 阻塞。
 
 ### 二、待答清单变化（较 09-18 20:4x 新增，其余沿用）
 
 - **`Q-47`／`Q-48`**：task-dispatcher 自身脚本两处解析缺陷（四标签待办正则漂移漏派、`_match_plans` 前缀误绑依赖），红线③须本人专门授权派 opener，均推荐 (a) 修，低风险重构。
-- **`Q-49`**：M2·U3 硬门槛引擎 G3 发布闸，待「发」（见上）。
+- **`Q-49`**：已答「发」，但 `0919O` 执行时自核拦停未发版（见上），需要的不是重新定夺而是「核实 4 条新失败与 M2U3 无关后再走发版」这条后续动作。
 - **`Q-01`／`Q-04`／`Q-08`／`Q-10`／`Q-16`**：仍待外部输入（私信测试帧／汤丽萍回件／`.51` 访问／群 webhook／门户导航），今日无新进展，继续挂起不追问。
 
 ### 三、机制新增（09-18，沿用）
@@ -62,6 +62,20 @@
 ---
 
 ## 二、下一步
+
+### 🆕 2026-09-19 `0919O` M2·U3 发版执行自核拦停——`Q-49` 引用的「5 failed 已知无关」名单本身失真，未发版、`.51` 未动
+
+`0919O`（无头，`run-lanes` 起）执行发版前置自核第一步「全量 pytest 重跑」，main HEAD 为本次执行时刻（`182383d` 及其后合入的 M3 语音面试 U2/U3/U4 与调度器修复均已在内）：**3662 passed／4 failed／10 skipped**（85.59s，`venv` 内 `python -m pytest -q`）。逐条比对 `0918AB` 记录的原始「5 failed」名单（`docs/session接力.md` 09-18 条目，本节上方保留）：4 条新失败**没有一条**在原名单里，且原名单里唯一被标「真回归」的 `test_manifest_matches_the_source_tree` 从未修过、这次仍在失败列表里（换了报错内容——现在缺 18 个 M3 节点，当时缺 1 个 `effect_persist_flags`），另 4 条环境缺口已消失（`funasr`／`livekit` 大概率已补装）。按 `0919O` 预案「逐条比对，任一条不在原名单 ⇒ 停，不得发版」，本条到此为止，**未进入锁定发版 commit／sync/冒烟任何一步，`.51` 现网未受影响，无需回滚**。四条失败详情：
+
+- `tests/test_db_m2_schema.py::test_added_columns_tuple_still_only_touches_job_profile` — `_ADDED_COLUMNS` 里出现了护栏不认识的 `job_prep_config`／`interview_session`（M3 语音面试合入带进的列迁移，未同步更新这条机械判据的预期表集合）
+- `tests/test_db_m2_u2_schema.py::test_old_job_table_gains_parse_confidence_threshold_via_migration` — 直接因上一条同根因报错：`job_prep_config` 只进了 `_ADDED_COLUMNS` 没进 `SCHEMA` 的 `CREATE TABLE IF NOT EXISTS`，老库跑迁移会 500
+- `tests/test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree` — `EFFECT_NODE_MANIFEST` 漏登 M3 语音面试合入的 18 个 effect 节点（`effect_close_session` 等，见 `0919O` 完整报错）
+- `tests/test_effect_idempotency_suite.py::test_every_effect_named_function_is_decorated_with_idempotent_effect` — `effect_send_verification_code`@`app/graph/invite_nodes.py:573` 缺 `@idempotent_effect` 装饰器，铁律 1 要求的幂等键/`effect_log` 落空
+
+四条**均指向 M3 语音面试包（U2/U3/U4）合并带入的既有缺口，不是 M2·U3 自身回归**，但既不在 `Q-49` 授权文本引用的「已知无关」名单内，也不属于 `0919O` 有权自行判定"确认无关就放行"的范围（预案要求逐条比对不在名单即停，不得自行扩大解释）——按无人值守预案，登记后原地停，不追问、不代拍。两项登记待派发：
+
+- 【谁做】M3 语音面试 U2/U3/U4 后续 lane 或专门修复 opener｜【状态】待派发｜【判据】`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MANIFEST` 补上 18 个新节点＋各自崩溃-恢复配方，`effect_send_verification_code` 补 `@idempotent_effect` 装饰器（缺幂等键，铁律 1 直接命中），四条测试转绿｜【不做会怎样】铁律1对这批 M3 新节点失去覆盖，全量 pytest 持续非 0 failed 掩盖后续真回归信号，且 `Q-49` 无法重新核实通过
+- 【谁做】下一次 `Q-49` 重新授权前｜【状态】待派发｜【判据】上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener｜【不做会怎样】`Q-49` 现有「发」的答复文本引用的判据已知失真，继续按它直接发版等于绕过自核
 
 ### 🆕 2026-09-18 `0918AB` reportlab／Pillow 依赖登记核查——早已登记，无需改动；顺带定位到 main 当前测试红
 
