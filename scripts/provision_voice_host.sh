@@ -51,6 +51,11 @@ precheck() {
         failed=1
     fi
 
+    if ! command -v python3.10 >/dev/null 2>&1 && ! command -v python3.12 >/dev/null 2>&1; then
+        echo "预检失败：未找到 python3.10 或 python3.12（CosyVoice venv 需要，docs/m3-voice-probe-cosyvoice-install.md）" >&2
+        failed=1
+    fi
+
     if ! command -v git >/dev/null 2>&1; then
         echo "预检失败：未找到 git（CosyVoice 需要 git clone）" >&2
         failed=1
@@ -80,7 +85,11 @@ install_livekit_server() {
         log "livekit-server 已安装，跳过（$(livekit-server --version 2>&1 | head -1)）"
         return
     fi
-    log "安装 livekit-server（官方安装脚本，LIVEKIT_VERSION=${LIVEKIT_VERSION:-latest}）"
+    if [ -n "$LIVEKIT_VERSION" ]; then
+        log "警告：LIVEKIT_VERSION=$LIVEKIT_VERSION 已设置，但官方安装脚本的版本锁定参数尚未验证，本次仍会安装最新版（TODO：确认 get.livekit.io 的版本锁定语法后补上）"
+    else
+        log "安装 livekit-server（官方安装脚本，未固定版本，将安装最新版）"
+    fi
     curl -sSL https://get.livekit.io | bash
 }
 
