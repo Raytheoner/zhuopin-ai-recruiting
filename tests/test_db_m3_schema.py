@@ -257,6 +257,7 @@ def test_interview_session_table_exists_with_expected_columns(conn):
         "phone_attempts", "recording_uri", "retention_until",
         "retention_policy_version", "sample_class", "status", "created_at",
         "phone_code_hash", "phone_code_expires_at",
+        "post_scoring_status", "post_scored_at",
     }
 
 
@@ -939,3 +940,52 @@ def test_legacy_db_gains_new_columns_via_migration(tmp_path):
     assert "job_prep_config.invite_expiry_days" in added
     cols = {row[1] for row in conn.execute("PRAGMA table_info(job_prep_config)")}
     assert "invite_expiry_days" in cols
+
+
+# ── interview_scorecard / interview_scorecard_tip（U5 tasks 6.6）────────
+
+
+def test_interview_scorecard_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "interview_scorecard")
+    assert _columns(conn, "interview_scorecard") == {
+        "id", "session_id", "analysis_run_id", "summary", "created_at",
+    }
+
+
+def test_interview_scorecard_unique_on_session(conn):
+    _seed_job_candidate_resume_application(conn)
+    conn.execute(
+        "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+        "retention_until, retention_policy_version, sample_class) "
+        "VALUES ('sess1', 'app1', 1, '2099-01-01', 'v1', 'internal_sim')"
+    )
+    _seed_analysis_run(conn)
+    conn.commit()
+    conn.execute(
+        "INSERT INTO interview_scorecard (id, session_id, analysis_run_id, summary) "
+        "VALUES ('sc-1', 'sess1', 'run1', '总体表现良好')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_scorecard (id, session_id, analysis_run_id, summary) "
+            "VALUES ('sc-2', 'sess1', 'run1', '重复场次')"
+        )
+
+
+def test_interview_scorecard_tip_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "interview_scorecard_tip")
+    assert _columns(conn, "interview_scorecard_tip") == {
+        "id", "scorecard_id", "dimension", "turn_id", "tip_text", "seq",
+    }
+
+
+# ── job_prep_config / interview_session 新列（U5 tasks 6.1/6.4/6.6）──────
+
+
+def test_job_prep_config_has_scoring_threshold_columns(conn):
+    assert {"low_confidence_threshold", "low_score_threshold"} <= _columns(conn, "job_prep_config")
+
+
+def test_interview_session_has_post_scoring_status_columns(conn):
+    assert {"post_scoring_status", "post_scored_at"} <= _columns(conn, "interview_session")

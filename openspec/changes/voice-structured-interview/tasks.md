@@ -56,14 +56,14 @@
 
 ## 6. U5 post 转写对齐 ＋ rubric 评分 ＋ ScoreCard（物理顺序在第 5 章 U4 之前；先用文本作答场次验证）
 
-- [ ] 6.1 `compute_align`：把 `interview_turn` 整理为证据单元（turn id、文本、字符偏移、音频起止、`asr_confidence`）；低置信度阈值岗位级配置默认 0.6，低于则标「转写待复核」；纯函数＋测试
-- [ ] 6.2 `app/agents/interview_scoring.py::score(snapshot, turns) -> ScoreCardDraft`（纯函数，经网关，`temperature=0`）；输出 schema 每维强制 `evidence:{turn_id, start, end, quote}`；缺证据整次判不可用不落分；`ScoreInput` 不含核验／声学／身份字段（2.7 断言）
-- [ ] 6.3 证据反查校正：用 `quote` 在 turn 文本里反查偏移，不一致以反查为准；反查失败判该维无证据；测试覆盖偏移错位与摘录不存在两种
-- [ ] 6.4 要点提示生成：从各维低分项与低置信度 turn 派生「建议终面追问」列表（规则派生，不再调 LLM），每条指向维度与 turn
-- [ ] 6.5 声学参考：从 turn 音频起止与转写字数算语速／停顿／静默比例，写 `interview_turn.acoustic_ref`（只读展示字段）；文本作答 turn 为空；测试：评分输入中不出现该字段
-- [ ] 6.6 `effect_persist_scorecard`：写 `analysis_run(run_type=interview)`＋`criterion_score`（`evidence_ref` type=interview_turn）＋要点提示，同事务；幂等键 `{session_id}:effect_persist_scorecard:{analysis_run_id}`；反证：`evidence_ref` 空或悬空被 CHECK／校验拒绝
-- [ ] 6.7 post 子图与触发：场次 `completed` 后由 `.51` 计划任务批处理触发 `compute_align → compute_score → effect_persist_scorecard`；失败标「评分失败待重试」可观测；重试不重复落分
-- [ ] 6.8 post e2e（文本作答场次）：用 U3 签发的内部模拟场次以文本作答走完 10 题 → post 评分 → 每维有 turn 回指且可定位 → `rejection_record` 无新增、`application` 阶段不变
+- [x] 6.1 `compute_align`：把 `interview_turn` 整理为证据单元（turn id、文本、字符偏移、音频起止、`asr_confidence`）；低置信度阈值岗位级配置默认 0.6，低于则标「转写待复核」；纯函数＋测试
+- [x] 6.2 `app/agents/interview_scoring.py::score(snapshot, turns) -> ScoreCardDraft`（纯函数，经网关，`temperature=0`）；输出 schema 每维强制 `evidence:{turn_id, start, end, quote}`；缺证据整次判不可用不落分；`ScoreInput` 不含核验／声学／身份字段（2.7 断言）
+- [x] 6.3 证据反查校正：用 `quote` 在 turn 文本里反查偏移，不一致以反查为准；反查失败判该维无证据；测试覆盖偏移错位与摘录不存在两种
+- [x] 6.4 要点提示生成：从各维低分项与低置信度 turn 派生「建议终面追问」列表（规则派生，不再调 LLM），每条指向维度与 turn
+- [x] 6.5 声学参考：从 turn 音频起止与转写字数算语速／停顿／静默比例，写 `interview_turn.acoustic_ref`（只读展示字段）；文本作答 turn 为空；测试：评分输入中不出现该字段
+- [x] 6.6 `effect_persist_scorecard`：写 `analysis_run(run_type=interview)`＋`criterion_score`（`evidence_ref` type=interview_turn）＋要点提示，同事务；幂等键 `{session_id}:effect_persist_scorecard:{analysis_run_id}`；反证：`evidence_ref` 空或悬空被 CHECK／校验拒绝
+- [x] 6.7 post 子图与触发：场次 `completed` 后由 `.51` 计划任务批处理触发 `compute_align → compute_score → effect_persist_scorecard`；失败标「评分失败待重试」可观测；重试不重复落分
+- [x] 6.8 post e2e（文本作答场次）：用 U3 签发的内部模拟场次以文本作答走完 10 题 → post 评分 → 每维有 turn 回指且可定位 → `rejection_record` 无新增、`application` 阶段不变
 
 ## 5. U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
 

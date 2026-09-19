@@ -865,6 +865,37 @@ CREATE TABLE IF NOT EXISTS interview_invite_event (
 
 CREATE INDEX IF NOT EXISTS idx_interview_invite_event_session
     ON interview_invite_event (session_id);
+
+-- ScoreCard 总体摘要与要点提示（voice-structured-interview U5 tasks 6.6/6.4；
+-- design D4 未列出这两张表，是本单元对"总体摘要"与"要点提示"存储位置的补充
+-- 设计决策——见 docs/superpowers/plans/2026-09-19-u5-post-scoring.md「设计决策 1」）。
+-- UNIQUE(session_id)：一个场次只有一份定稿 ScoreCard；失败重试不写这张表，
+-- 只有整次评分判定可用（全部维度都有合法证据）才写一次。
+CREATE TABLE IF NOT EXISTS interview_scorecard (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES interview_session(id),
+    analysis_run_id TEXT NOT NULL REFERENCES analysis_run(id),
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_scorecard_session
+    ON interview_scorecard (session_id);
+
+-- 要点提示（interview-scorecard spec「ScoreCard 与要点提示只作参考」：每条
+-- MUST 指向具体维度与 turn）。turn_id 建外键——要点提示离开了它指向的 turn
+-- 就没有意义，不像 interview_access_log 那样需要"留痕独立于内容表可写性"。
+CREATE TABLE IF NOT EXISTS interview_scorecard_tip (
+    id TEXT PRIMARY KEY NOT NULL,
+    scorecard_id TEXT NOT NULL REFERENCES interview_scorecard(id),
+    dimension TEXT NOT NULL,
+    turn_id TEXT NOT NULL REFERENCES interview_turn(id),
+    tip_text TEXT NOT NULL,
+    seq INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_scorecard_tip_scorecard
+    ON interview_scorecard_tip (scorecard_id);
 """
 
 
@@ -909,6 +940,16 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # phone_verified_at 已在 U1 建好，这两列是本单元独有的新增。
     ("interview_session", "phone_code_hash", "TEXT"),
     ("interview_session", "phone_code_expires_at", "TEXT"),
+    # voice-structured-interview U5 tasks 6.1/6.4：低置信度转写阈值、要点
+    # 提示低分阈值，均为岗位级配置。job_prep_config 在 U2 建表，CREATE TABLE
+    # IF NOT EXISTS 对已存在的表无效，必须走加列迁移（与 invite_expiry_days
+    # 同一先例）。
+    ("job_prep_config", "low_confidence_threshold", "REAL NOT NULL DEFAULT 0.6"),
+    ("job_prep_config", "low_score_threshold", "REAL NOT NULL DEFAULT 2.0"),
+    # U5 tasks 6.6/6.7：post 评分状态机，批处理靠它判断该场次是否需要（重新）
+    # 评分。interview_session 在 M3 U1 建表，同样走加列迁移。
+    ("interview_session", "post_scoring_status", "TEXT NOT NULL DEFAULT 'pending'"),
+    ("interview_session", "post_scored_at", "TEXT"),
 )
 
 
