@@ -24,6 +24,7 @@
 """
 
 import ast
+import hashlib
 import json
 import pathlib
 import sqlite3
@@ -68,10 +69,39 @@ from app.graph.interview_prep_nodes import (
     effect_regenerate_prep_question,
 )
 from app.agents.interview_prep import PrepDraft, PrepQuestionDraft
+from app.graph.interview_scoring_nodes import (
+    AlignedTurn,
+    CorrectedCriterionScore,
+    TalkingPoint,
+    effect_mark_scoring_failed,
+    effect_persist_scorecard,
+    effect_write_acoustic_refs,
+)
+from app.graph.invite_nodes import (
+    effect_consume_resume_token,
+    effect_create_interview_session,
+    effect_deliver_invitation,
+    effect_display_verification_code_to_hr,
+    effect_issue_invite,
+    effect_issue_resume_token,
+    effect_issue_verification_code,
+    effect_log_invite_access_denied,
+    effect_open_invite,
+    effect_record_consent,
+    effect_send_verification_code,
+    effect_verify_phone,
+)
+from app.graph.live_session_nodes import (
+    effect_close_session,
+    effect_fetch_recording,
+    effect_open_session,
+    effect_persist_turn,
+)
 from app.graph.resume_nodes import effect_persist_parse
 from app.graph.screening_nodes import compute_screen, effect_persist_flags
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
+from app.schemas.live_turn_event import LiveTurnEvent
 from app.schemas.resume_fields import (
     EducationField,
     ListField,
@@ -79,6 +109,7 @@ from app.schemas.resume_fields import (
     ResumeFields,
     TextField,
 )
+from app.schemas.session_bundle import SessionBundle, SessionBundleQuestion
 from app.storage.db import get_connection, init_schema
 
 # 仓库根 = tests/ 的上一级
@@ -110,8 +141,44 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_edit_prep_question",
         "effect_delete_prep_question",
         "effect_regenerate_prep_question",
+        "effect_create_interview_session",
+        "effect_issue_invite",
+        "effect_log_invite_access_denied",
+        "effect_open_invite",
+        "effect_issue_resume_token",
+        "effect_consume_resume_token",
+        "effect_deliver_invitation",
+        "effect_record_consent",
+        "effect_issue_verification_code",
+        "effect_verify_phone",
+        "effect_display_verification_code_to_hr",
+        "effect_open_session",
+        "effect_persist_turn",
+        "effect_close_session",
+        "effect_fetch_recording",
+        "effect_write_acoustic_refs",
+        "effect_persist_scorecard",
+        "effect_mark_scoring_failed",
+        "effect_send_verification_code",
     }
 )
+
+# ⚠️ 0919T 追加：`effect_send_verification_code`（app/graph/invite_nodes.py，
+# OQ-10 未决前的占位桩）不管调用方传什么参数都立刻 raise NotImplementedError
+# ——函数体在 idempotent_effect 装饰器的 `fn(conn, ...)` 调用点就抛出，
+# 永远走不到 "INSERT INTO effect_log → commit()" 这一步。下面两条通用崩溃-
+# 恢复协议（`test_forced_interrupt_then_recovery_applies_the_effect_exactly_once`
+# / `test_effect_log_count_equals_business_rows_per_thread`）默认每个节点调用
+# 一次都能真正生效（写一次 effect_log + 一次业务事实），这个前提对一个永远
+# 抛异常的占位桩不成立——不是"发现它不幂等"（铁律 1 谈的是已生效的副作用是否
+# 被重复应用，这个函数从未生效过），是两类节点本就不在同一个可比较的维度上。
+# 该桩改成真实实现（OQ-10 落地）的那天，必须把它从这个集合里摘掉、改走通用
+# 协议——`test_manifest_matches_the_source_tree` 与
+# `test_every_effect_node_has_a_recovery_recipe` 仍然要求它在
+# EFFECT_NODE_MANIFEST 与 build_recipes() 里各有一条，只是不喂给这两条通用
+# 协议，改由 `test_effect_send_verification_code_stub_always_raises_and_writes_nothing`
+# 单独覆盖："装饰器包着一个永远失败的桩，异常原样透传、不留任何痕迹"这件事本身。
+_PERMANENTLY_UNIMPLEMENTED_STUBS = frozenset({"effect_send_verification_code"})
 
 
 def collect_effect_node_sites() -> dict[str, list[str]]:
@@ -329,7 +396,11 @@ _RESUME = "resume-4-4"
 _CANDIDATE = "candidate-4-4"
 _APPLICATION = "application-4-4"
 _PREP_RUN = "prep-run-4-4"
+_SESSION = "session-4-4"
+_TURN = "turn-4-4"
+_SCORE_RUN = "score-run-4-4"
 _TS = "2026-09-08T02:00:00+00:00"
+_FAR_FUTURE = "2099-01-01T00:00:00+00:00"
 _LABEL = AI_LABEL_TEMPLATE.format(generated_at=_TS)
 _AI_BODY = f"【AI 生成】本文案由系统基于岗位画像自动生成，生成时间 {_TS}。很遗憾……"
 
@@ -520,6 +591,27 @@ def _jd_profile() -> JobProfile:
 _EDITED_JD = "岗位职责：负责 ECU 底层软件开发（HR 手改版）。"
 
 
+class _FakeVoiceHostClient:
+    """给 U4 live 子图三个需要 client 的 effect_* 节点用的替身，只实现
+    `effect_open_session`/`effect_fetch_recording` 真正调到的两个方法——本
+    文件不测 `run_live_session_sync` 本身（那是另一份既有覆盖
+    tests/test_live_session_nodes.py 的范围），不需要 `poll_events`。"""
+
+    def __init__(self) -> None:
+        self.created_sessions: list[str] = []
+        self.deleted_artifacts: list[str] = []
+
+    def create_session(self, bundle: SessionBundle) -> None:
+        self.created_sessions.append(bundle.session_id)
+
+    def notify_delete_artifacts(self, session_id: str) -> None:
+        self.deleted_artifacts.append(session_id)
+
+
+_RECORDING_CONTENT = b"hello-recording-4-4"
+_RECORDING_SHA256 = hashlib.sha256(_RECORDING_CONTENT).hexdigest()
+
+
 def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
     """节点名 → 崩溃-恢复配方。键集合必须与 EFFECT_NODE_MANIFEST 逐字相等。"""
 
@@ -646,6 +738,83 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
         dimension="AUTOSAR CP", difficulty="medium", text="重生成后的题面",
         rubric="重生成后的 rubric", follow_ups=["新追问"], rationale="重生成依据",
     )
+
+    # ── U3 邀约与同意（app/graph/invite_nodes.py）11 个节点的共用种子 ──────
+    def _seed_invite_session(conn, *, status="pending"):
+        """`_seed_application_base` 之上再放一行 `interview_session`——U3 的
+        11 个节点里除 `effect_create_interview_session` 本身外，全部要求场次
+        已存在（`interview_invite_event`/`interview_consent` 都外键指向它）。
+        `prep_snapshot_version` 是裸整数，不建到 `prep_snapshot` 的复合外键
+        （见 app/storage/db.py SCHEMA 注释），不需要真的有一份 prep_snapshot。"""
+        _seed_application_base(conn)
+        conn.execute(
+            "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+            "retention_until, retention_policy_version, sample_class, status) "
+            "VALUES (?, ?, 1, ?, 'v1-90d', 'internal_sim', ?)",
+            (_SESSION, _APPLICATION, _FAR_FUTURE, status),
+        )
+        conn.commit()
+
+    def _seed_resume_token_session(conn):
+        """`effect_consume_resume_token` 专用：场次已签发一枚续入令牌
+        （`resume_token_hash` 非空）、状态 'interrupted'，用来观察消费后
+        `resume_token_hash` 清空 + 状态回到 'in_progress' 这个转移。"""
+        _seed_invite_session(conn, status="interrupted")
+        conn.execute(
+            "UPDATE interview_session SET resume_token_hash = 'rt-hash-4-4' WHERE id = ?",
+            (_SESSION,),
+        )
+        conn.commit()
+
+    # ── U4 live 子图（app/graph/live_session_nodes.py）4 个节点的共用种子 ──
+    def _seed_live_session(conn):
+        """复用既有的 `_seed_prep_snapshot_draft`（job/profile/candidate/
+        resume/application/analysis_run/prep_snapshot/prep_question 一条
+        完整闭环）再加一行 'in_progress' 的 `interview_session`——
+        `effect_persist_turn` 的 `interview_turn.question_id` 外键指向
+        `prep_question`，没有这条闭环会在种子阶段就炸 FK。"""
+        _seed_prep_snapshot_draft(conn)
+        conn.execute(
+            "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+            "retention_until, retention_policy_version, sample_class, status) "
+            "VALUES (?, ?, 1, ?, 'v1-90d', 'internal_sim', 'in_progress')",
+            (_SESSION, _APPLICATION, _FAR_FUTURE),
+        )
+        conn.commit()
+
+    def _live_bundle() -> SessionBundle:
+        return SessionBundle(
+            session_id=_SESSION, prep_curve="easy_to_hard", follow_up_limit=2,
+            questions=[SessionBundleQuestion(question_id="prep-q-4-4", seq=1, text="原题面", follow_ups=["追问"])],
+        )
+
+    # ── U5 post 评分（app/graph/interview_scoring_nodes.py）3 个节点的种子 ──
+    def _seed_scoring_session(conn):
+        """在 `_seed_live_session` 之上再加一条已完成的 `interview_turn`
+        （`effect_write_acoustic_refs`/`effect_persist_scorecard` 的证据回指都
+        指向具体某条 turn）与一条 `analysis_run`（`criterion_score`/
+        `interview_scorecard` 外键指向它，见 app/storage/db.py SCHEMA）。"""
+        _seed_prep_snapshot_draft(conn)
+        conn.execute(
+            "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+            "retention_until, retention_policy_version, sample_class, status) "
+            "VALUES (?, ?, 1, ?, 'v1-90d', 'internal_sim', 'completed')",
+            (_SESSION, _APPLICATION, _FAR_FUTURE),
+        )
+        conn.execute(
+            "INSERT INTO interview_turn (id, session_id, seq, question_id, question_text, "
+            "answer_text, answer_mode, audio_start_ms, audio_end_ms) VALUES "
+            "(?, ?, 1, 'prep-q-4-4', '讲讲你的项目', '做过三年 AUTOSAR CP 分层开发', "
+            "'voice', 0, 8000)",
+            (_TURN, _SESSION),
+        )
+        conn.execute(
+            "INSERT INTO analysis_run (id, application_id, job_id, configured_model, "
+            "prompt_version, temperature, input_hash, raw_response) VALUES "
+            "(?, ?, ?, 'deepseek-chat', 'interview-score-v1', 0, 'h', '{}')",
+            (_SCORE_RUN, _APPLICATION, _JOB),
+        )
+        conn.commit()
 
     return {
         "effect_persist_draft": Recipe(
@@ -1000,6 +1169,355 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "幂等短路，不会在已经是 0 行的表上再次尝试 DELETE。"
             ),
         ),
+        "effect_create_interview_session": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_application_base,
+            invoke=lambda conn: effect_create_interview_session(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="req-4-4",
+                session={
+                    "id": _SESSION,
+                    "application_id": _APPLICATION,
+                    "prep_snapshot_version": 1,
+                    "sample_class": "internal_sim",
+                    "retention_until": _FAR_FUTURE,
+                    "retention_policy_version": "v1-90d",
+                },
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE application_id = ?", (_APPLICATION,)
+            ).fetchone()[0],
+        ),
+        "effect_issue_invite": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_issue_invite(
+                conn,
+                thread_id=_SESSION,
+                business_key="issue-hash-4-4",
+                session_id=_SESSION,
+                token_hash="issue-hash-4-4",
+                expires_at=_FAR_FUTURE,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_invite_event WHERE session_id = ? "
+                "AND event_type = 'issued'",
+                (_SESSION,),
+            ).fetchone()[0],
+        ),
+        "effect_log_invite_access_denied": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_log_invite_access_denied(
+                conn,
+                thread_id=_SESSION,
+                business_key="denied-4-4",
+                session_id=_SESSION,
+                reason="expired_access",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_invite_event WHERE session_id = ? "
+                "AND event_type = 'expired_access'",
+                (_SESSION,),
+            ).fetchone()[0],
+        ),
+        "effect_open_invite": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_open_invite(
+                conn, thread_id=_SESSION, business_key="open", session_id=_SESSION,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE id = ? AND status = 'in_progress'",
+                (_SESSION,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：pending → in_progress 是 UPDATE，行数口径"
+                "改用「处于该状态的行数」，与 effect_mark_needs_manual 同一手法。"
+            ),
+        ),
+        "effect_issue_resume_token": Recipe(
+            thread_id=_SESSION,
+            seed=lambda conn: _seed_invite_session(conn, status="interrupted"),
+            invoke=lambda conn: effect_issue_resume_token(
+                conn,
+                thread_id=_SESSION,
+                business_key="resume-hash-4-4",
+                session_id=_SESSION,
+                token_hash="resume-hash-4-4",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_invite_event WHERE session_id = ? "
+                "AND event_type = 'resume_issued'",
+                (_SESSION,),
+            ).fetchone()[0],
+        ),
+        "effect_consume_resume_token": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_resume_token_session,
+            invoke=lambda conn: effect_consume_resume_token(
+                conn, thread_id=_SESSION, business_key="consume-4-4", session_id=_SESSION,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE id = ? "
+                "AND status = 'in_progress' AND resume_token_hash IS NULL",
+                (_SESSION,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：消费续入令牌是 UPDATE（清空哈希 + 状态回到"
+                "in_progress），种子先放一个非空哈希 + 'interrupted' 状态，行数口径"
+                "改用「已消费状态的行数」，与 effect_mark_needs_manual 同一手法。"
+            ),
+        ),
+        "effect_deliver_invitation": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_deliver_invitation(
+                conn,
+                thread_id=_SESSION,
+                business_key="draft-4-4",
+                session_id=_SESSION,
+                recipient="candidate:application-4-4",
+                body="您好，请点击链接开始面试。",
+                channel=WebChannel(conn),
+                recorder=AuditRecorder(SqliteSink(conn), JsonlChainSink(tmp_path / "decisions-invite.jsonl")),
+                outbound_enabled=lambda: False,
+                confirmed_by="hr:tester",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_invite_event WHERE session_id = ? "
+                "AND event_type IN ('manual_handoff', 'delivered')",
+                (_SESSION,),
+            ).fetchone()[0],
+        ),
+        "effect_record_consent": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_record_consent(
+                conn,
+                thread_id=_SESSION,
+                business_key="ai_interview:v1",
+                session_id=_SESSION,
+                kind="ai_interview",
+                result="accepted",
+                version="v1",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_consent WHERE session_id = ? AND kind = 'ai_interview'",
+                (_SESSION,),
+            ).fetchone()[0],
+        ),
+        "effect_issue_verification_code": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_issue_verification_code(
+                conn,
+                thread_id=_SESSION,
+                business_key="code-4-4",
+                session_id=_SESSION,
+                code_hash="code-hash-4-4",
+                expires_at=_FAR_FUTURE,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE id = ? AND phone_code_hash = 'code-hash-4-4'",
+                (_SESSION,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：签发验证码是 UPDATE 同一行三列，行数口径改用"
+                "「该行哈希是否等于签发值」这个 0/1 谓词，与 effect_update_jd_text "
+                "同一手法。"
+            ),
+        ),
+        "effect_verify_phone": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_verify_phone(
+                conn, thread_id=_SESSION, business_key="1", session_id=_SESSION, correct=True,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE id = ? AND phone_verified_at IS NOT NULL",
+                (_SESSION,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：验证通过是 UPDATE phone_verified_at，行数口径"
+                "改用「该列非空的行数」，与 effect_mark_needs_manual 同一手法。"
+            ),
+        ),
+        "effect_display_verification_code_to_hr": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_invite_session,
+            invoke=lambda conn: effect_display_verification_code_to_hr(
+                conn,
+                thread_id=_SESSION,
+                business_key="display-4-4",
+                session_id=_SESSION,
+                accessor="hr:tester",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_invite_event WHERE session_id = ? "
+                "AND event_type = 'code_displayed_to_hr'",
+                (_SESSION,),
+            ).fetchone()[0],
+        ),
+        "effect_open_session": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_live_session,
+            invoke=lambda conn: effect_open_session(
+                conn,
+                thread_id=_SESSION,
+                business_key="1",
+                session_id=_SESSION,
+                bundle=_live_bundle(),
+                client=_FakeVoiceHostClient(),
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_live_event WHERE session_id = ? AND event_type = 'opened'",
+                (_SESSION,),
+            ).fetchone()[0],
+        ),
+        "effect_persist_turn": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_live_session,
+            invoke=lambda conn: effect_persist_turn(
+                conn,
+                thread_id=_SESSION,
+                business_key="1",
+                session_id=_SESSION,
+                event=LiveTurnEvent(
+                    seq=1, question_id="prep-q-4-4", question_text="讲讲你的项目",
+                    answer_text="回答内容", answer_mode="text",
+                ),
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_turn WHERE session_id = ? AND seq = 1", (_SESSION,)
+            ).fetchone()[0],
+        ),
+        "effect_close_session": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_live_session,
+            invoke=lambda conn: effect_close_session(
+                conn, thread_id=_SESSION, business_key="close", session_id=_SESSION,
+                final_status="completed",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE id = ? AND status = 'completed'",
+                (_SESSION,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：in_progress → completed 是 UPDATE，行数口径"
+                "改用「处于该状态的行数」，与 effect_mark_needs_manual 同一手法。"
+            ),
+        ),
+        "effect_fetch_recording": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_live_session,
+            invoke=lambda conn: effect_fetch_recording(
+                conn,
+                thread_id=_SESSION,
+                business_key=_RECORDING_SHA256,
+                session_id=_SESSION,
+                content=_RECORDING_CONTENT,
+                recording_sha256=_RECORDING_SHA256,
+                recording_dir=str(tmp_path / "recordings"),
+                client=_FakeVoiceHostClient(),
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE id = ? AND recording_sha256 = ?",
+                (_SESSION, _RECORDING_SHA256),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：落录音哈希是 UPDATE，行数口径改用「该列"
+                "等于目标哈希的行数」，与 effect_update_jd_text 同一手法。"
+            ),
+        ),
+        "effect_write_acoustic_refs": Recipe(
+            thread_id=f"{_SESSION}:post",
+            seed=_seed_scoring_session,
+            invoke=lambda conn: effect_write_acoustic_refs(
+                conn,
+                thread_id=f"{_SESSION}:post",
+                business_key=_SESSION,
+                session_id=_SESSION,
+                aligned_turns=[
+                    AlignedTurn(
+                        turn_id=_TURN, seq=1, question_id="prep-q-4-4", question_text="讲讲你的项目",
+                        answer_text="做过三年 AUTOSAR CP 分层开发", answer_mode="voice",
+                        asr_confidence=None, audio_start_ms=0, audio_end_ms=8000, low_confidence=False,
+                    )
+                ],
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_turn WHERE id = ? AND acoustic_ref IS NOT NULL",
+                (_TURN,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：写声学参考是 UPDATE，行数口径改用「该列"
+                "非空的行数」，与 effect_mark_needs_manual 同一手法。"
+            ),
+        ),
+        "effect_persist_scorecard": Recipe(
+            thread_id=f"{_SESSION}:post",
+            seed=_seed_scoring_session,
+            invoke=lambda conn: effect_persist_scorecard(
+                conn,
+                thread_id=f"{_SESSION}:post",
+                business_key=_SCORE_RUN,
+                session_id=_SESSION,
+                corrected_scores=[
+                    CorrectedCriterionScore(
+                        dimension="AUTOSAR CP", score=4.0, turn_id=_TURN, start=0, end=5,
+                        quote="做过三年",
+                    )
+                ],
+                overall_summary="整体表现良好",
+                talking_points=[
+                    TalkingPoint(dimension="AUTOSAR CP", turn_id=_TURN, tip_text="建议追问")
+                ],
+                analysis_run_id=_SCORE_RUN,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_scorecard WHERE session_id = ?", (_SESSION,)
+            ).fetchone()[0],
+        ),
+        "effect_mark_scoring_failed": Recipe(
+            thread_id=f"{_SESSION}:post",
+            seed=_seed_scoring_session,
+            invoke=lambda conn: effect_mark_scoring_failed(
+                conn,
+                thread_id=f"{_SESSION}:post",
+                business_key="fail-4-4",
+                session_id=_SESSION,
+                reason="维度证据反查失败",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_session WHERE id = ? AND post_scoring_status = 'failed_retry'",
+                (_SESSION,),
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：标记失败是 UPDATE post_scoring_status，行数"
+                "口径改用「处于该状态的行数」，与 effect_mark_needs_manual 同一手法。"
+            ),
+        ),
+        "effect_send_verification_code": Recipe(
+            thread_id=_SESSION,
+            seed=_seed_nothing,
+            invoke=lambda conn: effect_send_verification_code(
+                conn, thread_id=_SESSION, business_key="1",
+            ),
+            count_business_rows=lambda conn: 0,
+            rows_per_effect=0,
+            note=(
+                "**永久占位桩（OQ-10 未决）**：不进入下面两条通用崩溃-恢复协议的"
+                "parametrize 范围（见 _PERMANENTLY_UNIMPLEMENTED_STUBS），因为函数体"
+                "永远在 idempotent_effect 的 fn(conn, ...) 调用点抛 NotImplementedError，"
+                "走不到 effect_log INSERT/commit 这一步，两条通用协议的"
+                "'crashed_once'/'恰好一份' 断言对它无意义。这条配方只服务"
+                "test_every_effect_node_has_a_recovery_recipe 的清单-配方对齐检查，"
+                "真正的行为断言在"
+                "test_effect_send_verification_code_stub_always_raises_and_writes_nothing。"
+            ),
+        ),
     }
 
 
@@ -1013,7 +1531,9 @@ def test_every_effect_node_has_a_recovery_recipe(tmp_path):
     )
 
 
-@pytest.mark.parametrize("node_name", sorted(EFFECT_NODE_MANIFEST))
+@pytest.mark.parametrize(
+    "node_name", sorted(EFFECT_NODE_MANIFEST - _PERMANENTLY_UNIMPLEMENTED_STUBS)
+)
 def test_forced_interrupt_then_recovery_applies_the_effect_exactly_once(node_name, tmp_path):
     """
     ⭐⭐⭐ 本单元的主用例。对**每一个** effect_* 节点走同一条协议：
@@ -1072,7 +1592,9 @@ def test_forced_interrupt_then_recovery_applies_the_effect_exactly_once(node_nam
     )
 
 
-@pytest.mark.parametrize("node_name", sorted(EFFECT_NODE_MANIFEST))
+@pytest.mark.parametrize(
+    "node_name", sorted(EFFECT_NODE_MANIFEST - _PERMANENTLY_UNIMPLEMENTED_STUBS)
+)
 def test_effect_log_count_equals_business_rows_per_thread(node_name, tmp_path):
     """
     ⭐ 工程铁律 1 的 reviewer 判据逐字落成断言：
@@ -1165,3 +1687,29 @@ def test_outbound_audit_has_no_sqlite_business_row_by_design(tmp_path):
         ).fetchone()[0]
         == 1
     ), "SQLite 里没有业务行，但幂等保护必须照常生效——重复留痕由 effect_log 挡住"
+
+
+def test_effect_send_verification_code_stub_always_raises_and_writes_nothing(tmp_path):
+    """
+    ⚠️ **`_PERMANENTLY_UNIMPLEMENTED_STUBS` 的固化，不是红灯。**
+
+    `effect_send_verification_code`（OQ-10 未决前的占位桩）被排除在两条通用
+    崩溃-恢复协议之外，理由见 `_PERMANENTLY_UNIMPLEMENTED_STUBS` 的注释。这条
+    用例补上真正的行为断言：即便函数体永远 raise，装饰器本身仍要正确工作——
+    异常原样透传给调用方（⛔ 不能被 idempotent_effect 吞掉、也不能被错误分类
+    成"幂等命中"返回 None），且不留下任何 effect_log 行或业务行（⛔ 不能有
+    部分写入残留）。
+    """
+    conn = get_connection(str(tmp_path / "stub.db"))
+    init_schema(conn)
+    conn.commit()
+
+    with pytest.raises(NotImplementedError):
+        effect_send_verification_code(conn, thread_id=_SESSION, business_key="1")
+
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM effect_log WHERE node_name = 'effect_send_verification_code'"
+        ).fetchone()[0]
+        == 0
+    ), "占位桩从未生效，不应留下任何 effect_log 行"
