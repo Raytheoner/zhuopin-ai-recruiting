@@ -3,12 +3,12 @@ version: 1
 summary:
   条目数: 539
   按状态:
-    待开: 206
+    待开: 199
     在跑: 8
-    完成: 241
-    阻塞: 84
+    完成: 251
+    阻塞: 81
   阻塞·决策: 50
-  阻塞·外部: 33
+  阻塞·外部: 30
   conflicts:
   - channel-resume-intake/0.1
   - m1-intake-quality-fixes/8.9
@@ -5219,192 +5219,6 @@ tasks:
   产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/voice-structured-interview/tasks.md
   可见: false
-- id: voice-structured-interview/5.1
-  场景: voice-structured-interview
-  阶段: build
-  标题: '`scripts/provision_voice_host.sh`：幂等安装 LiveKit server／TURN／agents worker／FunASR／CosyVoice（版本按 `docs/m3-voice-probe.md` 锁'
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区:
-  - docs/m3-voice-probe.md
-  - scripts/provision_voice_host.sh
-  状态: 待开
-  阻塞类型: 无
-  产出判据: '`scripts/provision_voice_host.sh`：幂等安装 LiveKit server／TURN／agents worker／FunASR／CosyVoice（版本按 `docs/m3-voice-probe.md` 锁定）；密钥经环境变量；无害预检（端口／磁盘／Python 版本）不足即退出并说明'
-  来源: openspec/changes/voice-structured-interview/tasks.md:70
-  可见: false
-- id: voice-structured-interview/5.2
-  场景: voice-structured-interview
-  阶段: build
-  标题: 两机接口：`.51` 出站 `POST /sessions`（下发快照、领房间令牌）与 `GET /sessions/{id}/events?since=`、`GET /sessions/{id}/recording`、`DELETE /s
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: 两机接口：`.51` 出站 `POST /sessions`（下发快照、领房间令牌）与 `GET /sessions/{id}/events?since=`、`GET /sessions/{id}/recording`、`DELETE /sessions/{id}/artifacts`；HMAC 签名＋时间戳
-    ±60 s 防重放；语音主机无任何入站到 `.51` 的代码路径（grep 断言）
-  来源: openspec/changes/voice-structured-interview/tasks.md:71
-  可见: false
-- id: voice-structured-interview/5.3
-  场景: voice-structured-interview
-  阶段: build
-  标题: 下发快照 schema `SessionBundle`（题目文本／题序／预埋追问／追问上限／场次标识／曲线）；测试用反射断言不含 `resume`/`candidate`/`name`/`phone` 键（D19）
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 下发快照 schema `SessionBundle`（题目文本／题序／预埋追问／追问上限／场次标识／曲线）；测试用反射断言不含 `resume`/`candidate`/`name`/`phone` 键（D19）
-  来源: openspec/changes/voice-structured-interview/tasks.md:72
-  可见: false
-- id: voice-structured-interview/5.4
-  场景: voice-structured-interview
-  阶段: build
-  标题: agents worker：按题序播报（CosyVoice）→ 端点检测＋FunASR 流式转写 → `follow_up_selector.select()`（D17，枚举 schema，越界按下一题）→ 追问或下一题；追问上限岗位级配置
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: agents worker：按题序播报（CosyVoice）→ 端点检测＋FunASR 流式转写 → `follow_up_selector.select()`（D17，枚举 schema，越界按下一题）→ 追问或下一题；追问上限岗位级配置默认 2；每轮记分段延迟与端到端延迟到本地事件队列
-  来源: openspec/changes/voice-structured-interview/tasks.md:73
-  可见: false
-- id: voice-structured-interview/5.5
-  场景: voice-structured-interview
-  阶段: build
-  标题: 打断处理：候选人开口 ⇒ 300 ms 内停播报、记截断毫秒、转写不丢；「再说一遍」／重听按钮重播不计追问；测试用录制音频回放模拟
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 打断处理：候选人开口 ⇒ 300 ms 内停播报、记截断毫秒、转写不丢；「再说一遍」／重听按钮重播不计追问；测试用录制音频回放模拟
-  来源: openspec/changes/voice-structured-interview/tasks.md:74
-  可见: false
-- id: voice-structured-interview/5.6
-  场景: voice-structured-interview
-  阶段: build
-  标题: 全程录制：双方音频写场次文件，每 turn 记录起止毫秒；录制失败 ⇒ 场次 `interrupted`＋候选人可续入提示；回传后语音主机删副本并回报；未回传中间文件 24 h 过期清理（幂等）
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 全程录制：双方音频写场次文件，每 turn 记录起止毫秒；录制失败 ⇒ 场次 `interrupted`＋候选人可续入提示；回传后语音主机删副本并回报；未回传中间文件 24 h 过期清理（幂等）
-  来源: openspec/changes/voice-structured-interview/tasks.md:75
-  可见: false
-- id: voice-structured-interview/5.7
-  场景: voice-structured-interview
-  阶段: build
-  标题: 文本作答降级：候选人主动切换或连续两轮丢包超阈值时提示（不自动切）；切换留痕；混合场次每 turn `answer_mode`；文本 turn 无音频但保留评分资格
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 文本作答降级：候选人主动切换或连续两轮丢包超阈值时提示（不自动切）；切换留痕；混合场次每 turn `answer_mode`；文本 turn 无音频但保留评分资格
-  来源: openspec/changes/voice-structured-interview/tasks.md:76
-  可见: false
-- id: voice-structured-interview/5.8
-  场景: voice-structured-interview
-  阶段: build
-  标题: 候选人答题端（Web，静态引入 LiveKit 浏览器 SDK）：房间加入／题目文字同显（带 AI 标识）／打断／重听／切文本；相对路径；无 `.51` 访问
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: 候选人答题端（Web，静态引入 LiveKit 浏览器 SDK）：房间加入／题目文字同显（带 AI 标识）／打断／重听／切文本；相对路径；无 `.51` 访问
-  来源: openspec/changes/voice-structured-interview/tasks.md:77
-  可见: false
-- id: voice-structured-interview/5.9
-  场景: voice-structured-interview
-  阶段: build
-  标题: '`.51` 侧 live 子图：`effect_open_session`（键 `{session_id}:effect_open_session:{snapshot_version}`）→ 轮询拉事件 `effect_persist_tu'
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: '`.51` 侧 live 子图：`effect_open_session`（键 `{session_id}:effect_open_session:{snapshot_version}`）→ 轮询拉事件 `effect_persist_turn`（键 `{session_id}:effect_persist_turn:{seq}`，`(session_id,
-    seq)` 唯一）→ `effect_'
-  来源: openspec/changes/voice-structured-interview/tasks.md:78
-  可见: false
-- id: voice-structured-interview/5.10
-  场景: voice-structured-interview
-  阶段: build
-  标题: 延迟报表：`scripts/report_m3_latency.py` 按场次／批次输出端到端中位与 P95、分段中位；输出进 `docs/m3-voice-probe.md`「内部模拟批次」节
-  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
-  依赖:
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
-  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
-  - voice-structured-interview/U5
-  触碰区:
-  - docs/m3-voice-probe.md
-  - scripts/report_m3_latency.py
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 延迟报表：`scripts/report_m3_latency.py` 按场次／批次输出端到端中位与 P95、分段中位；输出进 `docs/m3-voice-probe.md`「内部模拟批次」节
-  来源: openspec/changes/voice-structured-interview/tasks.md:79
-  可见: false
 - id: voice-structured-interview/5.11
   场景: voice-structured-interview
   阶段: build
@@ -5451,17 +5265,7 @@ tasks:
   - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
   - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
   - voice-structured-interview/0.4
-  - voice-structured-interview/5.1
-  - voice-structured-interview/5.10
   - voice-structured-interview/5.11
-  - voice-structured-interview/5.2
-  - voice-structured-interview/5.3
-  - voice-structured-interview/5.4
-  - voice-structured-interview/5.5
-  - voice-structured-interview/5.6
-  - voice-structured-interview/5.7
-  - voice-structured-interview/5.8
-  - voice-structured-interview/5.9
   - voice-structured-interview/U4/plan
   - voice-structured-interview/U5
   触碰区:
@@ -8216,6 +8020,192 @@ tasks:
   可见: false
   备注: 0919 dispatcher 核实（dispatcher-20260919-082121，事件 lanes-done-20260919-070114）：分支 lane-voice-interview-u3-invite-consent 已合并 main（merge commit 25ffcea，无残留 diff），tasks.md
     章节4 4.1-4.11 与 Task 10 全部 [x]，真身判定完成
+- id: voice-structured-interview/5.1
+  场景: voice-structured-interview
+  阶段: build
+  标题: '`scripts/provision_voice_host.sh`：幂等安装 LiveKit server／TURN／agents worker／FunASR／CosyVoice（版本按 `docs/m3-voice-probe.md` 锁'
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区:
+  - docs/m3-voice-probe.md
+  - scripts/provision_voice_host.sh
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`scripts/provision_voice_host.sh`：幂等安装 LiveKit server／TURN／agents worker／FunASR／CosyVoice（版本按 `docs/m3-voice-probe.md` 锁定）；密钥经环境变量；无害预检（端口／磁盘／Python 版本）不足即退出并说明'
+  来源: openspec/changes/voice-structured-interview/tasks.md:70
+  可见: false
+- id: voice-structured-interview/5.10
+  场景: voice-structured-interview
+  阶段: build
+  标题: 延迟报表：`scripts/report_m3_latency.py` 按场次／批次输出端到端中位与 P95、分段中位；输出进 `docs/m3-voice-probe.md`「内部模拟批次」节
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区:
+  - docs/m3-voice-probe.md
+  - scripts/report_m3_latency.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 延迟报表：`scripts/report_m3_latency.py` 按场次／批次输出端到端中位与 P95、分段中位；输出进 `docs/m3-voice-probe.md`「内部模拟批次」节
+  来源: openspec/changes/voice-structured-interview/tasks.md:79
+  可见: false
+- id: voice-structured-interview/5.2
+  场景: voice-structured-interview
+  阶段: build
+  标题: 两机接口：`.51` 出站 `POST /sessions`（下发快照、领房间令牌）与 `GET /sessions/{id}/events?since=`、`GET /sessions/{id}/recording`、`DELETE /s
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 两机接口：`.51` 出站 `POST /sessions`（下发快照、领房间令牌）与 `GET /sessions/{id}/events?since=`、`GET /sessions/{id}/recording`、`DELETE /sessions/{id}/artifacts`；HMAC 签名＋时间戳
+    ±60 s 防重放；语音主机无任何入站到 `.51` 的代码路径（grep 断言）
+  来源: openspec/changes/voice-structured-interview/tasks.md:71
+  可见: false
+- id: voice-structured-interview/5.3
+  场景: voice-structured-interview
+  阶段: build
+  标题: 下发快照 schema `SessionBundle`（题目文本／题序／预埋追问／追问上限／场次标识／曲线）；测试用反射断言不含 `resume`/`candidate`/`name`/`phone` 键（D19）
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 下发快照 schema `SessionBundle`（题目文本／题序／预埋追问／追问上限／场次标识／曲线）；测试用反射断言不含 `resume`/`candidate`/`name`/`phone` 键（D19）
+  来源: openspec/changes/voice-structured-interview/tasks.md:72
+  可见: false
+- id: voice-structured-interview/5.4
+  场景: voice-structured-interview
+  阶段: build
+  标题: agents worker：按题序播报（CosyVoice）→ 端点检测＋FunASR 流式转写 → `follow_up_selector.select()`（D17，枚举 schema，越界按下一题）→ 追问或下一题；追问上限岗位级配置
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: agents worker：按题序播报（CosyVoice）→ 端点检测＋FunASR 流式转写 → `follow_up_selector.select()`（D17，枚举 schema，越界按下一题）→ 追问或下一题；追问上限岗位级配置默认 2；每轮记分段延迟与端到端延迟到本地事件队列
+  来源: openspec/changes/voice-structured-interview/tasks.md:73
+  可见: false
+- id: voice-structured-interview/5.5
+  场景: voice-structured-interview
+  阶段: build
+  标题: 打断处理：候选人开口 ⇒ 300 ms 内停播报、记截断毫秒、转写不丢；「再说一遍」／重听按钮重播不计追问；测试用录制音频回放模拟
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 打断处理：候选人开口 ⇒ 300 ms 内停播报、记截断毫秒、转写不丢；「再说一遍」／重听按钮重播不计追问；测试用录制音频回放模拟
+  来源: openspec/changes/voice-structured-interview/tasks.md:74
+  可见: false
+- id: voice-structured-interview/5.6
+  场景: voice-structured-interview
+  阶段: build
+  标题: 全程录制：双方音频写场次文件，每 turn 记录起止毫秒；录制失败 ⇒ 场次 `interrupted`＋候选人可续入提示；回传后语音主机删副本并回报；未回传中间文件 24 h 过期清理（幂等）
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 全程录制：双方音频写场次文件，每 turn 记录起止毫秒；录制失败 ⇒ 场次 `interrupted`＋候选人可续入提示；回传后语音主机删副本并回报；未回传中间文件 24 h 过期清理（幂等）
+  来源: openspec/changes/voice-structured-interview/tasks.md:75
+  可见: false
+- id: voice-structured-interview/5.7
+  场景: voice-structured-interview
+  阶段: build
+  标题: 文本作答降级：候选人主动切换或连续两轮丢包超阈值时提示（不自动切）；切换留痕；混合场次每 turn `answer_mode`；文本 turn 无音频但保留评分资格
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 文本作答降级：候选人主动切换或连续两轮丢包超阈值时提示（不自动切）；切换留痕；混合场次每 turn `answer_mode`；文本 turn 无音频但保留评分资格
+  来源: openspec/changes/voice-structured-interview/tasks.md:76
+  可见: false
+- id: voice-structured-interview/5.8
+  场景: voice-structured-interview
+  阶段: build
+  标题: 候选人答题端（Web，静态引入 LiveKit 浏览器 SDK）：房间加入／题目文字同显（带 AI 标识）／打断／重听／切文本；相对路径；无 `.51` 访问
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 候选人答题端（Web，静态引入 LiveKit 浏览器 SDK）：房间加入／题目文字同显（带 AI 标识）／打断／重听／切文本；相对路径；无 `.51` 访问
+  来源: openspec/changes/voice-structured-interview/tasks.md:77
+  可见: false
+- id: voice-structured-interview/5.9
+  场景: voice-structured-interview
+  阶段: build
+  标题: '`.51` 侧 live 子图：`effect_open_session`（键 `{session_id}:effect_open_session:{snapshot_version}`）→ 轮询拉事件 `effect_persist_tu'
+  单元: U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
+  依赖:
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg5
+  - voice-structured-interview/U5
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`.51` 侧 live 子图：`effect_open_session`（键 `{session_id}:effect_open_session:{snapshot_version}`）→ 轮询拉事件 `effect_persist_turn`（键 `{session_id}:effect_persist_turn:{seq}`，`(session_id,
+    seq)` 唯一）→ `effect_'
+  来源: openspec/changes/voice-structured-interview/tasks.md:78
+  可见: false
 - id: voice-structured-interview/6.1
   场景: voice-structured-interview
   阶段: build
