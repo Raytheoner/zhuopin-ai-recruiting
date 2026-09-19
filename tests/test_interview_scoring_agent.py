@@ -76,7 +76,11 @@ def _body(dimension="AUTOSAR CP", turn_id="t1", quote="做过三年分层开发"
                 {
                     "dimension": dimension, "score": 4.0, "rationale": "回答扎实",
                     "evidence": {"turn_id": turn_id, "quote": quote},
-                }
+                },
+                {
+                    "dimension": "沟通表达", "score": 4.0, "rationale": "回答扎实",
+                    "evidence": {"turn_id": "t2", "quote": "每周同步进度"},
+                },
             ],
             "overall_summary": "整体表现良好",
         },
@@ -97,6 +101,16 @@ def test_score_returns_draft_with_run_id_and_response_model():
     assert draft.dropped_count == 0
 
 
+def _single_dimension_score_input():
+    return ScoreInput(
+        rubric_dimensions=["AUTOSAR CP"],
+        turns=[
+            ScoreInputTurn(turn_id="t1", seq=1, question_text="讲讲你的 AUTOSAR 项目", answer_text="做过三年分层开发"),
+            ScoreInputTurn(turn_id="t2", seq=2, question_text="怎么跟团队协作", answer_text="每周同步进度"),
+        ],
+    )
+
+
 def test_score_drops_dimension_outside_whitelist_but_keeps_valid_ones():
     body = json.dumps(
         {
@@ -111,7 +125,7 @@ def test_score_drops_dimension_outside_whitelist_but_keeps_valid_ones():
         ensure_ascii=False,
     )
     gateway = _gateway([body])
-    draft = score(gateway, _score_input())
+    draft = score(gateway, _single_dimension_score_input())
     assert [d.dimension for d in draft.dimensions] == ["AUTOSAR CP"]
     assert draft.dropped_count == 1
 
@@ -126,6 +140,41 @@ def test_score_raises_after_max_retries_when_all_dimensions_out_of_whitelist():
         ensure_ascii=False,
     )
     gateway = _gateway([bad_body, bad_body])
+    with pytest.raises(ScoringGenerationFailed):
+        score(gateway, _score_input(), max_retries=2)
+
+
+def test_score_retries_and_succeeds_when_later_attempt_covers_all_dimensions():
+    # 模拟模型第一次只评了 rubric 两个维度中的一个（非空、非全部越界丢弃）。
+    partial_body = json.dumps(
+        {
+            "dimensions": [
+                {"dimension": "AUTOSAR CP", "score": 4.0, "rationale": "r",
+                 "evidence": {"turn_id": "t1", "quote": "做过三年分层开发"}},
+            ],
+            "overall_summary": "s",
+        },
+        ensure_ascii=False,
+    )
+    full_body = _body()
+    gateway = _gateway([partial_body, full_body])
+    draft = score(gateway, _score_input(), max_retries=2)
+    assert isinstance(draft, ScoreCardDraft)
+    assert {d.dimension for d in draft.dimensions} == {"AUTOSAR CP", "沟通表达"}
+
+
+def test_score_raises_when_every_attempt_stays_incomplete():
+    partial_body = json.dumps(
+        {
+            "dimensions": [
+                {"dimension": "AUTOSAR CP", "score": 4.0, "rationale": "r",
+                 "evidence": {"turn_id": "t1", "quote": "做过三年分层开发"}},
+            ],
+            "overall_summary": "s",
+        },
+        ensure_ascii=False,
+    )
+    gateway = _gateway([partial_body, partial_body])
     with pytest.raises(ScoringGenerationFailed):
         score(gateway, _score_input(), max_retries=2)
 

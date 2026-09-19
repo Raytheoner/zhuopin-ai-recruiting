@@ -30,8 +30,8 @@ _SCORE_SYSTEM_PROMPT_TEMPLATE = (
 
 
 class ScoringGenerationFailed(Exception):
-    """模型返回的维度评分全部越界丢弃（不在白名单内）后，本次评分判失败（可重
-    试），与 app/agents/interview_prep.py::PrepGenerationFailed 同一判据。"""
+    """过滤白名单后，`kept` 未能覆盖 rubric 全部维度（含全部越界丢弃导致
+    `kept` 为空、以及仅覆盖部分维度两种情形）后，本次评分判失败（可重试）。"""
 
 
 @dataclass(frozen=True)
@@ -90,11 +90,17 @@ def score(
 ) -> ScoreCardDraft:
     """L3 Agent：纯函数，只调 LLM 网关。
 
-    重试判据与 app/agents/interview_prep.py::generate 同一判据："本轮维度评分
-    全部越界丢弃"才判失败重试，单条越界只丢弃计数、其余维度保留。
+    重试判据（spec `interview-scorecard` 需求"逐维评分带 turn 回指"，场景"一
+    个场次的评分"：每个 rubric 维度各有一条评分项）：过滤白名单去重后的
+    `kept` 必须覆盖 `score_input.rubric_dimensions` 全部维度，覆盖不全——无论
+    是全部越界丢弃（`kept` 为空）还是仅覆盖部分维度——都判失败重试，不允许
+    带着不完整的 ScoreCard 直接成功。`_filter_whitelisted` 已按 `dimension`
+    去重，故 `kept` 中同一维度不会出现两次，覆盖判定用集合相等即可。
     """
     system_prompt = _build_system_prompt(score_input)
+    required = set(score_input.rubric_dimensions)
     last_dropped = 0
+    last_missing: set[str] = required
 
     for _ in range(max_retries):
         parsed, meta = gateway.extract_structured_with_meta(
@@ -108,8 +114,10 @@ def score(
             parsed.dimensions, dimensions=score_input.rubric_dimensions
         )
         last_dropped = dropped
+        kept_dimensions = {d.dimension for d in kept}
+        last_missing = required - kept_dimensions
 
-        if kept:
+        if kept_dimensions == required:
             return ScoreCardDraft(
                 dimensions=kept,
                 overall_summary=parsed.overall_summary,
@@ -119,5 +127,6 @@ def score(
             )
 
     raise ScoringGenerationFailed(
-        f"{max_retries} 次尝试后评分维度全部越界丢弃（最近一次丢弃 {last_dropped} 条）"
+        f"{max_retries} 次尝试后评分维度仍未覆盖全部 rubric 维度"
+        f"（最近一次缺失 {sorted(last_missing)}，丢弃 {last_dropped} 条）"
     )
