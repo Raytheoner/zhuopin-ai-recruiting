@@ -214,13 +214,14 @@ def test_live_e2e_internal_simulation_with_interrupt_and_follow_up(conn, vh_conn
     assert result == "completed"
 
     turns = conn.execute(
-        "SELECT seq, interrupted_at_ms, follow_up_of, answer_mode FROM interview_turn "
+        "SELECT id, seq, interrupted_at_ms, follow_up_of, answer_mode FROM interview_turn "
         "WHERE session_id = ? ORDER BY seq", (session_id,),
     ).fetchall()
-    assert [t[0] for t in turns] == [1, 2, 3, 4, 5, 6]
-    assert turns[0][1] == 180  # 第一题被打断，截断点被记录
-    assert turns[1][2] is not None  # 第二条 turn 是追问，follow_up_of 指向第一题
-    assert all(t[3] == "voice" for t in turns)
+    assert [t[1] for t in turns] == [1, 2, 3, 4, 5, 6]
+    assert turns[0][2] == 180  # 第一题被打断，截断点被记录
+    assert turns[1][3] == turns[0][0]  # 第二条 turn 是追问，follow_up_of 精确指向第一题的 id
+    assert all(t[3] is None for t in turns if t != turns[1])  # 其余 5 条不是追问
+    assert all(t[4] == "voice" for t in turns)
 
     session_row = conn.execute(
         "SELECT status, recording_uri, recording_sha256 FROM interview_session WHERE id = ?", (session_id,)
