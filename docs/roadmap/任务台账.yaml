@@ -3,10 +3,10 @@ version: 1
 summary:
   条目数: 543
   按状态:
-    待开: 201
-    在跑: 8
+    待开: 199
+    在跑: 9
     完成: 252
-    阻塞: 82
+    阻塞: 83
   阻塞·决策: 50
   阻塞·外部: 31
   conflicts:
@@ -32,14 +32,14 @@ summary:
   - relay:H-4
   - relay:R-10
   - relay:R-6
+  - relay:tag#346eaefa
   - relay:tag#431272f7
+  - relay:tag#91af1c79
   ready:
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
-  - relay:tag#346eaefa
-  - relay:tag#91af1c79
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -6546,19 +6546,18 @@ tasks:
   阶段: build
   标题: '`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MA'
   依赖: []
-  触碰区:
-  - tests/test_db_m2_schema.py
-  - tests/test_db_m2_u2_schema.py
-  - tests/test_effect_idempotency_suite.py
-  - app/graph/invite_nodes.py
+  触碰区: []
   状态: 在跑
   阻塞类型: 无
   产出判据: '`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MANIFEST` 补上 18 个新节点＋各自崩溃-恢复配方，`effect_send_verification_code`
     补 `@idempotent_effe'
   来源: docs/session接力.md:92
-  备注: dispatcher-20260919-230047 已派 `0919T`（`lane-0919t-m3-effect-coverage`），正文
-    `docs/openers/0919T-M3语音面试effect测试覆盖补齐.md`，收敛后按 `git cherry -v main` 核真身改「完成」
   可见: false
+  conflicts:
+    状态:
+      台账: 在跑
+      真身: 待开
+  备注: dispatcher-20260919-230047 已派 `0919T`（`lane-0919t-m3-effect-coverage`），正文 `docs/openers/0919T-M3语音面试effect测试覆盖补齐.md`，收敛后按 `git cherry -v main` 核真身改「完成」
 - id: relay:tag#346eaefa
   场景: 构建自动化
   阶段: build
@@ -6567,10 +6566,13 @@ tasks:
   触碰区: []
   状态: 阻塞
   阻塞类型: 无
-  产出判据: 上一条四测试转绿后（即 `relay:tag#91af1c79`：补 SCHEMA／EFFECT_NODE_MANIFEST／幂等装饰器），重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛
-    才可派下一条 `deploy-51` 执行 opener（dispatcher-20260919-230047：生成器不追踪同段落对「上一条」的文本引用，手工标阻塞防止在 91af1c79 完成前被判 ready 派车，91af1c79 完成后需人工改回 待开／无）
+  产出判据: 上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
   来源: docs/session接力.md:93
   可见: false
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 待开
   备注: dispatcher-20260919-230047 补依赖：标题本身写明「上一条四测试转绿后」——「上一条」即 `relay:tag#91af1c79`（补 SCHEMA／EFFECT_NODE_MANIFEST／幂等装饰器），生成器按段落逐条抽取不追踪段内文本引用关系，手工补依赖防止在 91af1c79 完成前被误判
     ready 派车
 - id: relay:tag#0f5416eb
