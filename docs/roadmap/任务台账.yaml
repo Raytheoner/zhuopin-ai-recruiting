@@ -1,14 +1,14 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 539
+  条目数: 543
   按状态:
-    待开: 199
+    待开: 201
     在跑: 8
-    完成: 251
-    阻塞: 81
+    完成: 252
+    阻塞: 82
   阻塞·决策: 50
-  阻塞·外部: 30
+  阻塞·外部: 31
   conflicts:
   - channel-resume-intake/0.1
   - m1-intake-quality-fixes/8.9
@@ -32,11 +32,14 @@ summary:
   - relay:H-4
   - relay:R-10
   - relay:R-6
+  - relay:tag#431272f7
   ready:
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
+  - relay:tag#346eaefa
+  - relay:tag#91af1c79
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -6520,6 +6523,67 @@ tasks:
       真身: 待开
   备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
+- id: relay:tag#431272f7
+  场景: 构建自动化
+  阶段: build
+  标题: '`git merge origin/lane-0919p-tag4-regex` 与 `origin/lane-0919q-queue-digest`（非 ff-only）分别验证无冲突（两分支改动路径与 main 新增的 4 个提交路径已'
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`git merge origin/lane-0919p-tag4-regex` 与 `origin/lane-0919q-queue-digest`（非 ff-only）分别验证无冲突（两分支改动路径与 main 新增的 4 个提交路径已核对无交集，见下方文件清单）后合并、测试 0 failed、push
+    成功'
+  来源: docs/session接力.md:70
+  可见: false
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: dispatcher-20260919-230047 核实：session接力.md 09-19 `0919S` 条目记录已用 `--no-ff` 完成两次真合并（`b17c2a1`／`e5d3441`）并两次 push 成功，`git cherry -v main lane-0919p-tag4-regex`／`lane-0919q-queue-digest`
+    均无 `+` 输出——两分支已完全合入 main。本条是提取自较早 `0919R` 段落的待办文本，生成器不追踪同文件后续段落的完成登记，每次刷新会被判 待开，下次核对先看 session接力.md 是否有更晚的收敛登记
+- id: relay:tag#91af1c79
+  场景: 构建自动化
+  阶段: build
+  标题: '`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MA'
+  依赖: []
+  触碰区:
+  - tests/test_db_m2_schema.py
+  - tests/test_db_m2_u2_schema.py
+  - tests/test_effect_idempotency_suite.py
+  - app/graph/invite_nodes.py
+  状态: 在跑
+  阻塞类型: 无
+  产出判据: '`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MANIFEST` 补上 18 个新节点＋各自崩溃-恢复配方，`effect_send_verification_code`
+    补 `@idempotent_effe'
+  来源: docs/session接力.md:92
+  备注: dispatcher-20260919-230047 已派 `0919T`（`lane-0919t-m3-effect-coverage`），正文
+    `docs/openers/0919T-M3语音面试effect测试覆盖补齐.md`，收敛后按 `git cherry -v main` 核真身改「完成」
+  可见: false
+- id: relay:tag#346eaefa
+  场景: 构建自动化
+  阶段: build
+  标题: 上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 o
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 无
+  产出判据: 上一条四测试转绿后（即 `relay:tag#91af1c79`：补 SCHEMA／EFFECT_NODE_MANIFEST／幂等装饰器），重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛
+    才可派下一条 `deploy-51` 执行 opener（dispatcher-20260919-230047：生成器不追踪同段落对「上一条」的文本引用，手工标阻塞防止在 91af1c79 完成前被判 ready 派车，91af1c79 完成后需人工改回 待开／无）
+  来源: docs/session接力.md:93
+  可见: false
+  备注: dispatcher-20260919-230047 补依赖：标题本身写明「上一条四测试转绿后」——「上一条」即 `relay:tag#91af1c79`（补 SCHEMA／EFFECT_NODE_MANIFEST／幂等装饰器），生成器按段落逐条抽取不追踪段内文本引用关系，手工补依赖防止在 91af1c79 完成前被误判
+    ready 派车
+- id: relay:tag#0f5416eb
+  场景: M0
+  阶段: build
+  标题: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 外部
+  产出判据: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
+  来源: docs/session接力.md:121
+  可见: false
 - id: answer:Q-02
   场景: M2
   阶段: build
