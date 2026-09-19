@@ -64,6 +64,30 @@ def test_reply_key_takes_leading_option_token(reply, key):
     assert A.reply_key(reply) == key
 
 
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("Q-38b", "Q-38"),
+        ("Q-38a", "Q-38"),
+        ("Q-38", "Q-38"),
+        ("Q-380", "Q-380"),  # 数字结尾，不是选项字母，不剥
+        ("Q-19①", "Q-19"),
+    ],
+)
+def test_normalize_map_key_strips_trailing_option_letter_but_not_digit(key, expected):
+    assert A.normalize_map_key(key) == expected
+
+
+def test_apply_answers_falls_back_to_normalized_key_when_exact_key_misses():
+    e = ent("answer:Q-07", 状态="待开", 阻塞类型="无")
+    q = queue_md([row("Q-38", "M2", "决策（预算与外部采购，不可代）", "`answer:Q-07`", "已答", "b：继续搁置")])
+    amap = {"Q-38": A.Mapping(说明="空操作", 保持阻塞={"answer:Q-07": ("外部", "维持搁置")})}
+    rep = A.apply_answers([e], q, new_entry=Entry, answer_map=amap)
+    assert (e.状态, e.阻塞类型) == ("阻塞", "外部")
+    assert rep.保持阻塞 == ["answer:Q-07"]
+    assert rep.缺映射 == []
+
+
 # ── ① 已答行解阻塞，队列覆盖文本启发式 ──
 
 
@@ -245,6 +269,28 @@ def test_every_map_key_is_documented_in_rules_section_7():
         assert f"`{key}`" in sec, f"rules.md §7 缺 {key}"
     for t in A.all_mapped_tasks():
         assert f"`{t.id}`" in sec, f"rules.md §7 缺任务 {t.id}"
+
+
+# ── `0918V`：Q-27／Q-38 补映射（Q-38 走键归一化命中） ──
+
+
+def test_q27_mapping_is_registered_and_generates_no_task():
+    relay = ent("relay:R-9", 状态="完成", 阻塞类型="无")
+    q = queue_md([row("Q-27", "M2/`.51`", "决策（环境操作）", "`relay:R-9`", "已答", "放行：派无头任务在 `.51` 装 VC++")])
+    rep = A.apply_answers([relay], q, new_entry=Entry)
+    assert A.map_key({"编号": "Q-27", "答复": "放行：派无头任务在 `.51` 装 VC++"}) == "Q-27"
+    assert relay.状态 == "完成"  # 已完成任务不被队列碰
+    assert rep.缺映射 == [] and rep.生成 == []
+
+
+def test_q38_mapping_keeps_answer_q07_blocked_via_real_answer_map():
+    e = ent("answer:Q-07", 状态="待开", 阻塞类型="无")
+    q = queue_md([row("Q-38", "M2", "决策（预算与外部采购，不可代）", "`answer:Q-07`", "已答", "b：继续搁置，维持 Q-07「以后再补」，⛔ 不再追问")])
+    rep = A.apply_answers([e], q, new_entry=Entry)
+    assert A.map_key({"编号": "Q-38", "答复": "b：继续搁置"}) == "Q-38b"  # 生成器实际解析出的键带字母后缀
+    assert (e.状态, e.阻塞类型) == ("阻塞", "外部")
+    assert rep.保持阻塞 == ["answer:Q-07"]
+    assert rep.缺映射 == []
 
 
 def test_map_task_ids_are_unique_and_prefixed():

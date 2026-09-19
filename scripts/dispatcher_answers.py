@@ -36,6 +36,7 @@ NO_ACTION_REPLY = "无新动作"
 
 _KEY_RE = re.compile(r"^\s*[（(]?\s*(作废|[a-zA-Z]|[①②③④⑤⑥⑦⑧⑨]|定|发|签|是|否)\s*[)）]?(?=\s*[：:，,、。（(\s]|$)")
 _ID_RE = re.compile(r"`([^`]+)`")
+_KEY_SUFFIX_RE = re.compile(r"^(Q-\d+)(作废|[a-zA-Z]|[①②③④⑤⑥⑦⑧⑨]|定|发|签|是|否)$")
 
 
 # ───────────────────────── 映射表数据结构 ─────────────────────────
@@ -231,6 +232,16 @@ ANSWER_MAP: dict[str, Mapping] = {
             )
         ],
     ),
+    "Q-27": Mapping(
+        说明=(
+            "`.51` VC++ 2015–2022 x64 Redistributable 已由 `0917BB` 装完（v14.27→v14.44），"
+            "映射登记为已完成，解阻塞 `relay:R-9`；不生成新任务，`.51` 系统组件变更仍须人派专门 opener（不因此获得自动权限）"
+        ),
+    ),
+    "Q-38": Mapping(
+        说明="空操作：不生成新任务，仅消除「缺映射」提示；答复是继续搁置维持 `Q-07`『以后再补』，`answer:Q-07` 的阻塞按原样保留",
+        保持阻塞={"answer:Q-07": ("外部", "维持 `Q-07`『以后再补』，⛔ 不再追问（`Q-38` 已答，仅消除缺映射提示）")},
+    ),
 }
 
 
@@ -249,6 +260,14 @@ def reply_key(reply: str) -> str:
 
 def map_key(row: dict[str, str]) -> str:
     return f"{row.get('编号', '')}{reply_key(row.get('答复', ''))}"
+
+
+def normalize_map_key(key: str) -> str:
+    """`Q-38b`／`Q-38a` 剥成 `Q-38` 再查表——选项字母不参与键匹配，只用于记录答了哪个选项。
+    `Q-380` 数字结尾（不是选项字母）不剥，原样返回。
+    """
+    m = _KEY_SUFFIX_RE.match(key)
+    return m.group(1) if m else key
 
 
 def task_ids(row: dict[str, str]) -> list[str]:
@@ -336,6 +355,10 @@ def apply_answers(entries: list, queue_text: str, *, new_entry, answer_map: dict
             continue
         key = map_key(row)
         mapping = amap.get(key)
+        if mapping is None:
+            norm = normalize_map_key(key)
+            if norm != key:
+                mapping = amap.get(norm)
         if mapping is None and no in no_action:
             mapping = Mapping(说明="登记行已答「无新动作」：只解阻塞")
         tag = f"{no} 已答 {reply_key(row.get('答复', ''))}".rstrip()
