@@ -989,3 +989,41 @@ def test_job_prep_config_has_scoring_threshold_columns(conn):
 
 def test_interview_session_has_post_scoring_status_columns(conn):
     assert {"post_scoring_status", "post_scored_at"} <= _columns(conn, "interview_session")
+
+
+# ── interview_live_event（U4 tasks 5.9）─────────────────────────────
+
+
+def test_interview_live_event_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "interview_live_event")
+    assert _columns(conn, "interview_live_event") == {"id", "session_id", "event_type", "detail", "at"}
+
+
+def test_interview_live_event_rejects_unknown_event_type(conn):
+    conn.execute("INSERT INTO job (id, title) VALUES ('job-1', 't')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('cand-1', '张三')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('resume-1', 'job-1', 'synthetic', 'a.pdf', 'hash', 'tester')"
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'cand-1', 'job-1', 'resume-1', 'initial')"
+    )
+    conn.execute(
+        "INSERT INTO interview_session (id, application_id, prep_snapshot_version, "
+        "retention_until, retention_policy_version, sample_class, status) "
+        "VALUES ('sess-1', 'app-1', 1, '2099-01-01', 'v1', 'internal_sim', 'in_progress')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO interview_live_event (id, session_id, event_type) VALUES ('e1', 'sess-1', 'bogus')"
+        )
+
+
+def test_job_prep_config_follow_up_limit_column_added(conn):
+    assert "follow_up_limit" in _columns(conn, "job_prep_config")
+
+
+def test_interview_session_recording_sha256_column_added(conn):
+    assert "recording_sha256" in _columns(conn, "interview_session")

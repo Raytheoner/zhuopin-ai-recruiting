@@ -896,6 +896,24 @@ CREATE TABLE IF NOT EXISTS interview_scorecard_tip (
 
 CREATE INDEX IF NOT EXISTS idx_interview_scorecard_tip_scorecard
     ON interview_scorecard_tip (scorecard_id);
+
+-- 场次级 live 段事件留痕（voice-structured-interview U4 tasks 5.9，design
+-- D20）。⛔ 不与 interview_invite_event 合并：那张表的 event_type CHECK 枚举
+-- 已经固定（'issued'/'reissued'/...），SQLite 的 CHECK 约束不能靠
+-- ALTER TABLE ADD COLUMN 追加取值，往里塞新枚举值需要整表重建，风险不值得
+-- ——新开一张表是更便宜的选择（与 interview_scorecard 的既有先例同一手法）。
+CREATE TABLE IF NOT EXISTS interview_live_event (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES interview_session(id),
+    event_type TEXT NOT NULL CHECK (event_type IN (
+        'opened', 'turn_persisted', 'closed', 'recording_fetched'
+    )),
+    detail TEXT,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_live_event_session
+    ON interview_live_event (session_id);
 """
 
 
@@ -950,6 +968,13 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 评分。interview_session 在 M3 U1 建表，同样走加列迁移。
     ("interview_session", "post_scoring_status", "TEXT NOT NULL DEFAULT 'pending'"),
     ("interview_session", "post_scored_at", "TEXT"),
+    # U4 tasks 5.4：追问次数上限，岗位级配置，默认 2（tasks.md 字面值）。
+    # job_prep_config 在 U2 建表，走加列迁移（与 low_confidence_threshold
+    # 同一先例）。
+    ("job_prep_config", "follow_up_limit", "INTEGER NOT NULL DEFAULT 2"),
+    # U4 tasks 5.9：effect_fetch_recording 校验并记录回传录音的 sha256，供
+    # 审计与重复拉取判重使用。
+    ("interview_session", "recording_sha256", "TEXT"),
 )
 
 
