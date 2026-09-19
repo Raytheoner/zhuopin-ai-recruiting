@@ -82,6 +82,17 @@ class Settings(BaseSettings):
     # 与 db_path 同一约定。
     resume_storage_dir: str = "data/resumes"
 
+    # 两机接口（U4 tasks 5.2，design D12）。语音主机的 base_url 与预共享密钥
+    # 都是生产凭据，只在各自机器的 .env 里维护，不进仓库（与 llm_api_key
+    # 同一约定）。
+    voice_host_base_url: str = ""
+    voice_host_shared_secret: str = ""
+    voice_host_request_timeout_seconds: float = 5.0
+
+    # 录音回传落盘目录（U4 tasks 5.9）。相对路径按进程工作目录解析，与
+    # db_path/resume_storage_dir 同一约定。
+    interview_recording_dir: str = "data/interview_recordings"
+
     def validate_model_version(self) -> None:
         if self.llm_model == "latest" or self.llm_model.endswith(":latest"):
             raise ValueError(

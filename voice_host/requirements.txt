@@ -1,0 +1,11 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.13.4
+httpx==0.28.1
+openai==1.59.6
+# funasr==1.4.15 已在 docs/m3-voice-probe.md P2 确认可导入（dev-machine，
+# 无 GPU）；livekit-agents 版本未经探针钉死，装最新版并在下一次 P2/P3 重跑
+# 时把实测版本回填本文件——⛔ 不在此处伪造一个未经验证的具体版本号。
+funasr==1.4.15
+livekit
+livekit-agents

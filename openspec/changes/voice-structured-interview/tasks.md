@@ -67,16 +67,16 @@
 
 ## 5. U4 live 语音链路（语音主机；前置：0.2 P1–P3 通过 ＋ 0.4 主机到位；任一不满足 ⇒ 本章「⏸ 留步」，⛔ 不判整包失败）
 
-- [ ] 5.1 `scripts/provision_voice_host.sh`：幂等安装 LiveKit server／TURN／agents worker／FunASR／CosyVoice（版本按 `docs/m3-voice-probe.md` 锁定）；密钥经环境变量；无害预检（端口／磁盘／Python 版本）不足即退出并说明
-- [ ] 5.2 两机接口：`.51` 出站 `POST /sessions`（下发快照、领房间令牌）与 `GET /sessions/{id}/events?since=`、`GET /sessions/{id}/recording`、`DELETE /sessions/{id}/artifacts`；HMAC 签名＋时间戳 ±60 s 防重放；语音主机无任何入站到 `.51` 的代码路径（grep 断言）
-- [ ] 5.3 下发快照 schema `SessionBundle`（题目文本／题序／预埋追问／追问上限／场次标识／曲线）；测试用反射断言不含 `resume`/`candidate`/`name`/`phone` 键（D19）
-- [ ] 5.4 agents worker：按题序播报（CosyVoice）→ 端点检测＋FunASR 流式转写 → `follow_up_selector.select()`（D17，枚举 schema，越界按下一题）→ 追问或下一题；追问上限岗位级配置默认 2；每轮记分段延迟与端到端延迟到本地事件队列
-- [ ] 5.5 打断处理：候选人开口 ⇒ 300 ms 内停播报、记截断毫秒、转写不丢；「再说一遍」／重听按钮重播不计追问；测试用录制音频回放模拟
-- [ ] 5.6 全程录制：双方音频写场次文件，每 turn 记录起止毫秒；录制失败 ⇒ 场次 `interrupted`＋候选人可续入提示；回传后语音主机删副本并回报；未回传中间文件 24 h 过期清理（幂等）
-- [ ] 5.7 文本作答降级：候选人主动切换或连续两轮丢包超阈值时提示（不自动切）；切换留痕；混合场次每 turn `answer_mode`；文本 turn 无音频但保留评分资格
-- [ ] 5.8 候选人答题端（Web，静态引入 LiveKit 浏览器 SDK）：房间加入／题目文字同显（带 AI 标识）／打断／重听／切文本；相对路径；无 `.51` 访问
-- [ ] 5.9 `.51` 侧 live 子图：`effect_open_session`（键 `{session_id}:effect_open_session:{snapshot_version}`）→ 轮询拉事件 `effect_persist_turn`（键 `{session_id}:effect_persist_turn:{seq}`，`(session_id, seq)` 唯一）→ `effect_close_session` → `effect_fetch_recording`（键 `{session_id}:effect_fetch_recording:{recording_sha}`，校验哈希后通知删副本）；续入不重复出题（与 4.3 联动测试）
-- [ ] 5.10 延迟报表：`scripts/report_m3_latency.py` 按场次／批次输出端到端中位与 P95、分段中位；输出进 `docs/m3-voice-probe.md`「内部模拟批次」节
+- [x] 5.1 `scripts/provision_voice_host.sh`：幂等安装 LiveKit server／TURN／agents worker／FunASR／CosyVoice（版本按 `docs/m3-voice-probe.md` 锁定）；密钥经环境变量；无害预检（端口／磁盘／Python 版本）不足即退出并说明
+- [x] 5.2 两机接口：`.51` 出站 `POST /sessions`（下发快照、领房间令牌）与 `GET /sessions/{id}/events?since=`、`GET /sessions/{id}/recording`、`DELETE /sessions/{id}/artifacts`；HMAC 签名＋时间戳 ±60 s 防重放；语音主机无任何入站到 `.51` 的代码路径（grep 断言）
+- [x] 5.3 下发快照 schema `SessionBundle`（题目文本／题序／预埋追问／追问上限／场次标识／曲线）；测试用反射断言不含 `resume`/`candidate`/`name`/`phone` 键（D19）
+- [x] 5.4 agents worker：按题序播报（CosyVoice）→ 端点检测＋FunASR 流式转写 → `follow_up_selector.select()`（D17，枚举 schema，越界按下一题）→ 追问或下一题；追问上限岗位级配置默认 2；每轮记分段延迟与端到端延迟到本地事件队列
+- [x] 5.5 打断处理：候选人开口 ⇒ 300 ms 内停播报、记截断毫秒、转写不丢；「再说一遍」／重听按钮重播不计追问；测试用录制音频回放模拟
+- [x] 5.6 全程录制：双方音频写场次文件，每 turn 记录起止毫秒；录制失败 ⇒ 场次 `interrupted`＋候选人可续入提示；回传后语音主机删副本并回报；未回传中间文件 24 h 过期清理（幂等）
+- [x] 5.7 文本作答降级：候选人主动切换或连续两轮丢包超阈值时提示（不自动切）；切换留痕；混合场次每 turn `answer_mode`；文本 turn 无音频但保留评分资格
+- [x] 5.8 候选人答题端（Web，静态引入 LiveKit 浏览器 SDK）：房间加入／题目文字同显（带 AI 标识）／打断／重听／切文本；相对路径；无 `.51` 访问
+- [x] 5.9 `.51` 侧 live 子图：`effect_open_session`（键 `{session_id}:effect_open_session:{snapshot_version}`）→ 轮询拉事件 `effect_persist_turn`（键 `{session_id}:effect_persist_turn:{seq}`，`(session_id, seq)` 唯一）→ `effect_close_session` → `effect_fetch_recording`（键 `{session_id}:effect_fetch_recording:{recording_sha}`，校验哈希后通知删副本）；续入不重复出题（与 4.3 联动测试）
+- [x] 5.10 延迟报表：`scripts/report_m3_latency.py` 按场次／批次输出端到端中位与 P95、分段中位；输出进 `docs/m3-voice-probe.md`「内部模拟批次」节
 - [ ] 5.11 live e2e（内部模拟 1 场）：签发 → 双同意 → 验证码 → 语音走完 ≥5 题含 1 次打断 1 次追问 → 录音回传 → 语音主机无残留 → post 评分每维回指可回放
 
 ## 7. U6 面试官与 HR 视图（Web）
