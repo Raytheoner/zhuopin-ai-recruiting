@@ -3,9 +3,9 @@ version: 1
 summary:
   条目数: 539
   按状态:
-    待开: 210
-    在跑: 8
-    完成: 237
+    待开: 209
+    在跑: 7
+    完成: 239
     阻塞: 84
   阻塞·决策: 50
   阻塞·外部: 33
@@ -37,6 +37,7 @@ summary:
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
+  - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -6561,26 +6562,23 @@ tasks:
   产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-19-voice-structured-interview-unit4-live-voice.md
   可见: false
-  备注: 0919 dispatcher 派车（dispatcher-20260919-105647，事件 lanes-done-20260919-101918），编号 0919J，分支 lane-voice-interview-u4-live-voice；0919 dispatcher（事件 lanes-done-20260919-110152）核实：Task1-3 各自 commit（6b7274f/7e3a445/2f549d0）＋review 通过（无 Critical/Important），⚠️ 分支尚未合 main（`git cherry -v main` 仍有 3 个 `+`）——同泳道串行同分支，比照 U2 seg1-3 先例，合并判定留到末段（seg4）收口时一次性核实
+  备注: 0919 dispatcher 派车（dispatcher-20260919-105647，事件 lanes-done-20260919-101918），编号 0919J，分支 lane-voice-interview-u4-live-voice；0919 dispatcher（事件 lanes-done-20260919-110152）核实：Task1-3
+    各自 commit（6b7274f/7e3a445/2f549d0）＋review 通过（无 Critical/Important），⚠️ 分支尚未合 main（`git cherry -v main` 仍有 3 个 `+`）——同泳道串行同分支，比照 U2 seg1-3 先例，合并判定留到末段（seg4）收口时一次性核实
 - id: plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
   场景: 构建自动化
   阶段: build
   标题: voice-structured-interview-unit4-live-voice Task 4–6
   依赖:
   - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg1
-  触碰区:
-  - app/schemas/live_turn_event.py
-  - app/live_voice/client.py
-  - app/config.py
-  - app/storage/db.py
-  - app/graph/live_session_nodes.py
-  - scripts/run_interview_live_sync.py
-  状态: 在跑
+  触碰区: []
+  状态: 完成
   阻塞类型: 无
   产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-19-voice-structured-interview-unit4-live-voice.md
   可见: false
-  备注: 0919 dispatcher 派车（dispatcher-20260919-111031，事件 lanes-done-20260919-110152），编号 0919K，分支 lane-voice-interview-u4-live-voice（同泳道续 seg1）
+  备注: 0919 dispatcher 派车（dispatcher-20260919-111031，事件 lanes-done-20260919-110152），编号 0919K，分支 lane-voice-interview-u4-live-voice（同泳道续 seg1）；0919 dispatcher（事件 lanes-done-20260919-111722）核实：Task4-6
+    各自 commit（57dee65/3ce4542..dcef9fe/67c936e）＋review 通过（3 项 minor 已登记延后，无 Critical/Important），本分支范围内 pytest 140 passed 0 failed，⚠️ 分支尚未合 main（`git cherry -v main`
+    仍有 8 个 `+`）——同泳道串行同分支，合并判定留到末段（seg5）收口时一次性核实
 - id: plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg3
   场景: 构建自动化
   阶段: build
@@ -6588,11 +6586,12 @@ tasks:
   依赖:
   - plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg2
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: Task 7–9 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-19-voice-structured-interview-unit4-live-voice.md
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-113813，事件 lanes-done-20260919-111722），编号 0919L，分支 lane-voice-interview-u4-live-voice（同泳道续 seg2）
 - id: plan:2026-09-19-voice-structured-interview-unit4-live-voice/seg4
   场景: 构建自动化
   阶段: build
