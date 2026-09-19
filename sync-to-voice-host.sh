@@ -20,7 +20,6 @@ cd "$(dirname "$0")"
 
 SYNC_PATHS=(
     "voice_host"
-    "app/live_voice/signing.py"
     "app/agents/follow_up_selector.py"
     "app/schemas/follow_up_result.py"
     "app/schemas/interview_ai_input.py"
