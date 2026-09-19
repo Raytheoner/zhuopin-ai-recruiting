@@ -373,3 +373,39 @@ def test_effect_write_acoustic_refs_is_idempotent(conn):
     log_count_2 = conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0]
 
     assert log_count_1 == log_count_2 == 1  # 第二次调用命中幂等键，effect_log 不再增加
+
+
+def test_effect_write_acoustic_refs_is_idempotent_with_multiple_turns(conn):
+    """幂等性测试覆盖批量场景（N > 1 voice turns）。验证工程铁律：一个 effect_*
+    节点的 effect_log 条数恒等于其业务表行数按 thread（本例：1 effect_log row
+    覆盖 2 interview_turn 写）。"""
+    _seed_job_application_session(conn)
+    _insert_turn(conn, turn_id="t1", session_id="sess-1", seq=1, answer_mode="voice",
+                 answer_text="第一个语音回答", audio_start_ms=0, audio_end_ms=5000)
+    _insert_turn(conn, turn_id="t2", session_id="sess-1", seq=2, answer_mode="voice",
+                 answer_text="第二个语音回答", audio_start_ms=5000, audio_end_ms=12000)
+    aligned = compute_align(conn, session_id="sess-1")
+
+    # 第一次调用：N=2 的 voice turn，应生成 1 条 effect_log 并写入 2 条 acoustic_ref
+    effect_write_acoustic_refs(
+        conn, thread_id="sess-1:post", business_key="sess-1", session_id="sess-1", aligned_turns=aligned
+    )
+    log_count_1 = conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0]
+    ref1_first = conn.execute("SELECT acoustic_ref FROM interview_turn WHERE id = 't1'").fetchone()[0]
+    ref2_first = conn.execute("SELECT acoustic_ref FROM interview_turn WHERE id = 't2'").fetchone()[0]
+
+    assert log_count_1 == 1  # 一个 effect_log 条目
+    assert ref1_first is not None  # 两个 turn 都写入了 acoustic_ref
+    assert ref2_first is not None
+
+    # 第二次调用：命中幂等键，effect_log 不增加，业务行也不变
+    effect_write_acoustic_refs(
+        conn, thread_id="sess-1:post", business_key="sess-1", session_id="sess-1", aligned_turns=aligned
+    )
+    log_count_2 = conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0]
+    ref1_second = conn.execute("SELECT acoustic_ref FROM interview_turn WHERE id = 't1'").fetchone()[0]
+    ref2_second = conn.execute("SELECT acoustic_ref FROM interview_turn WHERE id = 't2'").fetchone()[0]
+
+    assert log_count_2 == 1  # effect_log 不增加（幂等性）
+    assert ref1_second == ref1_first  # 业务行内容不变
+    assert ref2_second == ref2_first
