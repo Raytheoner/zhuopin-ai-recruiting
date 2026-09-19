@@ -4,8 +4,8 @@ summary:
   条目数: 534
   按状态:
     待开: 215
-    在跑: 8
-    完成: 226
+    在跑: 7
+    完成: 227
     阻塞: 85
   阻塞·决策: 50
   阻塞·外部: 34
@@ -38,6 +38,13 @@ summary:
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
+  - voice-structured-interview/6.1
+  - voice-structured-interview/6.2
+  - voice-structured-interview/6.3
+  - voice-structured-interview/6.4
+  - voice-structured-interview/6.5
+  - voice-structured-interview/6.6
+  - voice-structured-interview/6.8
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -5198,11 +5205,12 @@ tasks:
   - voice-structured-interview/U3
   - voice-structured-interview/U5/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '`compute_align`：把 `interview_turn` 整理为证据单元（turn id、文本、字符偏移、音频起止、`asr_confidence`）；低置信度阈值岗位级配置默认 0.6，低于则标「转写待复核」；纯函数＋测试'
   来源: openspec/changes/voice-structured-interview/tasks.md:59
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-090554，事件 lanes-done-20260919-085606），编号 0919F/G/H（Task1-3/4-6/7-9与收口，分支 lane-voice-interview-u5-post-scoring）
 - id: voice-structured-interview/6.2
   场景: voice-structured-interview
   阶段: build
@@ -5213,12 +5221,13 @@ tasks:
   - voice-structured-interview/U5/plan
   触碰区:
   - app/agents/interview_scoring.py
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '`app/agents/interview_scoring.py::score(snapshot, turns) -> ScoreCardDraft`（纯函数，经网关，`temperature=0`）；输出 schema 每维强制 `evidence:{turn_id, start, end, quote}`；缺证据整次判不可用不落分；`ScoreInput`
     不含核验／声学／身份字段（2.7 断'
   来源: openspec/changes/voice-structured-interview/tasks.md:60
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-090554，事件 lanes-done-20260919-085606），编号 0919F/G/H（Task1-3/4-6/7-9与收口，分支 lane-voice-interview-u5-post-scoring）
 - id: voice-structured-interview/6.3
   场景: voice-structured-interview
   阶段: build
@@ -5228,11 +5237,12 @@ tasks:
   - voice-structured-interview/U3
   - voice-structured-interview/U5/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 证据反查校正：用 `quote` 在 turn 文本里反查偏移，不一致以反查为准；反查失败判该维无证据；测试覆盖偏移错位与摘录不存在两种
   来源: openspec/changes/voice-structured-interview/tasks.md:61
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-090554，事件 lanes-done-20260919-085606），编号 0919F/G/H（Task1-3/4-6/7-9与收口，分支 lane-voice-interview-u5-post-scoring）
 - id: voice-structured-interview/6.4
   场景: voice-structured-interview
   阶段: build
@@ -5242,11 +5252,12 @@ tasks:
   - voice-structured-interview/U3
   - voice-structured-interview/U5/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 要点提示生成：从各维低分项与低置信度 turn 派生「建议终面追问」列表（规则派生，不再调 LLM），每条指向维度与 turn
   来源: openspec/changes/voice-structured-interview/tasks.md:62
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-090554，事件 lanes-done-20260919-085606），编号 0919F/G/H（Task1-3/4-6/7-9与收口，分支 lane-voice-interview-u5-post-scoring）
 - id: voice-structured-interview/6.5
   场景: voice-structured-interview
   阶段: build
@@ -5256,11 +5267,12 @@ tasks:
   - voice-structured-interview/U3
   - voice-structured-interview/U5/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: 声学参考：从 turn 音频起止与转写字数算语速／停顿／静默比例，写 `interview_turn.acoustic_ref`（只读展示字段）；文本作答 turn 为空；测试：评分输入中不出现该字段
   来源: openspec/changes/voice-structured-interview/tasks.md:63
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-090554，事件 lanes-done-20260919-085606），编号 0919F/G/H（Task1-3/4-6/7-9与收口，分支 lane-voice-interview-u5-post-scoring）
 - id: voice-structured-interview/6.6
   场景: voice-structured-interview
   阶段: build
@@ -5270,11 +5282,12 @@ tasks:
   - voice-structured-interview/U3
   - voice-structured-interview/U5/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: '`effect_persist_scorecard`：写 `analysis_run(run_type=interview)`＋`criterion_score`（`evidence_ref` type=interview_turn）＋要点提示，同事务；幂等键 `{session_id}:effect_persist_scorecard:{analysis_run_id}`；反证：`evidenc'
   来源: openspec/changes/voice-structured-interview/tasks.md:64
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-090554，事件 lanes-done-20260919-085606），编号 0919F/G/H（Task1-3/4-6/7-9与收口，分支 lane-voice-interview-u5-post-scoring）
 - id: voice-structured-interview/6.7
   场景: voice-structured-interview
   阶段: build
@@ -5298,11 +5311,12 @@ tasks:
   - voice-structured-interview/U3
   - voice-structured-interview/U5/plan
   触碰区: []
-  状态: 待开
+  状态: 在跑
   阻塞类型: 无
   产出判据: post e2e（文本作答场次）：用 U3 签发的内部模拟场次以文本作答走完 10 题 → post 评分 → 每维有 turn 回指且可定位 → `rejection_record` 无新增、`application` 阶段不变
   来源: openspec/changes/voice-structured-interview/tasks.md:66
   可见: false
+  备注: 0919 dispatcher 派车（dispatcher-20260919-090554，事件 lanes-done-20260919-085606），编号 0919F/G/H（Task1-3/4-6/7-9与收口，分支 lane-voice-interview-u5-post-scoring）
 - id: voice-structured-interview/U5/plan
   场景: voice-structured-interview
   阶段: plan
@@ -5312,7 +5326,7 @@ tasks:
   - voice-structured-interview/U3
   触碰区:
   - docs/superpowers/plans/*-voice-structured-interview-unit5-*.md
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 voice-structured-interview（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/voice-structured-interview/tasks.md
@@ -5320,9 +5334,11 @@ tasks:
   闸门: G2 voice-structured-interview
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: 0919 dispatcher 派车（dispatcher-20260919-082121，事件 lanes-done-20260919-070114），编号 0919E
+  备注: 0919 dispatcher 派车（dispatcher-20260919-082121，事件 lanes-done-20260919-070114），编号 0919E；实际产出文件为 docs/superpowers/plans/2026-09-19-u5-post-scoring.md（commit a8e82e6），内容含
+    9 个 Task 与 Global Constraints 段，满足实质产出判据，但文件名未含 `unit5`/`voice-structured-interview` 故触碰区 glob 与自动真身检测不命中——本条状态由 dispatcher-20260919-090554 人工核验后改「完成」，⚠️ 后续 spec-to-plan
+    产出请遵循既有命名惯例（`<date>-<pkg>-unit<n>-<desc>.md`）避免复发
 - id: voice-structured-interview/U5
   场景: voice-structured-interview
   阶段: build
