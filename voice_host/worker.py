@@ -59,8 +59,19 @@ MAX_REPLAY_ATTEMPTS = 3
 
 def _ask_one_turn(
     *, question_id: str, question_text: str, tts: TTSAdapter, asr: ASRAdapter,
-    seq: int, follow_up_of_seq: int | None, is_follow_up: bool,
+    seq: int, follow_up_of_seq: int | None, is_follow_up: bool, answer_mode: str,
 ) -> WorkerTurnResult:
+    if answer_mode == "text":
+        transcript = asr.transcribe_turn()  # 这里的 asr 实际是 TextAnswerAdapter，满足同一 Protocol
+        return WorkerTurnResult(
+            seq=seq, question_id=question_id, question_text=question_text,
+            answer_text=transcript.text, answer_mode="text",
+            audio_start_ms=None, audio_end_ms=None,
+            asr_confidence=transcript.confidence, follow_up_of_seq=follow_up_of_seq,
+            interrupted_at_ms=None,
+            latency={"end_to_end_ms": transcript.asr_ms},
+        )
+
     turn_cycle = TurnCycleController()
     audio_start_ms = _clock_ms()
     turn_cycle.start_broadcast(question_seq=seq, at_ms=audio_start_ms, is_follow_up=is_follow_up)
@@ -127,12 +138,13 @@ def _persist(conn, *, session_id: str, result: WorkerTurnResult) -> None:
 
 def run_session(
     *, conn, bundle: SessionBundle, gateway: LLMGateway, tts: TTSAdapter, asr: ASRAdapter,
-    recorder: RecordingAdapter,
+    recorder: RecordingAdapter, text_adapter: ASRAdapter | None = None,
 ) -> str:
-    """跑完整场次（语音模式）：先启动录制（失败 ⇒ 直接 interrupted，不问
-    一句），再按 `bundle.questions` 顺序逐题问答，正常结束后停止录制并登记
-    哈希。文本降级分支在 Task 13（修改 `_ask_one_turn` 加 `answer_mode`
-    参数）。"""
+    """跑完整场次：先启动录制（失败 ⇒ 直接 interrupted），再按
+    `bundle.questions` 顺序逐题问答——每题开始前查一次
+    `queue_store.get_current_answer_mode`（tasks 5.7"同一场次 MUST 允许
+    混合"），语音模式用 `asr`、文本模式用 `text_adapter`（两者满足同一
+    `ASRAdapter` Protocol，`_ask_one_turn` 不关心具体是哪一种）。"""
     import logging
 
     logger = logging.getLogger(__name__)
@@ -147,9 +159,12 @@ def run_session(
     seq = 0
     for question in bundle.questions:
         seq += 1
+        mode = queue_store.get_current_answer_mode(conn, session_id=bundle.session_id)
+        active_asr = text_adapter if (mode == "text" and text_adapter is not None) else asr
         result = _ask_one_turn(
             question_id=question.question_id, question_text=question.text,
-            tts=tts, asr=asr, seq=seq, follow_up_of_seq=None, is_follow_up=False,
+            tts=tts, asr=active_asr, seq=seq, follow_up_of_seq=None, is_follow_up=False,
+            answer_mode=mode if text_adapter is not None else "voice",
         )
         _persist(conn, session_id=bundle.session_id, result=result)
 
@@ -166,10 +181,13 @@ def run_session(
             follow_up_count += 1
             seq += 1
             follow_up_text = question.follow_ups[choice.follow_up_index]
+            follow_up_mode = queue_store.get_current_answer_mode(conn, session_id=bundle.session_id)
+            follow_up_asr = text_adapter if (follow_up_mode == "text" and text_adapter is not None) else asr
             follow_up_result = _ask_one_turn(
                 question_id=question.question_id, question_text=follow_up_text,
-                tts=tts, asr=asr, seq=seq,
+                tts=tts, asr=follow_up_asr, seq=seq,
                 follow_up_of_seq=last_turn_seq_for_question, is_follow_up=True,
+                answer_mode=follow_up_mode if text_adapter is not None else "voice",
             )
             follow_up_result.latency["follow_up_selection_ms"] = follow_up_selection_ms
             follow_up_result.latency["end_to_end_ms"] += follow_up_selection_ms

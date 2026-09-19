@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS voice_host_event (
     detail TEXT,
     created_at REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pending_text_answer (
+    session_id TEXT PRIMARY KEY NOT NULL REFERENCES session(id),
+    text TEXT NOT NULL,
+    submitted_at REAL NOT NULL
+);
 """
 
 
@@ -198,3 +204,26 @@ def record_voice_host_event(
         (str(uuid.uuid4()), session_id, event_type, detail, time.time()),
     )
     conn.commit()
+
+
+def submit_text_answer(conn: sqlite3.Connection, *, session_id: str, text: str) -> None:
+    """候选人切到文本作答后提交一条答案（tasks 5.7）。`ON CONFLICT` 覆盖旧值
+    ——同一时刻只有一条"待消费"的文本答案，worker.py 的 `TextAnswerAdapter`
+    轮询消费它（`pop_pending_text_answer`）。"""
+    conn.execute(
+        "INSERT INTO pending_text_answer (session_id, text, submitted_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, submitted_at = excluded.submitted_at",
+        (session_id, text, time.time()),
+    )
+    conn.commit()
+
+
+def pop_pending_text_answer(conn: sqlite3.Connection, *, session_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT text FROM pending_text_answer WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute("DELETE FROM pending_text_answer WHERE session_id = ?", (session_id,))
+    conn.commit()
+    return row[0]

@@ -233,3 +233,78 @@ def test_run_session_marks_interrupted_when_recording_fails_to_start(conn, tmp_p
     assert status == "interrupted"
     assert queue_store.get_session_status(conn, session_id="s1") == "interrupted"
     assert queue_store.events_since(conn, session_id="s1", since_seq=0) == []
+
+
+def test_run_session_uses_text_adapter_when_mode_switched_before_question(conn, tmp_path):
+    queue_store.open_session(conn, session_id="s1", bundle_json="{}")
+    queue_store.set_current_answer_mode(conn, session_id="s1", mode="text")
+    queue_store.submit_text_answer(conn, session_id="s1", text="我用文字回答第一题")
+    queue_store.submit_text_answer(conn, session_id="s1", text="我用文字回答第二题")
+
+    from voice_host.adapters import TextAnswerAdapter
+    from voice_host.recording import FakeRecordingAdapter
+
+    gateway = _gateway([json.dumps({"decision": "next_question"}, ensure_ascii=False)])
+    tts = FakeTTSAdapter()  # 文本模式不应被调用
+    asr = FakeASRAdapter(results=[])  # 文本模式不应被调用
+    text_adapter = TextAnswerAdapter(conn=conn, session_id="s1", poll_interval_s=0.01, timeout_s=2.0)
+    recorder = FakeRecordingAdapter(data_dir=tmp_path)
+
+    status = run_session(
+        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+        recorder=recorder, text_adapter=text_adapter,
+    )
+
+    assert status == "completed"
+    assert tts.played == []
+    events = queue_store.events_since(conn, session_id="s1", since_seq=0)
+    assert [e["answer_mode"] for e in events] == ["text", "text"]
+    assert events[0]["audio_start_ms"] is None
+    assert events[0]["audio_end_ms"] is None
+    assert events[0]["answer_text"] == "我用文字回答第一题"
+
+
+def test_run_session_supports_mixed_voice_and_text_turns(conn, tmp_path):
+    queue_store.open_session(conn, session_id="s1", bundle_json="{}")
+    # 第一题语音作答，回答后切到文本，第二题文本作答。
+    gateway = _gateway([json.dumps({"decision": "next_question"}, ensure_ascii=False)])
+    tts = FakeTTSAdapter(first_frame_ms_sequence=[80])
+    asr = FakeASRAdapter(results=[
+        TranscriptResult(text="语音回答第一题", confidence=0.9, endpoint_detection_ms=300, asr_ms=150),
+    ])
+
+    from voice_host.adapters import TextAnswerAdapter
+    from voice_host.recording import FakeRecordingAdapter
+
+    text_adapter = TextAnswerAdapter(conn=conn, session_id="s1", poll_interval_s=0.01, timeout_s=2.0)
+    recorder = FakeRecordingAdapter(data_dir=tmp_path)
+
+    def _switch_after_first_question(*args, **kwargs):
+        queue_store.set_current_answer_mode(conn, session_id="s1", mode="text")
+        queue_store.submit_text_answer(conn, session_id="s1", text="文字回答第二题")
+
+    # 用 monkeypatch 风格的手动 hook：在真实场景里切换发生在候选人点击按钮
+    # （Task 13 Step 8 的端点），测试里直接在第一题问答完成的时间点模拟这个
+    # 外部动作——这是本单元测试能覆盖"混合模式"场景的唯一现实做法，因为
+    # run_session 内部没有测试钩子。
+    import voice_host.worker as worker_module
+
+    original_persist = worker_module._persist
+
+    def _patched_persist(conn_, *, session_id, result):
+        original_persist(conn_, session_id=session_id, result=result)
+        if result.seq == 1:
+            _switch_after_first_question()
+
+    worker_module._persist = _patched_persist
+    try:
+        status = run_session(
+            conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+            recorder=recorder, text_adapter=text_adapter,
+        )
+    finally:
+        worker_module._persist = original_persist
+
+    assert status == "completed"
+    events = queue_store.events_since(conn, session_id="s1", since_seq=0)
+    assert [e["answer_mode"] for e in events] == ["voice", "text"]

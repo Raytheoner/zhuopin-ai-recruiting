@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI 结构化面试</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="interview.css" />
+</head>
+<body>
+  <main id="app">
+    <header>
+      <h1>AI 结构化面试</h1>
+      <p class="ai-label">本次面试由 AI 主持提问，内容由 AI 生成，仅供参考——人工面试官会复核最终评价。</p>
+    </header>
+
+    <section id="question-panel">
+      <p id="question-text">正在连接房间…</p>
+      <div id="controls">
+        <button id="replay-btn" type="button">重听本题</button>
+        <button id="switch-text-btn" type="button">改为文字作答</button>
+      </div>
+      <div id="text-answer-panel" hidden>
+        <textarea id="text-answer-input" rows="4" placeholder="请输入你的回答"></textarea>
+        <button id="submit-text-btn" type="button">提交</button>
+      </div>
+      <p id="network-quality-prompt" hidden>检测到网络不稳定，建议切换为文字作答。</p>
+    </section>
+  </main>
+  <script src="vendor/livekit-client.min.js"></script>
+  <script src="interview.js"></script>
+</body>
+</html>

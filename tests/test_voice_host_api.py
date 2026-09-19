@@ -93,3 +93,23 @@ def test_delete_artifacts_is_idempotent_even_without_recording(client):
     second = client.delete("/sessions/s1/artifacts", headers=headers)
     assert first.status_code == 204
     assert second.status_code == 204
+
+
+def test_switch_to_text_records_mode_and_event(client):
+    body = _bundle_body()
+    client.post("/sessions", content=body, headers=_signed_headers(method="POST", path="/sessions", body=body))
+
+    switch_body = b'{"trigger": "manual"}'
+    headers = _signed_headers(method="POST", path="/sessions/s1/switch-to-text", body=switch_body)
+    response = client.post("/sessions/s1/switch-to-text", content=switch_body, headers=headers)
+    assert response.status_code == 200
+
+
+def test_submit_text_answer_requires_prior_switch(client):
+    body = _bundle_body()
+    client.post("/sessions", content=body, headers=_signed_headers(method="POST", path="/sessions", body=body))
+
+    answer_body = json.dumps({"text": "我的文字回答"}).encode("utf-8")
+    headers = _signed_headers(method="POST", path="/sessions/s1/text-answer", body=answer_body)
+    response = client.post("/sessions/s1/text-answer", content=answer_body, headers=headers)
+    assert response.status_code == 200

@@ -1,0 +1,11 @@
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6f8; }
+#app { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
+header h1 { font-size: 20px; margin-bottom: 4px; }
+.ai-label { font-size: 12px; color: #888; margin-top: 0; }
+#question-panel { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+#question-text { font-size: 16px; line-height: 1.6; }
+#controls { display: flex; gap: 12px; margin-top: 16px; }
+button { padding: 8px 16px; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+#text-answer-panel { margin-top: 16px; }
+#text-answer-input { width: 100%; box-sizing: border-box; padding: 8px; }
+#network-quality-prompt { color: #b45309; font-size: 13px; }

@@ -112,3 +112,18 @@ def test_record_voice_host_event(conn):
         "SELECT event_type, detail FROM voice_host_event WHERE session_id = 's1'"
     ).fetchone()
     assert row == ("mode_switched_manual", "seq=3")
+
+
+def test_submit_and_pop_pending_text_answer(conn):
+    queue_store.open_session(conn, session_id="s1", bundle_json="{}")
+    assert queue_store.pop_pending_text_answer(conn, session_id="s1") is None
+    queue_store.submit_text_answer(conn, session_id="s1", text="我的文字回答")
+    assert queue_store.pop_pending_text_answer(conn, session_id="s1") == "我的文字回答"
+    assert queue_store.pop_pending_text_answer(conn, session_id="s1") is None  # 消费一次即清空
+
+
+def test_set_and_get_current_answer_mode(conn):
+    queue_store.open_session(conn, session_id="s1", bundle_json="{}")
+    assert queue_store.get_current_answer_mode(conn, session_id="s1") == "voice"
+    queue_store.set_current_answer_mode(conn, session_id="s1", mode="text")
+    assert queue_store.get_current_answer_mode(conn, session_id="s1") == "text"

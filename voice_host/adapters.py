@@ -77,3 +77,33 @@ class FakeASRAdapter:
 
     def transcribe_turn(self) -> TranscriptResult:
         return self.results.pop(0)
+
+
+@dataclass
+class TextAnswerAdapter:
+    """文本作答降级的 `ASRAdapter` 实现（tasks 5.7，本计划「设计决策 13」）：
+    阻塞轮询本地队列直到候选人通过 `POST /sessions/{id}/text-answer` 提交
+    文字答案。`confidence=1.0`（文字没有转写置信度问题）、
+    `endpoint_detection_ms=0.0`（不需要端点检测）、`asr_ms` 记的是候选人
+    实际打字耗时——这样 `_ask_one_turn` 完全不需要为文本模式另写一套问答
+    循环，latency_json 的字段约定（本计划「设计决策 6」）也天然兼容。"""
+
+    conn: object
+    session_id: str
+    poll_interval_s: float = 0.5
+    timeout_s: float = 300.0
+
+    def transcribe_turn(self) -> TranscriptResult:
+        import time as _time
+
+        from voice_host import queue_store
+
+        start = _time.monotonic()
+        while True:
+            text = queue_store.pop_pending_text_answer(self.conn, session_id=self.session_id)
+            if text is not None:
+                elapsed_ms = (_time.monotonic() - start) * 1000
+                return TranscriptResult(text=text, confidence=1.0, endpoint_detection_ms=0.0, asr_ms=elapsed_ms)
+            if _time.monotonic() - start > self.timeout_s:
+                raise TimeoutError(f"场次 {self.session_id!r} 等待文本作答超时")
+            _time.sleep(self.poll_interval_s)

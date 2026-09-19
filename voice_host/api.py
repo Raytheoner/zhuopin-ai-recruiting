@@ -75,4 +75,23 @@ def create_app(*, queue_db_path: str, shared_secret: str, on_session_opened=None
             queue_store.mark_recording_transferred(conn, session_id=session_id)
         return Response(status_code=204)
 
+    @app.post("/sessions/{session_id}/switch-to-text")
+    async def switch_to_text(session_id: str, request: Request):
+        body = await _verify(request)
+        import json
+        payload = json.loads(body) if body else {}
+        trigger = payload.get("trigger", "manual")
+        event_type = "mode_switched_after_prompt" if trigger == "after_network_prompt" else "mode_switched_manual"
+        queue_store.set_current_answer_mode(conn, session_id=session_id, mode="text")
+        queue_store.record_voice_host_event(conn, session_id=session_id, event_type=event_type)
+        return {"ok": True}
+
+    @app.post("/sessions/{session_id}/text-answer")
+    async def post_text_answer(session_id: str, request: Request):
+        body = await _verify(request)
+        import json
+        payload = json.loads(body)
+        queue_store.submit_text_answer(conn, session_id=session_id, text=payload["text"])
+        return {"ok": True}
+
     return app
