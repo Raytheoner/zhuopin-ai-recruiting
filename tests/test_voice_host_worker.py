@@ -239,7 +239,6 @@ def test_run_session_uses_text_adapter_when_mode_switched_before_question(conn, 
     queue_store.open_session(conn, session_id="s1", bundle_json="{}")
     queue_store.set_current_answer_mode(conn, session_id="s1", mode="text")
     queue_store.submit_text_answer(conn, session_id="s1", text="我用文字回答第一题")
-    queue_store.submit_text_answer(conn, session_id="s1", text="我用文字回答第二题")
 
     from voice_host.adapters import TextAnswerAdapter
     from voice_host.recording import FakeRecordingAdapter
@@ -250,10 +249,30 @@ def test_run_session_uses_text_adapter_when_mode_switched_before_question(conn, 
     text_adapter = TextAnswerAdapter(conn=conn, session_id="s1", poll_interval_s=0.01, timeout_s=2.0)
     recorder = FakeRecordingAdapter(data_dir=tmp_path)
 
-    status = run_session(
-        conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
-        recorder=recorder, text_adapter=text_adapter,
-    )
+    def _submit_answer_for_second_question(*args, **kwargs):
+        queue_store.submit_text_answer(conn, session_id="s1", text="我用文字回答第二题")
+
+    # 用 monkeypatch 风格的手动 hook：在真实场景里答案通过 API 端点提交，
+    # 测试里直接在第一题问答完成的时间点（_persist 返回后）模拟提交第二题答案
+    # ——这样第二个 submit_text_answer 发生在第一个已被消费之后，符合单插槽队列
+    # 的设计（pending_text_answer PRIMARY KEY = session_id，ON CONFLICT DO UPDATE）。
+    import voice_host.worker as worker_module
+
+    original_persist = worker_module._persist
+
+    def _patched_persist(conn_, *, session_id, result):
+        original_persist(conn_, session_id=session_id, result=result)
+        if result.seq == 1:
+            _submit_answer_for_second_question()
+
+    worker_module._persist = _patched_persist
+    try:
+        status = run_session(
+            conn=conn, bundle=_bundle(), gateway=gateway, tts=tts, asr=asr,
+            recorder=recorder, text_adapter=text_adapter,
+        )
+    finally:
+        worker_module._persist = original_persist
 
     assert status == "completed"
     assert tts.played == []
