@@ -4,8 +4,8 @@ summary:
   条目数: 547
   按状态:
     待开: 198
-    在跑: 8
-    完成: 257
+    在跑: 7
+    完成: 258
     阻塞: 84
   阻塞·决策: 50
   阻塞·外部: 33
@@ -6535,16 +6535,17 @@ tasks:
   依赖: []
   触碰区:
   - .claude/skills/lane-watch-relay/SKILL.md
-  状态: 在跑
+  状态: 完成
   阻塞类型: 无
   产出判据: '`.claude/skills/lane-watch-relay/SKILL.md` §4 分流表补 `CTX-RELAY`（＝正常，续棒已自动排，⛔ 不当失败处理）与 `RELAY-EXHAUSTED`（＝已续 3 次仍越线，本泳道已停，须人判任务是否该拆）两个新状态'
   来源: docs/session接力.md:75
   可见: false
   conflicts:
     状态:
-      台账: 在跑
+      台账: 完成
       真身: 待开
-  备注: task-dispatcher 派 0920I（事件 lanes-done-20260920-134828）
+  备注: task-dispatcher 派 0920I（事件 lanes-done-20260920-134828），已核实完成——commit 092617d 已把 CTX-RELAY／RELAY-EXHAUSTED 两行写入 SKILL.md §4（grep -n CTX-RELAY .claude/skills/lane-watch-relay/SKILL.md
+    命中第 91-92 行）；conflicts 复现属 scene_of_change() 生成器已知误报（同 propose:S-渠道 一条备注），⛔ 无需改回
 - id: relay:tag#55cb5cbe
   场景: 构建自动化
   阶段: build
