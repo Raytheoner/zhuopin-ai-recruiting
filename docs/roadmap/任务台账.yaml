@@ -6539,6 +6539,7 @@ tasks:
   产出判据: opener 正文新增固定一节「## 机器判据」写成可执行 shell 块（每行一条、附期望值）；`run-lanes.sh` 收工时自己跑一遍该块，任一条不符 ⇒ 状态降为 `PARTIAL`（附不符项），泳道自报的 `OPENER_DONE` 不算数；无「## 机器判据」节的 opener 维持现状不拦
   来源: docs/session接力.md:72
   可见: false
+  队列: Q-54 待答
 - id: relay:tag#33937877
   场景: 构建自动化
   阶段: build
