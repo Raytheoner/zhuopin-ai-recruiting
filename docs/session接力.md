@@ -63,6 +63,14 @@
 
 ## 二、下一步
 
+### 🆕 2026-09-20 `0920D` 续棒泳道看护机制落档——Shao Peishen 定两条口径，已建 skill 待提交
+
+Shao Peishen 2026-09-20 定：**①本机只构建本地项目，GitHub 只是存储，⛔ 永不直接调 GitHub 上的 skill，⛔ 与其他项目（「企业AI转型」线）的 skill 无关**——只有他明确指示「参考 XX 项目做法」时才去只读参考，且只模仿、在本仓库自建实现。触发实证：本轮 Cowork 开场误取了「企业AI转型」线的 `zhuopin-lane-watch`（正本在 Win 端 `C:\Dev\zhuopin-ai\...`，本机不可及），白跑一轮才回到本项目 `lane-dispatch`。**②续棒免粘贴 Opener**：新会话只要说「续棒泳道看护」即接上，⛔ 不再出转场 Opener 让他手工粘；会话标题沿用 Opener 前缀形状 ＝ 端口（`[Mac]` 本机 Mac Studio／`[Win]` 他的笔记本）＋日期＋字母编号，**续棒固定 `R` 系列**，他开场打一行 `[Mac]MMDDR 续棒泳道看护` 即同时带出标题与触发词。
+
+- 已建 `.claude/skills/lane-watch-relay/SKILL.md`（102 行）：§0 边界（只用本仓库资产／两侧仓库路径与 git 可碰性）→ §1 编号与标题（`R` 系列，Cowork 无 `set_session_title`，标题只能由他第一句话带出）→ §2 只读接手一次跑完的固定命令组（接力卡新节＋`queue_pending`＋`dispatcher_backlog --dry-run`＋`pgrep run-lanes`＋最新 `results.tsv`＋调度器 `.done`；⛔ 禁 cat 日志正文／全量队列／整目录列举）→ §3 两栏汇报格式 → §4 分流表（ready 全是 `gate 待开` ＝ 闸未满足、不是可发车）→ §5 落档与提交
+- 【谁做】`0920D` 无头泳道（`commit_request` 白名单拒 `.claude/**`，只能走 CC 侧）｜【状态】待发车（等 Shao Peishen 一句授权）｜【判据】五路径一次提交上 main 并 push 成功，`git log --oneline -1` 为本次 commit｜【不做会怎样】skill 只存在于工作区未追踪状态，下次 `git clean` 或换机即丢，两条口径回到「只在会话里说过」
+
+
 ### ✅ 2026-09-20 `0920A` M2·U3 硬门槛引擎发版 `.51`——`Q-51` 放行，全部冒烟通过，未回滚
 
 `0920A`（无头，`run-lanes` 起）按 `Q-51`（Shao Peishen 2026-09-20 答「发」）执行。开工自核五条全过（`a6df909` 在祖先链、tasks.md 4.1–4.6 全勾、重跑全量 pytest **3716 passed／0 failed／10 skipped** 与授权数字一致、`write_rejection`/`COMPLIANCE_ASSERTIONS` 逐行核对、`live_resume_intake_enabled` 默认 `False` 无覆盖）。发版 commit `8596829`，现网原 commit `67772ba`（发版三 `0918AM`，哈希+文件计数实测复核吻合）。携带范围 28 文件 / +3168 −6：M2·U3 申诉接线（本次目标，新增 `POST /api/applications/{application_id}/appeal`、`POST /api/rejections/{rejection_id}/appeal/transition`）＋ M3 语音面试测试覆盖补齐（`0919T`）＋调度器脚本修复，均核实不改变现网既有行为（除 U3 本身）。无新增 pip 依赖。
