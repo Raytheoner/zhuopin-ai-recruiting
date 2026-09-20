@@ -6620,7 +6620,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 外部
   产出判据: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
-  来源: docs/session接力.md:154
+  来源: docs/session接力.md:147
   可见: false
 - id: answer:Q-02
   场景: M2
