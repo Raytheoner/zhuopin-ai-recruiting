@@ -54,6 +54,7 @@ TZ=Asia/Shanghai date '+%m%d %H:%M %Z'
 sed -n '/^## 🔴 新 session 先看这一节/,/^## 开场词/p' docs/session接力.md    # 上一场交接结论
 PYTHONPATH=. python3 -m scripts.queue_pending                              # 定夺队列：只出待答
 PYTHONPATH=. python3 -m scripts.dispatcher_backlog --dry-run | tail -14    # 台账摘要＋ready
+# ⚠️ pgrep 只在本机侧（CC）有效；Cowork 挂载侧见下方「判据可用性」
 pgrep -f 'run-lanes.*\.sh' || echo "无泳道在跑"
 D=$(ls -dt .claude/handoff/lanes-2026* | head -1); echo "$D"; cat "$D/results.tsv"
 ls -t .claude/handoff/commit/*.done | head -1 | xargs tail -4             # 调度器最近一次
@@ -61,6 +62,16 @@ git -C <仓库> log --oneline -5   # ⚠️ 只在本机侧跑
 ```
 
 `results.tsv` 现为 13 列，第 13 列 `upeak` ＝ 该 session 上下文峰值（0920G 起）。
+
+🔴 **判据可用性：两条在 Cowork 挂载侧失效，⛔ 不要照跑**（2026-09-20 `0920R` 实测立）：
+
+| 判据 | 本机侧（CC） | Cowork 挂载侧 | 挂载侧改用什么 |
+|---|---|---|---|
+| `pgrep -f run-lanes` 判在跑 | ✅ 有效 | ⛔ **假阳**——device_bash 在隔离 VM 里，看不到 Mac 的进程空间（本场实测回 PID `1 2 5`） | 读最新 `lanes-*` 目录的 `results.tsv` 行数 vs 该批次编排条数：齐＝已收工；缺行且目录 mtime 在数分钟内＝仍在跑 |
+| `curl .51:8095` 判 on/off-LAN | ✅ 有效 | ⛔ **恒 403**——挂载侧出网走代理，403 是代理拒绝，不是 `.51` 不可达 | 无实证即写「未实证」，按周末/常态把 `.51` 类挂起；⛔ 不得据 403 断言 off-LAN |
+
+⛔ 拿失效判据当结论比没有判据更贵：本场差点据此误报泳道在跑。
+
 
 🔴 **只读结论性清单，⛔ 禁止**：`cat` 泳道日志正文、`cat` 全量定夺队列、整目录列举、读 opener 正文、
 拉全文 `git diff`。判「某条还失不失败」只看 `results.tsv` 的行与汇总数字。
