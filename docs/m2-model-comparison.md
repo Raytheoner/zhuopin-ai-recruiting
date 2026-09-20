@@ -81,6 +81,40 @@ Windows 侧另有一处脚本缺口：`smoke_m2_deps.py` 的 markdown 输出含 
 
 ⇒ 对本文档「决策」节的影响：~~BGE-M3 本地 CPU（D7）在 `.51` 现状下跑不起来~~ **前置条件已满足**（2026-09-17 22:07 VC++ 运行库升至 v14.44，一次性、25 MB、未重启服务）；torch/FlagEmbedding import 耗时见上表，`.51` 单份耗时见「BGE-M3 本地 CPU 召回」节。PaddleOCR 结论不变（D14 退路）。
 
+### `.51` 生产 venv（Q-08，`0920M` 实跑，2026-09-20）
+
+实跑：`[Mac]0920M`，经 ssh 在 `.51` **生产目录** `C:\apps\zhuopin-recruit-agent\.venv` 跑同一探针——
+区别于 0917AX/BB 用的**隔离** `C:\apps\m2-smoke\.venv`。原始输出 `data/eval/m2-pilot/smoke-win51.json`；
+Mac 侧同步对照 `data/eval/m2-pilot/smoke-mac.json`。
+
+平台：`Windows-2019Server-10.0.17763-SP0` ｜ Python 3.14.5
+
+| 包 | 可导入 | 版本 | 体积 MB | import 耗时 ms | 错误 |
+|---|---|---|---|---|---|
+| numpy | ✅ | 2.5.3 | 54.5 | 321 | |
+| pypdf | ✅ | 6.19.0 | 4.0 | 156 | |
+| python-docx | ✅ | 1.2.0 | 2.4 | 146 | |
+| reportlab | ❌ | | | | ModuleNotFoundError: No module named 'reportlab' |
+| pillow | ❌ | | | | ModuleNotFoundError: No module named 'PIL' |
+| pymupdf | ❌ | | | | ModuleNotFoundError: No module named 'pymupdf' |
+| paddlepaddle | ❌ | | | | ModuleNotFoundError: No module named 'paddle' |
+| paddleocr | ❌ | | | | ModuleNotFoundError: No module named 'paddleocr' |
+| torch | ❌ | | | | ModuleNotFoundError: No module named 'torch' |
+| FlagEmbedding | ❌ | | | | ModuleNotFoundError: No module named 'FlagEmbedding' |
+
+即生产 venv 目前只装了三个轻依赖；reportlab／pillow／pymupdf／torch／FlagEmbedding 在生产 venv 里都还没装
+——但 0917AX/BB 已证明这五项在这台 Windows 机器上**装得上**（隔离 venv 曾装齐并 import 成功），
+缺口是「生产 venv 未同步装」，不是「装不上」。paddlepaddle／paddleocr 维持不可装结论（本次复现同一
+`ModuleNotFoundError`，与 cp314 无 wheel／`paddlex` 钉版冲突的既有结论一致，未重新排查 root cause）。
+
+脚本缺口 `smoke_m2_deps.py` 的 GBK 控制台 `UnicodeEncodeError` 本次复现，绕过方式改用 `python -X utf8`
+（同 R-10 技术债，未新增登记）。
+
+**Q-08 两问结论**：
+
+- `PaddleOCR: 不可装 ⇒ D14 退路 走`（依据：本次生产 venv 复测 `ModuleNotFoundError: No module named 'paddleocr'`，与 0917AX 的 cp314 无 wheel／`paddlex` 钉 `PyYAML==6.0.2` 需 MSVC 结论一致）
+- `发版白名单需补：reportlab==5.0.1、pillow==12.3.0、pymupdf==1.28.2、torch==2.14.0、FlagEmbedding==1.4.2`（依据：生产 venv 当前缺失，但 0917AX/BB 隔离 venv 已验证在同款 Windows 机器上可装、VC++ v14.44 前置条件已满足；paddlepaddle/paddleocr 不列入，按 D14 退路处理）
+
 ## 样本
 
 - 来源类别：`synthetic`（`scripts/gen_pilot_samples.py`，seed 20260917，20 份，无任何真人信息）。⚠️ 合成样本上的指标只证明管线、schema 守字段率、evidence 可定位率与延迟成本；**D9 验收数字必须在真实脱敏样本上重算**（计划「待裁决」#2）。
