@@ -543,14 +543,14 @@ PY
 run_lane() {
   local lane="$1"
   local id title body log t0 t1 code mins status lmodel lsrc
-  local rawjson usage_row ucost uin uout ucread ucwrite uturns
+  local rawjson usage_row ucost uin uout ucread ucwrite uturns upeak
 
   while IFS=$'\t' read -r _lane id title; do
     log="$LOGDIR/${lane}-${id}.log"
     body="$(extract "$id")"
 
     if [[ -z "$body" ]]; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "NO-BODY" "0" "$log" "-" "-" "-" "-" "-" "-" "-" >> "$LOGDIR/results.tsv"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "NO-BODY" "0" "$log" "-" "-" "-" "-" "-" "-" "-" "-" >> "$LOGDIR/results.tsv"
       echo "  ✗ [$lane/$id] 抽不到正文，停本泳道"
       return 1
     fi
@@ -606,7 +606,7 @@ run_lane() {
       fi
       if [[ ! -d "$run_dir" ]] || [[ "$(git -C "$run_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)" != "$br" ]]; then
         echo "worktree=FAIL path=$wt_rel branch=$br" >> "$log"
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "WORKTREE-FAIL" "0" "$log" "$lmodel" "-" "-" "-" "-" "-" "-" >> "$LOGDIR/results.tsv"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "WORKTREE-FAIL" "0" "$log" "$lmodel" "-" "-" "-" "-" "-" "-" "-" >> "$LOGDIR/results.tsv"
         echo "  ✗ [$lane/$id] worktree 建不出来或分支不符（$wt_rel / $br），停本泳道"
         return 1
       fi
@@ -631,7 +631,7 @@ run_lane() {
 import json, sys
 
 raw_path, log_path = sys.argv[1], sys.argv[2]
-cost = tin = tout = cread = cwrite = turns = "-"
+cost = tin = tout = cread = cwrite = turns = peak = "-"
 try:
     raw = open(raw_path, encoding="utf-8").read()
 except OSError:
@@ -647,6 +647,15 @@ try:
     cread = usage.get("cache_read_input_tokens", "-")
     cwrite = usage.get("cache_creation_input_tokens", "-")
     turns = data.get("num_turns", "-")
+    # 上下文峰值（0920G）：usage.iterations 每条对应一次「压缩周期」终点的用量快照，
+    # 取其 input+cache_creation+cache_read 之和的最大值，近似该 session 单轮上下文的峰值。
+    # 实测（0920E 会话，7d40b1d4…）：iterations[0] 之和 153042 与全量 transcript 逐轮扫描
+    # 得到的真实峰值 153042 完全吻合。没有 iterations 时不猜——留 "-"，⛔ 不拿累计量充数
+    # （累计 cache_read 是多轮之和，会比真实峰值大一个数量级，充数会把 150k 判据整批打穿）。
+    for it in (usage.get("iterations") or []):
+        s = (it.get("input_tokens") or 0) + (it.get("cache_creation_input_tokens") or 0) + (it.get("cache_read_input_tokens") or 0)
+        if peak == "-" or s > peak:
+            peak = s
     if data.get("subtype") == "error_max_budget_usd" or data.get("terminal_reason") == "budget_exhausted":
         # 旧 text 模式撞预算时 stdout 就是这句，622 行起的 BUDGET-HIT 判据靠 grep 这个子串。
         text_to_log = "Error: Exceeded USD budget\n"
@@ -662,10 +671,10 @@ if text_to_log:
     with open(log_path, "a", encoding="utf-8") as lf:
         lf.write(text_to_log)
 
-print("\t".join(str(x) for x in (cost, tin, tout, cread, cwrite, turns)))
+print("\t".join(str(x) for x in (cost, tin, tout, cread, cwrite, turns, peak)))
 PY
 )"
-    IFS=$'\t' read -r ucost uin uout ucread ucwrite uturns <<< "$usage_row"
+    IFS=$'\t' read -r ucost uin uout ucread ucwrite uturns upeak <<< "$usage_row"
 
     # 哨兵扫全文，不扫 tail —— 原版实测哨兵落在第 2 行，扫 tail 会误判
     # 容忍模型把哨兵加粗/包反引号（2026-09-16 0916K 实证：输出 `**OPENER_DONE**`，活已干完却判 NO-SENTINEL）
@@ -681,7 +690,7 @@ PY
     elif [[ $sentinel == PARTIAL ]];            then status="PARTIAL"
     else                                             status="NO-SENTINEL"; fi
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" "$lmodel" "$ucost" "$uin" "$uout" "$ucread" "$ucwrite" "$uturns" >> "$LOGDIR/results.tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" "$lmodel" "$ucost" "$uin" "$uout" "$ucread" "$ucwrite" "$uturns" "$upeak" >> "$LOGDIR/results.tsv"
     echo "  • [$lane/$id] $status (${mins}m, $lmodel)"
 
     # 活干完的条目自动摘掉泳道标注 —— 让「跑完即摘」成为机制，不靠人记得。
@@ -733,6 +742,10 @@ echo "━━━━━━ 泳道执行汇总 ━━━━━━"
   done
 } | tee "$LOGDIR/summary.txt"
 
+# results.tsv 列定义：lane／id／status／mins／log／model／cost／in／out／cache_read／
+# cache_write／turns／upeak（0920G 新增第 13 列：该 session 单轮上下文峰值 input+
+# cache_creation+cache_read 的最大值，取自 usage.iterations，"-" 表示取不到，只记账不中止）。
+#
 # 批次用量合计（0918F）：results.tsv 第 7-12 列，"-" 当 0 计。新文件，无历史消费方。
 {
   printf 'cost_usd\tin\tout\tcache_read\tcache_write\tturns\tlanes\n'
@@ -763,6 +776,16 @@ partial="$(awk -F'\t' '$3=="PARTIAL" {printf "%s ", $2}' "$LOGDIR/results.tsv")"
   echo "⏸ 有留步项（PARTIAL）：$partial"
   echo "   看日志里的「⏸ 留步」登记，多半是等 .51、等窗口、等你拍板。这不算失败。"
 }
+
+# 上下文峰值播报（0920G）：只记账不中止，⛔ 不加任何截断/降级逻辑。
+peak_line="$(awk -F'\t' 'NF>=13 && $13!="-" && $13+0>m{m=$13+0; id=$2} END{if(id!="") printf "%s\t%d", id, m}' "$LOGDIR/results.tsv")"
+if [[ -n "$peak_line" ]]; then
+  IFS=$'\t' read -r peak_id peak_val <<< "$peak_line"
+  echo
+  printf '上下文峰值：%s=%dk\n' "$peak_id" "$(( (peak_val + 999) / 1000 ))"
+  over_n="$(awk -F'\t' 'NF>=13 && $13!="-" && $13+0>=150000{c++} END{print c+0}' "$LOGDIR/results.tsv")"
+  [[ "$over_n" -gt 0 ]] && printf '⚠️ 本批有 %s 条越过 150k 转场线（仅记账，未中止）\n' "$over_n"
+fi
 
 echo
 echo "⚠️ 别只信这张表。跑完自己核一次真身："
