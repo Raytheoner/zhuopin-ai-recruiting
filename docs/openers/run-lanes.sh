@@ -7,6 +7,8 @@
 #   ① 哨兵双指标 —— 退出码 0 只说明进程正常结束，不说明任务完成。要求每个 session
 #      顶格输出 OPENER_DONE / OPENER_PARTIAL，两个指标都对才算 OK。
 #      PARTIAL 里含「上下文转场」的是 hook 硬闸留步（0920H）⇒ CTX-RELAY，同泳道队尾自动排续棒。
+#      泳道自报 OPENER_DONE 不算数（0920K）：opener 正文文件的 `## 机器判据` bash 块由脚本在仓库根
+#      跑一遍，不过 ⇒ GATE-FAIL；块含副作用命令 ⇒ GATE-UNSAFE 不执行。两者与 FAIL 同处置。
 #      ⚠️ 哨兵扫全文，不扫 tail：原版实测哨兵落在第 2 行，日志一长就误判 NO-SENTINEL
 #      并误停整条泳道。
 #   ② 无头引导头 —— 统一注入硬规则，不靠每份 opener 各自手写。
@@ -120,6 +122,8 @@ SUBAGENT_MODEL="sonnet"
 # 上下文续棒上限（2026-09-20 0920H）：泳道越 150k 转场线时由 hook 注入哨兵、留步，脚本在同泳道队尾
 # 自动排 `<原id>续<n>` 接着干；续到第 RELAY_MAX 棒仍越线 ⇒ RELAY-EXHAUSTED 停本泳道，⛔ 不无限续。
 RELAY_MAX="${HR_LANE_RELAY_MAX:-3}"
+# 机器判据闸单条超时秒（2026-09-20 0920K）。判据块本分是只读核验，60 秒足够；测试用环境变量调小。
+GATE_TIMEOUT="${HR_LANE_GATE_TIMEOUT:-60}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -594,7 +598,71 @@ PY
 }
 
 # ---------------------------------------------------------------------------
-# 一条泳道：内部严格串行，遇 FAIL / NO-SENTINEL / RELAY-EXHAUSTED 停本泳道，不影响别的泳道
+# 机器判据闸（0920K）三个 helper。背景：0920I 在一条 grep 判据实测为 0 的情况下照样打了 OPENER_DONE
+# ——判据只写在正文里靠泳道自觉，没有消费者。这里给它装消费者：泳道自报 DONE 不算数，脚本自己跑一遍。
+#   gate_extract <id>  按 docs/openers/<id>-*.md 取 `## 机器判据` 节后第一个 ```bash 块（stdout）。
+#                      🔴 向后兼容：glob 匹配数 ≠ 1、无该节、无 bash 块 ⇒ 输出空 ⇒ 不拦。拦错一条会停整条泳道。
+#   gate_unsafe <file> 安全预检：命中黑名单 ⇒ 打印命中模式、退出 0。🔴 先于执行——命中即不跑。
+#   gate_run <file> <log> 在仓库根跑，GATE_TIMEOUT 超时（整个进程组一起杀，⛔ 不留 sleep 孤儿挂住管道），
+#                      stdout 打退出码（超时 = 124），块输出末 30 行追加进 <log>。
+# ---------------------------------------------------------------------------
+gate_extract() {
+  python3 - "$REPO" "$1" <<'PY'
+import glob, re, sys
+repo, oid = sys.argv[1:3]
+files = glob.glob(f"{repo}/docs/openers/{oid}-*.md")
+if len(files) != 1:
+    sys.exit(0)
+lines = open(files[0], encoding="utf-8", errors="replace").read().split("\n")
+# 节名允许带序号：「## 机器判据」「## 五、机器判据」「## 5. 机器判据」都认
+sec = next((i for i, l in enumerate(lines) if re.match(r'^##+\s*([一二三四五六七八九十\d]+[、.．]\s*)?机器判据', l)), None)
+if sec is None:
+    sys.exit(0)
+start = None
+for i in range(sec + 1, len(lines)):
+    l = lines[i]
+    if start is None:
+        if re.match(r'^#{1,2}\s', l):          # 出了本节还没见到 bash 块 ⇒ 无判据
+            break
+        if re.match(r'^```bash\s*$', l):
+            start = i + 1
+    elif re.match(r'^```\s*$', l):
+        print("\n".join(lines[start:i]))
+        break
+PY
+}
+
+gate_unsafe() {
+  grep -oE -m1 'git[[:space:]]+(push|commit|reset|clean)|rm[[:space:]]+-[[:alpha:]-]*[rf]|(^|[^[:alnum:]_])(sudo|curl|wget|ssh|scp|launchctl|mkfs)([[:space:]]|$)|>[[:space:]]*/dev/sd|\$\([^)]*rm[[:space:]]|`[^`]*rm[[:space:]]' "$1"
+}
+
+gate_run() {
+  python3 - "$1" "$2" "$REPO" "$GATE_TIMEOUT" <<'PY'
+import os, signal, subprocess, sys
+script, log, repo, tmo = sys.argv[1:5]
+p = subprocess.Popen(["bash", script], cwd=repo, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                     stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
+try:
+    out, _ = p.communicate(timeout=float(tmo))
+    rc = p.returncode
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    out, _ = p.communicate()
+    rc = 124
+tail = (out or "").rstrip("\n").split("\n")[-30:]
+with open(log, "a", encoding="utf-8") as lf:
+    lf.write(f"gate: rc={rc}{'（超时 ' + tmo + 's）' if rc == 124 else ''} script={script}\n")
+    for l in tail:
+        lf.write(f"gate| {l}\n")
+print(rc)
+PY
+}
+
+# ---------------------------------------------------------------------------
+# 一条泳道：内部严格串行，遇 FAIL / NO-SENTINEL / RELAY-EXHAUSTED / GATE-* 停本泳道，不影响别的泳道
 # ---------------------------------------------------------------------------
 run_lane() {
   local lane="$1"
@@ -769,12 +837,37 @@ PY
       if [[ "$rn" -ge "$RELAY_MAX" ]]; then status="RELAY-EXHAUSTED"; else status="CTX-RELAY"; fi
     else                                             status="NO-SENTINEL"; fi
 
+    # 机器判据闸（0920K）：只对自报 OK 的条目跑——PARTIAL/CTX-RELAY 本来就没干完，跑判据必不过、会把预期内的留步
+    # 误判成失败；FAIL/NO-SENTINEL 已经停了。判据按原条 root 取（续棒条收口验的是原 opener 的判据），
+    # 在仓库根跑（worktree 条此时已 ff-only 合回主工作区）。GATE-UNSAFE 是「不执行＋记账」，⛔ 不先跑再判。
+    if [[ "$status" == "OK" ]]; then
+      local gate_block gate_sh gate_hit gate_rc
+      gate_block="$(gate_extract "$root")"
+      if [[ -n "$gate_block" ]]; then
+        gate_sh="$LOGDIR/gate-${root}.sh"
+        printf '%s\n' "$gate_block" > "$gate_sh"
+        if gate_hit="$(gate_unsafe "$gate_sh")"; then
+          status="GATE-UNSAFE"
+          echo "gate: UNSAFE 命中黑名单「${gate_hit}」，判据块未执行（$gate_sh）" >> "$log"
+          printf '%s\t%s\n' "$root" "UNSAFE" >> "$LOGDIR/gates.tsv"
+        else
+          gate_rc="$(gate_run "$gate_sh" "$log")"
+          if [[ "$gate_rc" == "0" ]]; then
+            printf '%s\t%s\n' "$root" "PASS" >> "$LOGDIR/gates.tsv"
+          else
+            status="GATE-FAIL"
+            printf '%s\t%s\n' "$root" "FAIL" >> "$LOGDIR/gates.tsv"
+          fi
+        fi
+      fi
+    fi
+
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" "$lmodel" "$ucost" "$uin" "$uout" "$ucread" "$ucwrite" "$uturns" "$upeak" >> "$LOGDIR/results.tsv"
     echo "  • [$lane/$id] $status (${mins}m, $lmodel)"
 
     # 活干完的条目自动摘掉泳道标注 —— 让「跑完即摘」成为机制，不靠人记得。
     # 只摘 OK / PARTIAL（活都干完了，PARTIAL 只是有留步项另行处理）。
-    # ⛔ BUDGET-HIT / FAIL / NO-SENTINEL 不摘：前者要人查产出物，后两者待重试。
+    # ⛔ BUDGET-HIT / FAIL / NO-SENTINEL / GATE-* 不摘：前者要人查产出物，其余待重试。
     # 续棒条跑成 ⇒ 摘的是**原条**的标注（续棒条不在编排文件里），状态里带上是第几棒收的口。
     if [[ "$status" == "OK" || "$status" == "PARTIAL" ]]; then
       if [[ "$rn" -gt 0 ]]; then mark_done "$root" "$lane" "${status}·续棒${rn}"
@@ -794,8 +887,9 @@ PY
       echo "  🔁 [$lane/$id] 上下文转场，本泳道下一条改跑续棒 ${relay_id}（第 $((rn + 1))/${RELAY_MAX} 棒）"
     fi
 
-    # PARTIAL 继续跑本泳道后续（留步是预期内的）；FAIL / NO-SENTINEL / RELAY-EXHAUSTED 停
-    if [[ "$status" == FAIL* || "$status" == "NO-SENTINEL" || "$status" == "RELAY-EXHAUSTED" ]]; then
+    # PARTIAL 继续跑本泳道后续（留步是预期内的）；FAIL / NO-SENTINEL / RELAY-EXHAUSTED / GATE-* 停
+    # （GATE-* 停的理由：后续条会跑在未验收的产出上，比停下来代价大）
+    if [[ "$status" == FAIL* || "$status" == "NO-SENTINEL" || "$status" == "RELAY-EXHAUSTED" || "$status" == GATE-* ]]; then
       echo "  ⏹ 泳道「${lane}」在 $id 停下（${status}），其余泳道不受影响"
       return 1
     fi
@@ -862,7 +956,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   mkdir -p "$REPO/.claude/handoff/events" && : > "$REPO/.claude/handoff/events/lanes-done-$STAMP"
 fi
 
-failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" || $3=="WORKTREE-FAIL" || $3=="RELAY-EXHAUSTED" {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"
+failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" || $3=="WORKTREE-FAIL" || $3=="RELAY-EXHAUSTED" || $3 ~ /^GATE-/ {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"
 partial="$(awk -F'\t' '$3=="PARTIAL" {printf "%s ", $2}' "$LOGDIR/results.tsv")"
 
 # 上下文续棒播报（0920H）：relays.tsv 每行「原id<TAB>续棒id」，按原 id 串成链。
@@ -875,6 +969,17 @@ if [[ -s "$LOGDIR/relays.tsv" ]]; then
   [[ -n "$exhausted" ]] && echo "   ⏹ 续到上限（HR_LANE_RELAY_MAX=${RELAY_MAX}）仍越线：${exhausted}—— 本泳道已停，原条标注未摘，要人看日志拆任务"
 else
   echo "🔁 本批无上下文续棒"
+fi
+
+# 机器判据播报（0920K）：gates.tsv 每行「原id<TAB>PASS|FAIL|UNSAFE」，只记实际跑过（或因 UNSAFE 拒跑）的块。
+if [[ -s "$LOGDIR/gates.tsv" ]]; then
+  gate_pass="$(awk -F'\t' '$2=="PASS"{c++} END{print c+0}' "$LOGDIR/gates.tsv")"
+  gate_bad="$(awk -F'\t' '$2!="PASS"{c++} END{print c+0}' "$LOGDIR/gates.tsv")"
+  gate_bad_ids="$(awk -F'\t' '$2!="PASS"{printf "%s%s", (n++?",":""), $1}' "$LOGDIR/gates.tsv")"
+  echo "🚦 机器判据：${gate_pass} 条过 / ${gate_bad} 条不过${gate_bad_ids:+（${gate_bad_ids}）}"
+  [[ "$gate_bad" -gt 0 ]] && echo "   泳道自报 DONE 但判据块不过（GATE-FAIL）或含副作用命令（GATE-UNSAFE）：标注未摘、本泳道已停，看日志 gate| 行"
+else
+  echo "🚦 本批无机器判据块"
 fi
 
 [[ -n "$partial" ]] && {
