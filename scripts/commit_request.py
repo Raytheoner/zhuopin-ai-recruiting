@@ -31,9 +31,11 @@
     → 可选 `git push`（被拒 ⇒ `pull --rebase --autostash` 后重试 ≤ 3）→ 写 `.done`。
 
 路径白名单（机器闸，⛔ 不在这里放宽；要放宽先改 CLAUDE.md 的并发协议再议）：
-    允许  docs/**（排除 docs/openers/run-lanes.sh、lane-launcher.sh、commit-launcher.sh）
+    允许  docs/**（排除 docs/openers/run-lanes.sh、lane-launcher.sh、commit-launcher.sh、handoff-relay.sh）
           openspec/changes/<名>/tasks.md
-    拒绝  tools/ app/ scripts/ tests/ .claude/ CLAUDE.md data/ .env*、含 `..`、绝对路径、
+          .claude/skills/<名>/SKILL.md（0920L；`<名>` 限字母数字下划线短横）
+    拒绝  tools/ app/ scripts/ tests/ CLAUDE.md data/ .env*、`.claude/settings.json`、
+          `.claude/hooks/*`、`.claude/handoff/**`、其余 `.claude/**`、含 `..`、绝对路径、
           `-A`／`.`／任何以 `-` 开头的 token、目录、通配符、以及不在工作区 diff 里的路径。
     列表里混一个非法的就整条拒绝，⛔ 不做「跳过这个继续」。
 
@@ -51,6 +53,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -75,6 +78,10 @@ DOCS_EXCLUDED = frozenset({
     "docs/openers/handoff-relay.sh",
 })
 DOC_SIZE_TEST = Path("tests") / "test_doc_size_budget.py"
+
+# `.claude/skills/<名>/SKILL.md` 单独放行（0920L）：Cowork 改技能文件的唯一合法落点，
+# `<名>` 限字母数字下划线短横，⛔ 不含 `/`、不含 `..`——排除 settings.json / hooks / handoff。
+SKILL_MD_PATTERN = re.compile(r"^\.claude/skills/[A-Za-z0-9_-]+/SKILL\.md$")
 
 # 定夺答复事件（R2 调度器唤醒，0917AM）：一次提交里含定夺队列 ⇒ 写一个事件文件，launchd WatchPaths
 # 由此起调度器去解阻塞。只在 .done 之后写：commit 没成就没有「答复落档」这件事。
@@ -117,7 +124,9 @@ def validate_path(raw: str) -> str | None:
         and parts[3] == "tasks.md"
     ):
         return None
-    return f"不在白名单（docs/** 或 openspec/changes/<名>/tasks.md）内：{raw}"
+    if SKILL_MD_PATTERN.match(normalized):
+        return None
+    return f"不在白名单（docs/**、openspec/changes/<名>/tasks.md 或 .claude/skills/<名>/SKILL.md）内：{raw}"
 
 
 def parse_request(text: str) -> tuple[dict | None, str | None]:
