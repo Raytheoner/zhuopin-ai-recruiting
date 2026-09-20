@@ -63,6 +63,26 @@
 
 ## 二、下一步
 
+### 🆕 2026-09-20 `0920F`/`0920G` 机制落档 ＋ 上下文守卫缺口结论（`0920G` 只做了可观测，硬闸待定夺）
+
+Shao Peishen 2026-09-20 二次带来姐妹项目（Win 端）实况：七条无头泳道上下文峰值 151k–244k，**全部越过 150k 转场线、无一条按规则收尾**；根因判为「守卫是提醒型、没有消费者」，治法是改成有消费者的硬闸（越线截断 ＋ 按 `OPENER_PARTIAL: 上下文转场` 记账 ＋ 自动排续棒）。要求本项目一并杜绝。
+
+**本项目核对结论——同族但更隐蔽：我们不是「越线不收尾」，是「越没越线都不知道」**：
+
+- `results.tsv` 原 12 列（lane／id／status／mins／log／model／cost／in／out／cache_read／cache_write／turns）**没有上下文峰值**。今天 `0920E` 那行的 129,144 是 `cache_write`，不是峰值——峰值从来没记过
+- `scripts/hooks/context-guard.py` 挂在 `UserPromptSubmit`。无头泳道一辈子只有开场那一条 user prompt（彼时上下文≈0）⇒ **运行中永远不可能触发**；且函数开头写死 `if HR_HEADLESS_LANE: return 0`，是 0916K 的**显式豁免**（当时 Win 端 #584/#585 泳道被 150k 提醒叫停、半途收尾）
+- 已有的 `scripts/opener_split_check.py`（plan ≥5 Task 必须拆段）是**开工前静态拆分**，不是运行中越线截断，覆盖不到本缺口
+
+处置分两步，本轮只做第一步：
+
+- ✅ `0920F` 接力归档瘦身（commit 见 reflog）：57,835 B → **44,587 B**，5 节标【已闭环】搬进归档，守恒校验通过，保留区（「新 session 先看这一节」／09-19 及以后条目／含待派发·待发车·待答·留步字样的条目）未动
+- ✅ `0920G` 上下文峰值入账（commit `fc575f5`）：`results.tsv` 加第 13 列 `upeak`＝该 session 所有 assistant 轮 `input+cache_creation+cache_read` 的最大值；五处 printf 同步补位；收工汇总打峰值，任一条 ≥150k 时多打一行 `⚠️ 本批有 N 条越过 150k 转场线（仅记账，未中止）`。**只记账、不改行为**
+- 【谁做】待 Shao Peishen 定夺后派 opener｜【状态】待定夺｜【判据】第二步硬闸＝`context-guard.py` 改挂 `PostToolUse`、去掉 `HR_HEADLESS_LANE` 豁免、越线注入「完成当前里程碑即以 `OPENER_PARTIAL: 上下文转场` 收尾」，**并同时**让 `run-lanes.sh` 识别该 PARTIAL 原因、自动把续棒条追加到同泳道队尾（交接复用 run-build 拆段那套：分支名／worktree 路径／上一条 commit hash 写文件，⛔ 不传对话）｜【不做会怎样】峰值可见但无人消费，等于 Win 端「提醒型守卫」的翻版，只是换了个位置
+- ⚠️ 两件**不可拆**：只截断不自动续棒 ＝ 回到 0916K「半途收尾」的老路；只自动续棒不截断 ＝ 没有触发点
+
+参考：本轮三条泳道的均摊上下文（`cache_read ÷ turns`）`0920E`≈108k／`0920F`≈97k／`0920G`≈71k——下一批起 `upeak` 列会给出真峰值，届时才能判我们到底越没越线。
+
+
 ### 🆕 2026-09-20 `0920E` kickoff 瘦身（派发中）＋ `Q-52` 转远期
 
 Shao Peishen 2026-09-20 指出姐妹项目（Win 端）的 token 浪费形状：`zhuopin-lane-watch` 正本 44,445 B，成因段在正文反复展开，装载器又明写「读不到就停、不许凭摘要跑」⇒ 不能跳。本项目核对结论：**skill 正文不常驻上下文**（每轮只带 15 份 description 共 4,562 B，这块无病），病在**尖峰**——`.claude/skills/kickoff/SKILL.md` **35,616 B** 为本仓库最大单份，且 `CLAUDE.md` 三处指向它（强制格式模板／引用式 opener／编号与抬头）⇒ **凡出一份 opener 就整读一次**。次大 `requirement-grill` 21,897、`lane-dispatch` 20,345。开场四件：`CLAUDE.md` 23,296（唯一真·每轮常驻）／`session接力.md` 55,997／`号池台账.md` 42,264／`OP-0820` 22,755，后三件按规则 grep 或分段读，不整读。
