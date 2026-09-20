@@ -1,0 +1,82 @@
+{
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "python": "3.14.6",
+  "results": [
+    {
+      "dist": "numpy",
+      "module": "numpy",
+      "ok": true,
+      "version": "2.5.3",
+      "size_mb": 32.9,
+      "import_ms": 48
+    },
+    {
+      "dist": "pypdf",
+      "module": "pypdf",
+      "ok": true,
+      "version": "6.19.0",
+      "size_mb": 4.0,
+      "import_ms": 35
+    },
+    {
+      "dist": "python-docx",
+      "module": "docx",
+      "ok": true,
+      "version": "1.2.0",
+      "size_mb": 2.4,
+      "import_ms": 21
+    },
+    {
+      "dist": "reportlab",
+      "module": "reportlab",
+      "ok": true,
+      "version": "5.0.1",
+      "size_mb": 8.5,
+      "import_ms": 5
+    },
+    {
+      "dist": "pillow",
+      "module": "PIL",
+      "ok": true,
+      "version": "12.3.0",
+      "size_mb": 14.9,
+      "import_ms": 5
+    },
+    {
+      "dist": "pymupdf",
+      "module": "pymupdf",
+      "ok": true,
+      "version": "1.28.2",
+      "size_mb": 60.8,
+      "import_ms": 449
+    },
+    {
+      "dist": "paddlepaddle",
+      "module": "paddle",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'paddle'"
+    },
+    {
+      "dist": "paddleocr",
+      "module": "paddleocr",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'paddleocr'"
+    },
+    {
+      "dist": "torch",
+      "module": "torch",
+      "ok": true,
+      "version": "2.14.0",
+      "size_mb": 587.3,
+      "import_ms": 3433
+    },
+    {
+      "dist": "FlagEmbedding",
+      "module": "FlagEmbedding",
+      "ok": true,
+      "version": "1.4.2",
+      "size_mb": 2.1,
+      "import_ms": 6036
+    }
+  ]
+}

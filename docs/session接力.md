@@ -40,6 +40,19 @@
 根因指向浏览器扩展/策略拦截，而非此前推测的「缓存旧 JS」。⚠️ 待排除混淆项：Claude 浏览器面板对私网站点逐次授权，
 也可能拦子请求——他在自己常用窗口点一次「岗位列表」即可定案。
 
+### 三·补二、`0920M` `.51` 依赖冒烟收口（`Q-08` 已答）
+
+`0920M` 走 `ssh zp51` 在生产 venv 实跑 `scripts.smoke_m2_deps`（只 import 不下载），两行结论已进
+`docs/m2-model-comparison.md`：**`PaddleOCR: 不可装 ⇒ D14 退路 走`**（cp314 无 wheel，与 `0917AX` 一致）；
+**发版白名单需补 `reportlab==5.0.1`／`pillow==12.3.0`／`pymupdf==1.28.2`／`torch==2.14.0`／`FlagEmbedding==1.4.2`**
+（生产 venv 当前缺失，VC++ v14.44 前置已满足）。`Q-08` 状态改「已答」。
+
+🔴 **本条判 `PARTIAL` 的原因是机制，不是失败**：探针 JSON 落在 `data/` 下，被 `check-forbidden-paths.sh`
+（PIPL 防护钩子，拦 `data/` 全前缀）挡住提交——**钩子是对的，错的是 `0920M` opener 里「被 gitignore 挡则 `git add -f`」那句**，
+它教泳道去绕一道人身信息护栏。⇒ 口径：**证据类产物一律落 `docs/`，⛔ 任何 opener 都不得写 `git add -f` 去过
+`check-forbidden-paths.sh`。** 本次两份探针 JSON 已经人工核内容（只含模块名与版本号，无路径、无个人信息）后复制到
+`docs/m2-smoke/` 提交。
+
 ### 四、下一步（新 session 直接接着做）
 
 1. **本轮无可发车项**：`ready` 三条全是闸。回 LAN 后先收 `Q-52` 的客户端侧一手证据（硬刷新＋DevTools 网络面板）。

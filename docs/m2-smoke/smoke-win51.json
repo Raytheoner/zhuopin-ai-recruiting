@@ -1,0 +1,72 @@
+{
+  "platform": "Windows-2019Server-10.0.17763-SP0",
+  "python": "3.14.5",
+  "results": [
+    {
+      "dist": "numpy",
+      "module": "numpy",
+      "ok": true,
+      "version": "2.5.3",
+      "size_mb": 54.5,
+      "import_ms": 321
+    },
+    {
+      "dist": "pypdf",
+      "module": "pypdf",
+      "ok": true,
+      "version": "6.19.0",
+      "size_mb": 4.0,
+      "import_ms": 156
+    },
+    {
+      "dist": "python-docx",
+      "module": "docx",
+      "ok": true,
+      "version": "1.2.0",
+      "size_mb": 2.4,
+      "import_ms": 146
+    },
+    {
+      "dist": "reportlab",
+      "module": "reportlab",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'reportlab'"
+    },
+    {
+      "dist": "pillow",
+      "module": "PIL",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'PIL'"
+    },
+    {
+      "dist": "pymupdf",
+      "module": "pymupdf",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'pymupdf'"
+    },
+    {
+      "dist": "paddlepaddle",
+      "module": "paddle",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'paddle'"
+    },
+    {
+      "dist": "paddleocr",
+      "module": "paddleocr",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'paddleocr'"
+    },
+    {
+      "dist": "torch",
+      "module": "torch",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'torch'"
+    },
+    {
+      "dist": "FlagEmbedding",
+      "module": "FlagEmbedding",
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'FlagEmbedding'"
+    }
+  ]
+}
