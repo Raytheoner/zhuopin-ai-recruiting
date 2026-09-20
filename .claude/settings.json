@@ -42,6 +42,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/scripts/hooks/context-guard.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\""
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
