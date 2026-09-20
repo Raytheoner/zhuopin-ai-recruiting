@@ -63,6 +63,12 @@
 
 ## 二、下一步
 
+### ✅ 2026-09-20 `0920A` M2·U3 硬门槛引擎发版 `.51`——`Q-51` 放行，全部冒烟通过，未回滚
+
+`0920A`（无头，`run-lanes` 起）按 `Q-51`（Shao Peishen 2026-09-20 答「发」）执行。开工自核五条全过（`a6df909` 在祖先链、tasks.md 4.1–4.6 全勾、重跑全量 pytest **3716 passed／0 failed／10 skipped** 与授权数字一致、`write_rejection`/`COMPLIANCE_ASSERTIONS` 逐行核对、`live_resume_intake_enabled` 默认 `False` 无覆盖）。发版 commit `8596829`，现网原 commit `67772ba`（发版三 `0918AM`，哈希+文件计数实测复核吻合）。携带范围 28 文件 / +3168 −6：M2·U3 申诉接线（本次目标，新增 `POST /api/applications/{application_id}/appeal`、`POST /api/rejections/{rejection_id}/appeal/transition`）＋ M3 语音面试测试覆盖补齐（`0919T`）＋调度器脚本修复，均核实不改变现网既有行为（除 U3 本身）。无新增 pip 依赖。
+
+标准五阶段全过：快照 `C:\apps\backups\20260920-0844` → 无需装依赖 → `sync-to-server.sh` 成功 → 闸 G-e 三条全过（`LastTaskResult=267009`／`:8095 Listen`=1／`Application startup complete` 无 `Traceback`）→ 冒烟①–④＋两条额外全过（首页 200、`/api/jobs` 200+JSON、appeal 两端点均命中=1、合规断言 CLI `EXIT=0` 6/6、`assert_no_ai_score_rejections` 隔离结果 0 违例、`appeal_event` 表已建且 `row_count=0`）。红线复验：`live_resume_intake_enabled` 发版前后均 `False`、无 `.env`/机器级环境变量覆盖。**未触发回滚**。执行记录：`docs/releases/2026-09-20-发版四-M2U3硬门槛引擎执行记录.md`。
+
 ### 🆕 2026-09-19 `0919R` 泳道收敛 `0919P`/`0919Q` 回 main 尝试——ff-only 失败，两分支均未合并
 
 `0919R`（无头，`run-lanes` 起）按 `0919P`/`0919Q` 收工报告执行收敛，实测 `git merge --ff-only` 对两个分支均 `fatal: Not possible to fast-forward`。根因：merge-base(main, 两分支) 均为 `8bfe582`，但 main 在此之后已推进 4 个提交（`9c10a03`／`54225ec`／`1bb055a`／`da34e94`，均为 task-dispatcher 台账刷新与 `Q-50` 答复），与 `0919P`（`53ed69a`／`bc8b0d3`）、`0919Q`（`41222b3`）各自独立分叉，非快进关系（`git merge-base --is-ancestor` 双向皆 NO）。按红线③「不改用 `--no-ff`、不 rebase、不追问」，本条到此为止，main 未变（仍为 `da34e94`），两分支代码改动（`scripts/dispatcher_backlog.py`／`scripts/queue_pending.py`／`scripts/handoff_digest.py` 等）仍只存在于各自远端分支，**尚未进入 main**。
