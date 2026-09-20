@@ -6534,7 +6534,7 @@ tasks:
   阻塞类型: 无
   产出判据: '`git merge origin/lane-0919p-tag4-regex` 与 `origin/lane-0919q-queue-digest`（非 ff-only）分别验证无冲突（两分支改动路径与 main 新增的 4 个提交路径已核对无交集，见下方文件清单）后合并、测试 0 failed、push
     成功'
-  来源: docs/session接力.md:70
+  来源: docs/session接力.md:76
   可见: false
   conflicts:
     状态:
@@ -6551,7 +6551,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 在定夺队列新增一行请 Shao Peishen 针对「本条重新核实过的 0 failed 全量结果」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
-  来源: docs/session接力.md:89
+  来源: docs/session接力.md:95
   可见: false
   conflicts:
     状态:
@@ -6568,7 +6568,7 @@ tasks:
   阻塞类型: 无
   产出判据: '`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MANIFEST` 补上 18 个新节点＋各自崩溃-恢复配方，`effect_send_verification_code`
     补 `@idempotent_effe'
-  来源: docs/session接力.md:102
+  来源: docs/session接力.md:108
   可见: false
   conflicts:
     状态:
@@ -6585,7 +6585,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
-  来源: docs/session接力.md:103
+  来源: docs/session接力.md:109
   可见: false
   conflicts:
     状态:
@@ -6602,7 +6602,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 外部
   产出判据: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
-  来源: docs/session接力.md:131
+  来源: docs/session接力.md:137
   可见: false
 - id: answer:Q-02
   场景: M2
