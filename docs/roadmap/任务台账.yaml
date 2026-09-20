@@ -77,6 +77,7 @@ summary:
   - 2026-09-18-voice-interview-u3-invite-consent
   - 2026-09-19-u5-post-scoring
   缺任务映射:
+  - Q-08
   - Q-48
 tasks:
 - id: scene:M0
