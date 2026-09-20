@@ -1,13 +1,13 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 547
+  条目数: 548
   按状态:
     待开: 198
     在跑: 7
     完成: 258
-    阻塞: 84
-  阻塞·决策: 50
+    阻塞: 85
+  阻塞·决策: 51
   阻塞·外部: 33
   conflicts:
   - channel-resume-intake/0.1
@@ -6528,6 +6528,17 @@ tasks:
       真身: 待开
   备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
+- id: relay:tag#5c585390
+  场景: 构建自动化
+  阶段: build
+  标题: opener 正文新增固定一节「## 机器判据」写成可执行 shell 块（每行一条、附期望值）；`run-lanes.sh` 收工时自己跑一遍该块，任一条不符 ⇒ 状态降为 `PARTIAL`（附不符项），泳道自报的 `OPENER_DO
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: opener 正文新增固定一节「## 机器判据」写成可执行 shell 块（每行一条、附期望值）；`run-lanes.sh` 收工时自己跑一遍该块，任一条不符 ⇒ 状态降为 `PARTIAL`（附不符项），泳道自报的 `OPENER_DONE` 不算数；无「## 机器判据」节的 opener 维持现状不拦
+  来源: docs/session接力.md:72
+  可见: false
 - id: relay:tag#33937877
   场景: 构建自动化
   阶段: build
@@ -6538,7 +6549,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: '`.claude/skills/lane-watch-relay/SKILL.md` §4 分流表补 `CTX-RELAY`（＝正常，续棒已自动排，⛔ 不当失败处理）与 `RELAY-EXHAUSTED`（＝已续 3 次仍越线，本泳道已停，须人判任务是否该拆）两个新状态'
-  来源: docs/session接力.md:75
+  来源: docs/session接力.md:84
   可见: false
   conflicts:
     状态:
@@ -6556,7 +6567,7 @@ tasks:
   阻塞类型: 决策
   产出判据: '第二步硬闸＝`context-guard.py` 改挂 `PostToolUse`、去掉 `HR_HEADLESS_LANE` 豁免、越线注入「完成当前里程碑即以 `OPENER_PARTIAL: 上下文转场` 收尾」，并同时让 `run-lanes.sh` 识别该 PARTIAL 原因、自动把续棒条追加到同泳道队尾（交接复用
     run-build 拆段那套：分支名／worktree 路径／上一条 '
-  来源: docs/session接力.md:92
+  来源: docs/session接力.md:101
   可见: false
 - id: relay:tag#198d8fba
   场景: 构建自动化
@@ -6567,7 +6578,7 @@ tasks:
   状态: 完成
   阻塞类型: 决策
   产出判据: 五路径一次提交上 main 并 push 成功，`git log --oneline -1` 为本次 commit
-  来源: docs/session接力.md:112
+  来源: docs/session接力.md:121
   可见: false
   conflicts:
     状态:
@@ -6585,7 +6596,7 @@ tasks:
   阻塞类型: 无
   产出判据: '`git merge origin/lane-0919p-tag4-regex` 与 `origin/lane-0919q-queue-digest`（非 ff-only）分别验证无冲突（两分支改动路径与 main 新增的 4 个提交路径已核对无交集，见下方文件清单）后合并、测试 0 failed、push
     成功'
-  来源: docs/session接力.md:125
+  来源: docs/session接力.md:134
   可见: false
   conflicts:
     状态:
@@ -6602,7 +6613,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 在定夺队列新增一行请 Shao Peishen 针对「本条重新核实过的 0 failed 全量结果」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
-  来源: docs/session接力.md:144
+  来源: docs/session接力.md:153
   可见: false
   conflicts:
     状态:
@@ -6619,7 +6630,7 @@ tasks:
   阻塞类型: 无
   产出判据: '`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MANIFEST` 补上 18 个新节点＋各自崩溃-恢复配方，`effect_send_verification_code`
     补 `@idempotent_effe'
-  来源: docs/session接力.md:157
+  来源: docs/session接力.md:166
   可见: false
   conflicts:
     状态:
@@ -6636,7 +6647,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
-  来源: docs/session接力.md:158
+  来源: docs/session接力.md:167
   可见: false
   conflicts:
     状态:
@@ -6653,7 +6664,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 外部
   产出判据: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
-  来源: docs/session接力.md:179
+  来源: docs/session接力.md:188
   可见: false
 - id: answer:Q-02
   场景: M2
