@@ -916,3 +916,74 @@ AT-1 原写「另起 session，worktree ☑」，但它的判据是两件**性�
   【不做会怎样：下一轮真实回件到达、走到这一步时，若某会话照抄前言检查点字符串原样调用
   `--clear`，会陷入同一 msgid 无法清除、每轮都重新"探测到信号→处理→清不掉→再探测到"的空转；
   目前靠"手工微调时间戳"能绕过，但不是所有拆件会话都会想到这么做】
+
+
+<!-- 〔归档工具〕 2026-09-20 搬入：🆕 2026-09-18 `0918B` M2·U1 数据模型 Segment B＋C 已合 main（`66e3b97 -->
+
+### 🆕 2026-09-18 `0918B` M2·U1 数据模型 Segment B＋C 已合 main（`66e3b97`，3092 passed，2.4–2.8＋8.1 已勾）【已闭环】
+- 【谁做】U2／U4 接手者【状态】9 条 Minor 延后【判据】见 `docs/findings/2026-09-18-0918B-M2U1-SegmentBC收口.md`「终审遗留」逐条关闭【不做会怎样】U2 写 `accessor` 与 U7 审计口径可能不一致；U4 落库前不校验 evidence_ref 偏移会存脏回指
+
+
+<!-- 〔归档工具〕 2026-09-20 搬入：🆕 2026-09-17 `0917BF` 四场景立包完成（G1 Q-33–36 放行后，无头单条串行）【已闭环】 -->
+
+### 🆕 2026-09-17 `0917BF` 四场景立包完成（G1 Q-33–36 放行后，无头单条串行）【已闭环】
+- 四包已立并过 `openspec validate --strict`：`interview-scheduling`（4 能力／42 条／🔴 6／OQ 8）、`offer-generation`（4 新能力＋`outbound-approval-gate` delta 增 `offer_letter`／40 条／🔴 4／OQ 7）、`onboarding-flow`（4 能力／34 条／🔴 6／OQ 7）、`channel-resume-intake`（4 能力／28 条／🔴 4／OQ 7）。四份 intent `status` 已改「已确认（G1 Q-xx）」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/interview-scheduling/proposal.md`）
+- ⚠️ 已由 `Q-39`／`Q-40`／`Q-41`／`Q-42` 覆盖跟踪（`0919P` 2026-09-19 核实：四包均已答「改：等人事部#3 回件补齐现用流程与样例后再定稿」，非本行所写的「待 G2 答定」——阻塞原因已从「待决策」变为「待外部回件」，本行描述过时，不再单独跟踪，四包 tasks.md 现状仍 0/N）【谁做】task-dispatcher【状态】待 G2（四包 design 各留 7–8 条 Open Questions，全部是「待专员」＋外部依赖原样转入，不阻塞 spec-to-plan）【判据】Shao Peishen 在定夺队列对四包 G2 答「定」后派 spec-to-plan【不做会怎样】四包停在 propose，波次 5 无法开工。路线图 §二 无四场景行，按 opener 预案跳过不新建
+
+
+<!-- 〔归档工具〕 2026-09-20 搬入：🆕 2026-09-16 `0916U` P2 拆件章程正本（liaison-unpack-charter）Task 4 -->
+
+### 🆕 2026-09-16 `0916U` P2 拆件章程正本（liaison-unpack-charter）Task 4-5 建造收口【已闭环】
+
+全 5 Task（Task1-3 上一 session、Task4-5 本 session）+ 终审 + 修复波 全部通过，已合入 main（合并
+commit 见收工报告）。终审（Opus）放行「With fixes」，一波修复（`c5aebd4`：`compute_prompt` 前言里
+残留的裸 `unpack-signal` 命令形＋`read_charter` 收窄的异常捕获）已修并复审通过。3 条遗留待办：
+
+| # | 事项 | 谁做 | 状态 | 判据（怎样算完） | 不做会怎样 |
+|---|---|---|---|---|---|
+| 1 | `compute_prompt` 未接生产路径：`__main__.py`/`dispatch_wiring.py` 仍各自持有 `CHARTER_RELPATH` 字面量与 `_build_minimal_prompt`（两处都带 `P2-TODO` 注释指名本变更包收尾时删除） | 下一条 CC 泳道（建议单独起 opener，读 `docs/superpowers/plans/2026-09-10-liaison-unpack-charter.md` 与本条后追加一个 wiring task，走 TDD） | ✅ **已还**（`0917H`） | `grep -rn CHARTER_RELPATH tools/liaison/__main__.py tools/liaison/unpack/dispatch_wiring.py` 零命中 ＋ `bridge_dispatch` 实际调用 `charter.compute_prompt` ＋ 单测覆盖 | — |
+| 2 | 章程 §二.6／`dispatch.py` 白名单的 `python -m tools.liaison criteria` 都是裸形式，且本机只有 `python3` 无 `python`；`criteria.py` 尚未交付（P3，`2026-09-10-liaison-criteria-ledger.md`） | P3 交付时顺带修（章程改 `PYTHONPATH=. tools/liaison/.venv/bin/python` 前缀形式 ＋ 同步改 `dispatch.py` 白名单，否则 Task5 的双向核对测试会红） | ✅ **已还**（`0917H`，即 TD-45 销账） | P3 落地后 `test_unpack_charter_allowlist.py` 两条测试仍绿 ＋ 章程与白名单用词一致 | — |
+| 3 | `design.md` D4 行 52 仍写 `HEADLESS_ARGV_TEMPLATE`，代码实际常量名是 `HEADLESS_ARGV_FIXED_PART`（P1 交付时改的名，design 文档没跟着改） | 下次碰 design.md D4 的人顺手改一个词 | ✅ **已还**（`0917H`） | `grep -n HEADLESS_ARGV_TEMPLATE openspec/changes/liaison-reply-bridge-and-patrol/design.md` 零命中 | — |
+
+SDD 台账（`.superpowers/sdd/2026-09-10-liaison-unpack-charter/progress.md`，worktree 内、gitignored）
+有完整的终审全文摘要与逐条裁决理由，worktree 删除前已转写本条要点，原台账即将随收口清除。
+
+
+<!-- 〔归档工具〕 2026-09-20 搬入：⑱ 2026-09-09 晚·跟进信线收口（Cowork·0909Q）【已闭环】 -->
+
+### ⑱ 2026-09-09 晚·跟进信线收口（Cowork·0909Q）【已闭环】
+
+- ✅ **人事部#1 已真发出**：`python -m tools.liaison send-followup --send` 发进「人力AI保障组」，markdown 正文 ＋ docx（39.4K）均到达（截图为证）。**HR 线跟进信第一次走通端到端自动发送，⛔ 今后不手工发**
+- 🔴 **两次台账状态与事实不符，方向相反，两次都无症状**：
+  ① `bf63e7a` 入库时提前写成 `✅ 已推送`，而信从未发出 ⇒ CLI 幂等保护认这一行，`--dry-run` 直接短路返回「已是终态」`EXIT=0`、正文一字不打印，真跑 `--send` 也会**一条不发却报成功**；已人工订正回 `🆕 待发` 才跑通
+  ② 真发成功后**主工作区台账未被自动回填**（文件 mtime 仍是人工订正那次）；已按事实人工改成终态
+  📌 **教训**：台账状态列是**机器判据不是记录**——写终态＝对下游宣布「这件事已发生」，写早了会让真正该发生的事再也不发生
+- ⏸ **待查（`0909AD` 第 3 项验收未成立）**：回填为何没落到主工作区。判据＝那次 `--send` 命令的**最后一行有没有打印「已发送并回填台账」**；有 ⇒ 大概率在 worktree 里跑、改了副本（三个 worktree 里都有台账副本）；无 ⇒ 回填逻辑真缺陷。⛔ 未查清前不要把 `0909AD` 当已验收
+- ⏸ **汤丽萍私信通道：Shao Peishen 2026-09-09 定「等明天她发信再接通」** ⇒ ⛔ 今天不再请她发任何消息（今天已让她白发 4 条：群 @ 三条 + 私信一条，全部因服务未在线而落空）。明天她发信后，从那条入站消息里读单聊 chatid
+- ✅ **TD-39 已还并已真实复验**（`0909AH` 改码 + `0909AJ` 断网 245 秒复验，2026-09-09）。**8.6 的该项阻断解除**；G-4 装 launchd 的三项解锁条件已全部满足，⏸ 只等 Shao Peishen 本人在 Terminal 跑（⛔ 不可代）
+- 🔢 号池：`0909` 双字母已用到 **AH**，下一个是 `AI`
+
+
+<!-- 〔归档工具〕 2026-09-20 搬入：⑰ 眼下手里的三件（2026-09-09 下午）【已闭环】 -->
+
+### ⑰ 眼下手里的三件（2026-09-09 下午）【已闭环】
+
+- ~~**`0909AA`**~~ ✅ **已跑完**（`8bd102b` / `e969f1b` / `a0a63b2`，均已推）：三凭据 len 35/43/89 齐、三条守卫全过；`tools/liaison/.venv` 建起（wecom-aibot-python-sdk 1.0.2 / pytest 8.3.4 / PyYAML 6.0.3）；表面探针与既有 findings **逐字节零差异 ⇒ 表面无变化**；首跑 4 red 已裁决清零，套件 **741 passed**。TD-19 **未销**（如期），但其阻塞理由已消失 ⇒ 转「已提上日程」，详见 TD-19 的「⏫ 2026-09-09 状态更新」段
+- **汤丽萍欢迎信：✅ 草稿已出（md ＋ docx 双件），⏳ 待你审**。落位 `docs/跟进信/`：正文 `人事部-汤丽萍-跟进-2026-09-09-AI招聘值守机制启用与配合方式.md` ＋ 同名 docx ＋ 新建台账 `README-跟进信清单.md`。三项自检已跑：`决策点: 1 项（a 使用反馈的形式与节奏）` 在位、**全文无第三人称**（剔除「其他」后命中 0）、docx 里 frontmatter 未渗进正文。
+  - 🔴 **口径变更（2026-09-09 Shao Peishen 定，此前的写法全部作废）**：**HR 项目不碰 Windows 侧那套**——zhuopin-ai 仓库的 README 主表、取号 CLI、串行闸 CLI、登记 CLI、PowerShell 发送通道**都不用**；HR 跟进信**自成一条编号线，从 `人事部#1` 起**（这封就是 #1）。⛔ 今后不要再写「待 Windows 侧取号／闸核／转 docx／登记」那四项
+  - **沿用**（其他部门跑了两个月已验证）：§4 三要素信骨架、`决策点:` 字段必写、起草期代词自检、docx 必发、发送状态语义、串行原则。**替代**：取号与闸核看 `docs/跟进信/README-跟进信清单.md`；docx 在 Cowork 里跑 `md-to-word`；🔴 **发送由 Shao Peishen 本人在企微完成，代理人永不代发**
+  - **身份已定**：汤丽萍＝**人事部 AI 专员**，与其他专员同等对待（名录正本里她还挂在「其他」栏、未记部门 ⇒ 那边需补一行，但 HR 线不依赖它）
+  - ✅ **留白已清（09-09 他让直接改，「手工介入容易出错」）**：开头「先肯定最近一次真实交付」那句**判定欢迎信不适用、整行删除**——⛔ 不编造交付。删后重出 docx 并写回，占位零残留、frontmatter 未渗漏、25 段。**md ＋ docx 双件均为定稿态，状态仍 `⏳ 待你审`，发送由他本人在企微完成**
+  - 🔴 **发送口径与实证（09-09 下午）**：他审核通过并授权先发群，台账已转 `🆕 待发`；**但 Cowork 实际发不出去**——`qyapi.weixin.qq.com` 在 Mac 侧 device shell 无 DNS、在云容器经代理 CONNECT 得 403（不在 egress 白名单）。⇒ 这封由他本人在企微发。要让 Cowork 能代发群，前提是把该域名加进本会话 egress 白名单
+  - ✅ **口径固化**：「人力AI保障组」＝**人事部门群**（项目叫法 vs 实际部门，同一个）；Mac 端只此一群、不向 Windows 端其他群发信。已写进 `docs/跟进信/README-跟进信清单.md` 抬头
+  - 🔴 **win 端收发实证（09-09 他口述 ＋ 本会话核 win 源码），三条改假设的事实**，全文 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`：① **aibot 能主动发**，单聊与群聊同一方法只差 chatid（`send_markdown(chatid,…)` / `send_file(chatid, media_id)`）——**前置是专员先私信一次机器人**，那个单聊 chatid 才存在；本文此前「aibot 不能主动私信」的说法**已作废**。② **群里只收文字平信，文档回灌只能私信** ⇒ 第 4 章附件归档链路在群消息上**永远验不到**，8.6 验收必须先加「专员私信一次机器人」这一步，TD-22（真实 msgid 字符集）也只能在带附件的私信上核。③ aibot 开机即在线＝长连接监听形态可行，缺的只是把 `client.run()` 接进 `run_forever`（TD-19）。④ 必须分清：**值守服务由 launchd 在 macOS 原生环境跑、用本机网络能连企微；Cowork 的 shell 在隔离 VM 里无出网** ⇒ 服务发消息不需要我有网
+  - ✅ **whitelist 已填**：汤丽萍（len=10）、邵培申（len=11）均非空，fail-closed 那道闸已过。⇒ 她的**回灌走群即可**（她在群里发、值守服务收），⛔ 不需要另建私信通道；真正的卡点只剩 **TD-19**（`make_sdk_connect` 探到 `connect` 是协程即拒启动，要把 `client.run()` 接进 `run_forever` 并用真实凭据端到端验证）＝ 8.6 灰度那件事
+  - 🧹 仓库根的 `Claude outputs/`（桌面端自动存的旧版「人力资源部」信）已挪进 `_to_delete/Claude outputs-20260909-旧版人力资源部信/`——Cowork 删不了文件，只能挪；⚠️ `_to_delete/` 未进 `.gitignore`，提交时别把它 add 进去
+  - 📎 截图实证（09-09 下午）：「人力AI保障组」7 人，**MAC机器人已在组内**（另一个 BOT 是陈承的机器人）；成员含邵培申（群主）、陈承、聂鑫、汤丽萍、王寒月
+  - **远程（Mac／Cowork）能做**：读正本起草 md 正文、跑代词自检与决策点自检、出 `⏳ 待你审` 草稿
+  - **远程不能做、⛔ 不要绕**：取号与串行闸判定只认 Windows 侧 CLI（`工具-跟进闸查询.py --to`）；README 主表（86 KB）远程读不到**也不该读**；docx 转换与登记 CLI 在 Windows 侧
+  - **编号规则与发送八态改读** `6-人才与组织/部门AI专员跟进/跟进机制-判据版.md`（≈17 KB，远程可取）。已取到：编号按**部门连续计数器**、跨收信人共用、换人不重置、未发出/已作废不占号；README「编号」列未发出时写 `部门#N（待你审，暂不占号）` 带括注，信件抬头不带；文件名 `部门-姓名-跟进-YYYY-MM-DD-主要事项.md`、⛔ 不含会变的数字；落款固定 `—— OPVP Shao Peishen`
+  - **已取到的起草依据**：正本 §4 三要素信骨架（抬头带部门连续编号→开头先肯定最近一次真实交付→逐件事「做什么／怎么做／什么时候交」→知识资产段→结尾附一页纸＋落款）、§5 落位与登记五步（含 1bis `决策点:` 字段、步骤 2 代词自检、步骤 3 docx 必发、步骤 5 首次发新机制信须随附《专员协作说明-新版需求确认怎么配合-2026-07-25.md》）
+  - **名录硬事实**：汤丽萍＝**女**（名录正本）。⚠️ 她在名录里**不在「部门AI专员」五人之列**（姚祖怡／陈忱／唐燕萍／泓钦／陈承），列在「其他」且未记部门 ⇒ ⛔ 不得自行把她写成「人力资源部AI专员」，信里用中性表述，这一条要当场问 Shao Peishen 一次
+  - **口径（09-09 他拍）**：先发「机制版」——只建立需求确认与使用反馈机制，明写「系统尚在灰度，暂不用改变你现在的习惯，开通时点我单独告知」；使用告知留 8.7
+  - ⏸ **09-09 下午他说「稍等 10 分钟再取，win 侧在修复」** ⇒ 下一轮重取正本前先确认他说修完了
