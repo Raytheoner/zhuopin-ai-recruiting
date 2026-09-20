@@ -6539,7 +6539,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: opener 正文新增固定一节「## 机器判据」写成可执行 shell 块（每行一条、附期望值）；`run-lanes.sh` 收工时自己跑一遍该块，任一条不符 ⇒ 状态降为 `PARTIAL`（附不符项），泳道自报的 `OPENER_DONE` 不算数；无「## 机器判据」节的 opener 维持现状不拦
-  来源: docs/session接力.md:100
+  来源: docs/session接力.md:116
   可见: false
   队列: Q-54 待答
 - id: relay:tag#33937877
@@ -6552,7 +6552,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: '`.claude/skills/lane-watch-relay/SKILL.md` §4 分流表补 `CTX-RELAY`（＝正常，续棒已自动排，⛔ 不当失败处理）与 `RELAY-EXHAUSTED`（＝已续 3 次仍越线，本泳道已停，须人判任务是否该拆）两个新状态'
-  来源: docs/session接力.md:112
+  来源: docs/session接力.md:128
   可见: false
   conflicts:
     状态:
@@ -6570,7 +6570,7 @@ tasks:
   阻塞类型: 决策
   产出判据: '第二步硬闸＝`context-guard.py` 改挂 `PostToolUse`、去掉 `HR_HEADLESS_LANE` 豁免、越线注入「完成当前里程碑即以 `OPENER_PARTIAL: 上下文转场` 收尾」，并同时让 `run-lanes.sh` 识别该 PARTIAL 原因、自动把续棒条追加到同泳道队尾（交接复用
     run-build 拆段那套：分支名／worktree 路径／上一条 '
-  来源: docs/session接力.md:129
+  来源: docs/session接力.md:145
   可见: false
 - id: relay:tag#198d8fba
   场景: 构建自动化
@@ -6581,7 +6581,7 @@ tasks:
   状态: 完成
   阻塞类型: 决策
   产出判据: 五路径一次提交上 main 并 push 成功，`git log --oneline -1` 为本次 commit
-  来源: docs/session接力.md:149
+  来源: docs/session接力.md:165
   可见: false
   conflicts:
     状态:
@@ -6599,7 +6599,7 @@ tasks:
   阻塞类型: 无
   产出判据: '`git merge origin/lane-0919p-tag4-regex` 与 `origin/lane-0919q-queue-digest`（非 ff-only）分别验证无冲突（两分支改动路径与 main 新增的 4 个提交路径已核对无交集，见下方文件清单）后合并、测试 0 failed、push
     成功'
-  来源: docs/session接力.md:162
+  来源: docs/session接力.md:178
   可见: false
   conflicts:
     状态:
@@ -6616,7 +6616,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 在定夺队列新增一行请 Shao Peishen 针对「本条重新核实过的 0 failed 全量结果」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
-  来源: docs/session接力.md:181
+  来源: docs/session接力.md:197
   可见: false
   conflicts:
     状态:
@@ -6633,7 +6633,7 @@ tasks:
   阻塞类型: 无
   产出判据: '`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MANIFEST` 补上 18 个新节点＋各自崩溃-恢复配方，`effect_send_verification_code`
     补 `@idempotent_effe'
-  来源: docs/session接力.md:194
+  来源: docs/session接力.md:210
   可见: false
   conflicts:
     状态:
@@ -6650,7 +6650,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
-  来源: docs/session接力.md:195
+  来源: docs/session接力.md:211
   可见: false
   conflicts:
     状态:
@@ -6667,7 +6667,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 外部
   产出判据: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
-  来源: docs/session接力.md:216
+  来源: docs/session接力.md:232
   可见: false
 - id: answer:Q-02
   场景: M2
@@ -7327,6 +7327,7 @@ tasks:
     状态:
       台账: 阻塞
       真身: 来源已消失或已勾选
+  备注: dispatcher-20260920-161739 核实：09-03 遗留的 .51 部署就绪疑问，此后 0908J（09-08）等多次 .51 发版已成功（含冒烟通过），M1 后续功能亦已持续同步部署；本条大概率已被后续发版覆盖，但发版决定不可代，调度器不代为销号，留待人工核实后归档或撤销
 - id: opener:[Mac]0917AK
   场景: 构建自动化
   阶段: build
@@ -7470,6 +7471,7 @@ tasks:
     状态:
       台账: 阻塞
       真身: 来源已消失或已勾选
+  备注: dispatcher-20260920-161739 核实：来源行 docs/session接力.md:119 当前查无此文（grep 全文＋归档目录均未命中），内容可能已随接力文档轮转改写；依赖=[]，未阻塞任何下游，暂留 conflicts 不动，待人工确认是否已随其所属包一并收口后清理
 - id: relay:H-1
   场景: M0
   阶段: build
@@ -7516,6 +7518,8 @@ tasks:
     状态:
       台账: 阻塞
       真身: 来源已消失或已勾选
+  备注: dispatcher-20260920-161739 核实：scripts/smoke_m2_deps.py 当前未见 sys.stdout.reconfigure 或 GBK 相关处理（修法未落地），但 0920M 在 .51 实跑已产出 data/eval/m2-pilot/smoke-win51.json（未见崩溃回退证据），未阻塞任何下游（依赖=[]）；低优先级代码修复，需专门
+    opener 处理，本会话不代为改代码
 - id: relay:R-11
   场景: M2
   阶段: build
@@ -7597,6 +7601,7 @@ tasks:
     状态:
       台账: 阻塞
       真身: 来源已消失或已勾选
+  备注: dispatcher-20260920-161739 核实：观察窗到期日 2026-09-24 尚未到（今日 2026-09-20），阻塞状态正确、无需现在处理；conflicts 复现是来源行随 docs/session接力.md 体积闸归档轮转导致的解析副作用，非真实歧义
 - id: relay:R-9
   场景: M3
   阶段: build
