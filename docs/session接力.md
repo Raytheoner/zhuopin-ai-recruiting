@@ -280,3 +280,7 @@ SDD 台账（`.superpowers/sdd/2026-09-10-liaison-unpack-charter/progress.md`，
    进编排 → dry-run 核对 → **只给看护者 opener 一整块**。
 5. **`run-lanes.sh` 开跑前自检**：无头块内含 `set_session_title` → `exit 13` 拒跑；
    块外缺豁免注明 → 只 WARN。方向别看反——无头块的**正确状态是不带那一行**。
+
+### ✅ 2026-09-20 `0920B` 诊断收口——「岗位列表读取失败」系虚警，非 `0920A` 服务端回归
+
+`0920B` 只读排查：`app.log` 零 ERROR/Traceback，`curl` 带 `root_path` 前缀实测 `/api/jobs` 200+24条正常数据，现网 `index.html` 哈希与仓库逐字节一致；关键证据是 Shao Peishen 那次点击「岗位列表」的请求**从未抵达服务器**。随后 Shao Peishen 用自己的外部 Chrome 浏览器实测同一页面「岗位列表」正常渲染 24 条岗位。两条证据合起来判定：故障发生在 Cowork 诊断时用的内置浏览器 pane 一侧（大概率是该沙箱浏览器对同源后续 fetch 的权限/网络处理问题），**不是 `0920A` 引入的服务端回归**，`.51` 现网健康，无需回滚、无需修复。`0920B` 自己提的「请他开 DevTools 复现」这一步经外部浏览器实测已经不需要了。
