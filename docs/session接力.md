@@ -63,6 +63,18 @@
 
 ## 二、下一步
 
+### ✅ 2026-09-20 `0920H` 上下文硬闸＋自动续棒已上 main（`08d2564` A 半 ／ `2f8993e` B 半，ff-only 合入）
+
+Shao Peishen 答「(a) 现在派整套」。两半一次做完，10 min、Opus、worktree `lane-0920h-ctx-relay`（隔离防自噬：本条改的 hook 正管着本条自己）。
+
+- **A 半 触发**：`scripts/hooks/context-guard.py` 按 `hook_event_name` 分流。新增 `PostToolUse` 挂点，**仅 `HR_HEADLESS_LANE` 非空生效**，阈值 `HR_LANE_CONTEXT_LIMIT` 默认 150000，越线注入「把手上这一个里程碑做完并提交，然后顶格输出 `OPENER_PARTIAL: 上下文转场 | 续棒: 分支=… worktree=… 上一条commit=… 已完成=… 待续=…`，⛔ 不要开始新里程碑、⛔ 不许自己再起 session」，同 session 去重档位 `relay`。`UserPromptSubmit` 分支**逻辑原样**（`git diff` 该文件删除行数 0），有人值守路径零回归
+- **B 半 消费者**：`run-lanes.sh` 认哨兵含「上下文转场」⇒ 状态 `CTX-RELAY`；`relay_fields()` 抓五字段、`relay_spawn()` 生成 `<原id>续<n>` 正文（沿用原【设置】行 ⇒ 同 worktree/分支）；`HR_LANE_RELAY_MAX` 默认 3，超限 `RELAY-EXHAUSTED` 与 FAIL 同处置（停本泳道）；续棒条跑成才摘**原条**泳道标注；汇总打 `🔁` 行；续棒条进 `results.tsv`、⛔ 不进号池台账
+- **测试**：新增 `tests/test_context_guard.py`（6 例）＋ `tests/test_run_lanes_relay.py`（4 例）＝ 10 passed；回归 `test_context_guard_hook.py`＋`test_run_lanes_model.py` 23 passed；`test_doc_size_budget.py` 5 passed。假 transcript／假 claude 桩，⛔ 未起任何真泳道
+- 🔴 **实现要点备查**：`PostToolUse` 的**纯 stdout 不进模型**（已在 claude 2.1.263 二进制核实「additionalContext shown to Claude」），注入必须走 JSON `hookSpecificOutput.additionalContext`。⛔ 以后写 PostToolUse hook 不要再用 print 直出
+- **两处偏离 opener 字面，均保守处置并登记**：① 自核②要求 `results.tsv` NF=13，实测旧批次文件为 12——因该批次 13:20 起跑、`0920G` 13:32 才合入，必然由旧脚本写出；HEAD 的 `run-lanes.sh:693` 已打 13 列，判定 `0920G` 已生效未停工（本轮 `0920H` 自己那行 `upeak`＝**125,236**，新列已实测生效）② opener 写「同泳道队尾」，实现为「本泳道下一条先跑续棒」——泳道内串行正因触碰区重叠，字面队尾会让后一条跑在半成品上。**此偏离判为更正确，采纳**
+- 【谁做】下一条机制类 opener｜【状态】待定夺｜【判据】`.claude/skills/lane-watch-relay/SKILL.md` §4 分流表补 `CTX-RELAY`（＝正常，续棒已自动排，⛔ 不当失败处理）与 `RELAY-EXHAUSTED`（＝已续 3 次仍越线，本泳道已停，须人判任务是否该拆）两个新状态｜【不做会怎样】续棒机制上线但看护技能不认这两个状态，下一场续棒时会把 `CTX-RELAY` 误当失败去重跑
+
+
 ### 🆕 2026-09-20 `0920F`/`0920G` 机制落档 ＋ 上下文守卫缺口结论（`0920G` 只做了可观测，硬闸待定夺）
 
 Shao Peishen 2026-09-20 二次带来姐妹项目（Win 端）实况：七条无头泳道上下文峰值 151k–244k，**全部越过 150k 转场线、无一条按规则收尾**；根因判为「守卫是提醒型、没有消费者」，治法是改成有消费者的硬闸（越线截断 ＋ 按 `OPENER_PARTIAL: 上下文转场` 记账 ＋ 自动排续棒）。要求本项目一并杜绝。
