@@ -35,8 +35,9 @@
           openspec/changes/<名>/tasks.md
           .claude/skills/<名>/SKILL.md（0920L；`<名>` 限字母数字下划线短横）
     拒绝  tools/ app/ scripts/ tests/ CLAUDE.md data/ .env*、`.claude/settings.json`、
-          `.claude/hooks/*`、`.claude/handoff/**`、其余 `.claude/**`、含 `..`、绝对路径、
-          `-A`／`.`／任何以 `-` 开头的 token、目录、通配符、以及不在工作区 diff 里的路径。
+          `.claude/hooks/*`、`.claude/handoff` 下的一切、`.claude` 下其余未列出的路径、
+          含 `..`、绝对路径、`-A`／`.`／任何以 `-` 开头的 token、目录、通配符、
+          以及不在工作区 diff 里的路径。
     列表里混一个非法的就整条拒绝，⛔ 不做「跳过这个继续」。
 
 `git commit --only -- <路径>` 而不是裸 `git commit`：别的 session 可能已经往暂存区放了东西，
