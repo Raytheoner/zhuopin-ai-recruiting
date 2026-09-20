@@ -6,6 +6,7 @@
 #
 #   ① 哨兵双指标 —— 退出码 0 只说明进程正常结束，不说明任务完成。要求每个 session
 #      顶格输出 OPENER_DONE / OPENER_PARTIAL，两个指标都对才算 OK。
+#      PARTIAL 里含「上下文转场」的是 hook 硬闸留步（0920H）⇒ CTX-RELAY，同泳道队尾自动排续棒。
 #      ⚠️ 哨兵扫全文，不扫 tail：原版实测哨兵落在第 2 行，日志一长就误判 NO-SENTINEL
 #      并误停整条泳道。
 #   ② 无头引导头 —— 统一注入硬规则，不靠每份 opener 各自手写。
@@ -116,6 +117,9 @@ BUDGET="25.00"
 # 需要 Opus 的（openspec design、疑难状态机调试）在 opener【设置】行显式写「模型: Opus」，⛔ 不改这里的默认值。
 DEFAULT_MODEL="sonnet"
 SUBAGENT_MODEL="sonnet"
+# 上下文续棒上限（2026-09-20 0920H）：泳道越 150k 转场线时由 hook 注入哨兵、留步，脚本在同泳道队尾
+# 自动排 `<原id>续<n>` 接着干；续到第 RELAY_MAX 棒仍越线 ⇒ RELAY-EXHAUSTED 停本泳道，⛔ 不无限续。
+RELAY_MAX="${HR_LANE_RELAY_MAX:-3}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -538,16 +542,86 @@ PY
 }
 
 # ---------------------------------------------------------------------------
-# 一条泳道：内部严格串行，遇 FAIL / NO-SENTINEL 停本泳道，不影响别的泳道
+# 上下文续棒（0920H）两个 helper。哨兵格式与 scripts/hooks/context-guard.py 的 PostToolUse 注入
+# 是一对——改一处必须改另一处：
+#   OPENER_PARTIAL: 上下文转场 | 续棒: 分支=<x> worktree=<y> 上一条commit=<h> 已完成=<一句话> 待续=<一句话>
+# ---------------------------------------------------------------------------
+# 打印 TAB 分隔的五字段（缺的填 -）：分支=… worktree=… 上一条commit=… 已完成=… 待续=…
+relay_fields() {
+  python3 - "$1" <<'PY'
+import re, sys
+line = ""
+for l in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if re.match(r'^[*`_]*OPENER_PARTIAL[*`_]*:.*上下文转场', l):
+        line = l.strip()   # 认最后一条
+def grab(pat, default="-"):
+    m = re.search(pat, line)
+    v = (m.group(1).strip() if m else "") or default
+    return v.replace("\t", " ")
+br = grab(r'分支[=＝]\s*(\S+)')
+wt = grab(r'worktree[=＝]\s*(\S+)')
+cm = grab(r'上一条commit[=＝]\s*(\S+)')
+done = grab(r'已完成[=＝]\s*(.*?)(?=\s+待续[=＝]|$)')
+todo = grab(r'待续[=＝]\s*(.*)$')
+print("\t".join(f"{k}={v}" for k, v in (("分支", br), ("worktree", wt), ("上一条commit", cm), ("已完成", done), ("待续", todo))))
+PY
+}
+
+# 参数 = 原id 第几棒 上一棒id 题名 五字段行 原正文文件。stdout = 续棒条正文。
+# （原正文走文件不走 stdin——`python3 - <<PY` 的 stdin 被 heredoc 占着。）
+# 抬头与【设置】行沿用原条（同 worktree/分支/模型/MCP 判定），正文＝前置三字段＋已完成/待续＋原正文引用＋红线指针。
+relay_spawn() {
+  python3 - "$1" "$2" "$3" "$4" "$5" "$6" "$RELAY_MAX" <<'PY'
+import sys
+root, n, prev, title, row, orig_path, cap = sys.argv[1:8]
+orig = open(orig_path, encoding="utf-8").read().split("\n")
+f = dict(kv.split("=", 1) for kv in row.split("\t"))
+setl = next((l for l in orig if "【设置】" in l), "【设置】（原条无设置行）")
+rest = [l for i, l in enumerate(orig) if i > 0 and l != setl]
+out = [
+    f"[Mac]{root}续{n}-{title}",
+    setl,
+    f"【续棒·run-lanes.sh 自动派生，非人派，不进号池】上一棒 {prev} 因上下文越过转场线留步，本条是第 {n}/{cap} 棒。",
+    f"前置（原样带上，⛔ 不另建）：分支={f.get('分支','-')} ｜ worktree={f.get('worktree','-')} ｜ 上一条commit={f.get('上一条commit','-')}",
+    f"上一棒已完成：{f.get('已完成','-')}",
+    f"从这里继续（待续）：{f.get('待续','-')}",
+    "⛔ 不重做「已完成」、⛔ 不从头重跑整条 opener；红线段照原 opener 执行（见下方原文及其指向的正文文件「红线」段）。",
+    "再次越线时照旧输出 `OPENER_PARTIAL: 上下文转场 | 续棒: …`，续棒仍由 run-lanes.sh 自动排。",
+    f"────────── 以下为原 opener 正文（引用，编号 {root}）──────────",
+] + rest
+print("\n".join(out).rstrip("\n"))
+PY
+}
+
+# ---------------------------------------------------------------------------
+# 一条泳道：内部严格串行，遇 FAIL / NO-SENTINEL / RELAY-EXHAUSTED 停本泳道，不影响别的泳道
 # ---------------------------------------------------------------------------
 run_lane() {
   local lane="$1"
   local id title body log t0 t1 code mins status lmodel lsrc
   local rawjson usage_row ucost uin uout ucread ucwrite uturns upeak
+  # 泳道队列（0920H）：原来直接从 manifest 流式读，续棒条无处可插；改成数组＋一个「待续棒」槽位。
+  #   q_id/q_title —— 会话编号与题名；每次取队首之前先看 relay_* 槽位：有续棒条就先跑它，⛔ 不先跑
+  #   泳道里的下一条——泳道内串行正是因为触碰区重叠，后一条要在前一条**整个做完**之后才能动。
+  #   root —— 所属原 opener 编号（worktree/分支回退名、摘标注都认它）；rn —— 第几棒（0 = 原条）
+  local -a q_id=() q_title=()
+  local qi=0 root rn bodyfile relay_row
+  local relay_id="" relay_body="" relay_root="" relay_n=0
 
   while IFS=$'\t' read -r _lane id title; do
+    q_id+=("$id"); q_title+=("$title")
+  done < <(awk -F'\t' -v L="$lane" '$1==L' "$MANIFEST")
+
+  while [[ -n "$relay_id" || $qi -lt ${#q_id[@]} ]]; do
+    if [[ -n "$relay_id" ]]; then
+      id="$relay_id"; bodyfile="$relay_body"; root="$relay_root"; rn="$relay_n"; title="${q_title[$((qi - 1))]}"
+      relay_id=""; relay_body=""; relay_root=""; relay_n=0
+    else
+      id="${q_id[$qi]}"; title="${q_title[$qi]}"; bodyfile=""; root="$id"; rn=0
+      qi=$((qi + 1))
+    fi
     log="$LOGDIR/${lane}-${id}.log"
-    body="$(extract "$id")"
+    if [[ -n "$bodyfile" ]]; then body="$(cat "$bodyfile")"; else body="$(extract "$id")"; fi
 
     if [[ -z "$body" ]]; then
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "NO-BODY" "0" "$log" "-" "-" "-" "-" "-" "-" "-" "-" >> "$LOGDIR/results.tsv"
@@ -594,8 +668,8 @@ run_lane() {
       setl="$(printf '%s\n' "$body" | grep -m1 '【设置】')"
       wt_rel="$(printf '%s\n' "$setl" | grep -oE '\.claude/worktrees/[A-Za-z0-9._-]+' | head -1)"
       br="$(printf '%s\n' "$setl" | sed -nE 's/.*分支(:|：)[[:space:]]*([A-Za-z0-9._\/-]+).*/\2/p' | head -1)"
-      [[ -z "$wt_rel" ]] && wt_rel=".claude/worktrees/lane-$id"
-      [[ -z "$br" || "$br" == main ]] && br="lane-$id"
+      [[ -z "$wt_rel" ]] && wt_rel=".claude/worktrees/lane-$root"    # 续棒条沿用原条的 worktree/分支
+      [[ -z "$br" || "$br" == main ]] && br="lane-$root"
       run_dir="$REPO/$wt_rel"
       if [[ ! -d "$run_dir" ]]; then
         if git -C "$REPO" show-ref --verify --quiet "refs/heads/$br"; then
@@ -679,6 +753,7 @@ PY
     # 哨兵扫全文，不扫 tail —— 原版实测哨兵落在第 2 行，扫 tail 会误判
     # 容忍模型把哨兵加粗/包反引号（2026-09-16 0916K 实证：输出 `**OPENER_DONE**`，活已干完却判 NO-SENTINEL）
     if   grep -qE '^[*`_]*OPENER_DONE[*`_]*[[:space:]]*$' "$log"; then sentinel=DONE
+    elif grep -qE '^[*`_]*OPENER_PARTIAL[*`_]*:.*上下文转场' "$log"; then sentinel=CTXRELAY
     elif grep -qE '^[*`_]*OPENER_PARTIAL'                   "$log"; then sentinel=PARTIAL
     else sentinel=NONE; fi
 
@@ -688,6 +763,10 @@ PY
     elif [[ $code -ne 0 ]];                     then status="FAIL($code)"
     elif [[ $sentinel == DONE ]];               then status="OK"
     elif [[ $sentinel == PARTIAL ]];            then status="PARTIAL"
+    elif [[ $sentinel == CTXRELAY ]]; then
+      # 上下文转场（0920H）：hook 越线注入、泳道做完手上里程碑后留步。活没干完 ⇒ ⛔ 不摘标注，
+      # 在本泳道队尾排续棒条接着干；已经是第 RELAY_MAX 棒还越线 ⇒ RELAY-EXHAUSTED，与 FAIL 同处置。
+      if [[ "$rn" -ge "$RELAY_MAX" ]]; then status="RELAY-EXHAUSTED"; else status="CTX-RELAY"; fi
     else                                             status="NO-SENTINEL"; fi
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$lane" "$id" "$status" "$mins" "$log" "$lmodel" "$ucost" "$uin" "$uout" "$ucread" "$ucwrite" "$uturns" "$upeak" >> "$LOGDIR/results.tsv"
@@ -696,16 +775,31 @@ PY
     # 活干完的条目自动摘掉泳道标注 —— 让「跑完即摘」成为机制，不靠人记得。
     # 只摘 OK / PARTIAL（活都干完了，PARTIAL 只是有留步项另行处理）。
     # ⛔ BUDGET-HIT / FAIL / NO-SENTINEL 不摘：前者要人查产出物，后两者待重试。
+    # 续棒条跑成 ⇒ 摘的是**原条**的标注（续棒条不在编排文件里），状态里带上是第几棒收的口。
     if [[ "$status" == "OK" || "$status" == "PARTIAL" ]]; then
-      mark_done "$id" "$lane" "$status"
+      if [[ "$rn" -gt 0 ]]; then mark_done "$root" "$lane" "${status}·续棒${rn}"
+      else mark_done "$id" "$lane" "$status"; fi
     fi
 
-    # PARTIAL 继续跑本泳道后续（留步是预期内的）；FAIL / NO-SENTINEL 停
-    if [[ "$status" == FAIL* || "$status" == "NO-SENTINEL" ]]; then
+    # 上下文续棒（0920H）：抓哨兵五字段 → 写续棒正文 → 放进本泳道「待续棒」槽位，下一轮先跑它。续棒条不进号池台账
+    # （运行态派生、不是人派的 opener），但 results.tsv 各占一行、upeak 照记。
+    if [[ "$status" == "CTX-RELAY" ]]; then
+      relay_row="$(relay_fields "$log")"
+      echo "relay: $relay_row" >> "$log"
+      relay_body="$LOGDIR/relay-${root}续$((rn + 1)).md"
+      extract "$root" > "$LOGDIR/relay-${root}.orig.md"
+      relay_spawn "$root" "$((rn + 1))" "$id" "$title" "$relay_row" "$LOGDIR/relay-${root}.orig.md" > "$relay_body"
+      relay_id="${root}续$((rn + 1))"; relay_root="$root"; relay_n=$((rn + 1))
+      printf '%s\t%s\n' "$root" "$relay_id" >> "$LOGDIR/relays.tsv"
+      echo "  🔁 [$lane/$id] 上下文转场，本泳道下一条改跑续棒 ${relay_id}（第 $((rn + 1))/${RELAY_MAX} 棒）"
+    fi
+
+    # PARTIAL 继续跑本泳道后续（留步是预期内的）；FAIL / NO-SENTINEL / RELAY-EXHAUSTED 停
+    if [[ "$status" == FAIL* || "$status" == "NO-SENTINEL" || "$status" == "RELAY-EXHAUSTED" ]]; then
       echo "  ⏹ 泳道「${lane}」在 $id 停下（${status}），其余泳道不受影响"
       return 1
     fi
-  done < <(awk -F'\t' -v L="$lane" '$1==L' "$MANIFEST")
+  done
   return 0
 }
 
@@ -768,8 +862,20 @@ if [[ $DRY_RUN -eq 0 ]]; then
   mkdir -p "$REPO/.claude/handoff/events" && : > "$REPO/.claude/handoff/events/lanes-done-$STAMP"
 fi
 
-failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" || $3=="WORKTREE-FAIL" {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"
+failed="$(awk -F'\t' '$3 ~ /^FAIL/ || $3=="NO-SENTINEL" || $3=="NO-BODY" || $3=="WORKTREE-FAIL" || $3=="RELAY-EXHAUSTED" {printf "%s,", $2}' "$LOGDIR/results.tsv" | sed 's/,$//')"
 partial="$(awk -F'\t' '$3=="PARTIAL" {printf "%s ", $2}' "$LOGDIR/results.tsv")"
+
+# 上下文续棒播报（0920H）：relays.tsv 每行「原id<TAB>续棒id」，按原 id 串成链。
+echo
+if [[ -s "$LOGDIR/relays.tsv" ]]; then
+  relay_n="$(wc -l < "$LOGDIR/relays.tsv" | tr -d ' ')"
+  relay_chains="$(awk -F'\t' '!($1 in c){order[++k]=$1; c[$1]=$1} {c[$1]=c[$1] " → " $2} END{for(i=1;i<=k;i++){printf "%s%s", (i>1?" ｜ ":""), c[order[i]]}}' "$LOGDIR/relays.tsv")"
+  echo "🔁 本批自动续棒 ${relay_n} 次：${relay_chains}"
+  exhausted="$(awk -F'\t' '$3=="RELAY-EXHAUSTED" {printf "%s ", $2}' "$LOGDIR/results.tsv")"
+  [[ -n "$exhausted" ]] && echo "   ⏹ 续到上限（HR_LANE_RELAY_MAX=${RELAY_MAX}）仍越线：${exhausted}—— 本泳道已停，原条标注未摘，要人看日志拆任务"
+else
+  echo "🔁 本批无上下文续棒"
+fi
 
 [[ -n "$partial" ]] && {
   echo
