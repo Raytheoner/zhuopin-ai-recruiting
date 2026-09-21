@@ -28,6 +28,7 @@ from tools.liaison.tests.test_inbound_wiring import (
     ADMITTED_USERID,
     OUTSIDER_USERID,
     STAND_IN_CHATTYPE,
+    STAND_IN_THREAD_PATH,
     T0,
     ReplySpy,
     StoppingEvent,
@@ -50,9 +51,14 @@ PAYLOAD = b"PK\x03\x04\x00\x00xlsx-bytes\xff\xfe"
 
 
 def make_file_frame(*, msgid="MSGID0002", sender=ADMITTED_USERID, filename="判例批改表.xlsx"):
-    """一份 `msgtype=file` 的帧：正文键缺席（文件消息本来就没正文），附件句柄用占位键。"""
+    """一份 `msgtype=file` 的帧：正文键缺席（文件消息本来就没正文），附件句柄用占位键。
+
+    `chattype` 钉死成 `"single"`（0921E 起「附件只走私信」口径生效后，非单聊帧
+    在 `handle_message_frame` 里直接跳过附件处理，走不到本文件要测的映射/下载分支）。
+    """
     frame = make_frame(msgid=msgid, sender=sender, content="")
     frame["body"]["msgtype"] = "file"
+    frame["body"]["chattype"] = "single"
     del frame["body"]["stand_in_text"]
     frame["body"]["stand_in_file"] = {
         "stand_in_url": "https://example.invalid/media/abc",
@@ -60,6 +66,20 @@ def make_file_frame(*, msgid="MSGID0002", sender=ADMITTED_USERID, filename="判�
         "stand_in_name": filename,
     }
     return frame
+
+
+@pytest.fixture
+def mapped_single(mapped, monkeypatch):  # noqa: ARG001 —— 依赖 `mapped` 只为排序，不直接用
+    """`mapped` 只把 `THREAD_ID_PATHS_BY_CHATTYPE` 映射到 `STAND_IN_CHATTYPE`；本文件
+    的附件测试帧 `chattype` 钉死为 `"single"`（0921E「附件只走私信」口径），这里额外
+    把 `"single"` 也映射到同一占位路径，⛔ 不改 `mapped` 本身（`test_inbound_wiring.py`
+    自己的用例仍要用它默认的 `STAND_IN_CHATTYPE` 映射）。
+    """
+    monkeypatch.setattr(
+        frames,
+        "THREAD_ID_PATHS_BY_CHATTYPE",
+        {STAND_IN_CHATTYPE: STAND_IN_THREAD_PATH, "single": STAND_IN_THREAD_PATH},
+    )
 
 
 @pytest.fixture
@@ -157,7 +177,7 @@ def test_attachment_error_is_a_frame_unverified_error():
 
 
 def test_unmapped_file_frame_archives_the_row_without_a_file_and_logs_the_shape(
-    svc, ports, mapped, caplog, tmp_path
+    svc, ports, mapped_single, caplog, tmp_path
 ):
     download = DownloadSpy()
     ports = liaison_main.InboundPorts(
@@ -166,6 +186,7 @@ def test_unmapped_file_frame_archives_the_row_without_a_file_and_logs_the_shape(
         reply=ports.reply,
         ledger_path=ports.ledger_path,
         download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
     )
     with caplog.at_level(logging.ERROR, logger="tools.liaison"):
         run_one(svc, ports, make_file_frame(sender=OUTSIDER_USERID))
@@ -175,9 +196,15 @@ def test_unmapped_file_frame_archives_the_row_without_a_file_and_logs_the_shape(
     assert download.calls == [], "表没填就 ⛔ 不许去下载"
     shape_lines = [r.getMessage() for r in caplog.records if "帧结构" in r.getMessage()]
     assert len(shape_lines) == 1
-    assert "body.stand_in_file.stand_in_url: str" in shape_lines[0]
-    assert "https://example.invalid" not in shape_lines[0], "⛔ 帧键结构里不许出现取值"
+    assert "已落盘于" in shape_lines[0]
+    assert "https://example.invalid" not in shape_lines[0], "⛔ 日志行里不许出现取值"
     assert "判例批改表" not in shape_lines[0]
+    dumped = list(ports.unknown_attachment_log_dir.glob("*-file.json"))
+    assert len(dumped) == 1, "0921E：未知附件帧必须落一份取证文件"
+    dumped_text = dumped[0].read_text(encoding="utf-8")
+    assert "body.stand_in_file.stand_in_url" in dumped_text
+    assert "https://example.invalid" not in dumped_text, "⛔ 取证文件里不许出现取值"
+    assert "判例批改表" not in dumped_text
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -186,7 +213,7 @@ def test_unmapped_file_frame_archives_the_row_without_a_file_and_logs_the_shape(
 
 
 def test_mapped_file_frame_is_downloaded_stored_and_recorded(
-    svc, ports, mapped, attachment_mapped
+    svc, ports, mapped_single, attachment_mapped
 ):
     download = DownloadSpy()
     ports = liaison_main.InboundPorts(
@@ -195,6 +222,7 @@ def test_mapped_file_frame_is_downloaded_stored_and_recorded(
         reply=ports.reply,
         ledger_path=ports.ledger_path,
         download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
     )
     run_one(svc, ports, make_file_frame())
 
@@ -209,7 +237,7 @@ def test_mapped_file_frame_is_downloaded_stored_and_recorded(
 
 
 def test_filename_falls_back_to_the_download_response_when_the_frame_has_none(
-    svc, ports, mapped, attachment_mapped
+    svc, ports, mapped_single, attachment_mapped
 ):
     frame = make_file_frame()
     del frame["body"]["stand_in_file"]["stand_in_name"]
@@ -220,6 +248,7 @@ def test_filename_falls_back_to_the_download_response_when_the_frame_has_none(
         reply=ports.reply,
         ledger_path=ports.ledger_path,
         download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
     )
     run_one(svc, ports, frame)
     items = attachments_json_of(svc.conn, "MSGID0002")
@@ -227,7 +256,7 @@ def test_filename_falls_back_to_the_download_response_when_the_frame_has_none(
 
 
 def test_bridge_signal_archived_path_points_at_the_attachment_file(
-    svc, roster, mapped, attachment_mapped, tmp_path, monkeypatch
+    svc, roster, mapped_single, attachment_mapped, tmp_path, monkeypatch
 ):
     """opener【三】：带附件的入站 ⇒ 信号项 `archived_path` 指向附件文件，⛔ 不是 `正文.txt`。"""
     from tools.liaison.unpack.dispatch import DispatchOutcome
@@ -250,6 +279,7 @@ def test_bridge_signal_archived_path_points_at_the_attachment_file(
         reply=ReplySpy(),
         ledger_path=ledger_path,
         download=DownloadSpy(),
+        unknown_attachment_log_dir=tmp_path / "unknown-attachment-frames",
     )
     run_one(svc, ports, make_file_frame())
 
@@ -271,7 +301,7 @@ def test_bridge_signal_archived_path_points_at_the_attachment_file(
 
 
 def test_empty_download_writes_no_zero_byte_file_and_alerts(
-    svc, ports, mapped, attachment_mapped
+    svc, ports, mapped_single, attachment_mapped
 ):
     download = DownloadSpy(result=(b"", "x.xlsx"))
     ports = liaison_main.InboundPorts(
@@ -280,6 +310,7 @@ def test_empty_download_writes_no_zero_byte_file_and_alerts(
         reply=ports.reply,
         ledger_path=ports.ledger_path,
         download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
     )
     run_one(svc, ports, make_file_frame(sender=OUTSIDER_USERID))
 
@@ -289,7 +320,7 @@ def test_empty_download_writes_no_zero_byte_file_and_alerts(
 
 
 def test_failing_download_still_archives_the_row_and_alerts(
-    svc, ports, mapped, attachment_mapped
+    svc, ports, mapped_single, attachment_mapped
 ):
     download = DownloadSpy(error=RuntimeError("网络挂了"))
     ports = liaison_main.InboundPorts(
@@ -298,6 +329,7 @@ def test_failing_download_still_archives_the_row_and_alerts(
         reply=ports.reply,
         ledger_path=ports.ledger_path,
         download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
     )
     run_one(svc, ports, make_file_frame())
 
@@ -309,7 +341,7 @@ def test_failing_download_still_archives_the_row_and_alerts(
     assert any("MSGID0002" in t and "附件" in t for t in svc.alert_sink.texts)
 
 
-def test_no_download_port_is_loud_not_silent(svc, ports, mapped, attachment_mapped, caplog):
+def test_no_download_port_is_loud_not_silent(svc, ports, mapped_single, attachment_mapped, caplog):
     """`InboundPorts.download` 默认 None（生产 SDK 下载口尚未接，TD-51）：只记 WARNING，
     正文照常归档，⛔ 不吞成"这条消息没附件"。"""
     assert ports.download is None
@@ -325,7 +357,7 @@ def test_no_download_port_is_loud_not_silent(svc, ports, mapped, attachment_mapp
 
 
 def test_replaying_the_same_msgid_downloads_and_stores_only_once(
-    svc, ports, mapped, attachment_mapped
+    svc, ports, mapped_single, attachment_mapped
 ):
     download = DownloadSpy()
     ports = liaison_main.InboundPorts(
@@ -334,6 +366,7 @@ def test_replaying_the_same_msgid_downloads_and_stores_only_once(
         reply=ports.reply,
         ledger_path=ports.ledger_path,
         download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
     )
     run_one(svc, ports, make_file_frame())
     first = archived_files(ports.archive_root)
@@ -349,7 +382,7 @@ def test_replaying_the_same_msgid_downloads_and_stores_only_once(
 
 
 def test_replay_with_a_ledger_keeps_the_attachment_path_and_writes_no_snapshot(
-    svc, roster, mapped, attachment_mapped, tmp_path, monkeypatch
+    svc, roster, mapped_single, attachment_mapped, tmp_path, monkeypatch
 ):
     """重投时 `outcome.attachments` 为空（`ArchiveOutcome` docstring：只在 `newly_archived`
     时权威），桥必须改读台账 `attachments_json` 记的那份材料——⛔ 不许顺手落一份
@@ -375,6 +408,7 @@ def test_replay_with_a_ledger_keeps_the_attachment_path_and_writes_no_snapshot(
         reply=ReplySpy(),
         ledger_path=ledger_path,
         download=download,
+        unknown_attachment_log_dir=tmp_path / "unknown-attachment-frames",
     )
     run_one(svc, ports, make_file_frame())
     run_one(svc, ports, make_file_frame())
