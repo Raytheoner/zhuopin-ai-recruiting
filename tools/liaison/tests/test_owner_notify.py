@@ -463,7 +463,13 @@ def test_main_wires_a_consumer_into_the_worker_ports():
         for n in ast.walk(main_fn)
         if isinstance(n, ast.Call)
     }
-    assert {"SdkSendPort", "OwnerNotifyConsumer", "InboundPorts", "ClientHolder"} <= names
+    assert {
+        "SdkSendPort",
+        "OwnerNotifyConsumer",
+        "InboundPorts",
+        "ClientHolder",
+        "SdkDownloadPort",
+    } <= names
 
 
 # ─────────────────────────────────────────────────────────────────────────

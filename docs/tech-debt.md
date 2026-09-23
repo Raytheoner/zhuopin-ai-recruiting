@@ -584,7 +584,23 @@ Python 默认处理直接终止进程，⛔ 不经过 `run()` 的那个 `except`
 
 ---
 
-## TD-51 · 私信文件帧的附件句柄字段未经真实帧确认（附件映射表为空，fail-closed）
+## TD-51 · ~~私信文件帧的附件句柄字段未经真实帧确认（附件映射表为空，fail-closed）~~【已还】
+
+**销账时间**：2026-09-23（`0923C`），证据：`data/liaison/logs/liaison.log:274`
+（2026-09-21 11:08:40 汤丽萍私信触发的真实帧）；filename 命名方案见
+`frames.py::_guess_attachment_filename`。真实帧只有 `body.file.url`／`body.file.aeskey`
+两个键、**没有 `filename`**——win 端参照 `body.file.{url,aeskey,filename,md5}`
+在本产品上不成立。`ATTACHMENT_FIELD_PATHS_BY_MSGTYPE["file"]` 已填两条真实路径；
+`test_production_attachment_table_is_empty_and_fails_closed_on_a_file_frame` 已改成
+正向断言（`test_production_attachment_table_maps_the_confirmed_file_frame_and_still_fail_closes_others`）；
+`InboundPorts.download` 已接 `session_client.SdkDownloadPort` 真实 SDK 适配器。
+⚠️ **`image`／`voice` 不在本条销账范围内**——TD-51 原登记的触发条件只针对
+`msgtype=file`，这两个 msgtype 至今没有一条真实文件帧，`compute_attachment_ref`
+对它们仍 fail-closed，这是设计的正常状态、不是遗留债务。
+
+---
+
+### 原登记（保留备查）
 
 **登记时间**：2026-09-17（`[Mac]0917W`，走 opener【二】第 3 条 fail-closed 支）
 **优先级裁定**：🔴 **业务链路阻塞项**——专员要回的是**文件**（判例批改表、评测集标注、历史岗位资料），

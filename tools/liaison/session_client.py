@@ -599,6 +599,81 @@ class ClientHolder:
         self._client = None
 
 
+#: `client.download_file()` 的超时（秒）。比 `owner_notify.SEND_TIMEOUT_SECONDS`（30s，
+#: 发一条 markdown）宽：这里传的是文件字节，且 SDK 内部还要做一次 AES-256-CBC 解密。
+DOWNLOAD_TIMEOUT_SECONDS = 60.0
+
+#: SDK 表面上的下载方法名（`aibot/client.py:304`）。⚠️ 只用于 `getattr` 探测，
+#: ⛔ 不做拦截判据以外的用途——理由同 `owner_notify.SDK_SEND_METHOD`。
+SDK_DOWNLOAD_METHOD = "download_file"
+
+
+class SdkDownloadError(RuntimeError):
+    """`SdkDownloadPort` 的下载失败：连接未就绪、SDK 表面对不上、超时、或 SDK 自己抛的异常。
+
+    ⛔ 不单独兜底——`inbound.fetch_inbound_attachment` 已经把 `download(ref)` 包在
+    `except Exception` 里（下载失败只告警、正文照常归档），这里只需要把失败原因
+    说清楚，⛔ 不需要再包一层重试或降级。
+    """
+
+
+class SdkDownloadPort:
+    """把 SDK `client.download_file(url, aes_key)` 投到主线程事件循环上并等结果
+    （TD-51，2026-09-23 `0923C`）。
+
+    与 `owner_notify.SdkSendPort` 同一手法、同两个把手来源（`__main__.main()` 里的
+    `ClientHolder`／`LoopStopper`）：⛔ 不缓存第一次拿到的 client——`make_sdk_connect`
+    每次重建连接都是全新对象（`_started` 闩锁，见 `make_sdk_connect` docstring）；
+    ⛔ 不在值守线程另起事件循环、⛔ 不把数据库连接带过这条线程边界（本类完全不碰库）。
+
+    形状对齐 `inbound.AttachmentDownloader`（`Callable[[InboundAttachmentRef],
+    tuple[bytes, str | None]]`），接进 `InboundPorts.download` 直接可用。
+    """
+
+    def __init__(
+        self,
+        client_holder: "ClientHolder",
+        loop_stopper: "LoopStopper",
+        *,
+        timeout: float = DOWNLOAD_TIMEOUT_SECONDS,
+    ) -> None:
+        self._client_holder = client_holder
+        self._loop_stopper = loop_stopper
+        self._timeout = timeout
+
+    def _handles(self):
+        client = self._client_holder.current()
+        loop = self._loop_stopper.current_loop()
+        if client is None or loop is None or loop.is_closed():
+            return None, None
+        return client, loop
+
+    def __call__(self, ref) -> tuple[bytes, str | None]:
+        client, loop = self._handles()
+        if client is None or loop is None:
+            raise SdkDownloadError("SDK 连接未就绪（没有正在 run() 的连接对象或事件循环）")
+        download = getattr(client, SDK_DOWNLOAD_METHOD, None)
+        if not callable(download):
+            raise SdkDownloadError(
+                f"SDK 连接对象没有 {SDK_DOWNLOAD_METHOD}()，附件下载口 fail-closed 不下载。"
+                "请按 aibot 当前版本重新核对表面，⛔ 不要绕过本检查"
+            )
+        awaitable = download(ref.download_url, ref.aes_key)
+        if not inspect.isawaitable(awaitable):
+            raise SdkDownloadError(
+                f"SDK 的 {SDK_DOWNLOAD_METHOD}() 不是协程（返回 "
+                f"{type(awaitable).__name__}），拿不到内容，fail-closed 不当作已下载"
+            )
+        future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+        try:
+            return future.result(timeout=self._timeout)
+        except TimeoutError:
+            future.cancel()
+            raise SdkDownloadError(f"等 SDK 下载回执超时（{self._timeout} 秒）") from None
+        except Exception as exc:  # noqa: BLE001 —— SDK 自己抛的异常统一折成本类
+            raise SdkDownloadError(f"{type(exc).__name__}: {exc}") from None
+
+
 def make_sdk_connect(
     client_factory: Callable[[], object],
     *,

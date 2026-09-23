@@ -7,7 +7,9 @@ opener 约束 4 逐字：用 SDK 内置重连；测试用 fake 连接对象验�
 from __future__ import annotations
 
 import ast
+import asyncio
 import pathlib
+import threading
 
 import pytest
 
@@ -468,3 +470,80 @@ def test_verify_client_surface_passes_a_client_that_matches_the_contract():
             pass
 
     session_client.verify_client_surface(GoodClient())  # ⛔ 不抛
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# `SdkDownloadPort`（TD-51，2026-09-23 `0923C`）：同 `owner_notify.SdkSendPort` 一套
+# 手法——client_holder／loop_stopper 两个把手 + `asyncio.run_coroutine_threadsafe`
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class _FakeDownloadClient:
+    def __init__(self, *, payload: bytes = b"abc", filename: str | None = "x.pdf") -> None:
+        self.calls: list[tuple[str, str | None]] = []
+        self._payload = payload
+        self._filename = filename
+
+    async def download_file(self, url: str, aes_key: str | None = None):
+        self.calls.append((url, aes_key))
+        return self._payload, self._filename
+
+
+class _NoDownloadClient:
+    def run(self) -> None: ...
+
+
+@pytest.fixture
+def loop_thread():
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    yield loop
+    loop.call_soon_threadsafe(loop.stop)
+    t.join(timeout=5)
+    loop.close()
+
+
+def test_sdk_download_port_posts_the_coroutine_to_the_client_loop(loop_thread):
+    from tools.liaison.frames import InboundAttachmentRef
+
+    stopper = session_client.LoopStopper()
+    stopper.remember(loop_thread)
+    holder = session_client.ClientHolder()
+    client = _FakeDownloadClient(payload=b"real-bytes", filename="真实.pdf")
+    holder.remember(client)
+    port = session_client.SdkDownloadPort(holder, stopper, timeout=5.0)
+    ref = InboundAttachmentRef(
+        msgtype="file", download_url="https://x.invalid/f", aes_key="key", filename=None
+    )
+    payload, filename = port(ref)
+    assert (payload, filename) == (b"real-bytes", "真实.pdf")
+    assert client.calls == [("https://x.invalid/f", "key")]
+
+
+def test_sdk_download_port_fails_closed_without_client_or_loop():
+    from tools.liaison.frames import InboundAttachmentRef
+
+    stopper = session_client.LoopStopper()
+    holder = session_client.ClientHolder()
+    port = session_client.SdkDownloadPort(holder, stopper, timeout=1.0)
+    ref = InboundAttachmentRef(
+        msgtype="file", download_url="https://x.invalid/f", aes_key=None, filename=None
+    )
+    with pytest.raises(session_client.SdkDownloadError):
+        port(ref)
+
+
+def test_sdk_download_port_fails_closed_when_the_sdk_has_no_download_file(loop_thread):
+    from tools.liaison.frames import InboundAttachmentRef
+
+    stopper = session_client.LoopStopper()
+    stopper.remember(loop_thread)
+    holder = session_client.ClientHolder()
+    holder.remember(_NoDownloadClient())
+    port = session_client.SdkDownloadPort(holder, stopper, timeout=1.0)
+    ref = InboundAttachmentRef(
+        msgtype="file", download_url="https://x.invalid/f", aes_key=None, filename=None
+    )
+    with pytest.raises(session_client.SdkDownloadError):
+        port(ref)
