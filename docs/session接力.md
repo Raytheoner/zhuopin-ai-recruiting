@@ -184,15 +184,6 @@ Shao Peishen 2026-09-20 定：**①本机只构建本地项目，GitHub 只是�
 - 【谁做】M3 语音面试 U2/U3/U4 后续 lane 或专门修复 opener｜【状态】待派发｜【判据】`_ADDED_COLUMNS` 涉及的新表（`job_prep_config`／`interview_session`）补齐 `SCHEMA` 里的 `CREATE TABLE IF NOT EXISTS`，`EFFECT_NODE_MANIFEST` 补上 18 个新节点＋各自崩溃-恢复配方，`effect_send_verification_code` 补 `@idempotent_effect` 装饰器（缺幂等键，铁律 1 直接命中），四条测试转绿｜【不做会怎样】铁律1对这批 M3 新节点失去覆盖，全量 pytest 持续非 0 failed 掩盖后续真回归信号，且 `Q-49` 无法重新核实通过
 - 【谁做】下一次 `Q-49` 重新授权前｜【状态】待派发｜【判据】上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener｜【不做会怎样】`Q-49` 现有「发」的答复文本引用的判据已知失真，继续按它直接发版等于绕过自核
 
-### 🆕 2026-09-18 `0918AB` reportlab／Pillow 依赖登记核查——早已登记，无需改动；顺带定位到 main 当前测试红
-
-派车前提（`0918U`：main 全量 pytest 4 failed，判「reportlab／Pillow 未登记进任何依赖清单」）已过期：**两包早在 2026-09-17 M2·U0（`6e93eb6`）就已登记进 `requirements-m2-u0.txt`**（标「轻依赖（单测需要）」，版本与共享 venv 已装版本一致），`tests/test_extract_text.py`／`tests/test_compare_models_m2.py` 现状 23 passed，无需任何改动。
-
-`0918AB` 全量 pytest 实测（main `8e4574f`＝本分支 HEAD，`git rev-list --count main...HEAD`＝0）：**5 failed**（非 opener 预期的 4 条，且均与 reportlab/Pillow 无关）——1 条真回归 `tests/test_effect_idempotency_suite.py::test_manifest_matches_the_source_tree`（`EFFECT_NODE_MANIFEST` 漏登 M2U3 合并带入的 `effect_persist_flags`）；4 条环境缺口 `tests/test_probe_m3_voice.py`（`funasr`／`livekit` 未装，`requirements-m3-u0.txt` 未装进共享 venv）。按 opener 预案「真回归⇒立刻停，不顺手改业务代码」，本条到此为止，两项登记待派发：
-
-- 【谁做】M2U3 后续 lane／下一次 task-dispatcher 唤醒｜【状态】✅ 已闭环（`0919P` 2026-09-19 核实：`effect_persist_flags` 已在 `EFFECT_NODE_MANIFEST` 且专属测试转绿，`test_manifest_matches_the_source_tree` 现存失败是另一批 18 个 M3 新节点缺口，见下方 09-19 `0919O` 条目，非本项范围）｜【判据】`EFFECT_NODE_MANIFEST` 补上 `effect_persist_flags` ＋ `build_recipes()` 加对应崩溃-恢复配方，该测试转绿｜【不做会怎样】铁律1（每个 effect_* 节点须被强制中断验证过）对新节点失去覆盖，且全量 pytest 持续红，掩盖后续真回归信号
-- 【谁做】M3 U0/U1 建造 lane 开工前｜【状态】✅ 已闭环（`0919P` 2026-09-19 核实：`tests/test_probe_m3_voice.py` 现状 47 passed／4 skipped，无 failed）｜【判据】`requirements-m3-u0.txt` 装进共享 venv，或测试改 `pytest.importorskip` 使懒加载生效，4 条转绿或规范 skip｜【不做会怎样】全量 pytest 持续非 0 failed，同样掩盖真回归信号
-
 ### 🆕 2026-09-18 S-M3 立包 `voice-structured-interview`（G1 Q-37 放行后，无头）〔原派车号 `0918B`，因号池体积闸登记被撤回（Q-43），该号已归 M2U1 建造；本条不占号〕
 - 包已立并过 `openspec validate --strict`：6 能力（`interview-prep-question-engine`／`interview-invite-and-consent`／`live-voice-interview-session`／`interview-scorecard`／`interview-recording-retention`／`m3-compliance-assertions`）／tasks 76 条（0.1 R-9 已勾，1/76）／🔴 7／design Open Questions **11**（OQ-1–4 待专员 `HR-G-NN` 四条、OQ-5 X5 探针、OQ-6 合规验收 #2、OQ-7 X6、OQ-8 对外通道、OQ-9 语音主机采购、OQ-10 短信通道与验证码门禁口径、OQ-11 内部模拟录音留存）。路线图 §二 M3 行改「已立包 1/76」。commit hash＝本行所在提交（`git log --oneline -1 -- openspec/changes/voice-structured-interview/proposal.md`）
 - ✅ 已闭环（`0919P` 2026-09-19 核实：`定夺队列` `Q-46` 已答「定」，M3 语音面试 U2/U3/U4 已合 main，见上方 09-19 `0919O` 条目，本行「待 G2」描述已过时）【谁做】task-dispatcher【状态】待 G2（Open Questions 全部是待专员＋外部依赖原样转入，不阻塞 spec-to-plan；U0 探针与 U1–U3、U5 不依赖任何 OQ）【判据】Shao Peishen 在定夺队列对本包 G2 答「定」后派 spec-to-plan（从 U0 探针起）【不做会怎样】M3 停在 propose；X5 探针继续空等
@@ -301,21 +292,6 @@ Shao Peishen 2026-09-20 定：**①本机只构建本地项目，GitHub 只是�
    进编排 → dry-run 核对 → **只给看护者 opener 一整块**。
 5. **`run-lanes.sh` 开跑前自检**：无头块内含 `set_session_title` → `exit 13` 拒跑；
    块外缺豁免注明 → 只 WARN。方向别看反——无头块的**正确状态是不带那一行**。
-
-### ✅ 2026-09-20 `0920B` 诊断收口——「岗位列表读取失败」系虚警，非 `0920A` 服务端回归
-
-`0920B` 只读排查：`app.log` 零 ERROR/Traceback，`curl` 带 `root_path` 前缀实测 `/api/jobs` 200+24条正常数据，现网 `index.html` 哈希与仓库逐字节一致；关键证据是 Shao Peishen 那次点击「岗位列表」的请求**从未抵达服务器**。随后 Shao Peishen 用自己的外部 Chrome 浏览器实测同一页面「岗位列表」正常渲染 24 条岗位。两条证据合起来判定：故障发生在 Cowork 诊断时用的内置浏览器 pane 一侧（大概率是该沙箱浏览器对同源后续 fetch 的权限/网络处理问题），**不是 `0920A` 引入的服务端回归**，`.51` 现网健康，无需回滚、无需修复。`0920B` 自己提的「请他开 DevTools 复现」这一步经外部浏览器实测已经不需要了。
-
-### 🔄 2026-09-20 会话转场——本轮 Cowork 交互会话下线，接力给下一场
-
-本会话（Cowork·0918AO 侧交互会话）因体量过重（已发生一次上下文压缩）由邵沛珅指示主动转场，避免继续在重会话里巡检。转场前巡检结论（只读，未做任何改动/派发）：
-
-- task-dispatcher 最近一次自扫（commit `6619d2d`）确认本轮无新派发；`定夺队列.md` 内 `Q-51` 已收口（`0920A` 发版 commit `8596829`，冒烟全过未回滚），当前无待答的 G 类闸门。
-- `.51` 现网健康（`0920B` 已排查「岗位列表读取失败」系 Cowork 内置浏览器 pane 的虚警，非服务端回归，详见上一条收口记录）。
-- 本机预览服务 `0920C`（原 PID 46460／端口 8096）：本次核查进程与端口均已不在，可能因设备侧休眠/重连被回收。非生产、不影响 `.51`，下一场如需继续本机预览可按 `0920C` 同款指令重开（可代范围，无需请示）。
-- 仓库有待清理未追踪项：`.claude/local-preview.pid`（陈旧pid文件）、`"Claude outputs/"`、`_to_delete/`、一份未登记草稿 `docs/openers/0918V-补Q27Q38映射与键归一化.md`——下一场先核实该草稿是否已过时（比对是否有对应已完成的 Q27/Q38 工作）再决定登记补派或删除，不确定就原样报告不要猜。
-
-给下一场「看护」开场的效率指引（已固化进跨项目记忆，此处复述便于下一场无需重新读记忆定位）：开场只读结论性清单——`scripts/queue_pending.py` 输出、最新 `.claude/handoff/lanes-*/summary.txt`、本文件最后 15~20 行——禁止 cat 全量日志/全量定夺队列表；git 写操作（commit/push）一律走 commit-request 通道或 CC 原生派发的 opener 执行，不要在设备挂载侧跑 `git commit`（会因 pre-commit hook 的 venv 路径在沙箱外而失败）。
 
 ### 🈸 2026-09-20 拆件会话 · 人事部#3 回件判「待人」——仅覆盖人事部#2决策点a，未覆盖场景A/B/C/D与决策点b/c
 
