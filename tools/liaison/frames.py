@@ -38,20 +38,23 @@
 帧里 `chattype` 不是 `"single"`/`"group"` 之一（协议变了，或 SDK 表面变了）⇒ fail-closed，
 ⛔ 不猜、不用 `userid` 顶替（那会让两个不同群里的人共享同一个 `thread_id`）。
 
-## 四、附件句柄（2026-09-17 `[Mac]0917W`，**尚无真实文件帧依据 ⇒ 表留空，TD-51**）
+## 四、附件句柄（`file` 已销账 2026-09-23 `0923C`；`image`／`voice` 仍是 TD-51）
 
 `msgtype` 为 `image`/`file`/`voice` 的帧带一个媒体项，取回字节要再走一次 SDK 下载
 （`aibot/client.py:304` `download_file(url, aes_key)`：先 HTTP GET 再 AES-256-CBC 解密，
 `aes_key` 按其 docstring「取自消息中 image.aeskey 或 file.aeskey」）。**句柄落在帧的哪个键**
-——`url`/`aeskey`/`filename` 各在哪——本仓库的值守日志与 `liaison_message` 表至今
-（2026-09-17）只见过 `msgtype=text` 的帧，⛔ 没有一条真实文件帧可核。win 端参照实现
-（`5-平台底座/wecom-aibot-service/aibot_service/frame_parsing.py`）读的是
-`body.file.{url,aeskey,filename,md5}`，只是**候选**，⛔ 未经本系统真实帧确认前不填表。
+——`url`/`aeskey`/`filename` 各在哪——`msgtype=file` 已由 2026-09-21 11:08:40 汤丽萍私信
+触发的真实帧确认（`data/liaison/logs/liaison.log:274`）：`body.file.url`／`body.file.aeskey`，
+**没有 `body.file.filename`**（真实帧实测，win 端参照 `5-平台底座/wecom-aibot-service/
+aibot_service/frame_parsing.py` 读的 `body.file.{url,aeskey,filename,md5}` 在本产品上
+**不成立**，那是另一条产品线的候选，不是依据）。`image`／`voice` 至今仍没有一条真实文件帧，
+⛔ 不照抄 `file` 的容器命名套用。
 
-⇒ `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` 与 `FIELD_PATHS` 同一纪律：表空即 fail-closed——
-`compute_attachment_ref` 对文件帧抛 `AttachmentFieldsUnverifiedError`，接线层
+⇒ `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE["file"]` 已填两条路径（`download_url`／`aes_key`）；
+`filename` 没有真实键可填，落盘命名改由 `_guess_attachment_filename` 兜底（msgid 主干名 +
+按内容魔数猜扩展名，猜不出就 `.bin` 并把"猜不出"写进文件名）。`image`／`voice` 两个 msgtype
+仍不在表里 ⇒ `compute_attachment_ref` 对它们仍抛 `AttachmentFieldsUnverifiedError`，接线层
 （`__main__.handle_message_frame`）只记一行**无取值**的帧键结构、正文照常归档、附件不落盘。
-销账（TD-51）＝Shao Peishen／汤丽萍私信一个测试文件后，按日志里的帧键结构把三条路径填进表。
 """
 
 from __future__ import annotations
@@ -125,10 +128,47 @@ def frame_chattype(frame: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 #: 附件句柄的取值路径表：`msgtype` → {`download_url`（必需）, `aes_key`（可选）,
-#: `filename`（可选）} → 帧内路径。**现状为空**（模块 docstring 第四节，TD-51）：
-#: 无真实文件帧依据 ⇒ ⛔ 不猜。空表 ⇒ `compute_attachment_ref` 对文件帧 fail-closed。
-#: 填表时三条路径都要有真实帧键结构日志作依据，⛔ 不许只凭 SDK docstring 或 win 端代码抄。
-ATTACHMENT_FIELD_PATHS_BY_MSGTYPE: dict[str, dict[str, tuple[str, ...]]] = {}
+#: `filename`（可选）} → 帧内路径。填表时三条路径都要有真实帧键结构日志作依据，
+#: ⛔ 不许只凭 SDK docstring 或 win 端代码抄。
+#:
+#: **`file` 已销账**（TD-51，2026-09-23 `0923C`，依据：`data/liaison/logs/liaison.log:274`，
+#: 2026-09-21 11:08:40 汤丽萍私信触发的真实帧）：该帧只有 `body.file.url`／`body.file.aeskey`
+#: 两个键，⛔ **没有 `body.file.filename`**——`filename` 不进本表，落盘命名改走
+#: `_guess_attachment_filename`（见下）。
+#: **`image`／`voice` 仍是空**：本仓库至今没有一条真实的这两种 msgtype 的文件帧，
+#: ⛔ 不许照抄 `file` 的容器命名套用——`compute_attachment_ref` 对它们仍 fail-closed。
+ATTACHMENT_FIELD_PATHS_BY_MSGTYPE: dict[str, dict[str, tuple[str, ...]]] = {
+    "file": {
+        # 依据：data/liaison/logs/liaison.log:274，2026-09-21 11:08:40
+        "download_url": ("body", "file", "url"),
+        # 依据：data/liaison/logs/liaison.log:274，2026-09-21 11:08:40
+        "aes_key": ("body", "file", "aeskey"),
+    },
+}
+
+#: 内容前缀（魔数）→ 扩展名。只覆盖 `_guess_attachment_filename` 已知的三种
+#: （2026-09-23 `0923C`）：PDF、旧版二进制 Office（doc）、ZIP 容器族（docx/xlsx/pptx
+#: 共用同一魔数，退化成 `.docx`——汤丽萍这次销账实测发的就是 doc 类文档）。
+#: ⛔ 顺序即优先级，⛔ 不要为了"整齐"打乱：`startswith` 逐条试。
+_ATTACHMENT_MAGIC_EXTENSIONS: tuple[tuple[bytes, str], ...] = (
+    (b"%PDF-", "pdf"),
+    (b"PK\x03\x04", "docx"),
+    (b"\xd0\xcf\x11\xe0", "doc"),
+)
+
+
+def _guess_attachment_filename(msgid: str, content_bytes: bytes) -> str:
+    """落盘文件名兜底（TD-51 b/c 支，2026-09-23 `0923C`）：帧没给 `filename`、SDK 下载
+    响应头也没给（那一支由调用方 `inbound.fetch_inbound_attachment` 先判）时，用
+    `msgid` 做主干名，扩展名按内容前缀的魔数猜；猜不出就用 `.bin`，且把"猜不出"这件事
+    直接写进文件名本身——归档产物落盘之后，文件名就是这份不确定性唯一留得住的记录。
+
+    纯函数：只读传入的字节，不读文件、不读时钟、不记日志（工程铁律 2）。
+    """
+    for magic, extension in _ATTACHMENT_MAGIC_EXTENSIONS:
+        if content_bytes.startswith(magic):
+            return f"{msgid}.{extension}"
+    return f"{msgid}-扩展名不确定.bin"
 
 ATTACHMENT_REQUIRED_KEYS = ("download_url",)
 ATTACHMENT_OPTIONAL_KEYS = ("aes_key", "filename")

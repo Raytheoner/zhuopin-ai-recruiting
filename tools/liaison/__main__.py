@@ -214,12 +214,11 @@ class InboundPorts:
     `ledger_path`：回件桥（P0）改写的跟进信台账，⚠️ 与 `whitelist_path`
     同一纪律——⛔ 不许给它加环境变量开关，测试把它顶到 `tmp_path`。
 
-    `download`（2026-09-17 `[Mac]0917W`）：附件句柄 → `(bytes, filename|None)` 的下载口，
-    形状对齐 SDK `client.download_file`。**生产现状为 `None`**（TD-51）：帧里附件句柄的
-    键名尚无真实文件帧依据（`frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` 为空），接上
-    真实下载口也没有输入。接法（销账时做）：SDK 的 `download_file` 是协程、跑在主线程的
-    事件循环上，值守线程要用 `asyncio.run_coroutine_threadsafe(...).result(timeout)`
-    投过去，⛔ 不许在值守线程里另起 loop、也 ⛔ 不许把库连接带过去。
+    `download`（2026-09-17 `[Mac]0917W`；接真实 SDK 适配器于 2026-09-23 `0923C`，TD-51）：
+    附件句柄 → `(bytes, filename|None)` 的下载口，形状对齐 SDK `client.download_file`。
+    生产由 `main()` 装 `session_client.SdkDownloadPort`：协程经
+    `asyncio.run_coroutine_threadsafe(...).result(timeout)` 投到主线程的事件循环上，
+    ⛔ 不在值守线程里另起 loop、也 ⛔ 不把库连接带过去。默认值仍是 `None`——单测装替身。
     """
 
     archive_root: Path = DEFAULT_ARCHIVE_ROOT
@@ -569,7 +568,10 @@ def main(
     stop_event = threading.Event()
     # 0917Y：本人通知发件箱的消费者接进值守线程。收件人由消费者从生产名单解析，
     # ⛔ 这里不传、也传不了收件人。
+    # TD-51（2026-09-23 `0923C`）：附件下载口接真实 SDK 适配器，同 SdkSendPort 一样
+    # 用 client_holder／loop_stopper 把协程投到主线程事件循环上。
     worker_ports = InboundPorts(
+        download=session_client.SdkDownloadPort(client_holder, loop_stopper),
         owner_notify=owner_notify.OwnerNotifyConsumer(
             send_port=owner_notify.SdkSendPort(client_holder, loop_stopper),
         ),

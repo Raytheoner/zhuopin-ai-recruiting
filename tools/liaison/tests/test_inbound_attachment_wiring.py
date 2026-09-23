@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import queue
+import threading
 
 import pytest
 
@@ -133,11 +135,34 @@ def test_text_frames_carry_no_attachment_ref():
     assert frames.compute_attachment_ref({"body": {"msgtype": "text"}}, "text") is None
 
 
-def test_production_attachment_table_is_empty_and_fails_closed_on_a_file_frame():
-    """现状：无真实文件帧依据（TD-51），表必须是空的，文件帧必抛，⛔ 不猜 URL。"""
-    assert frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE == {}
+def test_production_attachment_table_maps_the_confirmed_file_frame_and_still_fail_closes_others():
+    """TD-51 销账（2026-09-23 `0923C`）：`file` 的真实帧已确认
+    （`data/liaison/logs/liaison.log:274`），生产表必须直接映射出 ref；`image`／`voice`
+    仍没有真实文件帧依据，⛔ 必须继续 fail-closed，不许照抄 `file` 的容器命名猜。
+    """
+    assert frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE == {
+        "file": {
+            "download_url": ("body", "file", "url"),
+            "aes_key": ("body", "file", "aeskey"),
+        },
+    }
+    real_shaped_frame = {
+        "body": {
+            "msgtype": "file",
+            "file": {"url": "https://real.invalid/media/xyz", "aeskey": "stand-in-aes-key"},
+        }
+    }
+    ref = frames.compute_attachment_ref(real_shaped_frame, "file")
+    assert ref == frames.InboundAttachmentRef(
+        msgtype="file",
+        download_url="https://real.invalid/media/xyz",
+        aes_key="stand-in-aes-key",
+        filename=None,
+    )
     with pytest.raises(frames.AttachmentFieldsUnverifiedError):
-        frames.compute_attachment_ref(make_file_frame(), "file")
+        frames.compute_attachment_ref({"body": {"msgtype": "image", "image": {}}}, "image")
+    with pytest.raises(frames.AttachmentFieldsUnverifiedError):
+        frames.compute_attachment_ref({"body": {"msgtype": "voice", "voice": {}}}, "voice")
 
 
 def test_mapped_file_frame_yields_a_ref_with_url_key_and_filename(attachment_mapped):
@@ -253,6 +278,126 @@ def test_filename_falls_back_to_the_download_response_when_the_frame_has_none(
     run_one(svc, ports, frame)
     items = attachments_json_of(svc.conn, "MSGID0002")
     assert items[0]["filename"] == "MSGID0002__来自响应头.pdf"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ③bis `_guess_attachment_filename`（TD-51 b/c 支，2026-09-23）：帧与响应头都没给
+# 文件名时，msgid 主干名 + 内容魔数猜扩展名；猜不出用 .bin 且把"猜不出"写进文件名
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("content_bytes", "expected"),
+    [
+        (b"%PDF-1.7\n...", "MSGIDX.pdf"),
+        (b"PK\x03\x04\x14\x00xlsx-bytes", "MSGIDX.docx"),
+        (b"\xd0\xcf\x11\xe0\x00\x00doc-bytes", "MSGIDX.doc"),
+        (b"\x00\x01not-a-known-type", "MSGIDX-扩展名不确定.bin"),
+    ],
+)
+def test_guess_attachment_filename_by_content_magic_number(content_bytes, expected):
+    assert frames._guess_attachment_filename("MSGIDX", content_bytes) == expected
+
+
+def test_filename_falls_back_to_the_guessed_name_when_frame_and_response_both_lack_one(
+    svc, ports, mapped_single, attachment_mapped
+):
+    """帧没给 filename、下载响应头也没给（TD-51 c 支）⇒ 落盘名按 msgid + 内容魔数猜。"""
+    frame = make_file_frame()
+    del frame["body"]["stand_in_file"]["stand_in_name"]
+    download = DownloadSpy(result=(PAYLOAD, None))
+    ports = liaison_main.InboundPorts(
+        archive_root=ports.archive_root,
+        whitelist_path=ports.whitelist_path,
+        reply=ports.reply,
+        ledger_path=ports.ledger_path,
+        download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
+    )
+    run_one(svc, ports, frame)
+    items = attachments_json_of(svc.conn, "MSGID0002")
+    assert items[0]["filename"] == "MSGID0002__MSGID0002.docx", "PAYLOAD 是 PK\\x03\\x04 开头"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ③quater `SdkDownloadPort` 端到端（TD-51 动作③，2026-09-23 `0923C`）：production
+# 表已映射 `file`（本文件①节新断言）⇒ 用**真实**帧形状（body.file.url/aeskey，
+# body.from.userid），⛔ 不 monkeypatch 表；下载口真的经
+# `asyncio.run_coroutine_threadsafe` 投到另一条线程的事件循环上取值、落盘成功。
+# ⛔ 仍然不 `import aibot`——用一个协程签名对齐的假客户端。
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class _FakeSdkClient:
+    """形状对齐 aibot 1.0.2 `WSClient.download_file(url, aes_key)`（协程）。"""
+
+    def __init__(self, *, payload: bytes = PAYLOAD, filename: str | None = None) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+        self._payload = payload
+        self._filename = filename
+
+    async def download_file(self, url: str, aes_key: str | None = None):
+        self.calls.append((url, aes_key))
+        return self._payload, self._filename
+
+
+@pytest.fixture
+def loop_thread():
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    yield loop
+    loop.call_soon_threadsafe(loop.stop)
+    t.join(timeout=5)
+    loop.close()
+
+
+def _real_file_frame(*, msgid="MSGID0003", sender=ADMITTED_USERID):
+    """真实帧形状（依据：`data/liaison/logs/liaison.log:274`，2026-09-21 11:08:40）：
+    `body.msgid`／`body.from.userid`（AT-1b 已确认的固定路径）＋ `body.file.{url,aeskey}`
+    （TD-51 本条新确认）。⛔ 不用 `make_frame()` 的 `stand_in_*` 占位键——这条要验的
+    正是生产表现在真的认得这份真实形状。"""
+    return {
+        "cmd": frames.MESSAGE_CALLBACK_CMD,
+        "headers": {"req_id": "req-real-1"},
+        "body": {
+            "msgtype": "file",
+            "chattype": "single",
+            "msgid": msgid,
+            "from": {"userid": sender},
+            "file": {"url": "https://real.invalid/media/xyz", "aeskey": "stand-in-aes-key"},
+        },
+    }
+
+
+def test_sdk_download_port_runs_the_real_coroutine_hop_and_stores_the_file(
+    svc, ports, loop_thread
+):
+    from tools.liaison import session_client
+
+    stopper = session_client.LoopStopper()
+    stopper.remember(loop_thread)
+    holder = session_client.ClientHolder()
+    client = _FakeSdkClient(filename="真实响应头.pdf")
+    holder.remember(client)
+    download = session_client.SdkDownloadPort(holder, stopper, timeout=5.0)
+
+    run_ports = liaison_main.InboundPorts(
+        archive_root=ports.archive_root,
+        whitelist_path=ports.whitelist_path,
+        reply=ports.reply,
+        ledger_path=ports.ledger_path,
+        download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
+    )
+    run_one(svc, run_ports, _real_file_frame())
+
+    assert client.calls == [("https://real.invalid/media/xyz", "stand-in-aes-key")]
+    items = attachments_json_of(svc.conn, "MSGID0003")
+    assert len(items) == 1
+    assert items[0]["filename"] == "MSGID0003__真实响应头.pdf"
+    stored = run_ports.archive_root / items[0]["relative_path"]
+    assert stored.read_bytes() == PAYLOAD
 
 
 def test_bridge_signal_archived_path_points_at_the_attachment_file(

@@ -34,7 +34,7 @@ from tools.liaison.archive import (
     InboundAttachment,
     archive_message,
 )
-from tools.liaison.frames import InboundAttachmentRef
+from tools.liaison.frames import InboundAttachmentRef, _guess_attachment_filename
 from tools.liaison.queue import compute_task_summary, enqueue_task
 from tools.liaison.whitelist import admit
 
@@ -170,8 +170,11 @@ def fetch_inbound_attachment(
         )
         return None
 
-    # 文件名优先级：帧里给的 > 下载响应头解出的 > 交给 compute_safe_filename 折成占位名。
+    # 文件名优先级（TD-51 b/c 支，2026-09-23）：帧里给的 > 下载响应头解出的（SDK 从
+    # Content-Disposition 解）> 按 msgid + 内容魔数猜（_guess_attachment_filename）。
     filename = ref.filename if ref.filename else response_filename
+    if not filename:
+        filename = _guess_attachment_filename(msgid, bytes(payload))
     return InboundAttachment(filename=filename, payload=bytes(payload))
 
 
