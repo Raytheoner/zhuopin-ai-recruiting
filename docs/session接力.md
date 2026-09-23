@@ -178,3 +178,27 @@
 `docs/跟进信/README-跟进信清单.md` 里人事部#3 行维持「📨 回件已到，待拆件 2026-09-20 17:04 CST」
 原状态不变，下一轮拆件会话探测仍会再探到全部四条，不会丢；机器判据里 `pending<4` 断言本轮预期不过，
 是待人的正常结果，不代表处理失败】
+
+### 🈸 2026-09-23 续棒 0923C 第1/3棒 · 合回 main 完成，机器判据「len>=3」疑似笔误待确认
+
+`lane-0923C`（TD-51 附件字段映射与下载口销账）已合并进 main：因 main 同期新增 5 条 docs/dispatcher
+commit，`--ff-only` 不可用，改用 `git merge lane-0923C --no-edit`（无冲突），合并 commit `78c7290`。
+主工作区复跑 `tools/liaison/tests/test_inbound_attachment_wiring.py` + `test_unpack_bridge.py`：
+48 passed。`docs/tech-debt.md` TD-51 销账戳记随合并落地。
+
+`docs/openers/0923C-TD51附件字段映射与下载口销账.md`「三、机器判据」第 1 行
+`assert len(f.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE) >= 3` 实测为 `1`
+（`{'file': {'download_url': ..., 'aes_key': ...}}`），不通过。核实：该断言把"填三条字段路径"
+（download_url／aes_key／filename）误算成"顶层 msgtype 条目数≥3"；但 filename 无真实键，按方案改走
+`_guess_attachment_filename` 兜底，不是字典项；`image`／`voice` 两个 msgtype 无真实帧证据，opener 正文
+「零、为什么」与 `frames.py` 代码注释都明确⛔ 不可瞎填。`len==1` 是正确、诚实的实现结果，怀疑 `>=3`
+是 opener 作者断言笔误。本棒未擅自改 opener 存档或伪造条目让判据"通过"——这触及验收判据本身的正确性，
+登记待确认，不越权替他改验收标准。
+
+【谁做：Shao Peishen】
+【状态：待人确认（技术判据疑似笔误，非合规红线／淘汰规则／对外通道等不可代事项，但触及验收标准本身，未擅自改）】
+【判据：确认 `docs/openers/0923C-TD51附件字段映射与下载口销账.md`「三、机器判据」第 1 行 `>=3` 是否应
+改为 `>=1`（或 `==1`，或改成 `"file" in ... and len(...["file"]) >= 2`）；确认后由下一条泳道/看护顺手
+改掉该 opener 存档文件，⛔ 不改代码】
+【不做会怎样：opener 存档文件的机器判据与实际正确实现永久不一致，下次任何人重跑该判据脚本都会得到
+"未过"的假阴性，需要反复重新排查同一个已查清的问题】
