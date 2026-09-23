@@ -28,6 +28,7 @@ test_this_chapter_wires_message_handling。⛔ 不许把 `handle_inbound_message
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 import queue
@@ -91,6 +92,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: `InboundPorts.ledger_path` 的默认值就是这一份，测试通过构造
 #: `InboundPorts(ledger_path=tmp_path / ...)` 覆盖它。
 LEDGER_PATH = REPO_ROOT / "docs" / "跟进信" / "README-跟进信清单.md"
+
+#: 未知附件帧取证落盘目录（`0921E`，TD-51 销账前的取证动作）。🔴 只落键路径与类型名
+#: （`frames.frame_key_types`），⛔ 一个取值都不许落盘——见 `_dump_unknown_attachment_frame`。
+DEFAULT_UNKNOWN_ATTACHMENT_FRAME_LOG_DIR = (
+    REPO_ROOT / "data" / "liaison" / "logs" / "unknown-attachment-frames"
+)
 
 #: 🔴 值守通道的 .env 在 **tools/liaison/**，⛔ 不是仓库根（2026-09-09 迁，TD-40）。
 #:
@@ -220,10 +227,33 @@ class InboundPorts:
     reply: Callable[[str, str], object] | None = None
     ledger_path: Path = LEDGER_PATH
     download: inbound.AttachmentDownloader | None = None
+    #: 0921E·未知附件帧取证落点，测试顶到 `tmp_path`，⛔ 不写进真实 `data/liaison/`。
+    unknown_attachment_log_dir: Path = DEFAULT_UNKNOWN_ATTACHMENT_FRAME_LOG_DIR
     #: 0917Y·本人通知发件箱的消费者。`None` = 不消费（发件箱只积不发）。生产由
     #: `main()` 装 `SdkSendPort`；单测装替身。`whitelist_path` 由消费者自己持有
     #: （它可能在别的 tmp 名单上），⛔ 不从本对象的 `whitelist_path` 取。
     owner_notify: owner_notify.OwnerNotifyConsumer | None = None
+
+
+def _dump_unknown_attachment_frame(
+    frame, msgtype: str, moment: datetime, log_dir: Path
+) -> Path:
+    """未知附件帧取证（`0921E`，TD-51 销账前的动作）：把帧的键路径与类型名
+    （`frames.frame_key_types`，⛔ 无取值、⛔ 无长度）落盘到
+    `<log_dir>/<时间戳>-<msgtype>.json`，供下次真实文件帧到达后核对着填
+    `frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE`。
+
+    `moment` 由调用方（值守线程）传入——是回调那一刻的时间，⛔ 本函数不读时钟
+    （工程铁律 2：副作用只在 `effect_*`／接线层做，取时刻的口径统一由值守线程持有）。
+    """
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stamp = moment.strftime("%Y%m%dT%H%M%S%f")
+    dump_path = log_dir / f"{stamp}-{msgtype}.json"
+    dump_path.write_text(
+        json.dumps(frames.frame_key_types(frame), ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return dump_path
 
 
 def handle_message_frame(
@@ -245,6 +275,10 @@ def handle_message_frame(
        本帧不落库**，并把帧的**键结构**（⛔ 无取值）打进日志，供 AT-1b 填路径表；
     2. 落库本身失败——材料没落定，ERROR 记清 `msgid`。⛔ 不吞、⛔ 不假装成功。
 
+    附件（0921E 加口径）：只在单聊帧上尝试取句柄——群帧附件一律忽略、记一行 info，
+    ⛔ 不进 `AttachmentFieldsUnverifiedError` 分支；单聊帧取不到才落
+    `ports.unknown_attachment_log_dir` 取证文件（`_dump_unknown_attachment_frame`）。
+
     返回是否真的落库了（用例据此断言，⛔ 不靠日志文本判断）。
     """
     try:
@@ -258,19 +292,36 @@ def handle_message_frame(
         )
         return False
 
-    # 附件句柄（0917W）：映射是纯函数，取不到 ⇒ 只记帧键结构（⛔ 无取值）、正文照常归档。
-    # 与上面主字段的处置**不同**：主字段取不到是整条不落库，附件取不到只是不落盘——
-    # 材料还在企微侧，待办照样生成、人能去要；整条拦在库外才是丢材料。
-    try:
-        attachment_ref = frames.compute_attachment_ref(frame, fields.msgtype)
-    except frames.AttachmentFieldsUnverifiedError as exc:
-        logger.error(
-            "入站附件未落盘（附件字段映射未经真实文件帧确认，fail-closed；正文照常归档）：%s｜"
-            "帧结构（只有键名与类型，⛔ 无取值）：%s",
-            exc,
-            frames.describe_frame_shape(frame),
-        )
-        attachment_ref = None
+    # 附件句柄（0917W；0921E 加「只走私信」口径）：映射是纯函数，取不到 ⇒ 只记帧键
+    # 结构（⛔ 无取值）、正文照常归档。与上面主字段的处置**不同**：主字段取不到是
+    # 整条不落库，附件取不到只是不落盘——材料还在企微侧，待办照样生成、人能去要；
+    # 整条拦在库外才是丢材料。
+    attachment_ref = None
+    if fields.msgtype in frames.ATTACHMENT_MSGTYPES:
+        chattype = frames.frame_chattype(frame)
+        if chattype != frames.SINGLE_CHAT_CHATTYPE:
+            # Shao Peishen 2026-09-21 口径：附件只走私信（单聊），群帧附件一律忽略，
+            # ⛔ 不尝试取句柄、⛔ 不落取证文件——群帧本来就不该有这份材料。
+            logger.info(
+                "附件只走私信，已忽略群帧附件：thread_id=%s msgid=%s msgtype=%s chattype=%r",
+                fields.thread_id,
+                fields.msgid,
+                fields.msgtype,
+                chattype,
+            )
+        else:
+            try:
+                attachment_ref = frames.compute_attachment_ref(frame, fields.msgtype)
+            except frames.AttachmentFieldsUnverifiedError as exc:
+                dump_path = _dump_unknown_attachment_frame(
+                    frame, fields.msgtype, moment, ports.unknown_attachment_log_dir
+                )
+                logger.error(
+                    "入站附件未落盘（附件字段映射未经真实文件帧确认，fail-closed；"
+                    "正文照常归档）：%s｜帧结构（只有键名与类型，⛔ 无取值）已落盘于 %s",
+                    exc,
+                    dump_path,
+                )
 
     try:
         # 下载是网络调用，只在这条值守线程上发生，⛔ 不在 SDK 回调里做。

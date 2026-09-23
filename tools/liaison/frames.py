@@ -107,6 +107,23 @@ THREAD_ID_PATHS_BY_CHATTYPE: dict[str, tuple[str, ...]] = {
 #: 是材料本身（`CONTENT_REQUIRED_MSGTYPES`），图片部分是否单独可下载没有任何依据。
 ATTACHMENT_MSGTYPES = frozenset({"image", "file", "voice"})
 
+#: 附件只走私信的口径值（Shao Peishen 2026-09-21 定，`0921E`）：群里发的附件不收，
+#: 只在单聊帧上尝试取附件句柄。⚠️ 只影响附件，⛔ 不影响文本帧的既有处理路径
+#: （文本消息群聊/单聊一视同仁，见 `compute_inbound_frame`）。
+SINGLE_CHAT_CHATTYPE = "single"
+
+
+def frame_chattype(frame: Any) -> str | None:
+    """帧的 `chattype` 取值（`"single"`/`"group"`/其它取值/取不到时为 `None`）。
+
+    ⛔ 不做校验、不 fail-closed——那是 `compute_inbound_frame` 的职责。这里只读一个
+    值给接线层判断"附件是否只走私信"（`SINGLE_CHAT_CHATTYPE`），⛔ 不作其它用途。
+
+    纯函数：不读时钟、不记日志、不改入参。
+    """
+    value = _read_path(frame, CHATTYPE_PATH)
+    return value if isinstance(value, str) else None
+
 #: 附件句柄的取值路径表：`msgtype` → {`download_url`（必需）, `aes_key`（可选）,
 #: `filename`（可选）} → 帧内路径。**现状为空**（模块 docstring 第四节，TD-51）：
 #: 无真实文件帧依据 ⇒ ⛔ 不猜。空表 ⇒ `compute_attachment_ref` 对文件帧 fail-closed。
@@ -333,6 +350,38 @@ def describe_frame_shape(frame: Any, *, max_depth: int = 4) -> str:
     纯函数：不读时钟、不记日志、不改入参。
     """
     return ", ".join(_describe_node(frame, (), max_depth)) or "<空帧>"
+
+
+def frame_key_types(frame: Any, *, max_depth: int = 4) -> dict[str, str]:
+    """把帧渲染成 `{点分键路径: 类型名}` 的字典，只给未知附件帧取证落盘用（`0921E`）。
+
+    🔴 **⛔ 一个取值都不许出现在返回值里，也 ⛔ 不带长度**——比 `describe_frame_shape`
+    还严格一档：那个函数给字符串报长度是为了判断"这个键是不是装着正文"，这里连长度
+    都不留，因为产出会**落盘**（日志只是一次性打印，文件是持久留存的第二份拷贝）。
+
+    纯函数：不读时钟、不记日志、不改入参、不写文件——落盘是调用方（接线层）的事。
+    """
+    result: dict[str, str] = {}
+    _collect_key_types(frame, (), max_depth, result)
+    return result
+
+
+def _collect_key_types(
+    node: Any, path: tuple[str, ...], depth_left: int, out: dict[str, str]
+) -> None:
+    if isinstance(node, dict):
+        if depth_left <= 0 or not node:
+            return
+        for key in node:
+            _collect_key_types(node[key], path + (str(key),), depth_left - 1, out)
+        return
+    if isinstance(node, (list, tuple)):
+        if not node:
+            return
+        _collect_key_types(node[0], path + ("[0]",), max(depth_left - 1, 0), out)
+        return
+    label = ".".join(path) if path else "<根>"
+    out[label] = type(node).__name__
 
 
 def _describe_node(node: Any, path: tuple[str, ...], depth_left: int) -> list[str]:

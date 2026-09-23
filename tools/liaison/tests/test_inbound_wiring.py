@@ -145,6 +145,9 @@ def ports(tmp_path, roster):
         whitelist_path=roster,
         reply=ReplySpy(),
         ledger_path=tmp_path / "README-跟进信清单.md",
+        # 0921E：⛔ 不留默认值——默认值指向真实 `data/liaison/logs/`，未知附件帧
+        # 取证一旦在用例里触发就会真的在仓库里落一份文件。
+        unknown_attachment_log_dir=tmp_path / "unknown-attachment-frames",
     )
 
 
