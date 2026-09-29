@@ -1,7 +1,7 @@
 # Session 接力 · HR 招聘智能体
 
 > 滚动更新，覆盖旧版。新会话读完本文即可接上。
-> 最后更新：2026-09-23 10:2x（Cowork·`0923R` 续棒看护实核）／上一版 2026-09-20 15:4x（Cowork·`0920R` 续棒看护实核）／上上版 2026-09-19 21:5x（Cowork·0918AO 巡检实核：0918V 已收口、M2·U3 建造完成待发布闸 Q-49、M3 U4 已合 main 进度 36/76）｜ 上一次：2026-09-18 20:4x（Cowork·0918G 换道前实核：M2 可见薄片已上线 .51、投递中继上线、无头块铁律立规）｜ 上上次：2026-09-17 06:2x（Cowork·0917D：R-1 实核已完成；体积闸归档接力 61→41 KB、编排 65→12 KB；R-2 拆成 `0917G`→`0917H` 经 launchd 发车（首发 E/F 作废）。此前：Cowork·HR业务线-接力0917D 转场：把 `0916E`–`0917B` 这一大段
+> 最后更新：2026-09-29（Codex 迁移实核：构建 workflow 双引擎切换已验收，见文末 `🈸 2026-09-29` 节）／上一版 2026-09-23 10:2x（Cowork·`0923R` 续棒看护实核）／上上版 2026-09-20 15:4x（Cowork·`0920R`）
 > **从未进过本文**的进展补齐——第十七批波次 1＋2 已基本完成、Token 治理线已结项；
 > 订正 `tasks.md` 抬头进度行失真 24/33 → 27/33）
 
@@ -204,3 +204,23 @@ commit，`--ff-only` 不可用，改用 `git merge lane-0923C --no-edit`（无�
 改掉该 opener 存档文件，⛔ 不改代码】
 【不做会怎样：opener 存档文件的机器判据与实际正确实现永久不一致，下次任何人重跑该判据脚本都会得到
 "未过"的假阴性，需要反复重新排查同一个已查清的问题】
+
+### 🈸 2026-09-29 Codex 迁移实核 · 泳道看护接棒（本会话实核，commit `8efc1a1` 本地已落盘）
+
+已完成并验收：P0 红灯清零（全量 pytest **3769 passed / 0 failed**、`-m compliance` **74 passed**）；
+`run-lanes.sh`／`dispatcher_event.sh`／`tools/liaison/unpack/dispatch.py` 三执行器双引擎
+（`HR_AGENT_ENGINE` 默认 `codex`，`claude` 回退）；`scripts/codex_jsonl_summary.py`（JSONL 哨兵＋用量收敛）
+与 `scripts/codex_sdd_runner.py`（替代 superpowers 插件）落地；`AGENTS.md` 适配层＋9 个技能迁
+`.agents/skills/`；`pgrep` 沙箱兜底（`run-lanes.pid`）；真实 worktree 无头冒烟（workspace-write 写文件＋
+OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadmap/任务台账.yaml` 改动原样保留、未动。
+
+- 【谁做：Shao Peishen】【状态：待批准】【判据：`git push origin main` 后 origin/main 与本地 `8efc1a1` 一致】
+  【不做会怎样：后续泳道 `git pull --rebase origin main` 拿不到迁移基线，Claude→Codex 切换只在本机成立】
+- 【谁做：泳道看护心跳（automation `hr`，30 分钟）】【状态：已开启】【判据：首次唤醒实跑 lane-watch-relay，
+  有 ready 且不越闸即经动作通道发车，结果落 `results.tsv` 并按安静原则只在有变化时汇报】
+  【不做会怎样：HR 项目构建停在当前待办，无人接棒】
+- 【谁做：下一条机制泳道】【状态：待派】【判据：拆件受限会话的「Edit 路径级 deny」做 Codex PreToolUse
+  hook 化并有测试（`AGENTS.md` §4 已知缺口）】【不做会怎样：拆件会话可写全仓——沙箱与章程正文仍挡，
+  但缺机器级路径 deny】
+- 【谁做：下一条机制泳道】【状态：待派】【判据：`dispatcher_answers.py` 6 条缺映射（Q-01a/Q-08/Q-48/
+  Q-53b/Q-54a/Q-59a）补齐；pyproject 收敛 3.6 万条 Python 3.14 弃用警告】【不做会怎样：调度告警与测试噪音长期存在】
