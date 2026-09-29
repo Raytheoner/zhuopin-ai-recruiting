@@ -214,10 +214,9 @@ commit，`--ff-only` 不可用，改用 `git merge lane-0923C --no-edit`（无�
 `.agents/skills/`；`pgrep` 沙箱兜底（`run-lanes.pid`）；真实 worktree 无头冒烟（workspace-write 写文件＋
 OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadmap/任务台账.yaml` 改动原样保留、未动。
 
-- 【谁做：Shao Peishen】【状态：待批准】【判据：`git push origin main` 后 origin/main 与本地 `8efc1a1` 一致】
-  【不做会怎样：后续泳道 `git pull --rebase origin main` 拿不到迁移基线，Claude→Codex 切换只在本机成立】
-- 【谁做：泳道看护心跳（automation `hr`，30 分钟）】【状态：已开启】【判据：首次唤醒实跑 lane-watch-relay，
-  有 ready 且不越闸即经动作通道发车，结果落 `results.tsv` 并按安静原则只在有变化时汇报】
+- 【谁做：Shao Peishen】【状态：✅ 已闭环 2026-09-29 17:2x】【判据：`origin/main` 已推到 `f2b6f87`→`3aa5d13`→`ffa6437`，与本地一致】
+- 【谁做：泳道看护心跳（automation `hr`，30 分钟）】【状态：✅ 首轮已实跑 2026-09-29 17:2x（无可发车项；
+  调度器 17:36–17:47 以 codex 引擎补跑 rc=0、积压事件已归档）| 判据：后续唤醒按安静原则只在有变化时汇报】
   【不做会怎样：HR 项目构建停在当前待办，无人接棒】
 - 【谁做：下一条机制泳道】【状态：待派】【判据：拆件受限会话的「Edit 路径级 deny」做 Codex PreToolUse
   hook 化并有测试（`AGENTS.md` §4 已知缺口）】【不做会怎样：拆件会话可写全仓——沙箱与章程正文仍挡，
@@ -231,3 +230,13 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 `> 泳道：机制落档` 是陈旧残留（其下方 HEAD 里就有「✅ 已完成 2026-09-20」，交付物见 commit `af6435e`
 与 `.claude/skills/lane-watch-relay/SKILL.md` §4），本轮**已摘除该残留、未重复发车**——首轮看护因此
 避免了一次对已完成 opener 的重复执行。**本轮无可发车项**，等心跳后续周期或汤丽萍回件解锁 ready。
+
+**17:5x 遗留（须落档，⛔ 不要丢弃工作区改动）**：launchd 下 codex 路径兜底修复已改**未提交**——
+`docs/openers/run-lanes.sh`＋`scripts/dispatcher_event.sh`（解析顺序 `HR_CODEX_BIN`→PATH→`~/.local/bin`→
+应用内置路径；修复前调度器 17:35 因 PATH 无 codex 一秒退出）＋ `tests/test_run_lanes_model_codex.py`、
+`tests/test_task_dispatcher.py` 两个新用例（100 passed）。
+
+- 【谁做：Shao Peishen（直提或派专门 opener）】【状态：待派】【判据：上述两脚本＋两测试完成一次
+  范围化提交与推送，`git status` 不再出现这 4 个文件（提交通道白名单外，⛔ 不能走 .request 通道）】
+  【不做会怎样：launchd 下的 codex 路径兜底只存在于本机未提交工作区——被清理/覆盖后调度器与发车链
+  会退回「找不到 codex CLI」一秒退出】
