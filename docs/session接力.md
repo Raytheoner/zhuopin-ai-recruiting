@@ -236,7 +236,6 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 应用内置路径；修复前调度器 17:35 因 PATH 无 codex 一秒退出）＋ `tests/test_run_lanes_model_codex.py`、
 `tests/test_task_dispatcher.py` 两个新用例（100 passed）。
 
-- 【谁做：Shao Peishen（直提或派专门 opener）】【状态：待派】【判据：上述两脚本＋两测试完成一次
-  范围化提交与推送，`git status` 不再出现这 4 个文件（提交通道白名单外，⛔ 不能走 .request 通道）】
-  【不做会怎样：launchd 下的 codex 路径兜底只存在于本机未提交工作区——被清理/覆盖后调度器与发车链
-  会退回「找不到 codex CLI」一秒退出】
+- 【谁做：Shao Peishen】【状态：✅ 已闭环 2026-09-30 07:31（Shao Peishen 答 1a 授权直提）】
+  【判据：4 个文件已一次性提交并推送为 `0a61d13`（`docs/openers/run-lanes.sh`＋`scripts/dispatcher_event.sh`
+  ＋两个测试，84 passed，pre-commit 全过），`git status` 不再出现这 4 个文件，origin/main 与本地一致】
