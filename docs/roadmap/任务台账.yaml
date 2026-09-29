@@ -1,13 +1,13 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 553
+  条目数: 554
   按状态:
     待开: 199
     在跑: 7
     完成: 258
-    阻塞: 89
-  阻塞·决策: 56
+    阻塞: 90
+  阻塞·决策: 57
   阻塞·外部: 32
   conflicts:
   - channel-resume-intake/0.1
@@ -6551,6 +6551,19 @@ tasks:
   阻塞类型: 决策
   产出判据: 同 `Q-59` 现有判据——一并裁决四条回件（决策点a 两次尝试、决策点b、空文本）是否已足够完整， 并明确 `人事部#3` 是整信待齐 A/B/C/D+a/b/c 后一次性转闭环、还是允许按决策点分批部分关闭
   来源: docs/session接力.md:176
+  可见: false
+- id: relay:tag#46e0a8a5
+  场景: 构建自动化
+  阶段: build
+  标题: 确认 `docs/openers/0923C-TD51附件字段映射与下载口销账.md`「三、机器判据」第 1 行 `>=3` 是否应 改为 `>=1`（或 `==1`，或改成 `"file" in ... and len(...["file
+  依赖: []
+  触碰区:
+  - docs/openers/0923C-TD51附件字段映射与下载口销账.md
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 确认 `docs/openers/0923C-TD51附件字段映射与下载口销账.md`「三、机器判据」第 1 行 `>=3` 是否应 改为 `>=1`（或 `==1`，或改成 `"file" in ... and len(...["file"]) >= 2`）；确认后由下一条泳道/看护顺手 改掉该 opener
+    存档文件，⛔ 不改代码
+  来源: docs/session接力.md:200
   可见: false
 - id: answer:Q-02
   场景: M2

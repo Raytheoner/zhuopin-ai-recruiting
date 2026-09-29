@@ -224,3 +224,10 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   但缺机器级路径 deny】
 - 【谁做：下一条机制泳道】【状态：待派】【判据：`dispatcher_answers.py` 6 条缺映射（Q-01a/Q-08/Q-48/
   Q-53b/Q-54a/Q-59a）补齐；pyproject 收敛 3.6 万条 Python 3.14 弃用警告】【不做会怎样：调度告警与测试噪音长期存在】
+
+**17:2x 首轮泳道看护实核（Codex 引擎，本会话）**：`origin/main` 已推到 `f2b6f87`；三执行器判活改走
+`run-lanes.pid`（无 pid 文件＝未在跑）；台账 558 条／ready 4 条**全是 gate**（等上游交付），最新批次
+`lanes-20260923-134523` 两条均为 `CTX-RELAY`／`PARTIAL`（正常，无 FAIL）；编排文件里 0920I 的
+`> 泳道：机制落档` 是陈旧残留（其下方 HEAD 里就有「✅ 已完成 2026-09-20」，交付物见 commit `af6435e`
+与 `.claude/skills/lane-watch-relay/SKILL.md` §4），本轮**已摘除该残留、未重复发车**——首轮看护因此
+避免了一次对已完成 opener 的重复执行。**本轮无可发车项**，等心跳后续周期或汤丽萍回件解锁 ready。
