@@ -29,6 +29,11 @@ Cowork 写 `<时间戳>.action`（JSON），`commit-launcher.sh` 先调本脚本
 
 单测注入口：`configure(repo)` 把所有路径指到临时仓库；`LANE_LAUNCHER_PGREP_PATTERN` 与
 `ACTION_REQUEST_DRAIN_WAIT` 两个环境变量与 lane-launcher.sh 同名同义。
+
+并发判据的沙箱兜底（2026-09-29 Codex 迁移）：macOS Seatbelt 沙箱禁止跨进程读命令行参数
+（`kern.procargs2`），`pgrep -f` 恒返回非 0。lane-launcher.sh 发车时把 run-lanes 的 bash
+pid 落盘到 `.claude/handoff/launch/run-lanes.pid`（run-lanes.sh 退出时自删），本脚本在
+pgrep 查不到时改读该 PID 文件 + `os.kill(pid, 0)` 判活，⛔ 不因此把「在跑」误判成「空闲」。
 """
 from __future__ import annotations
 
@@ -101,7 +106,28 @@ def _tail(text: str, n: int) -> list[str]:
 
 
 def run_lanes_is_running() -> bool:
-    return subprocess.run(["pgrep", "-f", PGREP_PATTERN], capture_output=True).returncode == 0
+    if subprocess.run(["pgrep", "-f", PGREP_PATTERN], capture_output=True).returncode == 0:
+        return True
+    # 沙箱兜底（见模块 docstring）：pgrep -f 查不到 ≠ 没在跑。PID 文件缺、内容非数字、
+    # pid 已死 ⇒ 才判「不忙」。查询失败按不存活处理，与 dispatch.py 的 compute_is_alive 同精神。
+    pid = _run_lanes_pid_from_file()
+    return pid is not None and _pid_is_alive(pid)
+
+
+def _run_lanes_pid_from_file() -> int | None:
+    try:
+        text = (LAUNCH_DIR / "run-lanes.pid").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() else None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def _wait_until_run_lanes_exits(max_seconds: float) -> bool:

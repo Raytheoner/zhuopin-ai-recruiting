@@ -24,21 +24,24 @@
 # 参数：
 #   --dry-run          只解析与打印
 #   --yes              跳过开跑确认
-#   --full-auto        用 --dangerously-skip-permissions（默认是 --permission-mode acceptEdits）
+#   --full-auto        codex 引擎＝workspace-write＋approval_policy=never；
+#                      claude 引擎＝--dangerously-skip-permissions（默认 --permission-mode acceptEdits）
 #   --only  A,B,C      只跑这几条
 #   --model NAME       整批强制模型（覆盖 opener【设置】里的「模型:」与默认值）
-#   --subagent-model N 泳道内子代理模型（默认 sonnet，经 CLAUDE_CODE_SUBAGENT_MODEL 传入）
+#   --subagent-model N 泳道内子代理模型（默认 sonnet；claude 经 CLAUDE_CODE_SUBAGENT_MODEL 传入，
+#                      codex 经 -c agents.default_subagent_model 传入）
 #   --max-parallel N   同时最多几条泳道（默认 3）
 #   --stagger N        泳道错峰启动间隔秒（默认 90，降编辑锁碰撞）
-#   --budget N         每条 session 的上限（默认 25.00）
+#   --budget N         每条 session 的上限（默认 25.00；仅 claude 引擎生效，codex 无美元预算旗标）
 #   --chain            链式接续：一轮收敛后重扫编排，还有待执行条目就自动接着跑
 #   --max-rounds N     链式的轮次硬上限（默认 5），防标注没摘干净导致无限重跑
 #
 # 退出码：
-#   0  正常          10 找不到 claude CLI    11 计划文件不存在
+#   0  正常          10 找不到执行引擎 CLI（codex/claude）   11 计划文件不存在
 #   12 manifest 空   13 抽取预检不通过       14 带着 index.lock
 #   15 条目总数自检不通过（Σ泳道条目 ≠ manifest 行数 ≠ 泳道标注数，见下方同名段落）
 #   64 未知参数
+#   63 执行引擎不合法（HR_AGENT_ENGINE 只认 codex|claude）
 #
 # 关于 --budget 的语义（2026-08-27 查证 code.claude.com/docs/en/costs）：
 #   Max/Pro 订阅下用量**包含在订阅里**，那个美元数是 Claude Code 按标准价目**本地折算**
@@ -104,6 +107,17 @@ export LANG=C
 REPO="/Users/paulshao/Projects/HumanResource"
 PLAN="$REPO/docs/openers/OP-0820-全量编排.md"
 
+# 沙箱兜底 PID 文件（2026-09-29 Codex 迁移）：lane-launcher.sh 发车时写入本进程的 bash pid，
+# scripts/action_request.py 在 pgrep 不可用时读它判并发。退出时自删——只删内容等于 $$ 的，
+# ⛔ 不删别人（手工多开）落盘的文件。run_lane 与收尾子 shell 里各自 `trap - EXIT` 摘掉，
+# 防子 shell 退出时抢先把主进程的兜底文件删了（bash 子 shell 继承 trap 与 $$）。
+_RL_PID_FILE="$REPO/.claude/handoff/launch/run-lanes.pid"
+cleanup_run_lanes_pid() {
+  [[ -f "$_RL_PID_FILE" ]] || return 0
+  [[ "$(cat "$_RL_PID_FILE" 2>/dev/null)" == "$$" ]] && rm -f "$_RL_PID_FILE"
+}
+trap cleanup_run_lanes_pid EXIT
+
 DRY_RUN=0; ASSUME_YES=0; FULL_AUTO=0; MODEL=""; ONLY=""
 MAX_PARALLEL=3; STAGGER=90
 CHAIN=0; ROUND=0; ROUND_CAP=5
@@ -125,6 +139,20 @@ RELAY_MAX="${HR_LANE_RELAY_MAX:-3}"
 # 机器判据闸单条超时秒（2026-09-20 0920K）。判据块本分是只读核验，60 秒足够；测试用环境变量调小。
 GATE_TIMEOUT="${HR_LANE_GATE_TIMEOUT:-60}"
 
+# ── 执行引擎（2026-09-29 Codex 迁移）────────────────────────────────────────
+# HR_AGENT_ENGINE=codex|claude，默认 codex。claude 是回退引擎（旧单测与历史契约平滑过渡）。
+# opener 的 Opus/Sonnet/Haiku 三档词汇保持不变（编排文件与号池都不动），只在这里映射到
+# 本机 Codex 可用模型；命令行 --model 传的仍是这三档（或 claude 引擎的模型名）。
+ENGINE="${HR_AGENT_ENGINE:-codex}"
+case "$ENGINE" in
+  codex|claude) ;;
+  *) echo "✗ HR_AGENT_ENGINE 只认 codex|claude：$ENGINE" >&2; exit 63 ;;
+esac
+CODEX_MODEL_OPUS="${HR_CODEX_MODEL_OPUS:-deepseek-v4-pro}"; CODEX_REASON_OPUS="${HR_CODEX_REASON_OPUS:-max}"
+CODEX_MODEL_SONNET="${HR_CODEX_MODEL_SONNET:-deepseek-v4-pro}"; CODEX_REASON_SONNET="${HR_CODEX_REASON_SONNET:-high}"
+CODEX_MODEL_HAIKU="${HR_CODEX_MODEL_HAIKU:-deepseek-flash}"; CODEX_REASON_HAIKU="${HR_CODEX_REASON_HAIKU:-low}"
+CODEX_LOGIN_METHOD="${HR_CODEX_FORCED_LOGIN:-chatgpt}"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)      DRY_RUN=1; shift ;;
@@ -144,7 +172,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-command -v claude >/dev/null || { echo "✗ 找不到 claude CLI"; exit 10; }
+if [[ "$ENGINE" == codex ]]; then
+  command -v codex >/dev/null || { echo "✗ 找不到 codex CLI（可用 HR_CODEX_BIN 指到绝对路径）"; exit 10; }
+else
+  command -v claude >/dev/null || { echo "✗ 找不到 claude CLI"; exit 10; }
+fi
 [[ -f "$PLAN" ]] || { echo "✗ 计划文件不存在：$PLAN"; exit 11; }
 
 # 编排文件里待执行的泳道标注数。在**编排文件原文**上数，且必须在 --only 过滤之前取——
@@ -329,10 +361,32 @@ resolve_model() {
   else printf '%s\t%s\n' "$DEFAULT_MODEL" "默认"; fi
 }
 
-if [[ $FULL_AUTO -eq 1 ]]; then PERM_DESC="dangerously-skip-permissions（全自动）"
+# codex 引擎：三档模型词汇 → 本机模型 + reasoning 档位。入参已由 resolve_model 保证小写三档之一
+# （或命令行 --model 的取值；认不出的按 sonnet 档兜底，预检已挡 INVALID）。
+codex_model_args() {
+  case "$1" in
+    opus)  printf '%s' "-m $CODEX_MODEL_OPUS -c model_reasoning_effort=$CODEX_REASON_OPUS" ;;
+    haiku) printf '%s' "-m $CODEX_MODEL_HAIKU -c model_reasoning_effort=$CODEX_REASON_HAIKU" ;;
+    *)     printf '%s' "-m $CODEX_MODEL_SONNET -c model_reasoning_effort=$CODEX_REASON_SONNET" ;;
+  esac
+}
+# 子代理模型（codex 引擎）：默认同 sonnet 档；--subagent-model 写 haiku 才降档。
+codex_subagent_args() {
+  local s; s="$(printf '%s' "$SUBAGENT_MODEL" | tr 'A-Z' 'a-z')"
+  case "$s" in
+    haiku) printf '%s' "-c agents.default_subagent_model=$CODEX_MODEL_HAIKU" ;;
+    *)     printf '%s' "-c agents.default_subagent_model=$CODEX_MODEL_SONNET" ;;
+  esac
+}
+
+if [[ "$ENGINE" == codex ]]; then
+  if [[ $FULL_AUTO -eq 1 ]]; then PERM_DESC="workspace-write + approval_policy=never（全自动）"
+  else PERM_DESC="workspace-write + approval_policy=on-request（无人值守请加 --full-auto）"; fi
+elif [[ $FULL_AUTO -eq 1 ]]; then PERM_DESC="dangerously-skip-permissions（全自动）"
 else PERM_DESC="acceptEdits（写文件免问，Bash/push 仍会问——无人值守请加 --full-auto）"; fi
 
 echo "计划文件：$PLAN"
+echo "执行引擎：$ENGINE（$PERM_DESC）"
 echo "泳道 ${#LANES[@]} 条（并行上限 ${MAX_PARALLEL}，错峰 ${STAGGER}s，单条预算上限 \$${BUDGET}，默认模型 ${MODEL:-$DEFAULT_MODEL}，子代理 ${SUBAGENT_MODEL}）："
 
 PRECHECK_BAD=0
@@ -665,6 +719,7 @@ PY
 # 一条泳道：内部严格串行，遇 FAIL / NO-SENTINEL / RELAY-EXHAUSTED / GATE-* 停本泳道，不影响别的泳道
 # ---------------------------------------------------------------------------
 run_lane() {
+  trap - EXIT
   local lane="$1"
   local id title body log t0 t1 code mins status lmodel lsrc
   local rawjson usage_row ucost uin uout ucread ucwrite uturns upeak
@@ -711,6 +766,7 @@ run_lane() {
     # （参数不生效也不报错），⛔ 但不要把它写成"编号靠这条保住了"。
     # 要验只需 5 分钟：跑一条最小 opener，看 claude 那侧有没有这个名字。
     # 这正是 kickoff skill 那条判据的适用场合——写成规则之前先想能不能推翻它。
+    # （以下两段只属于 claude 引擎；codex 引擎的 argv 见下一块。）
     local args=(-p -n "[Mac]$id-$title" --output-format json --max-budget-usd "$BUDGET")
     if [[ $FULL_AUTO -eq 1 ]]; then args+=(--dangerously-skip-permissions)
     else args+=(--permission-mode acceptEdits); fi
@@ -723,7 +779,20 @@ run_lane() {
     if ! printf '%s\n' "$body" | grep -m1 '【设置】' | grep -qE 'MCP(:|：)[[:space:]]*on'; then
       args+=(--strict-mcp-config)
     fi
-    echo "model=$lmodel（$lsrc）subagent=$SUBAGENT_MODEL" >> "$log"
+    # ── codex 引擎 argv（2026-09-29）──
+    # ⛔ 实测：本机 codex CLI 0.158.0-alpha 的 -a/--ask-for-approval 旗标被参数解析器拒绝
+    # （help 里列出、实跑报 unexpected argument），审批档位一律走 -c approval_policy=… 配置覆盖键。
+    # forced_login_method=chatgpt：本机 ~/.codex/config.toml 写死 api 登录而 auth.json 是
+    # ChatGPT 会话态，两者冲突会让 codex exec 启动即报认证错——按 auth.json 真身对齐。
+    # workspace-write 沙箱把写权限锁在 run_dir（worktree 条目＝泳道目录），天然禁改主工作区。
+    local codex_args=()
+    if [[ "$ENGINE" == codex ]]; then
+      local cm_args cs_args
+      cm_args="$(codex_model_args "$lmodel")"
+      cs_args="$(codex_subagent_args)"
+      read -r -a codex_args <<< "exec --json --sandbox workspace-write -c approval_policy=$([[ $FULL_AUTO -eq 1 ]] && printf never || printf on-request) -c forced_login_method=$CODEX_LOGIN_METHOD $cm_args $cs_args"
+    fi
+    echo "engine=$ENGINE model=$lmodel（$lsrc）subagent=$SUBAGENT_MODEL" >> "$log"
 
     # worktree 隔离由脚本强制（2026-09-16，Win 端 #596/#599 实证：开工单写了「先建 worktree」，泳道跳过、直接改主工作区）。
     # 【设置】写 worktree: ✅/☑ 的条目：脚本先建（或复用）worktree，在里面启动 claude，并导出
@@ -763,13 +832,20 @@ run_lane() {
     # stdout 单独落 $rawjson（不进 $log），下面用 python 把其中 result 字段（解码后的最终文本，
     # 与旧 text 模式的 stdout 逐字等价）写回 $log，哨兵 grep 与状态判定（622 行起）完全不用动。
     rawjson="$LOGDIR/${lane}-${id}.json"
-    ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) > "$rawjson" 2>> "$log"
+    if [[ "$ENGINE" == codex ]]; then
+      ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 codex "${codex_args[@]}" - ) > "$rawjson" 2>> "$log"
+    else
+      ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) > "$rawjson" 2>> "$log"
+    fi
     code=$?
     t1=$(date +%s); mins=$(( (t1 - t0) / 60 ))
 
     # 解不出合法 json（测试假桩、异常中断等）⇒ 原始内容整段当文本落 $log，与旧 text 模式
-    # 字节等价，哨兵判据零影响；用量六列全写 "-"。
-    usage_row="$(python3 - "$rawjson" "$log" <<'PY'
+    # 字节等价，哨兵判据零影响；用量六列全写 "-"。（claude 引擎段落；codex 引擎见下方分支。）
+    if [[ "$ENGINE" == codex ]]; then
+      usage_row="$(python3 "$REPO/scripts/codex_jsonl_summary.py" "$rawjson" "$log")"
+    else
+      usage_row="$(python3 - "$rawjson" "$log" <<'PY'
 import json, sys
 
 raw_path, log_path = sys.argv[1], sys.argv[2]
@@ -815,7 +891,8 @@ if text_to_log:
 
 print("\t".join(str(x) for x in (cost, tin, tout, cread, cwrite, turns, peak)))
 PY
-)"
+    )"
+    fi
     IFS=$'\t' read -r ucost uin uout ucread ucwrite uturns upeak <<< "$usage_row"
 
     # 哨兵扫全文，不扫 tail —— 原版实测哨兵落在第 2 行，扫 tail 会误判
@@ -950,7 +1027,7 @@ echo "日志目录：$LOGDIR"
 # 入队失败 ⛔ 不影响泳道结果与退出码；dry-run 不入队。
 # ---------------------------------------------------------------------------
 if [[ $DRY_RUN -eq 0 ]]; then
-  ( cd "$REPO" && python3 -m tools.liaison owner-notify \
+  ( trap - EXIT; cd "$REPO" && python3 -m tools.liaison owner-notify \
       --dedupe-key "lanes-$STAMP" --lane-logdir "$LOGDIR" ) \
     || echo "  ⚠️ 本人通知入队失败（不影响泳道结果；查 data/liaison/logs 与 owner_notify_outbox）"
   mkdir -p "$REPO/.claude/handoff/events" && : > "$REPO/.claude/handoff/events/lanes-done-$STAMP"
@@ -1031,7 +1108,7 @@ if [[ $CHAIN -eq 1 ]]; then
   else
     echo
     echo "🔗 链式接续：仍有 $remain 条待执行，进入第 $((ROUND + 1)) 轮"
-    ( cd "$REPO" && git pull --rebase origin main ) || \
+    ( trap - EXIT; cd "$REPO" && git pull --rebase origin main ) || \
       echo "   ⚠️ pull --rebase 失败，下一轮各条目自己还会再 pull 一次，继续"
     sleep 10
     exec "$0" --chain --round "$ROUND" --max-rounds "$ROUND_CAP" \

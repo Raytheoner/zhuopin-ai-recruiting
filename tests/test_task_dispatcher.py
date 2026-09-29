@@ -67,6 +67,8 @@ def run_shell(repo: Path, claude: Path, **env_extra: str) -> subprocess.Complete
     env = dict(os.environ)
     env["DISPATCHER_REPO"] = str(repo)
     env["DISPATCHER_CLAUDE"] = str(claude)
+    # 本文件旧断言钉的是 claude 引擎行为（回退引擎）；codex 引擎用例显式覆盖该键。
+    env.setdefault("HR_AGENT_ENGINE", "claude")
     env.update(env_extra)
     return subprocess.run(["bash", str(SHELL)], env=env, capture_output=True, text=True, timeout=60)
 
@@ -167,7 +169,7 @@ def test_sigterm_to_the_shell_kills_the_claude_child_and_releases_the_lock(repo:
         encoding="utf-8",
     )
     script.chmod(0o755)
-    env = {**os.environ, "DISPATCHER_REPO": str(repo), "DISPATCHER_CLAUDE": str(script)}
+    env = {**os.environ, "DISPATCHER_REPO": str(repo), "DISPATCHER_CLAUDE": str(script), "HR_AGENT_ENGINE": "claude"}
     shell = subprocess.Popen(["bash", str(SHELL)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.monotonic() + 10
@@ -260,6 +262,35 @@ def test_session_is_started_with_sonnet_budget_and_headless_flags(repo: Path) ->
     assert "--max-budget-usd 10" in args_line
     assert "-p " in args_line and "--dangerously-skip-permissions" in args_line
     assert "--strict-mcp-config" in args_line
+
+
+def test_session_is_started_with_codex_engine_flags(repo: Path) -> None:
+    """codex 引擎（默认）：argv 形状钉死沙箱/审批/认证与模型映射，⛔ 不含 claude 专属旗标。"""
+    (events_dir(repo) / "lanes-done-1").touch()
+    # 壳的 codex 引擎引用 $REPO/scripts/codex_jsonl_summary.py 记账，隔离仓库里补上真身。
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "codex_jsonl_summary.py").write_text(
+        (ROOT / "scripts" / "codex_jsonl_summary.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    fake = repo / "fake-codex.sh"
+    calls_dir = repo / "codex-calls"
+    calls_dir.mkdir()
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f'{{ echo "ARGS: $*"; echo "--- PROMPT ---"; cat; }} > "{calls_dir}/call.txt"\n'
+        "echo OPENER_DONE\nexit 0\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    proc = run_shell(repo, fake, HR_AGENT_ENGINE="codex", DISPATCHER_CODEX=str(fake))
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    args_line = (calls_dir / "call.txt").read_text(encoding="utf-8").splitlines()[0]
+    assert "--json" in args_line and "--sandbox workspace-write" in args_line
+    assert "-c approval_policy=never" in args_line
+    assert "-c forced_login_method=chatgpt" in args_line
+    assert "-m deepseek-v4-pro" in args_line and "-c model_reasoning_effort=high" in args_line
+    assert "--max-budget-usd" not in args_line and "--dangerously-skip-permissions" not in args_line
 
 
 def test_session_log_is_written_under_dispatcher_dir(repo: Path) -> None:

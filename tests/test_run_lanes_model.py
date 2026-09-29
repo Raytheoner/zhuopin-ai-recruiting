@@ -77,7 +77,9 @@ def _build_sandbox(tmp_path: Path):
     # （run-lanes.sh 已为该 CC 会话导出 HR_LANE_ISOLATE/MAIN/WORKTREE 给 worktree-guard
     # hook 用），原样带进被测脚本的子进程会污染本该是"干净启动"的非 worktree 条目。
     base_env = {k: v for k, v in os.environ.items() if not k.startswith("HR_LANE_")}
-    env = dict(base_env, RUN_LANES_COPY="1", PATH=f"{bindir}:{os.environ['PATH']}")
+    # HR_AGENT_ENGINE=claude：本文件钉的是 claude 引擎的模型分级行为（回退引擎）。
+    # codex 引擎（默认）的等价断言见 tests/test_run_lanes_model_codex.py。
+    env = dict(base_env, RUN_LANES_COPY="1", HR_AGENT_ENGINE="claude", PATH=f"{bindir}:{os.environ['PATH']}")
     return {"repo": repo, "script": script, "plan": plan, "calls": calls, "env": env}
 
 

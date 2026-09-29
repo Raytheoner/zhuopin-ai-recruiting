@@ -347,18 +347,21 @@ def test_install_agent_rejects_anything_outside_the_pattern(repo: Path, recorder
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _hold_fake_process(tmp_path: Path) -> tuple[subprocess.Popen, str]:
+def _hold_fake_process(repo: Path, tmp_path: Path) -> tuple[subprocess.Popen, str]:
+    """起一个假占位进程，并把它落进 `launch/run-lanes.pid`（并发判据的沙箱兜底真源）。
+
+    不再轮询 `pgrep -f` 等它可见：Codex 默认 Seatbelt 沙箱禁止跨进程读命令行参数
+    （`kern.procargs2`），`pgrep -f` 恒非 0，等它等于必挂。PID 文件判活走 `os.kill`，
+    沙箱内外行为一致。
+    """
     busy = tmp_path / f"fake-busy-{uuid.uuid4().hex}.sh"
     busy.write_text("#!/usr/bin/env bash\nsleep 20\n", encoding="utf-8")
     busy.chmod(0o755)
     holder = subprocess.Popen(["bash", str(busy)])
-    for _ in range(100):
-        if subprocess.run(["pgrep", "-f", busy.name], capture_output=True).returncode == 0:
-            return holder, busy.name
-        time.sleep(0.05)
-    holder.kill()
-    holder.wait()
-    pytest.fail("假占位进程没能被 pgrep 看到")
+    launch = repo / ".claude" / "handoff" / "launch"
+    launch.mkdir(parents=True, exist_ok=True)
+    (launch / "run-lanes.pid").write_text(f"{holder.pid}\n", encoding="utf-8")
+    return holder, busy.name
 
 
 def test_launch_lanes_writes_a_launch_request_when_idle(repo: Path) -> None:
@@ -374,7 +377,7 @@ def test_launch_lanes_writes_a_launch_request_when_idle(repo: Path) -> None:
 
 
 def test_launch_lanes_goes_to_queue_when_run_lanes_is_busy(repo: Path, monkeypatch, tmp_path: Path) -> None:
-    holder, pattern = _hold_fake_process(tmp_path)
+    holder, pattern = _hold_fake_process(repo, tmp_path)
     monkeypatch.setattr(ar, "PGREP_PATTERN", pattern)
     try:
         write_action(repo, "20260917-174100", {"action": "launch-lanes", "args": "--full-auto --yes"})
@@ -447,7 +450,7 @@ def test_drain_moves_only_the_earliest_queued_request_back_to_launch(repo: Path)
 
 
 def test_drain_does_nothing_while_run_lanes_is_busy(repo: Path, monkeypatch, tmp_path: Path) -> None:
-    holder, pattern = _hold_fake_process(tmp_path)
+    holder, pattern = _hold_fake_process(repo, tmp_path)
     monkeypatch.setattr(ar, "PGREP_PATTERN", pattern)
     try:
         _queue(repo, "20260917-140000")

@@ -259,8 +259,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
 
-def tick_main(argv: Sequence[str]) -> int:
+def tick_main(argv: Sequence[str], *, today: dt.date | None = None) -> int:
     """`python -m tools.liaison tick` 的实现。**这是本模块唯一读真实时钟与真实路径的地方。**
+
+    `today` 是单测注入口（⛔ 不是业务参数）：不传才读真实时钟（CST「自然日」），
+    单测用它冻结日期，避免观察窗到期这类「日期炸弹」随真实日历漂移。
 
     `argv` 没有默认值（与 `retention.cleanup_main` 同一理由）。库路径取
     `liaison_db.DEFAULT_DB_PATH` 的属性访问、真源路径取 `default_paths()`，单测都能替换。
@@ -277,7 +280,11 @@ def tick_main(argv: Sequence[str]) -> int:
         liaison_db.init_schema(conn)
         # 「自然日」按中国日历算（台账里的日期全是 CST），⛔ 不用本机时区——本机在 EDT，
         # 与中国差 12 小时，照本机日期算会集体差一天且不报错（CLAUDE.md「MMDD 必须实跑」同源）。
-        report = run_tick(conn, paths=default_paths(), today=dt.datetime.now(CHINA_TZ).date())
+        report = run_tick(
+            conn,
+            paths=default_paths(),
+            today=today or dt.datetime.now(CHINA_TZ).date(),
+        )
     finally:
         conn.close()
     print(render_report(report))

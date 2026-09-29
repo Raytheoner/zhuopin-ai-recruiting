@@ -139,19 +139,19 @@ def test_illegal_tokens_are_rejected_without_launching(repo: Path, line: str) ->
 
 
 def _hold_a_fake_run_lanes(repo: Path) -> tuple[subprocess.Popen, str]:
-    """起一个能被 pgrep 看到的假占位进程，返回 (进程, 可作 pgrep 模式的名字)。"""
+    """起一个假占位进程，并把它落进 `launch/run-lanes.pid`（并发判据的沙箱兜底真源）。
+
+    Codex 默认 Seatbelt 沙箱禁跨进程读命令行参数，`pgrep -f` 恒非 0——等它可见必挂。
+    PID 文件判活走 `kill -0`，沙箱内外行为一致（与 lane-launcher.sh 的 `_lanes_busy` 兜底同源）。
+    """
     busy = repo / f"fake-busy-{uuid.uuid4().hex}.sh"
     busy.write_text("#!/usr/bin/env bash\nsleep 20\n", encoding="utf-8")
     busy.chmod(0o755)
     holder = subprocess.Popen(["bash", str(busy)])
-    # 等 pgrep 真能看到它，再跑 launcher —— 否则并发用例会偶发地测成 ①。
-    for _ in range(100):
-        if subprocess.run(["pgrep", "-f", busy.name], capture_output=True).returncode == 0:
-            return holder, busy.name
-        time.sleep(0.05)
-    holder.kill()
-    holder.wait()
-    pytest.fail("假占位进程没能被 pgrep 看到")
+    launch = repo / ".claude" / "handoff" / "launch"
+    launch.mkdir(parents=True, exist_ok=True)
+    (launch / "run-lanes.pid").write_text(f"{holder.pid}\n", encoding="utf-8")
+    return holder, busy.name
 
 
 def test_concurrent_run_lanes_queues_the_request(repo: Path) -> None:

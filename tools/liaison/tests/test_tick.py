@@ -268,10 +268,14 @@ def test_tick_main_runs_end_to_end_against_injected_paths(tmp_path, world, monke
     world.ledger_path.write_text(
         LEDGER_HEADER + ledger_row("人事部#2", status="✅ 已推送 2026-09-09"), encoding="utf-8"
     )
-    assert tick.tick_main([]) == 0
+    # 日期炸弹（2026-09-29 冻结）：world 的观察窗到期日是 2026-09-24，真实时钟越过它之后
+    # 扫描会多入队一条观察窗提醒，「已存在 2」漂成「已存在 3」。钉到两个跟进提醒都成立
+    # （≥09-16）而观察窗未到期（<09-24）的 2026-09-20。
+    today = dt.date(2026, 9, 20)
+    assert tick.tick_main([], today=today) == 0
     out = capsys.readouterr().out
     assert "followup:人事部#2:1" in out and "followup:人事部#2:2" in out
-    assert tick.tick_main([]) == 0
+    assert tick.tick_main([], today=today) == 0
     assert "入队 0，已存在 2" in capsys.readouterr().out
     conn = liaison_db.get_connection(tmp_path / "liaison.db")
     assert conn.execute("SELECT COUNT(*) FROM owner_notify_outbox").fetchone()[0] == 2

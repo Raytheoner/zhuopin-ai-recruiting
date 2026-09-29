@@ -170,7 +170,16 @@ done
 # 在 run-lanes 跑完之前只会空转），而是由 run-lanes 收敛写出的 lanes-done 事件驱动
 # `scripts/action_request.py launch-queue-drain` 把最早一条移回本层，重新触发本脚本。
 # ---------------------------------------------------------------------------
-if pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
+_lanes_busy() {
+  pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1 && return 0
+  # 沙箱兜底（2026-09-29 Codex 迁移）：macOS Seatbelt 沙箱下 pgrep -f 读不到跨进程
+  # 命令行参数，恒非 0。读本脚本上次发车落盘的 run-lanes.pid 判活；pid 已死 ⇒ 不忙。
+  local pid
+  pid="$(cat "$LAUNCH_DIR/run-lanes.pid" 2>/dev/null | tr -cd '0-9')"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+if _lanes_busy; then
   enqueue "已有 run-lanes 进程在跑（pgrep -f '$PGREP_PATTERN' 非空）"
 fi
 
@@ -183,6 +192,10 @@ cd "$REPO" || reject "无法 cd 到仓库根 $REPO"
 
 nohup bash "$REPO/$RUNNER" "${ARGS[@]}" > "$boot_log" 2>&1 &
 pid=$!
+
+# 沙箱兜底（2026-09-29 Codex 迁移）：scripts/action_request.py 的并发判据在 Codex 的
+# macOS Seatbelt 沙箱下 `pgrep -f` 恒空，改读本 PID 文件判活（run-lanes.sh 退出时自删）。
+printf '%s\n' "$pid" > "$LAUNCH_DIR/run-lanes.pid"
 
 {
   echo "pid=$pid"

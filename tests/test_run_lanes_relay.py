@@ -85,7 +85,7 @@ def _build_sandbox(tmp_path: Path, relay_times: int, partial_plain: bool = False
     plan = tmp_path / "plan.md"
     plan.write_text(PLAN, encoding="utf-8")
     base_env = {k: v for k, v in os.environ.items() if not k.startswith("HR_LANE_")}
-    env = dict(base_env, RUN_LANES_COPY="1", PATH=f"{bindir}:{os.environ['PATH']}")
+    env = dict(base_env, RUN_LANES_COPY="1", HR_AGENT_ENGINE="claude", PATH=f"{bindir}:{os.environ['PATH']}")
     return {"repo": repo, "script": script, "plan": plan, "calls": calls, "bodies": bodies, "env": env}
 
 

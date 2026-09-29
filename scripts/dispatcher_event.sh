@@ -13,7 +13,8 @@
 #      AbandonProcessGroup 又不连坐子进程，不这样做会留下一个孤儿 claude 会话与新会话双跑）
 #   ③ 判「该不该起会话」：有未处理事件文件、或当日兜底戳不存在 ⇒ 起；否则静默退出
 #      —— skill 把事件搬进 events/processed/ 会再触发 WatchPaths，没有这条判据就是死循环
-#   ④ printf | claude -p 以 Sonnet 执行 skill，预算上限 $10，日志 .claude/handoff/dispatcher/<ts>.log
+#   ④ printf | <引擎> 无头执行 skill（codex 引擎＝codex exec --sandbox workspace-write；
+#     claude 引擎＝claude -p，预算上限 $10），日志 .claude/handoff/dispatcher/<ts>.log
 #   ⑤ 会话 rc=0 ⇒ 把本轮列给它的事件里仍留在 events/ 的搬进 processed/（skill ⑨ 应已做，这里兜底防重复处理）；
 #      rc≠0 ⇒ 事件原地留着，等下次唤醒／每日兜底，并写失败戳：30 分钟内不再由事件起会话（防预算打满后
 #      被自己写的事件反复唤醒、按次烧 $10）。同一次调用最多跑 3 轮，吃掉会话期间新到的事件。
@@ -21,7 +22,9 @@
 # ⛔ 本壳不 source .env、不读密钥、不把事件文件内容当命令（事件文件只用文件名）。
 # 单测注入口（生产由 launchd 直接调用、不设）：
 #   DISPATCHER_REPO    仓库根（默认 /Users/paulshao/Projects/HumanResource）
-#   DISPATCHER_CLAUDE  claude 可执行文件（默认 PATH 里的 claude；测试指到假脚本）
+#   HR_AGENT_ENGINE   codex|claude（默认 codex；测试用 claude 回退或指假 codex）
+#   DISPATCHER_CLAUDE claude 可执行文件（默认 PATH 里的 claude；测试指到假脚本）
+#   DISPATCHER_CODEX  codex 可执行文件（默认 PATH 里的 codex；测试指到假脚本）
 #   DISPATCHER_MODEL   模型（默认 sonnet）    DISPATCHER_BUDGET  预算美元（默认 10）
 #   DISPATCHER_MAX_ROUNDS 同次调用最多轮数（默认 3）    DISPATCHER_BACKOFF_MIN 失败退避分钟（默认 30）
 # ===========================================================================
@@ -32,11 +35,31 @@ export LC_ALL=C
 export LANG=C
 
 REPO="${DISPATCHER_REPO:-/Users/paulshao/Projects/HumanResource}"
+ENGINE="${HR_AGENT_ENGINE:-codex}"
+case "$ENGINE" in
+  codex|claude) ;;
+  *) echo "✗ HR_AGENT_ENGINE 只认 codex|claude：$ENGINE" >&2; exit 64 ;;
+esac
 CLAUDE_BIN="${DISPATCHER_CLAUDE:-claude}"
+CODEX_BIN="${DISPATCHER_CODEX:-codex}"
 MODEL="${DISPATCHER_MODEL:-sonnet}"
 BUDGET="${DISPATCHER_BUDGET:-10}"
 MAX_ROUNDS="${DISPATCHER_MAX_ROUNDS:-3}"
 BACKOFF_MIN="${DISPATCHER_BACKOFF_MIN:-30}"
+# codex 引擎模型映射（与 run-lanes.sh 同档位）：DISPATCHER_MODEL 默认 sonnet 档。
+CODEX_MODEL_OPUS="${HR_CODEX_MODEL_OPUS:-deepseek-v4-pro}"; CODEX_REASON_OPUS="${HR_CODEX_REASON_OPUS:-max}"
+CODEX_MODEL_SONNET="${HR_CODEX_MODEL_SONNET:-deepseek-v4-pro}"; CODEX_REASON_SONNET="${HR_CODEX_REASON_SONNET:-high}"
+CODEX_MODEL_HAIKU="${HR_CODEX_MODEL_HAIKU:-deepseek-flash}"; CODEX_REASON_HAIKU="${HR_CODEX_REASON_HAIKU:-low}"
+CODEX_LOGIN_METHOD="${HR_CODEX_FORCED_LOGIN:-chatgpt}"
+
+dispatcher_codex_args() {
+  local m; m="$(printf '%s' "$MODEL" | tr 'A-Z' 'a-z')"
+  case "$m" in
+    opus)  printf '%s' "-m $CODEX_MODEL_OPUS -c model_reasoning_effort=$CODEX_REASON_OPUS" ;;
+    haiku) printf '%s' "-m $CODEX_MODEL_HAIKU -c model_reasoning_effort=$CODEX_REASON_HAIKU" ;;
+    *)     printf '%s' "-m $CODEX_MODEL_SONNET -c model_reasoning_effort=$CODEX_REASON_SONNET" ;;
+  esac
+}
 
 # ⛔ 不许留字面量 ~：这里是 shell，$HOME 会展开；plist 里那份由安装器渲染成绝对路径。
 export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
@@ -109,10 +132,17 @@ if [[ -f "$FAILED_STAMP" ]] && [[ -n "$(find "$LOGDIR" -maxdepth 1 -name last-fa
   exit 0
 fi
 
-command -v "$CLAUDE_BIN" >/dev/null 2>&1 || [[ -x "$CLAUDE_BIN" ]] || {
-  log "✗ 找不到 claude CLI（$CLAUDE_BIN；PATH=$PATH）"
-  exit 10
-}
+if [[ "$ENGINE" == codex ]]; then
+  command -v "$CODEX_BIN" >/dev/null 2>&1 || [[ -x "$CODEX_BIN" ]] || {
+    log "✗ 找不到 codex CLI（$CODEX_BIN；PATH=$PATH）"
+    exit 10
+  }
+else
+  command -v "$CLAUDE_BIN" >/dev/null 2>&1 || [[ -x "$CLAUDE_BIN" ]] || {
+    log "✗ 找不到 claude CLI（$CLAUDE_BIN；PATH=$PATH）"
+    exit 10
+  }
+fi
 
 # ---------------------------------------------------------------------------
 # ④ 起会话。prompt 只含：事件文件名清单、无头引导、一句「用 Skill 工具调 task-dispatcher」。
@@ -128,13 +158,13 @@ build_prompt() {
 ④ 收工输出 skill §3 六行报告，最后一行顶格 OPENER_DONE 或 OPENER_PARTIAL: <原因>。
 
 [Mac]dispatcher-$STAMP
-【设置】执行环境: CC ｜ Session: 新开（dispatcher_event.sh 无头起）｜ 分支: main ｜ worktree: ❌ 不勾（调度器只改文档并经提交通道提交）｜ 工作区: 仓库根 ｜ 派发: launchd·task-dispatcher
+【设置】执行环境: $ENGINE ｜ Session: 新开（dispatcher_event.sh 无头起）｜ 分支: main ｜ worktree: ❌ 不勾（调度器只改文档并经提交通道提交）｜ 工作区: 仓库根 ｜ 派发: launchd·task-dispatcher
 
 触发：$trigger
 本轮事件文件（相对 .claude/handoff/events/，处理完按 skill ⑨ 移入 processed/）：
 ${ev_list:-（无——每日兜底：只刷新台账、推进状态、算 ready 集）}
 
-请用 Skill 工具调用 \`task-dispatcher\`，按其 SKILL.md ① → ⑨ 逐步执行到底。单实例锁已由壳持有（DISPATCHER_LOCK_HELD=1）。
+请执行 \`task-dispatcher\` 技能（Codex 引擎读 \`.agents/skills/task-dispatcher/SKILL.md\`，Claude 引擎读 \`.claude/skills/task-dispatcher/SKILL.md\`），按其 ① → ⑨ 逐步执行到底。单实例锁已由壳持有（DISPATCHER_LOCK_HELD=1）。
 EOF
 }
 
@@ -167,11 +197,19 @@ while :; do
   # 后台起、记 pid 进锁、再 wait：壳被 TERM 时 trap 能拿到子进程杀掉；锁里第二行让别的实例也能看见它。
   # --output-format json（0918F）：只为拿 total_cost_usd/usage——本壳成败只认 rc，不像
   # run-lanes.sh 那样靠 grep $LOG 判定，所以这里不用把 result 文本转译回纯文本，直接原样落 $LOG。
-  build_prompt "$ev_names" "$trigger" | env DISPATCHER_LOCK_HELD=1 HR_HEADLESS_LANE=1 \
-      CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$MODEL" \
-      "$CLAUDE_BIN" -p -n "[Mac]dispatcher-$STAMP" --output-format json \
-      --model "$MODEL" --max-budget-usd "$BUDGET" --dangerously-skip-permissions --strict-mcp-config \
-      >> "$LOG" 2>&1 &
+  if [[ "$ENGINE" == codex ]]; then
+    dx_args="$(dispatcher_codex_args)"
+    build_prompt "$ev_names" "$trigger" | env DISPATCHER_LOCK_HELD=1 HR_HEADLESS_LANE=1 \
+        "$CODEX_BIN" exec --json --sandbox workspace-write -c approval_policy=never \
+        -c forced_login_method="$CODEX_LOGIN_METHOD" $dx_args - \
+        >> "$LOG" 2>&1 &
+  else
+    build_prompt "$ev_names" "$trigger" | env DISPATCHER_LOCK_HELD=1 HR_HEADLESS_LANE=1 \
+        CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$MODEL" \
+        "$CLAUDE_BIN" -p -n "[Mac]dispatcher-$STAMP" --output-format json \
+        --model "$MODEL" --max-budget-usd "$BUDGET" --dangerously-skip-permissions --strict-mcp-config \
+        >> "$LOG" 2>&1 &
+  fi
   child=$!
   printf '%s\n%s\n' "$$" "$child" > "$LOCK"
   wait "$child"
@@ -180,7 +218,10 @@ while :; do
   echo "$$" > "$LOCK"
   log "■ 第 $round 轮结束 rc=$rc"
 
-  usage_row="$(python3 - "$LOG" "$pre_lines" <<'PY'
+  if [[ "$ENGINE" == codex ]]; then
+    usage_row="$(python3 "$REPO/scripts/codex_jsonl_summary.py" --usage-only --skip "$pre_lines" "$LOG")"
+  else
+    usage_row="$(python3 - "$LOG" "$pre_lines" <<'PY'
 import json, sys
 
 log_path, skip = sys.argv[1], int(sys.argv[2])
@@ -208,7 +249,8 @@ for line in lines:
     cwrite = usage.get("cache_creation_input_tokens", "-")
 print("\t".join(str(x) for x in (cost, tin, tout, cread, cwrite)))
 PY
-)"
+  )"
+  fi
   printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$round" "${ev_count:-0}" "$usage_row" >> "$USAGE_TSV"
 
   if [[ $rc -eq 0 ]]; then

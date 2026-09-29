@@ -73,11 +73,15 @@ def test_compute_is_busy_false_when_is_alive_raises():
 from pathlib import Path
 
 from tools.liaison.unpack.dispatch import (
+    AGENT_ENGINE_ENV,
     BUDGET_ENV,
     CLAUDE_BIN_ENV,
+    CODEX_BIN_ENV,
     DEFAULT_BUDGET_USD,
     build_headless_argv,
+    build_headless_argv_codex,
     resolve_claude_bin,
+    resolve_codex_bin,
 )
 
 
@@ -106,6 +110,51 @@ def test_resolve_claude_bin_none_when_all_three_fail(monkeypatch, tmp_path):
     monkeypatch.setattr("tools.liaison.unpack.dispatch.shutil.which", lambda name: None)
     monkeypatch.setattr("tools.liaison.unpack.dispatch.Path.home", lambda: tmp_path / "empty-home")
     assert resolve_claude_bin({}) is None
+
+
+def test_resolve_codex_bin_prefers_env_override():
+    assert resolve_codex_bin({CODEX_BIN_ENV: "/opt/codex/bin/codex"}) == "/opt/codex/bin/codex"
+
+
+def test_resolve_codex_bin_falls_back_to_path(monkeypatch):
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.shutil.which", lambda name: "/usr/local/bin/codex"
+    )
+    assert resolve_codex_bin({}) == "/usr/local/bin/codex"
+
+
+def test_resolve_codex_bin_falls_back_to_bundled_app_path(monkeypatch, tmp_path):
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.shutil.which", lambda name: None)
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.Path.home", lambda: tmp_path / "no-home")
+    fallback = tmp_path / "fake-app" / "codex"
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.CODEX_BIN_FALLBACKS",
+        (str(fallback),),
+    )
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("", encoding="utf-8")
+    assert resolve_codex_bin({}) == str(fallback)
+
+
+def test_build_headless_argv_codex_shape():
+    argv = build_headless_argv_codex("/usr/local/bin/codex", {})
+    assert argv == [
+        "/usr/local/bin/codex",
+        "exec",
+        "--json",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "approval_policy=never",
+        "-c",
+        "forced_login_method=chatgpt",
+        "-",
+    ]
+
+
+def test_build_headless_argv_codex_honors_login_override():
+    argv = build_headless_argv_codex("/x/codex", {"HR_CODEX_FORCED_LOGIN": "api"})
+    assert "forced_login_method=api" in argv
 
 
 def test_build_headless_argv_shape():
@@ -258,7 +307,7 @@ def test_dispatch_binary_not_found_is_failed(tmp_path, monkeypatch):
         prompt="prompt",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
-        env={},
+        env={AGENT_ENGINE_ENV: "claude"},
         now=NOW,
         popen=popen,
     )
@@ -283,7 +332,7 @@ def test_dispatch_popen_raises_is_process_create_failed(tmp_path, monkeypatch):
         prompt="prompt",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
-        env={},
+        env={AGENT_ENGINE_ENV: "claude"},
         now=NOW,
         popen=_raising_popen,
     )
@@ -306,7 +355,7 @@ def test_dispatch_started_writes_lock_and_stdin_and_does_not_wait(tmp_path, monk
         prompt="给拆件会话的完整 prompt",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
-        env={},
+        env={AGENT_ENGINE_ENV: "claude"},
         now=NOW,
         popen=popen,
     )
@@ -362,7 +411,7 @@ def test_dispatch_never_raises_even_on_unexpected_stdin_error(tmp_path, monkeypa
         prompt="prompt",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
-        env={},
+        env={AGENT_ENGINE_ENV: "claude"},
         now=NOW,
         popen=popen,
     )
@@ -405,7 +454,7 @@ def test_dispatch_kills_the_child_process_when_lock_write_fails(tmp_path, monkey
         prompt="prompt",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
-        env={},
+        env={AGENT_ENGINE_ENV: "claude"},
         now=NOW,
         popen=popen,
     )
@@ -434,6 +483,7 @@ def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
         "PYTHONPATH": ".",
         "USER": "paulshao",
         "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
+        AGENT_ENGINE_ENV: "claude",
         "HR_LIAISON_BOT_SECRET": "top-secret",
         "HR_LIAISON_GROUP_WEBHOOK": "https://example.invalid/webhook",
         "SOME_UNRELATED_VAR": "x",
@@ -460,6 +510,7 @@ def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
         "PYTHONPATH": ".",
         "USER": "paulshao",
         "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
+        AGENT_ENGINE_ENV: "claude",
     }
 
 
@@ -494,3 +545,33 @@ def test_filter_child_env_never_leaks_hr_liaison_secrets_regardless_of_allowlist
         if key.startswith("HR_LIAISON_") and key != "HR_LIAISON_CLAUDE_BIN"
     }
     assert leaked_secrets == set()
+
+
+def test_dispatch_codex_engine_starts_with_codex_argv_and_prompt(tmp_path, monkeypatch):
+    """codex 引擎（默认）：argv 走 `exec --json --sandbox workspace-write`，prompt 仍从 stdin 写入。"""
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_codex_bin", lambda env: "/usr/local/bin/codex"
+    )
+    process = _FakeProcess(pid=5151)
+    popen = _fake_popen_factory(process)
+    outcome = dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="给拆件会话的完整 prompt",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    assert outcome.status == "started"
+    assert outcome.pid == 5151
+    argv, kwargs = popen.calls[0]
+    assert argv[0] == "/usr/local/bin/codex"
+    assert argv[1:4] == ["exec", "--json", "--sandbox"]
+    assert "workspace-write" in argv and "approval_policy=never" in argv
+    assert argv[-1] == "-"
+    assert process.stdin.closed_with == "给拆件会话的完整 prompt".encode("utf-8")
+    assert kwargs["cwd"] == str(_repo_root_for_test())

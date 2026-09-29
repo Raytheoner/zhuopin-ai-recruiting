@@ -82,7 +82,7 @@ DOC_SIZE_TEST = Path("tests") / "test_doc_size_budget.py"
 
 # `.claude/skills/<名>/SKILL.md` 单独放行（0920L）：Cowork 改技能文件的唯一合法落点，
 # `<名>` 限字母数字下划线短横，⛔ 不含 `/`、不含 `..`——排除 settings.json / hooks / handoff。
-SKILL_MD_PATTERN = re.compile(r"^\.claude/skills/[A-Za-z0-9_-]+/SKILL\.md$")
+SKILL_MD_PATTERN = re.compile(r"^\.(claude|agents)/skills/[A-Za-z0-9_-]+/SKILL\.md$")
 
 # 定夺答复事件（R2 调度器唤醒，0917AM）：一次提交里含定夺队列 ⇒ 写一个事件文件，launchd WatchPaths
 # 由此起调度器去解阻塞。只在 .done 之后写：commit 没成就没有「答复落档」这件事。
@@ -127,7 +127,7 @@ def validate_path(raw: str) -> str | None:
         return None
     if SKILL_MD_PATTERN.match(normalized):
         return None
-    return f"不在白名单（docs/**、openspec/changes/<名>/tasks.md 或 .claude/skills/<名>/SKILL.md）内：{raw}"
+    return f"不在白名单（docs/**、openspec/changes/<名>/tasks.md 或 .claude|.agents/skills/<名>/SKILL.md）内：{raw}"
 
 
 def parse_request(text: str) -> tuple[dict | None, str | None]:

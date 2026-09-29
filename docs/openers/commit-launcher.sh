@@ -31,7 +31,10 @@ SCRIPT="$SELF_DIR/../../scripts/commit_request.py"
 # 本仓库的 venv 叫 venv/（pre-commit 钩子 INSTALL_PYTHON 也指它），.venv/ 只是兜底。
 # 用 venv 的 python 起，是为了 git commit 触发的 pre-commit 钩子能找到 pre_commit 模块。
 PY=""
-for cand in "$REPO/venv/bin/python" "$REPO/.venv/bin/python"; do
+# 主仓库 venv 回退（2026-09-29）：单测里 $REPO 是临时仓库、没有 venv，而 commit_request.py
+# 的体积闸需要能 import pytest 的解释器——照脚本自身所在主仓库找 venv/bin/python，
+# ⛔ 不退回系统 python3（无 pytest ⇒ 体积闸被静默跳过，红了照样提交）。
+for cand in "$REPO/venv/bin/python" "$REPO/.venv/bin/python" "$SELF_DIR/../../venv/bin/python" "$SELF_DIR/../../.venv/bin/python"; do
   [[ -x "$cand" ]] && { PY="$cand"; break; }
 done
 [[ -n "$PY" ]] || PY="$(command -v python3 || true)"

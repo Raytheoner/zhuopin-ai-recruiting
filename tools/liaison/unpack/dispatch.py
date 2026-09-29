@@ -24,6 +24,18 @@ logger = logging.getLogger("tools.liaison.unpack.dispatch")
 #: `build_headless_argv` 的调用方都从这里 import，⛔ 不许各处重写字面量。
 CLAUDE_BIN_ENV = "HR_LIAISON_CLAUDE_BIN"
 BUDGET_ENV = "HR_LIAISON_UNPACK_BUDGET_USD"
+AGENT_ENGINE_ENV = "HR_AGENT_ENGINE"
+CODEX_BIN_ENV = "HR_CODEX_BIN"
+CODEX_FORCED_LOGIN_ENV = "HR_CODEX_FORCED_LOGIN"
+
+#: 默认执行引擎（2026-09-29 Codex 迁移）：codex。claude 是回退引擎（旧单测与历史契约）。
+AGENT_ENGINE_DEFAULT = "codex"
+
+#: 本机 codex CLI 的兜底路径（随 ChatGPT/Codex 桌面应用分发；launchd 的 PATH 未必含它）。
+#: ⛔ 与 REPO_ROOT 一样是单机仓内常量——两台机器各自核对，不要当成通用安装路径。
+CODEX_BIN_FALLBACKS: tuple[str, ...] = (
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+)
 
 #: 预算默认值（design D16，Shao Peishen 2026-09-10 答 2a）。取字符串——它只会被
 #:拼进 argv，⛔ 不参与任何数值运算，存成 `str` 免得调用方还要 `str(int(...))`。
@@ -87,6 +99,23 @@ def resolve_claude_bin(env: Mapping[str, str]) -> str | None:
     fallback = Path.home() / ".local" / "bin" / "claude"
     if fallback.is_file():
         return str(fallback)
+    return None
+
+
+def resolve_codex_bin(env: Mapping[str, str]) -> str | None:
+    """`codex` 二进制路径解析（四级顺序，与 claude 侧同精神）。均找不到 ⇒ `None`。"""
+    override = env.get(CODEX_BIN_ENV)
+    if override and override.strip():
+        return override.strip()
+    found = shutil.which("codex")
+    if found:
+        return found
+    local = Path.home() / ".local" / "bin" / "codex"
+    if local.is_file():
+        return str(local)
+    for cand in CODEX_BIN_FALLBACKS:
+        if Path(cand).is_file():
+            return cand
     return None
 
 
@@ -207,8 +236,12 @@ HEADLESS_ARGV_FIXED_PART: tuple[str, ...] = (
 #: 不影响凭据边界。
 _CHILD_ENV_ALLOWLIST: tuple[str, ...] = (
     CLAUDE_BIN_ENV,
+    CODEX_BIN_ENV,
+    AGENT_ENGINE_ENV,
+    CODEX_FORCED_LOGIN_ENV,
     "PATH",
     "HOME",
+    "CODEX_HOME",
     "PYTHONPATH",
     "USER",
 )
@@ -230,6 +263,33 @@ def build_headless_argv(claude_bin: str, budget: str) -> list[str]:
     return [claude_bin, *HEADLESS_ARGV_FIXED_PART, "--max-budget-usd", budget]
 
 
+def build_headless_argv_codex(codex_bin: str, env: Mapping[str, str]) -> list[str]:
+    """codex 引擎的无头 argv（2026-09-29）。**纯函数**，⛔ 不读环境、不起进程。
+
+    - `--json`：stdout 是 JSONL 事件流（拆件会话只把输出当日志，⛔ 不消费哨兵）
+    - `--sandbox workspace-write`：写权限锁在 cwd（仓库根）内；网络（git push 等）沙箱拦
+    - `-c approval_policy=never`：无人值守，升级请求自动拒绝并回报给会话
+    - `-c forced_login_method=chatgpt`：对齐本机 auth.json 的 ChatGPT 会话态
+      （全局 config 写死 api 登录会造成启动认证冲突，实测必炸）
+    - 末尾 `-`：prompt 从 stdin 读（调用方照旧 write stdin 后 close）
+    章程 §三 的「只改白名单路径」由 workspace-write 沙箱与章程正文共同约束；
+    细粒度 Edit 路径 deny 的 Codex PreToolUse hook 化是后续项（见 AGENTS.md 迁移注记）。
+    """
+    login = (env.get(CODEX_FORCED_LOGIN_ENV) or "chatgpt").strip() or "chatgpt"
+    return [
+        codex_bin,
+        "exec",
+        "--json",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "approval_policy=never",
+        "-c",
+        f"forced_login_method={login}",
+        "-",
+    ]
+
+
 # tools/liaison/unpack/dispatch.py → parents[0]=unpack, [1]=liaison, [2]=tools, [3]=仓库根
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -244,7 +304,7 @@ class DispatchOutcome:
     log_path: str | None = None
 
 
-class _ClaudeBinaryNotFound(Exception):
+class _AgentBinaryNotFound(Exception):
     """内部哨兵：区分「二进制解析失败」与「popen 本身抛异常」，两者的审计
     `reason` 不同（`binary_not_found` vs `process_create_failed`），⛔ 不让
     调用方看到——只在本函数体内捕获。"""
@@ -308,11 +368,18 @@ def dispatch_headless_unpack(
 
     try:
         try:
-            claude_bin = resolve_claude_bin(env)
-            if claude_bin is None:
-                raise _ClaudeBinaryNotFound()
-            budget = (env.get(BUDGET_ENV) or DEFAULT_BUDGET_USD).strip()
-            argv = build_headless_argv(claude_bin, budget)
+            engine = (env.get(AGENT_ENGINE_ENV) or AGENT_ENGINE_DEFAULT).strip().lower()
+            if engine == "codex":
+                agent_bin = resolve_codex_bin(env)
+                if agent_bin is None:
+                    raise _AgentBinaryNotFound()
+                argv = build_headless_argv_codex(agent_bin, env)
+            else:
+                claude_bin = resolve_claude_bin(env)
+                if claude_bin is None:
+                    raise _AgentBinaryNotFound()
+                budget = (env.get(BUDGET_ENV) or DEFAULT_BUDGET_USD).strip()
+                argv = build_headless_argv(claude_bin, budget)
             process = popen(
                 argv,
                 cwd=str(REPO_ROOT),
@@ -321,7 +388,7 @@ def dispatch_headless_unpack(
                 stderr=subprocess.STDOUT,
                 env=_filter_child_env(env),
             )
-        except _ClaudeBinaryNotFound:
+        except _AgentBinaryNotFound:
             return DispatchOutcome(status="failed", reason="binary_not_found")
         except Exception as exc:
             logger.error("拆件会话进程创建失败：%s", exc, exc_info=True)

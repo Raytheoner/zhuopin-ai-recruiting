@@ -131,3 +131,7 @@ def unpack_side_effects_to_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatch_wiring, "DEFAULT_LOCK_PATH", lock_path)
     monkeypatch.setattr(liaison_main, "UNPACK_SIGNAL_PATH", signal_path)
     monkeypatch.setenv(dispatch.CLAUDE_BIN_ENV, str(tmp_path / "claude-must-not-run"))
+    # 拆件测试套件整体钉 claude 引擎：真实进程闸靠「HR_LIAISON_CLAUDE_BIN 指向不存在文件」
+    # 成立；默认 codex 引擎会解析到本机真实 codex 并真起会话，破坏测试隔离。
+    # 生产默认引擎（codex）的行为由 test_unpack_dispatch.py 单独钉。
+    monkeypatch.setenv(dispatch.AGENT_ENGINE_ENV, "claude")

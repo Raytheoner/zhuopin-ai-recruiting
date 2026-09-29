@@ -16,6 +16,7 @@ def test_docs_still_whitelisted() -> None:
 
 def test_skill_md_whitelisted() -> None:
     assert validate_path(".claude/skills/lane-watch-relay/SKILL.md") is None
+    assert validate_path(".agents/skills/lane-watch-relay/SKILL.md") is None
 
 
 def test_settings_json_still_rejected() -> None:
@@ -24,3 +25,4 @@ def test_settings_json_still_rejected() -> None:
 
 def test_skill_non_skill_md_file_rejected() -> None:
     assert validate_path(".claude/skills/x/hooks.py") is not None
+    assert validate_path(".agents/skills/x/hooks.py") is not None
