@@ -133,10 +133,25 @@ if [[ -f "$FAILED_STAMP" ]] && [[ -n "$(find "$LOGDIR" -maxdepth 1 -name last-fa
 fi
 
 if [[ "$ENGINE" == codex ]]; then
-  command -v "$CODEX_BIN" >/dev/null 2>&1 || [[ -x "$CODEX_BIN" ]] || {
+  # launchd 的 PATH 不含桌面应用附带的 codex（2026-09-29 17:35 实测：调度器一秒退出在
+  # 「找不到 codex CLI」）。解析顺序：DISPATCHER_CODEX／HR_CODEX_BIN（可绝对路径）
+  # → PATH → ~/.local/bin → 应用内置路径。⛔ 与 run-lanes.sh／dispatch.py 保持同一顺序。
+  _resolved=""
+  for _cand in "$CODEX_BIN" "${HR_CODEX_BIN:-}" "$HOME/.local/bin/codex" \
+               "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"; do
+    [[ -n "$_cand" ]] || continue
+    if [[ "$_cand" == */* ]]; then
+      [[ -x "$_cand" ]] && { _resolved="$_cand"; break; }
+    else
+      _resolved="$(command -v "$_cand" 2>/dev/null || true)"
+      [[ -n "$_resolved" ]] && break
+    fi
+  done
+  [[ -n "$_resolved" ]] || {
     log "✗ 找不到 codex CLI（$CODEX_BIN；PATH=$PATH）"
     exit 10
   }
+  CODEX_BIN="$_resolved"
 else
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || [[ -x "$CLAUDE_BIN" ]] || {
     log "✗ 找不到 claude CLI（$CLAUDE_BIN；PATH=$PATH）"

@@ -293,6 +293,27 @@ def test_session_is_started_with_codex_engine_flags(repo: Path) -> None:
     assert "--max-budget-usd" not in args_line and "--dangerously-skip-permissions" not in args_line
 
 
+def test_codex_resolved_from_local_bin_when_path_lacks_it(repo: Path, tmp_path: Path) -> None:
+    """launchd 的 PATH 不含 codex：解析必须兜到 $HOME/.local/bin/codex（2026-09-29 实测缺口）。"""
+    (events_dir(repo) / "lanes-done-1").touch()
+    fake_home = tmp_path / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    fake = fake_home / ".local" / "bin" / "codex"
+    fake.write_text(
+        "#!/usr/bin/env bash\ncat >/dev/null\necho OPENER_DONE\nexit 0\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    proc = run_shell(
+        repo, fake_home / ".local" / "bin" / "claude",
+        HR_AGENT_ENGINE="codex",
+        HOME=str(fake_home),
+        PATH="/usr/bin:/bin",
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert not (events_dir(repo) / "lanes-done-1").exists(), "事件应被处理并归档"
+
+
 def test_session_log_is_written_under_dispatcher_dir(repo: Path) -> None:
     (events_dir(repo) / "lanes-done-1").touch()
     run_shell(repo, fake_claude(repo, body="hello-from-fake"))

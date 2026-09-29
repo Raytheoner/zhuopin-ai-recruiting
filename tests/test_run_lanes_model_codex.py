@@ -167,3 +167,13 @@ def test_non_json_stdout_falls_back_to_plain_text(sandbox):
     rows = results.read_text(encoding="utf-8").split("\t")
     assert rows[2] == "OK"
     assert rows[6:12] == ["-", "-", "-", "-", "-", "-"]
+
+
+def test_codex_resolved_via_hr_codex_bin_when_not_on_path(sandbox):
+    """launchd 的 PATH 没有 codex（2026-09-29 实测）：HR_CODEX_BIN 绝对路径必须能兜住。"""
+    fake = sandbox["script"].parent / "bin" / "codex"
+    sandbox["env"]["PATH"] = "/usr/bin:/bin"
+    sandbox["env"]["HR_CODEX_BIN"] = str(fake)
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101A")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert calls_for(sandbox)["0101A"]

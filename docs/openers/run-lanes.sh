@@ -173,7 +173,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$ENGINE" == codex ]]; then
-  command -v codex >/dev/null || { echo "✗ 找不到 codex CLI（可用 HR_CODEX_BIN 指到绝对路径）"; exit 10; }
+  # launchd（lane-launcher 起本脚本）的 PATH 不含桌面应用附带的 codex——与 dispatcher_event.sh／
+  # dispatch.py 同一解析顺序：HR_CODEX_BIN → PATH → ~/.local/bin → 应用内置路径（2026-09-29 实测定）。
+  CODEX_BIN=""
+  for _cand in "${HR_CODEX_BIN:-}" "codex" "$HOME/.local/bin/codex" \
+               "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"; do
+    [[ -n "$_cand" ]] || continue
+    if [[ "$_cand" == */* ]]; then
+      [[ -x "$_cand" ]] && { CODEX_BIN="$_cand"; break; }
+    else
+      CODEX_BIN="$(command -v "$_cand" 2>/dev/null || true)"
+      [[ -n "$CODEX_BIN" ]] && break
+    fi
+  done
+  [[ -n "$CODEX_BIN" ]] || { echo "✗ 找不到 codex CLI（可用 HR_CODEX_BIN 指到绝对路径）"; exit 10; }
 else
   command -v claude >/dev/null || { echo "✗ 找不到 claude CLI"; exit 10; }
 fi
@@ -833,7 +846,7 @@ run_lane() {
     # 与旧 text 模式的 stdout 逐字等价）写回 $log，哨兵 grep 与状态判定（622 行起）完全不用动。
     rawjson="$LOGDIR/${lane}-${id}.json"
     if [[ "$ENGINE" == codex ]]; then
-      ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 codex "${codex_args[@]}" - ) > "$rawjson" 2>> "$log"
+      ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 "$CODEX_BIN" "${codex_args[@]}" - ) > "$rawjson" 2>> "$log"
     else
       ( cd "$run_dir" && printf '%s\n%s\n' "$HEADER" "$body" | env ${iso_env[@]+"${iso_env[@]}"} HR_HEADLESS_LANE=1 CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=3600000 CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL" claude "${args[@]}" ) > "$rawjson" 2>> "$log"
     fi
