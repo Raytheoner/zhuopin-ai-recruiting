@@ -4,11 +4,24 @@
 把一条无头泳道的 stdout（JSONL 事件流）收敛成两样东西：
 
   ① 7 列 TSV：`cost in out cache_read cache_write turns peak`——列序与 run-lanes.sh
-     原 claude `--output-format json` 解析完全一致，下游 results.tsv／usage.tsv 零改动。
+    原 claude `--output-format json` 解析完全一致，下游 results.tsv／usage.tsv 零改动。
      `cost` 没有真实值来源，恒 `-`（⛔ 不编造美元数）；`turns`＝`turn.completed` 事件数；
-     `peak`＝各轮 `input+cached+write` 之和的最大值，近似单轮上下文峰值——口径与
-     claude 的 `usage.iterations` 不同（codex 不提供该结构），只记账与 150k 提示用，
-     ⛔ 不当作硬闸。
+     `in`／`out`／`cache_read`／`cache_write` 均为**累计口径**——`usage` 是 session 累计值，
+     故多事件时取**最后一条累计快照**（⛔ 不逐条相加：把累计量再累加一遍即重复计数）。
+     单事件（codex 的常态）下四列即该事件的值，与迁移期旧行为逐字一致。
+
+  ⚠️ `peak` 口径（2026-09-30 `0930I` 修正）：**codex 的 JSONL 不提供单轮上下文峰值**——
+     `codex exec --json` 全程只在收尾发一次 `turn.completed`，其 `usage` 是**整场累计值**
+     （0930F 实证：`input_tokens=6454677`、`cached_input_tokens=6394496`、`cache_write=0`、
+     `turns=1`）。故本列＝「**最大单轮累计用量**」：把每条 `turn.completed` 的 `usage` 当累计值，
+     与上一条作差得该轮增量（首条事件的增量＝其自身），
+     `peak = max(增量 input_tokens + 增量 cache_write_input_tokens)`。
+     ⛔ **不再叠加 `cache_read`**（`cached_input_tokens` 是 `input_tokens` 内的命中量，重复计入
+     会把 0930F 这种单事件样本从 6,454,677 虚增到 12,849,173）。⛔ 本列**不得与 claude 的
+     `usage.iterations` 口径并排比较**（claude 的 iterations 提供真实单轮快照，codex 没有），
+     ⛔ **不得单独作为 150k 转场判据**（codex 泳道的转场判据只看 `CTX-RELAY` 哨兵）。
+     `usage` 缺 `input_tokens`／`cache_write_input_tokens` 等字段（老版本 codex）按 0 处理，
+     ⛔ 不让整份解析因此退化成 `-`。
 
   ② 最终文本：按序拼接 `item.completed` 里 `type=agent_message` 的 `text`，追加进
      `<log>`，供哨兵 grep（`OPENER_DONE`／`OPENER_PARTIAL`）与 BUDGET-HIT 判据复用原逻辑。
@@ -50,6 +63,7 @@ def summarize(text: str) -> tuple[list[str], str, bool]:
     """收敛成 (7 个 TSV 字段, 最终文本, 是否出现过合法 JSON)。"""
     events, lines, saw_json = parse_lines(text)
     tin = tout = cread = cwrite = turns = 0
+    prev_in = prev_cw = 0
     peak = 0
     parts: list[str] = []
     for ev in events:
@@ -69,11 +83,21 @@ def summarize(text: str) -> tuple[list[str], str, bool]:
             o = int(u.get("output_tokens") or 0)
             cr = int(u.get("cached_input_tokens") or 0)
             cw = int(u.get("cache_write_input_tokens") or 0)
-            tin += i
-            tout += o
-            cread += cr
-            cwrite += cw
-            peak = max(peak, i + cr + cw)
+            # 五个用量列仍是**累计口径**：`usage` 是 session 累计值 ⇒ 多事件时取**最后一条累计快照**，
+            # ⛔ 不逐条相加（把累计量再累加一遍＝重复计数，与本次要修的 cache_read 失真同一类错误）。
+            # 单事件（codex 常态）下与迁移期旧行为逐字一致：`turns=1`，四列即该事件的值。
+            tin = i
+            tout = o
+            cread = cr
+            cwrite = cw
+            # codex 的 usage 是累计值（0930F 实证：全程只发一次 turn.completed），
+            # 故 peak 取「逐轮增量 input + 增量 cache_write」的最大值（首轮增量＝其自身），
+            # ⛔ 不叠加 cache_read（已含在 input_tokens 内，重复计入即本次失真的一半）。
+            delta_in = i - prev_in
+            delta_cw = cw - prev_cw
+            peak = max(peak, delta_in + delta_cw)
+            prev_in = i
+            prev_cw = cw
 
     if parts:
         final = "\n".join(parts)
