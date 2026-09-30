@@ -135,3 +135,24 @@ def unpack_side_effects_to_tmp(tmp_path, monkeypatch):
     # 成立；默认 codex 引擎会解析到本机真实 codex 并真起会话，破坏测试隔离。
     # 生产默认引擎（codex）的行为由 test_unpack_dispatch.py 单独钉。
     monkeypatch.setenv(dispatch.AGENT_ENGINE_ENV, "claude")
+
+
+@pytest.fixture(autouse=True)
+def group_webhook_bucket_isolated():
+    """群 webhook 令牌桶是**进程级单例**（TD-26 ①），用例之间必须清干净。
+
+    **为什么必须有这条**：单例一旦被某条用例装成假时钟（`test_notify_ratelimit.py`
+    就是这么做的），整个进程随后**任何**用真时钟取桶的调用点都会撞上那条
+    "第二个调用方带着自己的时钟来"的 `RuntimeError`——而 `__main__.main()` 正是
+    这样一个调用点（0930K 起它在那里装群通知回推）。没有本夹具，"某条用例能不能
+    通过"会取决于 pytest 的收集顺序，那正是本目录别处一直在消灭的那种非 hermetic
+    依赖；有了它，谁先谁后都跑得一样。
+
+    ⛔ 不是"把断言放宽"：`get_group_webhook_bucket` 的拒绝行为一个字没动，清的只是
+    用例**边界**上的残留状态（该函数的 docstring 明写 reset 只给测试用）。
+    """
+    from tools.liaison.notify import ratelimit
+
+    ratelimit.reset_group_webhook_bucket()
+    yield
+    ratelimit.reset_group_webhook_bucket()

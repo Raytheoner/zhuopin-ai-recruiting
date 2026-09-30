@@ -8,6 +8,10 @@
 拿不到 `WebhookTransportError`，于是只能去 import 子模块，包根这层边界就形同虚设）。
 ⚠️ `AIBOT_CHANNEL` 今天在生产代码里零消费者，仍然导出——它与 `GROUP_WEBHOOK_CHANNEL`
 是同一个概念的两个成员，只导一个正是本条债要消灭的那种不对称。
+
+⚠️ 0930K 的「回推接线」概念同理：`GroupNotifyRelay`（门面）、`compute_task_relay_text`
+（文案纯函数）与 `refuse_delivery`（拒发分支的守卫）一起导出——只导门面会让调用方
+为了拿到文案函数去 import 子模块，包根这层边界就形同虚设。
 """
 
 from tools.liaison.notify.guard import (
@@ -48,11 +52,19 @@ from tools.liaison.notify.webhook import (
     build_group_webhook_sender,
     send_group_notify,
 )
+#: ⚠️ `relay` 依赖 webhook／store／guard 三个子模块，**排在它们之后**导入——
+#: 否则包初始化期间会先去走一遍尚未装载的子模块。
+from tools.liaison.notify.relay import (
+    GroupNotifyRelay,
+    compute_task_relay_text,
+    refuse_delivery,
+)
 
 __all__ = [
     "AIBOT_CHANNEL",
     "GROUP_NOTIFY_THREAD_ID",
     "GROUP_WEBHOOK_CHANNEL",
+    "GroupNotifyRelay",
     "GroupWebhookSender",
     "MODE_DEGRADED",
     "MODE_DIRECT",
@@ -72,9 +84,11 @@ __all__ = [
     "compute_length_guard",
     "compute_notify_digest",
     "compute_notify_plan",
+    "compute_task_relay_text",
     "effect_send_group_notify",
     "get_group_webhook_bucket",
     "make_group_webhook_bucket",
+    "refuse_delivery",
     "reset_group_webhook_bucket",
     "select_pending_resends",
     "send_group_notify",

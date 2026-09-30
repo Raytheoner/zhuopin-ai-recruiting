@@ -35,16 +35,26 @@ import queue
 import re
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from tools.liaison import alerts, frames, inbound, owner_notify, session, session_client
+from tools.liaison import (
+    alerts,
+    frames,
+    inbound,
+    notify,
+    owner_notify,
+    session,
+    session_client,
+)
 from tools.liaison import logsetup
 from tools.liaison.archive import DEFAULT_ARCHIVE_ROOT
 from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
+from tools.liaison.queue import compute_task_summary
 from tools.liaison.storage import db as liaison_db
 from tools.liaison.unpack import dispatch_wiring
 from tools.liaison.unpack.bridge import run_bridge
@@ -232,6 +242,12 @@ class InboundPorts:
     #: `main()` 装 `SdkSendPort`；单测装替身。`whitelist_path` 由消费者自己持有
     #: （它可能在别的 tmp 名单上），⛔ 不从本对象的 `whitelist_path` 取。
     owner_notify: owner_notify.OwnerNotifyConsumer | None = None
+    #: 0930K·群通知回推：群帧**入队成功之后**把任务摘要回推进值守群。
+    #: `None` = 不回推（单测的默认，也是"这条泳道之外的行为"）。
+    #: ⚠️ 生产里 `main()` 装的是**非 None** 的 relay，哪怕这台机器根本没配
+    #: `HR_LIAISON_GROUP_WEBHOOK`——那种情况下 relay 会落一行 `rejected` ＋ 告警
+    #: （见 `notify.relay` 的 docstring），⛔ 不是"不装就没有这回事"。
+    group_notify: notify.GroupNotifyRelay | None = None
 
 
 def _dump_unknown_attachment_frame(
@@ -253,6 +269,43 @@ def _dump_unknown_attachment_frame(
         encoding="utf-8",
     )
     return dump_path
+
+
+def _push_group_task_notice(
+    svc: session.LiaisonSession, ports: InboundPorts, fields: frames.InboundFrameFields
+) -> None:
+    """群帧入队成功后的回推（0930K）。**永不上抛**。
+
+    跑在值守线程上、用 `svc.conn`——回推的 `effect_log` 与台账行因此在**同一条连接、
+    同一个事务**里提交（工程铁律 1），幂等由既有的
+    `{thread_id}:effect_send_group_notify:{摘要}` 承担，⛔ 本层不另造一套。
+
+    两条纪律都落在这一层：
+    - ⛔ 一条通知发不出去**不许打死值守线程**——它死了 = 存活戳停更 = 看门狗重启整个
+      进程，一条群通知 ⛔ 不配有这种破坏力；
+    - ⛔ 也不许静默：拒发（地址缺失／超限无法降级）与未送达都由 `notify.GroupNotifyRelay`
+      落一行 `liaison_group_notify` 并告警，"没发出去"必须是看得见的。
+      ⇒ 这里只兜**意料之外**的异常，不兜那两类已知终局。
+    """
+    if ports.group_notify is None:
+        return
+    # 摘要与 `handle_inbound_message` 入队时用的是**同一个纯函数**（`compute_task_summary`）、
+    # 同一个默认长度，所以这里算出来的就是队列视图里那一份，⛔ 不是第二处摘要口径。
+    summary = compute_task_summary(fields.content, msgtype=fields.msgtype)
+    text = notify.compute_task_relay_text(
+        thread_id=fields.thread_id, msgid=fields.msgid, summary=summary
+    )
+    try:
+        ports.group_notify.send_group_notify(
+            svc.conn, thread_id=fields.thread_id, text=text, alert_sink=svc.alert_sink
+        )
+    except Exception:  # noqa: BLE001 —— 见 docstring
+        logger.error(
+            "群通知回推失败（值守线程继续）。thread_id=%s msgid=%s",
+            fields.thread_id,
+            fields.msgid,
+            exc_info=True,
+        )
 
 
 def handle_message_frame(
@@ -354,6 +407,15 @@ def handle_message_frame(
             exc_info=True,
         )
         return False
+
+    # 0930K·群通知回推：**群帧、且归档＋入队之后**才回推。
+    # ⛔ 私信帧不回推（Shao Peishen 2026-09-30 答 1a 的口径）；⛔ 绝不能在入队**之前**
+    # 通知——顺序反了就会出现"群里说已登记、库里没有这条待办"，而那个方向看不出错。
+    # 「不是 single ⇒ 群帧」与上面「附件只走私信」用同一个判据：`compute_inbound_frame`
+    # 对非 single/group 的 chattype 已经 fail-closed，能走到这里的只可能是两者之一。
+    is_group_frame = frames.frame_chattype(frame) != frames.SINGLE_CHAT_CHATTYPE
+    if result.route.should_enqueue and is_group_frame:
+        _push_group_task_notice(svc, ports, fields)
 
     if result.route.admitted:
         # 8.5bis 之后新增：归档＋入队已提交，桥（P0）在此之后跑，失败
@@ -574,6 +636,13 @@ def main(
         download=session_client.SdkDownloadPort(client_holder, loop_stopper),
         owner_notify=owner_notify.OwnerNotifyConsumer(
             send_port=owner_notify.SdkSendPort(client_holder, loop_stopper),
+        ),
+        # 0930K：群通知回推的接线。令牌桶取**进程级单例**（D9 的 20 条/分钟是服务端
+        # 额度，两个桶＝两份配额，见 ratelimit 的 TD-26 ①）；时钟在这里注入，因为
+        # notify 包结构上不 import time。⛔ 地址不在这里读——按条现读，配置改了不必重启。
+        group_notify=notify.GroupNotifyRelay(
+            bucket=notify.get_group_webhook_bucket(monotonic=time.monotonic, sleep=time.sleep),
+            sleep=time.sleep,
         ),
     )
     worker = threading.Thread(
