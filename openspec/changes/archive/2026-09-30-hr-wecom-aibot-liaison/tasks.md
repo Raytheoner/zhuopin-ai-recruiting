@@ -235,7 +235,7 @@
   ⛔ **本条不做真实入站落库一条**：那需要 `.env` ＋ `tools/liaison/.venv` ＋ 真实库 ＋ 值守服务在跑，worktree 里一个都没有（`0909AJ`／`0909AH` 已立此判据）⇒ 拆为 **AT-1b**，由 `[Mac]0910A` 在主工作区验，见 `docs/session接力.md`「⚠️ AT-1 的 worktree 矛盾」。⛔ 本条也不发任何真实消息
   > **落地登记（2026-09-10 `[Mac]0910B`）**：① ② ③ ④ ⑥ ⑦ 已落地并有测试守护（`tools/liaison/tests/test_inbound_wiring.py` 18 条 ＋ `test_main_wiring.py::test_this_chapter_wires_message_handling` 换掉了原禁令条）。⑤ **走了 fail-closed 支**：钉死版本 `wecom-aibot-python-sdk==1.0.2` 的包内源码只命名了 `body.msgtype`（`message_handler.py:34-38`）与 `headers.req_id`（`client.py:130-132`），`body` 的类型就是 `Any`（`types.py:166`）⇒ `msgid`／发送人 userid／会话 id／正文／附件句柄落在哪个键上**没有任何真实帧依据**，`frames.FIELD_PATHS` 留空、`compute_inbound_frame` 一律抛 `InboundFrameUnverifiedError`、本帧不落库、只打一行**无取值**的帧键结构给 AT-1b 照填。已登记 **TD-43**。
   > 🔴 ⛔ **本勾 ⛔ 不得当作「入站链路已通」的证据**：它只表示"订阅、回调、消费、幂等、判据"全部就位。真实入站落库一条是 **AT-1b**（`[Mac]0910A`，主工作区），⛔ 未做。
-- [ ] 8.6 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 **前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人**——aibot 的单聊 chatid 要专员先私信才存在；⛔ 少这一步，**带附件的归档链路根本验不到**（群里 @ 机器人只收文字平信，**文档回灌只能走私信**）。⇒ 三条链路的验收面要拆开：群里发文字 → 入队；**私信发文档 → 归档**（顺带核 TD-22 真实 `msgid` 是否含 `_`）；群通知 → 回推
+- [x] 8.6 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 **前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人**——aibot 的单聊 chatid 要专员先私信才存在；⛔ 少这一步，**带附件的归档链路根本验不到**（群里 @ 机器人只收文字平信，**文档回灌只能走私信**）。⇒ 三条链路的验收面要拆开：群里发文字 → 入队；**私信发文档 → 归档**（顺带核 TD-22 真实 `msgid` 是否含 `_`）；群通知 → 回推
   > ⏸ **2026-09-17 `0917V` 实证核验（`docs/findings/2026-09-17-8.6与8.7实证核验.md`）：3 条验收面只 1/3 满足**——群里发文字→入队 ✅ 有真实证据（汤丽萍群消息 `b8b523c7`）；**私信发文档→归档 ❌**（三条私信全是纯文字，`attachments_json` 恒为 `[]`，从未处理过一次带附件私信，归 `0917W`）；**群通知→回推 ❌**（四条 `liaison_task` 全部 `send_status='pending'`／`pushed_at=NULL`，`liaison_group_notify` 0 行，`HR_LIAISON_GROUP_WEBHOOK` 未配置——此项由 Shao Peishen 本人配置真实 webhook 后才能验，⛔ 不代填凭据）。恒等不变式 `verify_ledger_against_archive()` 返回空列表，但当前无带附件记录，属空对空的平凡通过，不计入本条证据。**不勾**
   > 🔎 **2026-09-30 `0930J` 自测（Flash 档，结论文档 `docs/findings/2026-09-30-8.6灰度自测.md` 344 行）：三条验收面 2/3** ——
   > **私信发文档→归档 ✅ 首次端到端实证**：邵培申 15:22:27 私信 `.doc`（`msgid=33a567cc…`）真落盘 42,496 B、
@@ -248,10 +248,20 @@
   > 不等 0 组**（`effect_archive_message` 3/3、`effect_enqueue_task` 3/3、`effect_unpack_audit` 3 组、
   > `effect_enqueue_owner_notify` 46/46）。⇒ **本条仍不勾**；接线泳道 `[Mac]0930K` 已派（Shao Peishen 2026-09-30 答 1a），
   > 接完并真实投递一条后由看护者复核勾选、随后跑 8.9 归档
+  > ✅ **2026-09-30 23:48 链路三实证投递 / 三条验收面 3/3 ⇒ 勾**：接线泳道 `[Mac]0930K`（`ff11df4`，判据在 main 复跑
+  > `tools/liaison/tests` 1223 passed／5 skipped）把 `send_group_notify` 接进群帧「入队成功后」路径；值守 19:47:37 重启加载后，
+  > 邵培申 2026-09-30 23:48:30 在值守群发文字（`msgid=e30158528d8f959cc0a3511dd7960319`）⇒ 入队 `liaison_task` #13 ⇒
+  > **回推真投递**：`liaison_group_notify` 首行 `state='sent'`／`channel='group_webhook'`，正文「【值守通道·新任务已登记】来源会话：wrvDL_… 来源消息：e30158528d… 摘要：@MAC机器人 8.6链路三测试」。
+  > 附带登记：`liaison_task.send_status` 仍为 `pending`（接线只落 `liaison_group_notify` 终态、未回写队列行）——不影响本验收面，
+  > 但队列视图会显示"未推送"，如需一致口径另开变更包（⛔ 不在本条擅改）。
 - [x] 8.7 加入汤丽萍（配置加一行 + 重启），并告知她"照原样在群里发即可、不用改任何习惯"
   > ✅ **2026-09-17 `0917V` 实证核验通过**（`docs/findings/2026-09-17-8.6与8.7实证核验.md` §三）：配置已加（`whitelist.yaml` `userid: "TangLiPing"`，`e969f1b` 2026-09-09）；重启已生效（汤丽萍 2026-09-17 09:45/09:46 两条真实消息被服务正常接收落库，fail-closed 设计下这即是配置已加载的直接证据）；告知信已推送（`人事部-汤丽萍-跟进-2026-09-09-…` 第 25 行原文措辞与判据字面一致，台账状态 `✅ 已推送 2026-09-09`）
 - [x] 8.8 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
   > ⏳ **观察窗 2026-09-17 → 2026-09-24**（`0917V` 开窗，`docs/findings/2026-09-17-值守通道一周观察窗.md`）：三项各已记查法命令与当日基线值（漏消息告警命中 15 次累计／限流命中 0 次·结构上未接通前不可能触发／归档 `msgid` 主键约束下重名差值恒为 0）。✅ **2026-09-30 `0930H` 到期收结论并勾**：三项逐条落档见 `docs/findings/2026-09-30-liaison一周观察结论.md`（窗内 5 条告警全为 `startup_gap` 重启噪音·无网络断线型中断，3 条 <10 秒属噪声级；限流零命中但结构上未接通、⛔ 不得判「已验证正常」；归档 10 份零重名冲突，⚠️ 附件互撞场景窗内无样本）。⛔ 8.6 仍不勾、8.9 不跑
-- [ ] 8.9 全部章节勾完后**当场**跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
+- [x] 8.9 全部章节勾完后**当场**跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
+  > ✅ **2026-09-30 当场跑**（看护者 `[Mac]0930R` 主会话直执）：`openspec archive hr-wecom-aibot-liaison -y`
+  > ——5 个 delta spec（`liaison-channel-session`／`liaison-group-notify`／`liaison-inbound-whitelist`／
+  > `liaison-message-archive`／`liaison-task-queue`）同步进 `openspec/specs/`，变更包移入
+  > `openspec/changes/archive/2026-09-30-hr-wecom-aibot-liaison/`
 
 **验收**：服务在本机常驻可用、三条链路端到端通、两道结构性门禁有测试守护、观察结论已落档。
