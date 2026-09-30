@@ -54,7 +54,7 @@ from tools.liaison import logsetup
 from tools.liaison.archive import DEFAULT_ARCHIVE_ROOT
 from tools.liaison.config import load_credentials
 from tools.liaison.errors import MissingCredentialsError
-from tools.liaison.queue import compute_task_summary
+from tools.liaison.queue import compute_task_summary, mark_task_pushed
 from tools.liaison.storage import db as liaison_db
 from tools.liaison.unpack import dispatch_wiring
 from tools.liaison.unpack.bridge import run_bridge
@@ -272,13 +272,26 @@ def _dump_unknown_attachment_frame(
 
 
 def _push_group_task_notice(
-    svc: session.LiaisonSession, ports: InboundPorts, fields: frames.InboundFrameFields
+    svc: session.LiaisonSession,
+    ports: InboundPorts,
+    fields: frames.InboundFrameFields,
+    moment: datetime,
 ) -> None:
-    """群帧入队成功后的回推（0930K）。**永不上抛**。
+    """群帧入队成功后的回推（0930K）＋成功后的队列回写（0930L）。**永不上抛**。
 
     跑在值守线程上、用 `svc.conn`——回推的 `effect_log` 与台账行因此在**同一条连接、
     同一个事务**里提交（工程铁律 1），幂等由既有的
     `{thread_id}:effect_send_group_notify:{摘要}` 承担，⛔ 本层不另造一套。
+
+    🔴 **回推终态是 `sent` 才回写队列（0930L）**：真身是 `liaison_group_notify.state`
+    三态（`sent` / `rejected` / `pending_resend`），由
+    `notify.GroupNotifyRelay.send_group_notify` 原样回传。只有 `sent` 才调既有的
+    `queue.mark_task_pushed`——它自带幂等键（`{thread_id}:effect_mark_task_pushed:{msgid}`）
+    与 `send_status <> 'pushed'` 两道防线，⛔ 本层不另写 UPDATE、不另造幂等键。
+    `rejected`（地址缺失／超限无法降级）与未送达一律**不回写**，队列行保持 `pending`
+    ——「发不出去」必须是看得见的，把没发出去的伪装成 `pushed` 正是 0930K 治的病。
+    `pushed_at` 由**本次事件那一刻**（`moment`）经 `session.format_instant` 产出，
+    与同一条消息的 `received_at` 同源同格式，⛔ 不自造第三种时间字面量。
 
     两条纪律都落在这一层：
     - ⛔ 一条通知发不出去**不许打死值守线程**——它死了 = 存活戳停更 = 看门狗重启整个
@@ -296,9 +309,19 @@ def _push_group_task_notice(
         thread_id=fields.thread_id, msgid=fields.msgid, summary=summary
     )
     try:
-        ports.group_notify.send_group_notify(
+        state = ports.group_notify.send_group_notify(
             svc.conn, thread_id=fields.thread_id, text=text, alert_sink=svc.alert_sink
         )
+        # 只在终态 `sent` 回写；`rejected` / `pending_resend` / 幂等命中（`None`）
+        # 都不回写——队列行继续显示「未推送」，与台账里那行 `liaison_group_notify`
+        # 的 `state` 说的是同一件事。
+        if state == notify.STATE_SENT:
+            mark_task_pushed(
+                svc.conn,
+                thread_id=fields.thread_id,
+                msgid=fields.msgid,
+                pushed_at=session.format_instant(moment),
+            )
     except Exception:  # noqa: BLE001 —— 见 docstring
         logger.error(
             "群通知回推失败（值守线程继续）。thread_id=%s msgid=%s",
@@ -415,7 +438,7 @@ def handle_message_frame(
     # 对非 single/group 的 chattype 已经 fail-closed，能走到这里的只可能是两者之一。
     is_group_frame = frames.frame_chattype(frame) != frames.SINGLE_CHAT_CHATTYPE
     if result.route.should_enqueue and is_group_frame:
-        _push_group_task_notice(svc, ports, fields)
+        _push_group_task_notice(svc, ports, fields, moment)
 
     if result.route.admitted:
         # 8.5bis 之后新增：归档＋入队已提交，桥（P0）在此之后跑，失败
