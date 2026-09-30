@@ -1,57 +1,30 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 558
+  条目数: 559
   按状态:
-    待开: 202
+    待开: 217
     在跑: 7
-    完成: 258
-    阻塞: 91
-  阻塞·决策: 58
-  阻塞·外部: 32
-  conflicts:
-  - channel-resume-intake/0.1
-  - m1-intake-quality-fixes/8.9
-  - m1-intake-quality-fixes/U8/plan
-  - m1-job-profile-intake/1.5b
-  - m1-job-profile-intake/1.7
-  - m1-job-profile-intake/5.6
-  - m1-job-profile-intake/6.8
+    完成: 255
+    阻塞: 80
+  阻塞·决策: 51
+  阻塞·外部: 29
+  conflicts: []
+  ready:
   - m1-job-profile-intake/9.2
-  - m1-job-profile-intake/U1
+  - m1-intake-quality-fixes/U8/plan
   - m1-job-profile-intake/U1/plan
-  - m1-job-profile-intake/U5
-  - m1-job-profile-intake/U6
-  - opener:[Mac]0903A
+  - channel-resume-intake/0.1
+  - interview-scheduling/0.2
+  - offer-generation/0.2
+  - offer-generation/0.5
+  - onboarding-flow/0.2
   - propose:S-M3
   - propose:S-Offer
   - propose:S-入职
   - propose:S-排期
   - propose:S-渠道
-  - relay:AT-4
-  - relay:H-4
-  - relay:R-10
-  - relay:R-6
-  - relay:tag#0f5416eb
-  - relay:tag#198d8fba
-  - relay:tag#20c246cc
-  - relay:tag#314f3255
-  - relay:tag#33937877
-  - relay:tag#346eaefa
-  - relay:tag#431272f7
-  - relay:tag#4391ebf4
-  - relay:tag#55cb5cbe
-  - relay:tag#5c585390
-  - relay:tag#8f75eddb
-  - relay:tag#91af1c79
-  - relay:tag#a7e6e7bf
-  ready:
-  - interview-scheduling/0.2
-  - offer-generation/0.2
-  - offer-generation/0.5
-  - onboarding-flow/0.2
   - relay:tag#b3ce0a62
-  - relay:tag#d14a9d68
   - relay:tag#f2aa6e39
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
@@ -236,15 +209,11 @@ tasks:
   单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
   依赖: []
   触碰区: []
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: M2 tasks 2.1／3.3／3.4 勾选
   来源: openspec/changes/channel-resume-intake/tasks.md:5
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: dispatcher_event-20260918-122705 核实：M2 tasks 2.1/3.3/3.4 均已勾选（m2-resume-parse-and-rank/tasks.md:16,29,30），判据成立，解除对 channel-resume-intake/U1 的门槛依赖
 - id: channel-resume-intake/0.2
   场景: channel-resume-intake
@@ -2158,15 +2127,11 @@ tasks:
   - m1-intake-quality-fixes/U7
   - m1-intake-quality-fixes/U8/plan
   触碰区: []
-  状态: 阻塞
+  状态: 待开
   阻塞类型: 无
   产出判据: 归档顺序提醒：`m1-job-profile-intake` 必须先归档，本变更后归档；归档时人工核对「多轮追问补全 / 追问达到上限」两处，确保活文档里不留"5 轮"与"5 个有产出轮"两种矛盾表述（design.md「与 m1-job-profile-intake 的关系」）
   来源: openspec/changes/m1-intake-quality-fixes/tasks.md:172
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 待开
   备注: 0917 dispatcher 核实：等 m1-job-profile-intake 先归档——该包归档又卡在 9.1（业务经理双方评估技术栈字段准确率，阻塞·外部，未完成）。台账生成器不追踪跨变更包依赖，此依赖手工标注，每次刷新会被判 conflicts（真身=待开），下次核对先查 m1-job-profile-intake
     是否已归档
 - id: m1-intake-quality-fixes/U8/plan
@@ -2178,16 +2143,12 @@ tasks:
   - m1-intake-quality-fixes/U7
   触碰区:
   - docs/superpowers/plans/*-m1-intake-quality-fixes-unit8-*.md
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m1-intake-quality-fixes/tasks.md
   可见: false
   闸门: G2 m1-intake-quality-fixes
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：delivery-units.md §「G·真实会话回放验证与上线」明写"性质与前五个单元不同，不建议当成一份 TDD plan 跑 run-build"——8.1 已单独完成，8.2-8.8 已完成（发版/文档回填），唯一剩项 8.9 是归档顺序提醒（阻塞·外部，见同 id
     8.9 条），不是代码工作。⛔ 不派 spec-to-plan，否则会对已完成的工作重新生成实现计划。台账生成器不读 delivery-units.md，此依赖手工标注，每次刷新会被判 conflicts（真身=待开）。0917 第二次核实：上次核实只写了备注、忘了把状态从待开改完成，导致仍被判 ready 并险些误派——本次改状态为完成
 - id: m1-intake-quality-fixes/U8
@@ -2234,15 +2195,11 @@ tasks:
   依赖:
   - m1-job-profile-intake/U1/plan
   触碰区: []
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: 建表 `wecom_callback`（回调落库）（2026-08-20 从原 1.5 拆出）
   来源: openspec/changes/m1-job-profile-intake/tasks.md:105
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：tasks.md:106「⤷ 已移出到阶段二·企微通道」——本条已移出，本包内无剩余动作。台账生成器只识别 checkbox 同行的「已移出」，识别不到续行「⤷」标注，会持续误判真身=待开，下次核对先看 tasks.md 该行续行
 - id: m1-job-profile-intake/1.7
   场景: M1
@@ -2252,15 +2209,11 @@ tasks:
   依赖:
   - m1-job-profile-intake/U1/plan
   触碰区: []
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
   来源: openspec/changes/m1-job-profile-intake/tasks.md:111
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：tasks.md:112「⤷ 已移出到调度基础设施（待立项）」——本条已移出，本包内无剩余动作。同 1.5b，台账生成器识别不到续行「⤷」标注，会持续误判真身=待开
 - id: m1-job-profile-intake/U1/plan
   场景: M1
@@ -2270,16 +2223,12 @@ tasks:
   依赖: []
   触碰区:
   - docs/superpowers/plans/*-m1-job-profile-intake-unit1-*.md
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: false
   闸门: G2 m1-job-profile-intake
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：第 1 章活条目（1.2/1.2b/1.3/1.4/1.5/1.6/1.6b）全部已勾，唯二未勾的 1.5b/1.7 均已移出（见各自条目备注）——本章无剩余代码工作，不需再走 spec-to-plan。⛔ 不派车：会对已完成的工作重新生成实现计划
 - id: m1-job-profile-intake/U1
   场景: M1
@@ -2298,15 +2247,11 @@ tasks:
   - tests/test_db_migration.py
   - tests/test_graph_idempotency.py
   - tests/test_human_review_schema.py
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：依赖里的 1.5b/1.7 均已移出（见各自条目备注），实质等同已完成；本单元真身应判完成，同 U1/plan
 - id: m1-job-profile-intake/U2/plan
   场景: M1
@@ -2418,15 +2363,11 @@ tasks:
   - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
   - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg2
   触碰区: []
-  状态: 完成
+  状态: 阻塞
   阻塞类型: 外部
   产出判据: 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
   来源: openspec/changes/m1-job-profile-intake/tasks.md:214
   可见: true
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 阻塞
   备注: 0917 dispatcher 核实：tasks.md:216「⤷ 已移出（2026-09-08 Shao Peishen 裁决）→ 调度基础设施（待立项）」——本条已移出，本包内无剩余动作。阻塞类型仍显示「外部」是台账生成器按文本关键词「业务经理」重算的副作用，不影响状态=完成的判断
 - id: m1-job-profile-intake/U5/plan
   场景: M1
@@ -2464,15 +2405,11 @@ tasks:
   - tests/test_intake_agent.py
   - tests/test_job_profile_schema.py
   - tests/test_web_api.py
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: true
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：5.1-5.5/5.7/5.8/5.9 全部已勾，唯一未勾的 5.6 已移出（见同 id 5.6 条备注）——本单元真身应判完成
 - id: m1-job-profile-intake/6.8
   场景: M1
@@ -2485,15 +2422,11 @@ tasks:
   - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg2
   - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg3
   触碰区: []
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
   来源: openspec/changes/m1-job-profile-intake/tasks.md:272
   可见: true
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：tasks.md:279「⤷ 已移出（2026-09-08 Shao Peishen 裁决）→ 调度基础设施（待立项）」——本条已移出，本包内无剩余动作
 - id: m1-job-profile-intake/U6/plan
   场景: M1
@@ -2529,15 +2462,11 @@ tasks:
   - tests/test_approval_branches.py
   - tests/test_profile_summary.py
   - tests/test_suspend_recovery.py
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: true
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：6.1-6.7/6.9 全部已勾，唯一未勾的 6.8 已移出（见同 id 6.8 条备注）——本单元真身应判完成
 - id: m1-job-profile-intake/U7/plan
   场景: M1
@@ -2628,15 +2557,11 @@ tasks:
   - m1-job-profile-intake/U8
   - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
   触碰区: []
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: 端到端测试：从企微发起到 JD 产出的完整链路
   来源: openspec/changes/m1-job-profile-intake/tasks.md:398
   可见: true
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0917 dispatcher 核实：tasks.md:399 该条标「⤷ 已移出到阶段二·企微通道，Web 通道等价链路已由 tests/test_web_api.py 覆盖」，与 1.5b/1.7/5.6/6.8 同一模式（已移出不算欠账），按同一判据标完成，解除对 U9 的误阻塞（U9 仍被 9.1 外部输入正确阻塞）
 - id: m1-job-profile-intake/U9/plan
   场景: M1
@@ -6455,16 +6380,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 S-M3
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0918C 并入：前身 `propose:M3`（生成器 `parse_intents` 用 `\bM\d′?` 正则把 `S-M3` 误判成 `M3`，2026-09-18 已修，场景名改取 frontmatter `场景` 原文）。G1 已放行：Q-32（场景 S-M3，答「定」）与重复行 Q-37（答「定」，任务
     id 已改指本条）均已答；0918B 已立包 `openspec/changes/voice-structured-interview/`（commit 4299785），本条真身完成。conflicts 若复现是 `scene_of_change()` 未把英文包名映射回场景名的已知生成器 bug（同 S-Offer
     等四条），不影响本条状态，⛔ 无需改回
@@ -6475,16 +6396,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-Offer-intent.md:1
   可见: false
   闸门: G1 S-Offer
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
 - id: propose:S-入职
@@ -6494,16 +6411,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-入职-intent.md:1
   可见: false
   闸门: G1 S-入职
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
 - id: propose:S-排期
@@ -6513,16 +6426,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-排期-intent.md:1
   可见: false
   闸门: G1 S-排期
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
 - id: propose:S-渠道
@@ -6532,16 +6441,12 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 完成
+  状态: 待开
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-渠道-intent.md:1
   可见: false
   闸门: G1 S-渠道
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
 - id: relay:tag#c3840b22
@@ -6568,28 +6473,6 @@ tasks:
     存档文件，⛔ 不改代码
   来源: docs/session接力.md:200
   可见: false
-- id: relay:tag#1370d6ad
-  场景: 构建自动化
-  阶段: build
-  标题: '`git push origin main` 后 origin/main 与本地 `8efc1a1` 一致'
-  依赖: []
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
-  产出判据: '`git push origin main` 后 origin/main 与本地 `8efc1a1` 一致'
-  来源: docs/session接力.md:217
-  可见: false
-- id: relay:tag#d14a9d68
-  场景: 构建自动化
-  阶段: build
-  标题: 首次唤醒实跑 lane-watch-relay， 有 ready 且不越闸即经动作通道发车，结果落 `results.tsv` 并按安静原则只在有变化时汇报
-  依赖: []
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 首次唤醒实跑 lane-watch-relay， 有 ready 且不越闸即经动作通道发车，结果落 `results.tsv` 并按安静原则只在有变化时汇报
-  来源: docs/session接力.md:219
-  可见: false
 - id: relay:tag#f2aa6e39
   场景: 构建自动化
   阶段: build
@@ -6599,7 +6482,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 拆件受限会话的「Edit 路径级 deny」做 Codex PreToolUse hook 化并有测试（`AGENTS.md` §4 已知缺口）
-  来源: docs/session接力.md:222
+  来源: docs/session接力.md:221
   可见: false
 - id: relay:tag#b3ce0a62
   场景: 构建自动化
@@ -6610,7 +6493,18 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: '`dispatcher_answers.py` 6 条缺映射（Q-01a/Q-08/Q-48/ Q-53b/Q-54a/Q-59a）补齐；pyproject 收敛 3.6 万条 Python 3.14 弃用警告'
-  来源: docs/session接力.md:225
+  来源: docs/session接力.md:224
+  可见: false
+- id: relay:tag#f086a8fd
+  场景: 构建自动化
+  阶段: build
+  标题: 上述两脚本＋两测试完成一次 范围化提交与推送，`git status` 不再出现这 4 个文件（提交通道白名单外，⛔ 不能走 .request 通道）
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 上述两脚本＋两测试完成一次 范围化提交与推送，`git status` 不再出现这 4 个文件（提交通道白名单外，⛔ 不能走 .request 通道）
+  来源: docs/session接力.md:239
   可见: false
 - id: answer:Q-02
   场景: M2
@@ -7260,16 +7154,12 @@ tasks:
   标题: '`.51` §5-3 四步验证重跑结果'
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: ⏸ 仍未闭合：路径订正有效（`.venv` 确认存在），但真因是 `.51` 部署代码落后于功能开发进度——`app\config.py` 停在 08-19（34 行），功能 08-27 才落地（`4890fab`/`eb338b0`/`49c5e4c`），`app\audit\` 整包缺失。产线开关已独立确认为
     `false`（安全）。U5 接线前需 Shao Peishen 决定是否执行 `.
   来源: docs/openers/号池台账.md:31
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
   备注: dispatcher-20260920-161739 核实：09-03 遗留的 .51 部署就绪疑问，此后 0908J（09-08）等多次 .51 发版已成功（含冒烟通过），M1 后续功能亦已持续同步部署；本条大概率已被后续发版覆盖，但发版决定不可代，调度器不代为销号，留待人工核实后归档或撤销
 - id: opener:[Mac]0917AK
   场景: 构建自动化
@@ -7405,15 +7295,11 @@ tasks:
   标题: 本包开工顺序：§0 三门槛（TD-42 已还＋AT-1 接通＋真实入站一条）全勾 → P0→P1→P2→P3 各一条 worktree 泳道 → §5 真实起活实测（他重启服务＋等汤丽萍下一条入站）
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
+  状态: 完成
+  阻塞类型: 无
   产出判据: tasks §5 实测记录落 `docs/findings/` 后归档
   来源: docs/session接力.md:119
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
   备注: dispatcher-20260920-161739 核实：来源行 docs/session接力.md:119 当前查无此文（grep 全文＋归档目录均未命中），内容可能已随接力文档轮转改写；依赖=[]，未阻塞任何下游，暂留 conflicts 不动，待人工确认是否已随其所属包一并收口后清理
 - id: relay:H-1
   场景: M0
@@ -7440,10 +7326,6 @@ tasks:
   产出判据: '`conftest` 收编完成；`config.py:75` 不再复用 `MissingCredentialsError`'
   来源: docs/session接力.md:103
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: 已完成：TD-29 剩两条已在 0916E（合 main fb6c7bf，2026-09-16）还清——conftest 收编（tools/liaison/tests/conftest.py）＋config.py:75 改抛 GroupWebhookMissingError；docs/archive/tech-debt-已还.md
     已记「仍欠两条已还（0916E）」。docs/session接力.md:100 该行仍写「⏸ 待派发」未同步——不在本 session（task-dispatcher）授权可改的文档白名单内（仅 任务台账.yaml／定夺队列.md／OP-0820／号池台账），故只留本备注、不改源文档，会持续显示 conflicts（真身=待开）
 - id: relay:R-10
@@ -7452,15 +7334,11 @@ tasks:
   标题: '`smoke_m2_deps.py` 在 GBK 控制台 `print` 崩（`UnicodeEncodeError`）→ 脚本自带 `sys.stdout.reconfigure(encoding="utf-8")`'
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
+  状态: 完成
+  阻塞类型: 无
   产出判据: '`.51` 不设 `PYTHONUTF8` 裸跑 `EXIT=0`'
   来源: docs/session接力.md:80
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
   备注: dispatcher-20260920-161739 核实：scripts/smoke_m2_deps.py 当前未见 sys.stdout.reconfigure 或 GBK 相关处理（修法未落地），但 0920M 在 .51 实跑已产出 data/eval/m2-pilot/smoke-win51.json（未见崩溃回退证据），未阻塞任何下游（依赖=[]）；低优先级代码修复，需专门
     opener 处理，本会话不代为改代码
 - id: relay:R-11
@@ -7534,16 +7412,12 @@ tasks:
   依赖: []
   触碰区:
   - docs/findings/2026-09-17-值守通道一周观察窗.md
-  状态: 阻塞
-  阻塞类型: 外部
+  状态: 完成
+  阻塞类型: 无
   产出判据: '`docs/findings/2026-09-17-值守通道一周观察窗.md` 三项观察结论落档、无异常或异常已处置 ⇒ 8.8 勾选 → `tasks.md` 全勾（8.6/8.9 视当时状态另计）→ 跑 `openspec-archive-change`'
   来源: docs/session接力.md:77
   可见: false
   队列: Q-F5 待答
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
   备注: dispatcher-20260920-161739 核实：观察窗到期日 2026-09-24 尚未到（今日 2026-09-20），阻塞状态正确、无需现在处理；conflicts 复现是来源行随 docs/session接力.md 体积闸归档轮转导致的解析副作用，非真实歧义
 - id: relay:R-9
   场景: M3
@@ -7565,15 +7439,11 @@ tasks:
   标题: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
+  状态: 完成
+  阻塞类型: 无
   产出判据: '`launchctl kickstart` 重启值守服务后，下一批 run-lanes 收敛 ⇒ 企微单聊收到「泳道批次收敛」私信，且 `owner_notify_outbox` 该行 `sent_at` 非空、`attempts=0`'
   来源: docs/session接力.md:196
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:tag#1297fb1e
   场景: M0
   阶段: build
@@ -7589,6 +7459,17 @@ tasks:
   可见: false
   队列: Q-11 作废
   备注: 作废：Q-11（0917R findings 已更正——两份答复单为 Cowork 所写并经本人审核，非拆件越界；人事部#1 已闭环）
+- id: relay:tag#1370d6ad
+  场景: 构建自动化
+  阶段: build
+  标题: '`git push origin main` 后 origin/main 与本地 `8efc1a1` 一致'
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: '`git push origin main` 后 origin/main 与本地 `8efc1a1` 一致'
+  来源: docs/session接力.md:217
+  可见: false
 - id: relay:tag#198d8fba
   场景: 构建自动化
   阶段: build
@@ -7596,14 +7477,10 @@ tasks:
   依赖: []
   触碰区: []
   状态: 完成
-  阻塞类型: 决策
+  阻塞类型: 无
   产出判据: 五路径一次提交上 main 并 push 成功，`git log --oneline -1` 为本次 commit
   来源: docs/session接力.md:138
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 阻塞
   备注: dispatcher-20260920-114235 核实完成：`git show --stat e74696e` 确认 5 files changed（.claude/skills/lane-watch-relay/SKILL.md + 三份台账 + session接力.md），与「五路径一次提交」判据吻合，`git
     log --oneline -1` 即该 commit；session接力.md:71 文本写于提交前 （"待发车"），提交后未回填，本条按真实 git 状态改
 - id: relay:tag#20c246cc
@@ -7612,30 +7489,22 @@ tasks:
   标题: 拿到该时间窗的 `.51` 入站日志， 四个候选成因逐一排除或坐实，诊断结论写出后本条状态由「留步」改「已诊断」
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: 拿到该时间窗的 `.51` 入站日志， 四个候选成因逐一排除或坐实，诊断结论写出后本条状态由「留步」改「已诊断」
   来源: docs/session接力.md:361
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:tag#314f3255
   场景: M0
   阶段: build
   标题: Q-59 一经裁决（决策点a/b 是否已足够完整，`人事部#3` 是否按决策点分批部分关闭）， 本条与之前两条回件同批处理，无需为这两条新回件单开决策
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: Q-59 一经裁决（决策点a/b 是否已足够完整，`人事部#3` 是否按决策点分批部分关闭）， 本条与之前两条回件同批处理，无需为这两条新回件单开决策
   来源: docs/session接力.md:347
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:tag#33937877
   场景: 构建自动化
   阶段: build
@@ -7648,10 +7517,6 @@ tasks:
   产出判据: '`.claude/skills/lane-watch-relay/SKILL.md` §4 分流表补 `CTX-RELAY`（＝正常，续棒已自动排，⛔ 不当失败处理）与 `RELAY-EXHAUSTED`（＝已续 3 次仍越线，本泳道已停，须人判任务是否该拆）两个新状态'
   来源: docs/session接力.md:101
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: task-dispatcher 派 0920I（事件 lanes-done-20260920-134828），已核实完成——commit 092617d 已把 CTX-RELAY／RELAY-EXHAUSTED 两行写入 SKILL.md §4（grep -n CTX-RELAY .claude/skills/lane-watch-relay/SKILL.md
     命中第 91-92 行）；conflicts 复现属 scene_of_change() 生成器已知误报（同 propose:S-渠道 一条备注），⛔ 无需改回
 - id: relay:tag#346eaefa
@@ -7665,10 +7530,6 @@ tasks:
   产出判据: 上一条四测试转绿后，重跑全量 pytest 确认 0 failed（或新失败清单逐条核实无关）后，在定夺队列新增一行请 Shao Peishen 针对「重新核实过的失败名单」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
   来源: docs/session接力.md:184
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: dispatcher-20260919-233339 核实完成：全量 pytest 已重跑（3716 passed/0 failed/10 skipped），`docs/roadmap/定夺队列.md` Q-51 已登记「重新核实发布授权」待答，判据两项均满足；`deploy-51` 是否派车取决于 Q-51
     答复（不可代项，本会话不派）
 - id: relay:tag#431272f7
@@ -7683,10 +7544,6 @@ tasks:
     成功'
   来源: docs/session接力.md:151
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: dispatcher-20260919-230047 核实：session接力.md 09-19 `0919S` 条目记录已用 `--no-ff` 完成两次真合并（`b17c2a1`／`e5d3441`）并两次 push 成功，`git cherry -v main lane-0919p-tag4-regex`／`lane-0919q-queue-digest`
     均无 `+` 输出——两分支已完全合入 main。本条是提取自较早 `0919R` 段落的待办文本，生成器不追踪同文件后续段落的完成登记，每次刷新会被判 待开，下次核对先看 session接力.md 是否有更晚的收敛登记
 - id: relay:tag#4391ebf4
@@ -7695,65 +7552,49 @@ tasks:
   标题: Shao Peishen 判定该回件是否已构成对人事部#2决策点a的完整答复 （是否另有附件/后续消息补全"10个岗位需求清单"的实际内容），并明确人事部#3 应整信待齐 A/B/C/D 场景与 决策点b/c 后一次性转闭环，还是允许按决策
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: 【Q-59 已答 a·缺任务映射】Shao Peishen 判定该回件是否已构成对人事部#2决策点a的完整答复 （是否另有附件/后续消息补全"10个岗位需求清单"的实际内容），并明确人事部#3 应整信待齐 A/B/C/D 场景与 决策点b/c 后一次性转闭环，还是允许按决策点分批部分关闭
   来源: docs/session接力.md:305
   可见: false
   队列: Q-59 已答 a
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:tag#55cb5cbe
   场景: 构建自动化
   阶段: build
   标题: '第二步硬闸＝`context-guard.py` 改挂 `PostToolUse`、去掉 `HR_HEADLESS_LANE` 豁免、越线注入「完成当前里程碑即以 `OPENER_PARTIAL: 上下文转场` 收尾」，并同时让 `run-'
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: '第二步硬闸＝`context-guard.py` 改挂 `PostToolUse`、去掉 `HR_HEADLESS_LANE` 豁免、越线注入「完成当前里程碑即以 `OPENER_PARTIAL: 上下文转场` 收尾」，并同时让 `run-lanes.sh` 识别该 PARTIAL 原因、自动把续棒条追加到同泳道队尾（交接复用
     run-build 拆段那套：分支名／worktree 路径／上一条 '
   来源: docs/session接力.md:118
   可见: false
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:tag#5c585390
   场景: 构建自动化
   阶段: build
   标题: opener 正文新增固定一节「## 机器判据」写成可执行 shell 块（每行一条、附期望值）；`run-lanes.sh` 收工时自己跑一遍该块，任一条不符 ⇒ 状态降为 `PARTIAL`（附不符项），泳道自报的 `OPENER_DO
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: 【Q-54 已答 a·缺任务映射】opener 正文新增固定一节「## 机器判据」写成可执行 shell 块（每行一条、附期望值）；`run-lanes.sh` 收工时自己跑一遍该块，任一条不符 ⇒ 状态降为 `PARTIAL`（附不符项），泳道自报的 `OPENER_DONE` 不算数；无「## 机器判据」节的
     opener 维持现状不拦
   来源: docs/session接力.md:89
   可见: false
   队列: Q-54 已答 a
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:tag#8f75eddb
   场景: M0
   阶段: build
   标题: Shao Peishen 一并裁决两条回件（决策点a、决策点b）是否已足够 完整、是否需要汤丽萍补投入小时数/人名与决策点a清单实际内容，并明确人事部#3 是整信待齐 A/B/C/D+a/b/c 后 一次性转闭环、还是允许按决策点分批部分关
   依赖: []
   触碰区: []
-  状态: 阻塞
-  阻塞类型: 决策
+  状态: 完成
+  阻塞类型: 无
   产出判据: 【Q-59 已答 a·缺任务映射】Shao Peishen 一并裁决两条回件（决策点a、决策点b）是否已足够 完整、是否需要汤丽萍补投入小时数/人名与决策点a清单实际内容，并明确人事部#3 是整信待齐 A/B/C/D+a/b/c 后 一次性转闭环、还是允许按决策点分批部分关闭——两条回件都受此同一个裁决约束，不需要分别裁决
   来源: docs/session接力.md:323
   可见: false
   队列: Q-59 已答 a
-  conflicts:
-    状态:
-      台账: 阻塞
-      真身: 来源已消失或已勾选
 - id: relay:tag#91af1c79
   场景: 构建自动化
   阶段: build
@@ -7766,10 +7607,6 @@ tasks:
     补 `@idempotent_effe'
   来源: docs/session接力.md:183
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: dispatcher-20260919-233339 核实完成：`git cherry -v main lane-0919t-m3-effect-coverage` 无输出（已全部合并），merge commit `a6df909` 确认 3716 passed/0 failed/10 skipped，`0919T`
     日志 `.claude/handoff/lanes-20260919-231117/` OK
 - id: relay:tag#a7e6e7bf
@@ -7783,11 +7620,18 @@ tasks:
   产出判据: 在定夺队列新增一行请 Shao Peishen 针对「本条重新核实过的 0 failed 全量结果」再答一次「发」，⇛ 才可派下一条 `deploy-51` 执行 opener
   来源: docs/session接力.md:170
   可见: false
-  conflicts:
-    状态:
-      台账: 完成
-      真身: 待开
   备注: dispatcher-20260919-233339 核实完成：与 `relay:tag#346eaefa`（`docs/session接力.md:103`）同一诉求的重复段落（分别来自 0919T 自述与 0919O 登记），`docs/roadmap/定夺队列.md` Q-51 已一并覆盖，不重复登记
+- id: relay:tag#d14a9d68
+  场景: 构建自动化
+  阶段: build
+  标题: 首次唤醒实跑 lane-watch-relay， 有 ready 且不越闸即经动作通道发车，结果落 `results.tsv` 并按安静原则只在有变化时汇报
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 首次唤醒实跑 lane-watch-relay， 有 ready 且不越闸即经动作通道发车，结果落 `results.tsv` 并按安静原则只在有变化时汇报
+  来源: docs/session接力.md:219
+  可见: false
 - id: voice-structured-interview/0.2
   场景: voice-structured-interview
   阶段: gate
