@@ -341,3 +341,24 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   `test_codex_worktree_gate_redirects_local_venv_to_main`（主仓 venv 桩＋worktree 判据块：断言改写后
   路径存在、`./venv/bin/python` 不再出现在生成的判据脚本里、泳道判 OK）；run-lanes 家族＋dispatcher
   **133 passed**。⇒ 后续 codex 泳道的判据块可以直接照常用 `./venv/bin/python`。
+
+**15:3x 追加（Shao Peishen 答「好了」＝两件前置已做；`0930J` 已发车并收敛）**
+
+- **前置已到位**：`HR_LIAISON_GROUP_WEBHOOK` 在根 `.env` 与 `tools/liaison/.env` 两处都已配置
+  （89 字符，取值未入档）；邵培申 2026-09-30 **15:22:27** 私信机器人发来 `10个岗位需求.doc`（42,496 B）。
+- **值守已重启**：`launchctl kickstart -k gui/502/com.zhuopin.hr.liaison`（pid 9825，断线 3 秒）——
+  `liveness.json` 新 `since`＝`2026-09-30T15:24:09`，`state=connected`。
+- **`0930J` = PARTIAL（Flash 档，2 分钟，分支 `lane-0930j-aibot-gray-selfcheck` `1670d3c` 已人工合回
+  main `973207c`）**，结论写进 `docs/findings/2026-09-30-8.6灰度自测.md`（344 行）：
+  - **链路一（私信发文档→归档）✅ 首次端到端实证通过**：帧入库（`msgid=33a567cc…`）、附件真落盘
+    42,496 B、`attachments_json` 非空（filename／relative_path／byte_length／sha256）、SHA-256 与台账
+    逐字一致、魔数 `d0cf11e0a1b1ae11`＝OLE2/doc ⇒ **TD-51 的字段映射在生产上第一次真正跑通**。
+  - **链路二（群消息→入队）✅**：`liaison_task` 12 行、来源 `msgid` 可回指；如实登记 12 行
+    `send_status` 全 `pending`（推送状态属链路三）。
+  - **链路三（群通知→回推）❌ 未实证，且成因变了**：webhook 已配置，但 `liaison_group_notify` 恒 0 行、
+    `send_group_notify()`（唯一写台账的门面）**在生产代码零调用点** ⇒ 这不是「缺凭据」，是**尚未接线**。
+    另一条真实外发路径是 `python -m tools.liaison send-followup --send`（跟进信群发），属对外发送。
+  - **恒等不变式 ✅**：按 `EFFECT_NODE_TO_TABLE` 逐 thread 比对，相等 10 组／不等 0 组。
+  - **8.6 ⛔ 不勾**（2/3），`tasks.md` 第 238 行原样保留 `- [ ]`；8.9 归档因此仍不跑。
+- 待办（`0930J` 的「需你定夺」原样转记）：① 链路三接线（派泳道补「入队后回推值守群」）／重定义
+  8.6 验收面为两条后勾／继续挂起；② 本 findings 结论是否补进 `tasks.md` 8.6 注记（推荐补）。
