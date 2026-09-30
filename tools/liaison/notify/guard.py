@@ -52,6 +52,12 @@ MODE_REJECT = "reject"
 REJECT_NO_ATTACHMENT_CHANNEL = "该通道没有可用的附件承载方式，超限内容无法降级"
 REJECT_SUMMARY_STILL_OVER = "提要本身仍超过通道上限，无法降级"
 
+#: 发送地址缺失时的拒发原因（0930K）。**只放变量名，⛔ 不放取值**——与
+#: `config.load_group_webhook` / `errors.GroupWebhookMissingError` 同一条纪律。
+MISSING_WEBHOOK_REJECT_REASON_TEMPLATE = (
+    "群通知发送地址缺失或只含空白字符 → {name}（本次群通知跳过发送）"
+)
+
 ATTACHMENT_FILENAME_TEMPLATE = "liaison-notify-{digest}.md"
 
 #: 提要开头的声明。**这句话是"不静默截断"的可执行形式**：正文被裁过这件事
@@ -193,4 +199,24 @@ def compute_notify_plan(
         reject_reason=None,
         byte_length=verdict.byte_length,
         limit_bytes=limit_bytes,
+    )
+
+
+def compute_missing_webhook_plan(text: str, *, missing_name: str) -> NotifyPlan:
+    """发送地址缺失／纯空白时的终局 plan：**恒定 `MODE_REJECT`**。纯函数。
+
+    ⛔ 刻意**没有**"降级成只写日志"这条出口：`load_group_webhook` 的既有语义就是
+    "缺地址 ⇒ 拒发并点名变量"（6.10 逐字），在这里静默跳过等于把那次失败伪装成成功。
+    产出交给**同一个** `store.effect_send_group_notify`，所以拒发同样落一行
+    `rejected` 台账并告警——"没发出去"这件事必须是看得见的，而不是只留在进程日志里。
+
+    长度判定照旧走 `compute_length_guard`：`NotifyPlan` 的字节数字段是台账的一部分，
+    ⛔ 不许因为"反正不发"就填 0——那会让两种拒发在台账里看起来一模一样。
+    """
+    verdict = compute_length_guard(text, limit_bytes=GROUP_WEBHOOK_CHANNEL.limit_bytes)
+    return _reject(
+        text,
+        digest=compute_notify_digest(text),
+        verdict=verdict,
+        reason=MISSING_WEBHOOK_REJECT_REASON_TEMPLATE.format(name=missing_name),
     )

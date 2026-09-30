@@ -82,11 +82,15 @@ def compute_alert_text(plan: guard.NotifyPlan, record: NotifyRecord) -> str:
     幂等防的是重复，补不回没发出去的东西；一句让人安心的话会让收信人不去补发。
     """
     if plan.mode == guard.MODE_REJECT:
+        # ⛔ 这里不写"内容超过本通道上限"：`MODE_REJECT` 有**两条**来源——超限无法
+        # 降级，以及**发送地址缺失**（0930K 的接线层，见 `guard.compute_missing_webhook_plan`）。
+        # 把后一种也写成"超过上限"，看告警的人会去查一个根本不存在的长度问题，
+        # 而真正的原因（少配一个环境变量）被那句错话盖住。
         return (
             "【HR 值守通道·群通知拒发】"
-            f"内容 {plan.byte_length} 字节超过本通道上限 {plan.limit_bytes} 字节，"
-            f"且无法降级：{plan.reject_reason}。"
-            f"该通知未发送（摘要 {plan.digest}），请人工处理。"
+            f"该通知未发送（摘要 {plan.digest}）：{plan.reject_reason}。"
+            f"（内容 {plan.byte_length} 字节，本通道上限 {plan.limit_bytes} 字节）"
+            f"请人工处理。"
         )
     return (
         "【HR 值守通道·群通知未送达】"
