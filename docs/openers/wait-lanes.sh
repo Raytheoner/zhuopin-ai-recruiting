@@ -46,7 +46,14 @@ mtime() {  # macOS 与 Linux 的 stat 参数互不兼容（Linux 的 -f 是查�
   if [[ "$(uname)" == Darwin ]]; then stat -f %m "$1" 2>/dev/null || echo 0; else stat -c %Y "$1" 2>/dev/null || echo 0; fi
 }
 now() { date +%s; }
-alive() { kill -0 "$PID" 2>/dev/null; }
+alive() {
+  # 判活双判据（2026-09-30，AGENTS.md §4）：Codex 的 Seatbelt 沙箱对 launchd 起的进程
+  # 一律拒绝信号 ⇒ `kill -0` **假阴**（实测：对运行中的 run-lanes PID 76998 返回 rc=1，
+  # 本条曾据此误报 EXITED）。失败时必须用 `lsof -p` 复核：有输出＝在跑，无输出＝已退出。
+  # ⛔ 不得只凭 `kill -0` 失败断言「批次已退出」（会诱发重复发车）。
+  kill -0 "$PID" 2>/dev/null && return 0
+  lsof -p "$PID" >/dev/null 2>&1
+}
 
 [[ -z "$LOGDIR" ]] && LOGDIR="$(newest_dir)"
 [[ -z "$LOGDIR" || ! -d "$LOGDIR" ]] && { echo "USAGE 找不到日志目录（$HANDOFF/lanes-*）"; exit 2; }
