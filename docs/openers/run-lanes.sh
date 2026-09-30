@@ -957,10 +957,15 @@ PY
         # 用 `$HR_GATE_MAIN` 显式引用（见 AGENTS.md §4）。
         if [[ "$gate_repo" != "$REPO" ]]; then
           python3 - "$gate_sh" <<'PY'
-import sys
+import re, sys
 p = sys.argv[1]
 t = open(p, encoding="utf-8").read()
 t = t.replace("cd /Users/paulshao/Projects/HumanResource", 'cd "$(pwd -P)"')
+# 0930R/2a（Q-65）：worktree 里**没有** `venv/`（gitignore，`git worktree add` 不落它），
+# 判据块里的 `./venv/bin/<工具>` 在 worktree 内恒报 `No such file`（0930I 首例实测）。
+# 这里把该形态定向到主工作区同名工具（$HR_GATE_MAIN 由 gate_run 注入）；⛔ 只改这一段形态，
+# 不动其它相对路径（判据要读泳道产物时仍须用泳道内相对路径）。
+t = re.sub(r'(?<![\w/"$])\./venv/bin/([A-Za-z0-9_.-]+)', r'"$HR_GATE_MAIN/venv/bin/\1"', t)
 open(p, "w", encoding="utf-8").write(t)
 PY
         fi

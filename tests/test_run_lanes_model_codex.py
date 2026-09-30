@@ -257,3 +257,61 @@ def test_codex_worktree_gate_runs_inside_worktree(sandbox):
     results = next((repo / ".claude" / "handoff").glob("lanes-*/results.tsv"))
     rows = {l.split("\t")[1]: l.split("\t") for l in results.read_text(encoding="utf-8").splitlines()}
     assert rows["0101G"][2] == "OK", rows["0101G"]
+
+
+Venv = """# 测试编排（worktree + venv 判据）
+
+> 泳道：甲
+> 无头豁免注明
+```
+[Mac]0101G-带venv判据的worktree条
+【设置】执行环境: Codex ｜ Session: 新开 ｜ 分支: lane-gate-test ｜ worktree: ✅ 勾（测试）｜ 工作区: .claude/worktrees/lane-gate-test ｜ 派发: run-lanes.sh
+干活
+```
+"""
+
+
+def test_codex_worktree_gate_redirects_local_venv_to_main(sandbox):
+    """Q-65 回归：worktree 里没有 `venv/`（gitignore），判据块的 `./venv/bin/python` 必须被
+    执行器改写成 `$HR_GATE_MAIN/venv/bin/python`——否则每条用 venv 的 codex worktree 泳道
+    都会恒 GATE-FAIL（0930I 首例：靠现场建 venv 才绕过）。
+    """
+    import shutil
+
+    repo = sandbox["repo"]
+    shutil.rmtree(repo / ".git")
+
+    def g(*a: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+
+    g("init", "-q", "-b", "main")
+    (repo / "README.md").write_text("x", encoding="utf-8")
+    # 主工作区的 venv 桩：worktree 里**没有** venv（= 生产实情）
+    (repo / "venv" / "bin").mkdir(parents=True)
+    stub = repo / "venv" / "bin" / "python"
+    stub.write_text("#!/usr/bin/env bash\necho 'main venv ok'\n", encoding="utf-8")
+    stub.chmod(0o755)
+    opener = repo / "docs" / "openers" / "0101G-带venv判据的worktree条.md"
+    opener.parent.mkdir(parents=True)
+    opener.write_text(
+        "## 机器判据\n\n```bash\n"
+        "cd /Users/paulshao/Projects/HumanResource\n"
+        'test -f "$HR_GATE_MAIN/venv/bin/python"\n'
+        './venv/bin/python -c "print(1)"\n'
+        "```\n",
+        encoding="utf-8",
+    )
+    g("add", "README.md", "docs/openers/0101G-带venv判据的worktree条.md")
+    g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    fake = sandbox["script"].parent / "bin" / "codex"
+    fake.write_text("#!/usr/bin/env bash\ncat >/dev/null\necho OPENER_DONE\n", encoding="utf-8")
+    fake.chmod(0o755)
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101G", plan_text=Venv)
+    assert r.returncode == 0, r.stdout + r.stderr
+    lane_dir = next((repo / ".claude" / "handoff").glob("lanes-*/"))
+    gate_sh = lane_dir / "gate-0101G.sh"
+    text = gate_sh.read_text(encoding="utf-8")
+    assert "./venv/bin/python" not in text, text
+    assert '"$HR_GATE_MAIN/venv/bin/python"' in text, text
+    rows = {l.split("\t")[1]: l.split("\t") for l in (lane_dir / "results.tsv").read_text(encoding="utf-8").splitlines()}
+    assert rows["0101G"][2] == "OK", rows["0101G"]

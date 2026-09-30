@@ -329,3 +329,15 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - **3a 进行中**：8.6 第 1 条链路（私信发文档→归档）待 Shao Peishen 私信机器人发一个文件——TD-51
   已还、`ATTACHMENT_FIELD_PATHS_BY_MSGTYPE["file"]` 映射在，帧一落地即可派 Flash 泳道自测；
   ⚠️ 第 3 条链路（群通知→回推）仍需他填 `HR_LIAISON_GROUP_WEBHOOK`（`Q-10`，⛔ 泳道不代填凭据）。
+
+**14:0x 追加（Shao Peishen 答 `1a，2a`）**
+
+- **1a（三条链路一次验完）**：前置是他在 `.env` 填 `HR_LIAISON_GROUP_WEBHOOK`——截至 13:4x
+  **该键仍不在 `.env` 里**。⇒ 他填好 + 私信发文件后：先 `launchctl kickstart -k gui/502/com.zhuopin.hr.liaison`
+  重启值守（确认 `state=running` 与 `liveness.json` 新 `since`），再发车 `0930J`。
+- **2a 已执行（Q-65 根因修复，主会话直执）**：`docs/openers/run-lanes.sh` 在 codex worktree 泳道的
+  判据块改写里，把 `./venv/bin/<工具>` 定向到 `"$HR_GATE_MAIN/venv/bin/<工具>"`（worktree 里没有
+  gitignore 的 `venv/`，0930I 首例是靠现场建 venv 绕过）；新增回归
+  `test_codex_worktree_gate_redirects_local_venv_to_main`（主仓 venv 桩＋worktree 判据块：断言改写后
+  路径存在、`./venv/bin/python` 不再出现在生成的判据脚本里、泳道判 OK）；run-lanes 家族＋dispatcher
+  **133 passed**。⇒ 后续 codex 泳道的判据块可以直接照常用 `./venv/bin/python`。
