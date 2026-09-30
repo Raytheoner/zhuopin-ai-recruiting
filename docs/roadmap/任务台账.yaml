@@ -3,17 +3,15 @@ version: 1
 summary:
   条目数: 559
   按状态:
-    待开: 216
+    待开: 207
     在跑: 7
-    完成: 258
-    阻塞: 78
+    完成: 268
+    阻塞: 77
   阻塞·决策: 52
-  阻塞·外部: 26
+  阻塞·外部: 25
   conflicts: []
   ready:
-  - m1-job-profile-intake/9.2
-  - m1-intake-quality-fixes/U8/plan
-  - m1-job-profile-intake/U1/plan
+  - m1-intake-quality-fixes/8.9
   - m2-resume-parse-and-rank/0.1
   - channel-resume-intake/0.1
   - interview-scheduling/0.2
@@ -2136,14 +2134,13 @@ tasks:
   - m1-intake-quality-fixes/U7
   触碰区:
   - docs/superpowers/plans/*-m1-intake-quality-fixes-unit8-*.md
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 m1-intake-quality-fixes（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m1-intake-quality-fixes/tasks.md
   可见: false
   闸门: G2 m1-intake-quality-fixes
-  备注: 0917 dispatcher 核实：delivery-units.md §「G·真实会话回放验证与上线」明写"性质与前五个单元不同，不建议当成一份 TDD plan 跑 run-build"——8.1 已单独完成，8.2-8.8 已完成（发版/文档回填），唯一剩项 8.9 是归档顺序提醒（阻塞·外部，见同 id
-    8.9 条），不是代码工作。⛔ 不派 spec-to-plan，否则会对已完成的工作重新生成实现计划。台账生成器不读 delivery-units.md，此依赖手工标注，每次刷新会被判 conflicts（真身=待开）。0917 第二次核实：上次核实只写了备注、忘了把状态从待开改完成，导致仍被判 ready 并险些误派——本次改状态为完成
+  备注: 0930E：U8 见 delivery-units.md:111「不建议当成一份 TDD plan 跑 run-build」，生成器已识别「不走 plan」，本条不产出待开 ⇒ 完成。
 - id: m1-intake-quality-fixes/U8
   场景: M1
   阶段: build
@@ -2180,34 +2177,6 @@ tasks:
   产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
   来源: openspec/changes/m1-intake-quality-fixes/tasks.md
   可见: false
-- id: m1-job-profile-intake/1.5b
-  场景: M1
-  阶段: build
-  标题: 建表 `wecom_callback`（回调落库）（2026-08-20 从原 1.5 拆出）
-  单元: 地基：数据层
-  依赖:
-  - m1-job-profile-intake/U1/plan
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 建表 `wecom_callback`（回调落库）（2026-08-20 从原 1.5 拆出）
-  来源: openspec/changes/m1-job-profile-intake/tasks.md:105
-  可见: false
-  备注: 0917 dispatcher 核实：tasks.md:106「⤷ 已移出到阶段二·企微通道」——本条已移出，本包内无剩余动作。台账生成器只识别 checkbox 同行的「已移出」，识别不到续行「⤷」标注，会持续误判真身=待开，下次核对先看 tasks.md 该行续行
-- id: m1-job-profile-intake/1.7
-  场景: M1
-  阶段: build
-  标题: 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
-  单元: 地基：数据层
-  依赖:
-  - m1-job-profile-intake/U1/plan
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
-  来源: openspec/changes/m1-job-profile-intake/tasks.md:111
-  可见: false
-  备注: 0917 dispatcher 核实：tasks.md:112「⤷ 已移出到调度基础设施（待立项）」——本条已移出，本包内无剩余动作。同 1.5b，台账生成器识别不到续行「⤷」标注，会持续误判真身=待开
 - id: m1-job-profile-intake/U1/plan
   场景: M1
   阶段: plan
@@ -2216,21 +2185,19 @@ tasks:
   依赖: []
   触碰区:
   - docs/superpowers/plans/*-m1-job-profile-intake-unit1-*.md
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 m1-job-profile-intake（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: false
   闸门: G2 m1-job-profile-intake
-  备注: 0917 dispatcher 核实：第 1 章活条目（1.2/1.2b/1.3/1.4/1.5/1.6/1.6b）全部已勾，唯二未勾的 1.5b/1.7 均已移出（见各自条目备注）——本章无剩余代码工作，不需再走 spec-to-plan。⛔ 不派车：会对已完成的工作重新生成实现计划
+  备注: 0930E：U1 早期单元无 plan 落档，本章活条目全勾，不需再走 spec-to-plan ⇒ 完成。
 - id: m1-job-profile-intake/U1
   场景: M1
   阶段: build
   标题: 1. 地基：数据层
   单元: 地基：数据层
   依赖:
-  - m1-job-profile-intake/1.5b
-  - m1-job-profile-intake/1.7
   - m1-job-profile-intake/U1/plan
   触碰区:
   - app/graph/build.py
@@ -2240,12 +2207,12 @@ tasks:
   - tests/test_db_migration.py
   - tests/test_graph_idempotency.py
   - tests/test_human_review_schema.py
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: false
-  备注: 0917 dispatcher 核实：依赖里的 1.5b/1.7 均已移出（见各自条目备注），实质等同已完成；本单元真身应判完成，同 U1/plan
+  备注: 0930E：本章唯二未勾 1.5b/1.7 均已移出（续行原文为据），活条目全勾 ⇒ 完成。
 - id: m1-job-profile-intake/U2/plan
   场景: M1
   阶段: plan
@@ -2346,22 +2313,6 @@ tasks:
   产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: false
-- id: m1-job-profile-intake/5.6
-  场景: M1
-  阶段: build
-  标题: 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
-  单元: '需求解析 Agent（capability: job-profile-intake）'
-  依赖:
-  - m1-job-profile-intake/U4
-  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
-  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg2
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
-  来源: openspec/changes/m1-job-profile-intake/tasks.md:214
-  可见: true
-  备注: 0917 dispatcher 核实：tasks.md:216「⤷ 已移出（2026-09-08 Shao Peishen 裁决）→ 调度基础设施（待立项）」——本条已移出，本包内无剩余动作。阻塞类型仍显示「外部」是台账生成器按文本关键词「业务经理」重算的副作用，不影响状态=完成的判断
 - id: m1-job-profile-intake/U5/plan
   场景: M1
   阶段: plan
@@ -2383,7 +2334,6 @@ tasks:
   标题: '5. 需求解析 Agent（capability: job-profile-intake）'
   单元: '需求解析 Agent（capability: job-profile-intake）'
   依赖:
-  - m1-job-profile-intake/5.6
   - m1-job-profile-intake/U4
   - m1-job-profile-intake/U5/plan
   - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
@@ -2398,29 +2348,12 @@ tasks:
   - tests/test_intake_agent.py
   - tests/test_job_profile_schema.py
   - tests/test_web_api.py
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: true
-  备注: 0917 dispatcher 核实：5.1-5.5/5.7/5.8/5.9 全部已勾，唯一未勾的 5.6 已移出（见同 id 5.6 条备注）——本单元真身应判完成
-- id: m1-job-profile-intake/6.8
-  场景: M1
-  阶段: build
-  标题: 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
-  单元: '确认断点（capability: job-profile-approval）'
-  依赖:
-  - m1-job-profile-intake/U5
-  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
-  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg2
-  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg3
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
-  来源: openspec/changes/m1-job-profile-intake/tasks.md:272
-  可见: true
-  备注: 0917 dispatcher 核实：tasks.md:279「⤷ 已移出（2026-09-08 Shao Peishen 裁决）→ 调度基础设施（待立项）」——本条已移出，本包内无剩余动作
+  备注: 0930E：本章唯一未勾 5.6 已移出（续行原文为据），活条目全勾 ⇒ 完成。
 - id: m1-job-profile-intake/U6/plan
   场景: M1
   阶段: plan
@@ -2442,7 +2375,6 @@ tasks:
   标题: '6. 确认断点（capability: job-profile-approval）'
   单元: '确认断点（capability: job-profile-approval）'
   依赖:
-  - m1-job-profile-intake/6.8
   - m1-job-profile-intake/U5
   - m1-job-profile-intake/U6/plan
   - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
@@ -2455,12 +2387,12 @@ tasks:
   - tests/test_approval_branches.py
   - tests/test_profile_summary.py
   - tests/test_suspend_recovery.py
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m1-job-profile-intake/tasks.md
   可见: true
-  备注: 0917 dispatcher 核实：6.1-6.7/6.9 全部已勾，唯一未勾的 6.8 已移出（见同 id 6.8 条备注）——本单元真身应判完成
+  备注: 0930E：本章唯一未勾 6.8 已移出（续行原文为据），活条目全勾 ⇒ 完成。
 - id: m1-job-profile-intake/U7/plan
   场景: M1
   阶段: plan
@@ -2541,21 +2473,6 @@ tasks:
   产出判据: 画像质量验收：10 个真实历史岗位重跑，HR 与业务经理双方评估技术栈字段准确率，目标 ≥80%
   来源: openspec/changes/m1-job-profile-intake/tasks.md:396
   可见: true
-- id: m1-job-profile-intake/9.2
-  场景: M1
-  阶段: build
-  标题: 端到端测试：从企微发起到 JD 产出的完整链路
-  单元: 验收与交付
-  依赖:
-  - m1-job-profile-intake/U8
-  - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 端到端测试：从企微发起到 JD 产出的完整链路
-  来源: openspec/changes/m1-job-profile-intake/tasks.md:398
-  可见: true
-  备注: 0917 dispatcher 核实：tasks.md:399 该条标「⤷ 已移出到阶段二·企微通道，Web 通道等价链路已由 tests/test_web_api.py 覆盖」，与 1.5b/1.7/5.6/6.8 同一模式（已移出不算欠账），按同一判据标完成，解除对 U9 的误阻塞（U9 仍被 9.1 外部输入正确阻塞）
 - id: m1-job-profile-intake/U9/plan
   场景: M1
   阶段: plan
@@ -2578,7 +2495,6 @@ tasks:
   单元: 验收与交付
   依赖:
   - m1-job-profile-intake/9.1
-  - m1-job-profile-intake/9.2
   - m1-job-profile-intake/U8
   - m1-job-profile-intake/U9/plan
   - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
@@ -6598,6 +6514,82 @@ tasks:
   可见: false
   队列: Q-21 已答 a
   备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AU，task-dispatcher·answers-mapped-20260917-190659 发车
+- id: m1-job-profile-intake/1.5b
+  场景: M1
+  阶段: build
+  标题: 建表 `wecom_callback`（回调落库）（2026-08-20 从原 1.5 拆出）
+  单元: 地基：数据层
+  依赖:
+  - m1-job-profile-intake/U1/plan
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 建表 `wecom_callback`（回调落库）（2026-08-20 从原 1.5 拆出）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:105
+  可见: false
+  备注: 0930E：已移出（续行原文为据，tasks.md:106「⤷ 已移出到阶段二·企微通道」）。
+- id: m1-job-profile-intake/1.7
+  场景: M1
+  阶段: build
+  标题: 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
+  单元: 地基：数据层
+  依赖:
+  - m1-job-profile-intake/U1/plan
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 写 checkpoint 清理任务（按流程完成时间归档），M1 不启用但代码就位
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:111
+  可见: false
+  备注: 0930E：已移出（续行原文为据，tasks.md:112「⤷ 已移出→调度基础设施（待立项）」）。
+- id: m1-job-profile-intake/5.6
+  场景: M1
+  阶段: build
+  标题: 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
+  单元: '需求解析 Agent（capability: job-profile-intake）'
+  依赖:
+  - m1-job-profile-intake/U4
+  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg1
+  - plan:2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 业务经理超时：3 个工作日提醒一次，再 3 天置 `abandoned` 并保留已采集内容
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:214
+  可见: true
+  备注: 0930E：已移出（续行原文为据，tasks.md:216「⤷ 已移出→调度基础设施（待立项）」）。原 阻塞·外部 系关键词「业务经理」误判，随移出一并清。
+- id: m1-job-profile-intake/6.8
+  场景: M1
+  阶段: build
+  标题: 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
+  单元: '确认断点（capability: job-profile-approval）'
+  依赖:
+  - m1-job-profile-intake/U5
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg1
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg2
+  - plan:2026-09-04-m1-job-profile-intake-unit6-approval-checkpoint/seg3
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 挂起提醒：第 1 天、第 3 天各一次（无定时基础设施，同 5.6）
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:272
+  可见: true
+  备注: 0930E：已移出（续行原文为据，tasks.md:279「⤷ 已移出→调度基础设施（待立项）」）。
+- id: m1-job-profile-intake/9.2
+  场景: M1
+  阶段: build
+  标题: 端到端测试：从企微发起到 JD 产出的完整链路
+  单元: 验收与交付
+  依赖:
+  - m1-job-profile-intake/U8
+  - plan:2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 端到端测试：从企微发起到 JD 产出的完整链路
+  来源: openspec/changes/m1-job-profile-intake/tasks.md:398
+  可见: true
+  备注: 0930E：已移出（续行原文为据，tasks.md:399「⤷ 已移出到阶段二·企微通道」）。
 - id: m2-resume-parse-and-rank/0.3
   场景: M2
   阶段: gate

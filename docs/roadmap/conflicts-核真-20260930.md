@@ -442,3 +442,40 @@
    成立，但 gate 自身 checkbox 未勾 ⇒ 真身=待开。生成器只看 checkbox，不查判据子句。
 4. **跨变更包依赖不追踪**：`m1-intake-quality-fixes/8.9` 依赖 `m1-job-profile-intake` 先归档，生成器
    不追跨包依赖，只能手工标注（历史备注已记）。
+
+---
+
+## 2026-09-30 追加：已移出／不走 plan 识别修正（[Mac]0930E）
+
+### 根因
+
+上一节「生成器判据局限」第 1、2 条是本轮伪 ready 的直接根因，已由本 opener 修生成器：
+
+1. **续行「⤷ 已移出」不识别**：`parse_tasks` 只认条目行同行的「已移出」，认不到 `- [ ] 1.5b …`
+   下一行（或隔着 ⚠️／⏸ 说明行的续行块）里的 `⤷ 已移出`，把已移出的活判成待开/阻塞伪 ready。
+2. **`delivery-units.md` 不被读**：`m1-intake-quality-fixes/U8/plan` 无 unit8 plan 文件被误判待开，
+   而 `delivery-units.md:111` 明写第 8 章「不建议当成一份 TDD plan 跑 run-build」。
+
+### 修法（只补识别，不改判据语义）
+
+- `parse_tasks` 新增续行块扫描：条目行之后的一串缩进行里出现「⤷ 开头且含已移出」⇒ 该条目视同已移出，
+  不生成条目、不计入未勾（`_moved_in_continuation`）。
+- `parse_tasks` 新增 `no_plan_units` 入参：`generate()` 读各变更包 `delivery-units.md` 单元划分表，
+  规模列含「不走 plan」的行提取「第 N 章」章节号（`parse_no_plan_units`），该单元的 plan 项不产出「待开」。
+- 早期单元无 plan 落档（如 `m1-job-profile-intake/U1`）沿用既有 `done` 判据：活条目全勾 ⇒ plan 项完成，
+  本轮因续行识别修正而自动生效。
+
+### 订正清单（台账状态 → 完成）
+
+- `m1-job-profile-intake/1.5b`／`1.7`／`5.6`／`6.8`／`9.2`：已移出（续行原文为据，不再生成条目）。
+  其中 `5.6` 原 阻塞·外部 系关键词「业务经理」误判，随移出一并清为 无。
+- `m1-job-profile-intake/U1`／`U5`／`U6`：本章唯一/唯二未勾条目均已移出，活条目全勾 ⇒ 完成。
+- `m1-job-profile-intake/U1/plan`：U1 早期单元无 plan 落档，不需再走 spec-to-plan ⇒ 完成。
+- `m1-intake-quality-fixes/U8/plan`：U8 见 `delivery-units.md:111`「不走 plan」⇒ 完成。
+
+### 机器判据结果
+
+- `tests/test_dispatcher_backlog.py` 34 passed；`dispatcher_backlog` 幂等（连跑两次 diff 为空）。
+- `--show conflicts` = 0；`--show ready` 不再含 `m1-job-profile-intake/9.2`／`U1/plan`／
+  `m1-intake-quality-fixes/U8/plan`。
+- 残留例外：无（8 条订正全部定论，无「台账对/两方都需修/穷尽后仍无法定论」项）。
