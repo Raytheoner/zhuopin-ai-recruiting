@@ -136,6 +136,35 @@ def test_real_run_passes_codex_argv_and_usage_columns(sandbox):
     assert rows["0101B"][5] == "opus"
     # 列序同 claude 引擎：cost("-"), in, out, cache_read, cache_write, turns
     assert rows["0101A"][6:12] == ["-", "10", "20", "30", "40", "1"]
+    # 第 13 列（upeak）：codex 的 JSONL 没有单轮上下文峰值可算 ⇒ 恒 "-"（0930I／[Mac]0930R）
+    assert rows["0101A"][12] == "-" and rows["0101B"][12] == "-"
+
+
+def test_codex_peak_column_stays_dash_and_no_150k_false_alarm(sandbox):
+    """复刻 0930F 的累计 usage（input 6454677／cached 6394496）。
+
+    旧实现把 `input + cache_read + cache_write` 当峰值 ⇒ 12,849,173 ≥150k，整批误报
+    「越过 150k 转场线」；新口径下 codex 泳道该列恒 `-`、播报跳过它。⛔ 不许改回累计量充数。
+    """
+    fake = Path(sandbox["env"]["PATH"].split(":")[0]) / "codex"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "cat >/dev/null\n"
+        "cat <<'JSON'\n"
+        '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"OPENER_DONE"}}\n'
+        '{"type":"turn.completed","usage":{"input_tokens":6454677,"output_tokens":52930,'
+        '"cached_input_tokens":6394496,"cache_write_input_tokens":0}}\n'
+        "JSON\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    r = run(sandbox, "--yes", "--full-auto")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "150k" not in r.stdout
+    results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
+    rows = {l.split("\t")[1]: l.split("\t") for l in results.read_text(encoding="utf-8").splitlines()}
+    assert rows["0101A"][7] == "6454677"  # 累计用量仍照记在第 8 列
+    assert rows["0101A"][12] == "-"       # 峰值列留 "-"，不拿累计量充数
 
 
 def test_non_full_auto_uses_on_request_approval(sandbox):

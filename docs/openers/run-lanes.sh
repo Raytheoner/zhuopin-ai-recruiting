@@ -912,6 +912,14 @@ PY
     fi
     IFS=$'\t' read -r ucost uin uout ucread ucwrite uturns upeak <<< "$usage_row"
 
+    # 第 13 列（上下文峰值）的引擎口径（2026-09-30 `0930I`＋本条，[Mac]0930R 派）：
+    # codex 的 `exec --json` 一次运行只在收尾发**一条累计 usage**，**没有单轮上下文峰值可算**
+    # （`codex_jsonl_summary.py` 只算得出「最大单轮累计用量」，量级比真实峰值大一个数量级：
+    # 0930F 实测 12,849,173 vs 真实 6,454,677）。按 claude 分支同一条规矩——**不猜、不拿累计量
+    # 充数** ⇒ codex 泳道该列一律 `-`；下面的「≥150k 转场线」播报因 `$13!="-"` 自动跳过。
+    # ⛔ 别改回拿累计量比 150k：会把 150k 判据整批打穿（0930A/B/C/E/F 五条全中）。
+    [[ "$ENGINE" == codex ]] && upeak="-"
+
     # 哨兵扫全文，不扫 tail —— 原版实测哨兵落在第 2 行，扫 tail 会误判
     # 容忍模型把哨兵加粗/包反引号（2026-09-16 0916K 实证：输出 `**OPENER_DONE**`，活已干完却判 NO-SENTINEL）
     if   grep -qE '^[*`_]*OPENER_DONE[*`_]*[[:space:]]*$' "$log"; then sentinel=DONE
@@ -1052,6 +1060,8 @@ echo "━━━━━━ 泳道执行汇总 ━━━━━━"
 # results.tsv 列定义：lane／id／status／mins／log／model／cost／in／out／cache_read／
 # cache_write／turns／upeak（0920G 新增第 13 列：该 session 单轮上下文峰值 input+
 # cache_creation+cache_read 的最大值，取自 usage.iterations，"-" 表示取不到，只记账不中止）。
+# ⚠️ codex 引擎（2026-09-30 起）该列恒为 `-`：codex 的 JSONL 没有单轮口径，⛔ 不用累计量充数
+# （见上面 upeak 赋值处的长注释；codex 泳道的转场判据只看 `CTX-RELAY` 哨兵）。
 #
 # 批次用量合计（0918F）：results.tsv 第 7-12 列，"-" 当 0 计。新文件，无历史消费方。
 {

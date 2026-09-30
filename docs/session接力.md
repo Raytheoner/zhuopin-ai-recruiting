@@ -313,3 +313,19 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   批次误报 EXITED（Seatbelt 对 launchd 进程 `kill -0` 假阴，AGENTS.md §4 同族）。
 - `0930H` 结论里登记 1 条**判据缺口**（开窗文件「误报」判据的第二分支「实际没有消息被漏收」服务侧
   不可判定）——只登记未动，属改判据、超出 3a 授权。
+
+**13:4x 追加（Shao Peishen 答 `1a，2a，3a`）**
+
+- **1a 已执行（主会话直执，按 `0930G` 先例）**：
+  - `docs/openers/run-lanes.sh`：**codex 泳道第 13 列 `upeak` 恒写 `-`**——codex 的 JSONL 没有单轮
+    口径（只有收尾一条累计 usage），照 claude 分支同一条规矩「不猜、不拿累计量充数」；收工的
+    「≥150k 转场线」播报因 `$13!="-"` 自动跳过 codex 泳道，不再整批误报。列定义注释同步写明。
+  - `tests/test_run_lanes_model_codex.py`：既有用例加断言（两泳道第 13 列均 `-`）＋新增回归
+    `test_codex_peak_column_stays_dash_and_no_150k_false_alarm`（复刻 0930F 累计样本：第 8 列仍记
+    6,454,677、第 13 列为 `-`、stdout 无「150k」）。run-lanes 全家族 54 passed／含 dispatcher 86 passed。
+  - `docs/tech-debt.md`：**TD-55**（值守「误报」判据第二分支服务侧不可判定，`0930H` 登记）＋
+    **TD-56**（codex 泳道无单轮上下文峰值，转场只能靠 `CTX-RELAY` 哨兵）。
+- **2a 已建**：到期提醒 automation `10-14`（heartbeat，週频；到期前静默，2026-10-14 起提醒一次后自停）。
+- **3a 进行中**：8.6 第 1 条链路（私信发文档→归档）待 Shao Peishen 私信机器人发一个文件——TD-51
+  已还、`ATTACHMENT_FIELD_PATHS_BY_MSGTYPE["file"]` 映射在，帧一落地即可派 Flash 泳道自测；
+  ⚠️ 第 3 条链路（群通知→回推）仍需他填 `HR_LIAISON_GROUP_WEBHOOK`（`Q-10`，⛔ 泳道不代填凭据）。
