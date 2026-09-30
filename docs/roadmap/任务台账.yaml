@@ -3,26 +3,26 @@ version: 1
 summary:
   条目数: 559
   按状态:
-    待开: 207
+    待开: 199
     在跑: 7
-    完成: 268
-    阻塞: 77
+    完成: 275
+    阻塞: 78
   阻塞·决策: 52
   阻塞·外部: 25
-  conflicts: []
-  ready:
+  conflicts:
+  - channel-resume-intake/0.1
   - m1-intake-quality-fixes/8.9
   - m2-resume-parse-and-rank/0.1
-  - channel-resume-intake/0.1
-  - interview-scheduling/0.2
-  - offer-generation/0.2
-  - offer-generation/0.5
-  - onboarding-flow/0.2
   - propose:S-M3
   - propose:S-Offer
   - propose:S-入职
   - propose:S-排期
   - propose:S-渠道
+  ready:
+  - interview-scheduling/0.2
+  - offer-generation/0.2
+  - offer-generation/0.5
+  - onboarding-flow/0.2
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -200,12 +200,18 @@ tasks:
   单元: 前置门槛（不写代码；任一未过则对应下游单元不得发车）
   依赖: []
   触碰区: []
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: M2 tasks 2.1／3.3／3.4 勾选
   来源: openspec/changes/channel-resume-intake/tasks.md:5
   可见: false
-  备注: dispatcher_event-20260918-122705 核实：M2 tasks 2.1/3.3/3.4 均已勾选（m2-resume-parse-and-rank/tasks.md:16,29,30），判据成立，解除对 channel-resume-intake/U1 的门槛依赖
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: 'dispatcher_event-20260918-122705 核实：M2 tasks 2.1/3.3/3.4 均已勾选（m2-resume-parse-and-rank/tasks.md:16,29,30），判据成立，解除对 channel-resume-intake/U1 的门槛依赖
+
+    0930 dispatcher 复核：M2 tasks 2.1/3.3/3.4 均 [x]，判据成立 ⇒ 标完成'
 - id: channel-resume-intake/0.2
   场景: channel-resume-intake
   阶段: gate
@@ -2118,13 +2124,19 @@ tasks:
   - m1-intake-quality-fixes/U7
   - m1-intake-quality-fixes/U8/plan
   触碰区: []
-  状态: 待开
+  状态: 阻塞
   阻塞类型: 无
   产出判据: 归档顺序提醒：`m1-job-profile-intake` 必须先归档，本变更后归档；归档时人工核对「多轮追问补全 / 追问达到上限」两处，确保活文档里不留"5 轮"与"5 个有产出轮"两种矛盾表述（design.md「与 m1-job-profile-intake 的关系」）
   来源: openspec/changes/m1-intake-quality-fixes/tasks.md:172
   可见: false
-  备注: 0917 dispatcher 核实：等 m1-job-profile-intake 先归档——该包归档又卡在 9.1（业务经理双方评估技术栈字段准确率，阻塞·外部，未完成）。台账生成器不追踪跨变更包依赖，此依赖手工标注，每次刷新会被判 conflicts（真身=待开），下次核对先查 m1-job-profile-intake
+  conflicts:
+    状态:
+      台账: 阻塞
+      真身: 待开
+  备注: '0917 dispatcher 核实：等 m1-job-profile-intake 先归档——该包归档又卡在 9.1（业务经理双方评估技术栈字段准确率，阻塞·外部，未完成）。台账生成器不追踪跨变更包依赖，此依赖手工标注，每次刷新会被判 conflicts（真身=待开），下次核对先查 m1-job-profile-intake
     是否已归档
+
+    0930 dispatcher 复核：仍等 m1-job-profile-intake 先归档（其归档卡 9.1 外部输入），保持阻塞·外部'
 - id: m1-intake-quality-fixes/U8/plan
   场景: M1
   阶段: plan
@@ -2535,12 +2547,17 @@ tasks:
   依赖: []
   触碰区:
   - docs/tech-debt.md
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: '`docs/tech-debt.md` TD-51 销账'
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:5
   可见: false
   队列: Q-01 已答 a
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: 0930 dispatcher 复核：TD-51 已销账（0923C，tech-debt.md 【已还】），判据成立 ⇒ 标完成
 - id: m2-resume-parse-and-rank/0.2
   场景: M2
   阶段: gate
@@ -6289,15 +6306,21 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-M3-intent.md:1
   可见: false
   闸门: G1 S-M3
-  备注: 0918C 并入：前身 `propose:M3`（生成器 `parse_intents` 用 `\bM\d′?` 正则把 `S-M3` 误判成 `M3`，2026-09-18 已修，场景名改取 frontmatter `场景` 原文）。G1 已放行：Q-32（场景 S-M3，答「定」）与重复行 Q-37（答「定」，任务
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: '0918C 并入：前身 `propose:M3`（生成器 `parse_intents` 用 `\bM\d′?` 正则把 `S-M3` 误判成 `M3`，2026-09-18 已修，场景名改取 frontmatter `场景` 原文）。G1 已放行：Q-32（场景 S-M3，答「定」）与重复行 Q-37（答「定」，任务
     id 已改指本条）均已答；0918B 已立包 `openspec/changes/voice-structured-interview/`（commit 4299785），本条真身完成。conflicts 若复现是 `scene_of_change()` 未把英文包名映射回场景名的已知生成器 bug（同 S-Offer
     等四条），不影响本条状态，⛔ 无需改回
+
+    0930 dispatcher 复核：openspec/changes/voice-structured-interview/ 齐 proposal/design/specs/tasks，G1（Q-32/Q-37）已放行，真身完成 ⇒ 标完成'
 - id: propose:S-Offer
   场景: S-Offer
   阶段: propose
@@ -6305,14 +6328,20 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-Offer-intent.md:1
   可见: false
   闸门: G1 S-Offer
-  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: '0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
+
+    0930 dispatcher 复核：openspec/changes/offer-generation/ 齐四件，G1（Q-34）已放行，真身完成 ⇒ 标完成'
 - id: propose:S-入职
   场景: S-入职
   阶段: propose
@@ -6320,14 +6349,20 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-入职-intent.md:1
   可见: false
   闸门: G1 S-入职
-  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: '0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
+
+    0930 dispatcher 复核：openspec/changes/onboarding-flow/ 齐四件，G1（Q-35）已放行，真身完成 ⇒ 标完成'
 - id: propose:S-排期
   场景: S-排期
   阶段: propose
@@ -6335,14 +6370,20 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-排期-intent.md:1
   可见: false
   闸门: G1 S-排期
-  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: '0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
+
+    0930 dispatcher 复核：openspec/changes/interview-scheduling/ 齐四件，G1（Q-33）已放行，真身完成 ⇒ 标完成'
 - id: propose:S-渠道
   场景: S-渠道
   阶段: propose
@@ -6350,14 +6391,20 @@ tasks:
   依赖: []
   触碰区:
   - openspec/changes/
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: G1 放行（定夺队列该行已答「定」）后：openspec/changes/<pkg>/ 齐 proposal／specs／design／tasks，`openspec validate <pkg> --strict` 过
   来源: docs/roadmap/intents/S-渠道-intent.md:1
   可见: false
   闸门: G1 S-渠道
-  备注: 0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: '0918 已人工核实完成（openspec validate 通过，proposal/design/specs/tasks 齐全）；conflicts 持续复现是 scripts/dispatcher_backlog.py scene_of_change() 未把英文包名映射回中文场景名的已知生成器 bug，不影响本条状态，⛔
     无需改回
+
+    0930 dispatcher 复核：openspec/changes/channel-resume-intake/ 齐四件，G1（Q-36）已放行，真身完成 ⇒ 标完成'
 - id: relay:tag#c3840b22
   场景: M0
   阶段: build
