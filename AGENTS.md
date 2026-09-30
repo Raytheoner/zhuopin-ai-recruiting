@@ -40,6 +40,9 @@
 - macOS Seatbelt 沙箱禁止跨进程读命令行参数 ⇒ `pgrep -f` 恒空。并发判据用
   `.claude/handoff/launch/run-lanes.pid` 兜底：`lane-launcher.sh` 发车时写、`run-lanes.sh`
   退出时自删、`scripts/action_request.py` 读它判活。
+  ⚠️ 沙箱会话内 `kill -0 <pid>` 对 launchd 起的进程**也恒失败**（2026-09-30 控制组实证：
+  对活着的值守 pid 与运行中的 run-lanes pid 均 rc=1）——`kill -0` 失败后必须用
+  `lsof -p <pid>` 复核（有输出＝在跑）。⛔ 不得只凭 `pgrep` 空或 `kill -0` 失败断言「无泳道在跑」。
 - Codex 的 `workspace-write` 沙箱把写权限锁在会话 cwd（泳道 worktree 条目＝泳道目录），
   天然禁止改主工作区——worktree 隔离不再依赖 hook。
 - **泳道也因此不能自行 git 提交**（2026-09-30 `0930D` 修复）：worktree 的 git 元数据在主工作区
