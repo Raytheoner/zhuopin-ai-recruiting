@@ -380,3 +380,22 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - **值守已二次重启**吃进接线：`pid=37076`、`since=2026-09-30T19:47:37`（15:24 那次是吃 webhook）。
 - **链路三的真实投递验证待做**：需要 Shao Peishen 在值守群发一条文字（他本人 `ShaoPeiShen` 在白名单里）
   ⇒ 系统入队后应自动回推一条群通知 ⇒ 核 `liaison_group_notify` 新行＋日志 ⇒ 才勾 8.6、随后跑 8.9 归档。
+
+**23:5x 追加（Shao Peishen 答 1a）：`hr-wecom-aibot-liaison` 整包闭环归档** 🎉
+
+- ✅ **链路三真投递**：他 23:48:30 在值守群发文字（`msgid=e30158528d8f959cc0a3511dd7960319`）⇒ 入队
+  `liaison_task` #13 ⇒ **回推真投递**：`liaison_group_notify` 首行 `state=sent`／`channel=group_webhook`，
+  正文「【值守通道·新任务已登记】来源会话：wrvDL_… 来源消息：e30158528d… 摘要：@MAC机器人 8.6链路三测试」
+  ——该表自建成以来**第一行**。
+- ✅ **8.6 勾（三条验收面 3/3）**：链路一 15:22 私信 doc 落盘＋sha256 逐字一致；链路二 群文字入队；
+  链路三 回推真投递；恒等不变式 10 组相等／0 不等。
+- ✅ **8.9 当场跑**：`openspec archive hr-wecom-aibot-liaison -y` —— 5 个 delta spec
+  （`liaison-channel-session`／`liaison-group-notify`／`liaison-inbound-whitelist`／
+  `liaison-message-archive`／`liaison-task-queue`）同步进 `openspec/specs/`（+27 requirements），
+  变更包移入 `openspec/changes/archive/2026-09-30-hr-wecom-aibot-liaison/`；主会话直执，提交 `7be4062`。
+- **台账已手工对齐**（生成器对「来源已消失」条目默认保守留旧状态）：8.6／8.9／U8／
+  `change:hr-wecom-aibot-liaison` 四条改完成并写备注；重跑生成器后 hr-wecom 家族 **19/19 完成、无 conflicts**，
+  全表 conflicts 13→9。`Q-10` 已按「已完成路径 a」作废销号。
+- ⚠️ **登记未改（新发现）**：回推后 `liaison_task.send_status` 仍为 `pending`——0930K 只落
+  `liaison_group_notify` 终态、**未回写队列行** ⇒ 队列视图会显示「未推送」。通知确已送达，影响面小，
+  建议另开一条小泳道对齐口径（⛔ 未擅改）。

@@ -3,12 +3,12 @@ version: 1
 summary:
   条目数: 563
   按状态:
-    待开: 199
+    待开: 197
     在跑: 7
-    完成: 277
-    阻塞: 80
+    完成: 281
+    阻塞: 78
   阻塞·决策: 55
-  阻塞·外部: 24
+  阻塞·外部: 22
   conflicts:
   - channel-resume-intake/0.1
   - m1-intake-quality-fixes/8.9
@@ -50,7 +50,16 @@ summary:
   - 2026-09-03-ai-audit-trail-unitU7-boundary-ci
   - 2026-09-03-outbound-retry-audit-trace
   - 2026-09-04-m1-job-profile-intake-unit-hard-requirement
+  - 2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton
+  - 2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency
+  - 2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist
   - 2026-09-08-idempotent-effect-unique-race-short-circuit
+  - 2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive
+  - 2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue
+  - 2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify
+  - 2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle
+  - 2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention
+  - 2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging
   - 2026-09-10-liaison-criteria-ledger
   - 2026-09-10-liaison-reply-bridge
   - 2026-09-10-liaison-unpack-charter
@@ -760,328 +769,6 @@ tasks:
   阻塞类型: 无
   产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
   来源: openspec/changes/channel-resume-intake/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/U1/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：1. 通道可行性与服务骨架
-  单元: 通道可行性与服务骨架
-  依赖: []
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit1-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U1
-  场景: M0
-  阶段: build
-  标题: 1. 通道可行性与服务骨架
-  单元: 通道可行性与服务骨架
-  依赖:
-  - hr-wecom-aibot-liaison/U1/plan
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg3
-  触碰区:
-  - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
-  - tools/liaison/README.md
-  - tools/liaison/requirements.txt
-  状态: 完成
-  阻塞类型: 无
-  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/U2/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：2. 存储基座与幂等不变式
-  单元: 存储基座与幂等不变式
-  依赖:
-  - hr-wecom-aibot-liaison/U1
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit2-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U2
-  场景: M0
-  阶段: build
-  标题: 2. 存储基座与幂等不变式
-  单元: 存储基座与幂等不变式
-  依赖:
-  - hr-wecom-aibot-liaison/U1
-  - hr-wecom-aibot-liaison/U2/plan
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg2
-  触碰区:
-  - app/storage/db.py
-  状态: 完成
-  阻塞类型: 无
-  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/U3/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：3. 准入名单
-  单元: 准入名单
-  依赖:
-  - hr-wecom-aibot-liaison/U2
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit3-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U3
-  场景: M0
-  阶段: build
-  标题: 3. 准入名单
-  单元: 准入名单
-  依赖:
-  - hr-wecom-aibot-liaison/U2
-  - hr-wecom-aibot-liaison/U3/plan
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg2
-  触碰区:
-  - tools/liaison/config/whitelist.yaml
-  状态: 完成
-  阻塞类型: 无
-  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/U4/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：4. 消息归档
-  单元: 消息归档
-  依赖:
-  - hr-wecom-aibot-liaison/U3
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit4-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit4 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U4
-  场景: M0
-  阶段: build
-  标题: 4. 消息归档
-  单元: 消息归档
-  依赖:
-  - hr-wecom-aibot-liaison/U3
-  - hr-wecom-aibot-liaison/U4/plan
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg2
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/U5/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：5. 值守任务队列
-  单元: 值守任务队列
-  依赖:
-  - hr-wecom-aibot-liaison/U4
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit5-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U5
-  场景: M0
-  阶段: build
-  标题: 5. 值守任务队列
-  单元: 值守任务队列
-  依赖:
-  - hr-wecom-aibot-liaison/U4
-  - hr-wecom-aibot-liaison/U5/plan
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg2
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/U6/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：6. 群通知外发
-  单元: 群通知外发
-  依赖:
-  - hr-wecom-aibot-liaison/U5
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit6-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit6 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U6
-  场景: M0
-  阶段: build
-  标题: 6. 群通知外发
-  单元: 群通知外发
-  依赖:
-  - hr-wecom-aibot-liaison/U5
-  - hr-wecom-aibot-liaison/U6/plan
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg2
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/U7/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：7. 连接生命周期与中断告警
-  单元: 连接生命周期与中断告警
-  依赖:
-  - hr-wecom-aibot-liaison/U6
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit7-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit7 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U7
-  场景: M0
-  阶段: build
-  标题: 7. 连接生命周期与中断告警
-  单元: 连接生命周期与中断告警
-  依赖:
-  - hr-wecom-aibot-liaison/U6
-  - hr-wecom-aibot-liaison/U7/plan
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg2
-  触碰区:
-  - docs/findings/2026-09-09-aibot-wsclient-表面实测.md
-  - docs/tech-debt.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: 章节 7 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: hr-wecom-aibot-liaison/8.6
-  场景: M0
-  阶段: build
-  标题: 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式
-  单元: 留存清理、进程守护与灰度验收
-  依赖:
-  - hr-wecom-aibot-liaison/8.6
-  - hr-wecom-aibot-liaison/U7
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
-  触碰区:
-  - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人——aibot
-    的单聊 chatid 要专员先私信才存在；⛔ 少这一步，带附件的归档链路根本验不到（
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:238
-  可见: false
-  队列: Q-10 待答
-- id: hr-wecom-aibot-liaison/8.9
-  场景: M0
-  阶段: build
-  标题: 全部章节勾完后当场跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
-  单元: 留存清理、进程守护与灰度验收
-  依赖:
-  - hr-wecom-aibot-liaison/U7
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: 全部章节勾完后当场跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:244
-  可见: false
-  队列: Q-10 待答
-  备注: 0917 dispatcher 核实：生成器依赖图漏列同章节未完成的 8.6（阻塞/决策，待本人私信机器人）/8.8（阻塞/外部，一周观察窗口未到），archive 判据「全部章节勾完」不成立；依赖字段每次生成会被覆盖、加依赖不持久，故直接标状态=阻塞防止误判 ready，此条会持续显示 conflicts（真身待开），下次核对时先查
-    8.6/8.8 是否已完成，完成后再放行
-- id: hr-wecom-aibot-liaison/U8/plan
-  场景: M0
-  阶段: plan
-  标题: spec-to-plan：8. 留存清理、进程守护与灰度验收
-  单元: 留存清理、进程守护与灰度验收
-  依赖:
-  - hr-wecom-aibot-liaison/U7
-  触碰区:
-  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit8-*.md
-  状态: 完成
-  阻塞类型: 无
-  产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-  闸门: G2 hr-wecom-aibot-liaison
-- id: hr-wecom-aibot-liaison/U8
-  场景: M0
-  阶段: build
-  标题: 8. 留存清理、进程守护与灰度验收
-  单元: 留存清理、进程守护与灰度验收
-  依赖:
-  - hr-wecom-aibot-liaison/8.6
-  - hr-wecom-aibot-liaison/8.9
-  - hr-wecom-aibot-liaison/U7
-  - hr-wecom-aibot-liaison/U8/plan
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
-  触碰区:
-  - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
-  - tools/liaison/launchd/com.zhuopin.hr.liaison.plist
-  - tools/liaison/scripts/install_launchd.py
-  - tools/liaison/tests/test_liaison_boundaries.py
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 章节 8 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
-  可见: false
-- id: change:hr-wecom-aibot-liaison
-  场景: M0
-  阶段: archive
-  标题: 变更包 hr-wecom-aibot-liaison
-  依赖:
-  - hr-wecom-aibot-liaison/U1
-  - hr-wecom-aibot-liaison/U2
-  - hr-wecom-aibot-liaison/U3
-  - hr-wecom-aibot-liaison/U4
-  - hr-wecom-aibot-liaison/U5
-  - hr-wecom-aibot-liaison/U6
-  - hr-wecom-aibot-liaison/U7
-  - hr-wecom-aibot-liaison/U8
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
   可见: false
 - id: interview-scheduling/0.1
   场景: interview-scheduling
@@ -5589,87 +5276,6 @@ tasks:
   产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-04-m1-job-profile-intake-unit9-6-human-review-exemption-line.md
   可见: true
-- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
-  可见: false
-- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 4–6
-  依赖:
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
-  可见: false
-- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg3
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 7
-  依赖:
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
-  可见: false
-- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency.md
-  可见: false
-- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 4–6
-  依赖:
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency.md
-  可见: false
-- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist.md
-  可见: false
-- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 4–5
-  依赖:
-  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist.md
-  可见: false
 - id: plan:2026-09-08-m1-job-profile-intake-unit2-gateway-fallback-and-retry/seg1
   场景: M1
   阶段: build
@@ -5727,144 +5333,6 @@ tasks:
   产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
   来源: docs/superpowers/plans/2026-09-08-m1-job-profile-intake-unit5-3-intent-recognition.md
   可见: true
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 4–6
-  依赖:
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 4–6
-  依赖:
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 4–6
-  依赖:
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 4–6
-  依赖:
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 4–5
-  依赖:
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 1–3
-  依赖: []
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging.md
-  可见: false
-- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
-  场景: M0
-  阶段: build
-  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 4
-  依赖:
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
-  触碰区: []
-  状态: 完成
-  阻塞类型: 无
-  产出判据: Task 4 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
-  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging.md
-  可见: false
 - id: plan:2026-09-17-m2-resume-parse-and-rank-unit1-data-model/seg1
   场景: M2
   阶段: build
@@ -6594,6 +6062,49 @@ tasks:
   可见: false
   队列: Q-21 已答 a
   备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AU，task-dispatcher·answers-mapped-20260917-190659 发车
+- id: change:hr-wecom-aibot-liaison
+  场景: M0
+  阶段: archive
+  标题: 变更包 hr-wecom-aibot-liaison
+  依赖:
+  - hr-wecom-aibot-liaison/U1
+  - hr-wecom-aibot-liaison/U2
+  - hr-wecom-aibot-liaison/U3
+  - hr-wecom-aibot-liaison/U4
+  - hr-wecom-aibot-liaison/U5
+  - hr-wecom-aibot-liaison/U6
+  - hr-wecom-aibot-liaison/U7
+  - hr-wecom-aibot-liaison/U8
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: tasks.md 全部勾选 ⇒ 当场 openspec-archive-change（CLAUDE.md 归档时限）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  备注: 2026-09-30 当场跑 `openspec archive hr-wecom-aibot-liaison -y`（5 个 delta spec 同步进 openspec/specs/，+27 requirements；变更包移入 archive/2026-09-30-hr-wecom-aibot-liaison/），看护者主会话直执，提交
+    7be4062
+- id: hr-wecom-aibot-liaison/8.6
+  场景: M0
+  阶段: build
+  标题: 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/8.6
+  - hr-wecom-aibot-liaison/U7
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
+  触碰区:
+  - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 单机灰度：名单先只放邵培申自己，自测归档／入队／通报三条链路，核对恒等不变式。🔴 前置（2026-09-09 Shao Peishen 口述 win 端实证，落档 `docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md`）：先由本人私信一次机器人——aibot
+    的单聊 chatid 要专员先私信才存在；⛔ 少这一步，带附件的归档链路根本验不到（
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:238
+  可见: false
+  队列: Q-10 待答
+  备注: 2026-09-30 三条验收面 3/3 ⇒ 勾：链路一 私信 doc 落盘（sha256 一致，0930J）；链路二 群文字入队（liaison_task）；链路三 群通知回推真投递（23:48:30 群消息 ⇒ liaison_group_notify state=sent，接线泳道 0930K/ff11df4）
 - id: hr-wecom-aibot-liaison/8.8
   场景: M0
   阶段: build
@@ -6614,6 +6125,288 @@ tasks:
   来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:242
   可见: false
   队列: Q-F5 待答
+- id: hr-wecom-aibot-liaison/8.9
+  场景: M0
+  阶段: build
+  标题: 全部章节勾完后当场跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/U7
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 全部章节勾完后当场跑 `openspec-archive-change`（CLAUDE.md「归档时限」：不得跨越一个工作 session）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:244
+  可见: false
+  队列: Q-10 待答
+  备注: 2026-09-30 当场执行——8.6 已勾（三条验收面 3/3）、8.8 已于同日收窗，全部章节勾完即跑 `openspec archive`，变更包移入 archive/2026-09-30-hr-wecom-aibot-liaison/（0917 那条「依赖漏列」备注已完成历史使命）
+- id: hr-wecom-aibot-liaison/U1
+  场景: M0
+  阶段: build
+  标题: 1. 通道可行性与服务骨架
+  单元: 通道可行性与服务骨架
+  依赖:
+  - hr-wecom-aibot-liaison/U1/plan
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg3
+  触碰区:
+  - docs/findings/2026-09-08-aibot-sdk-py314-兼容性.md
+  - tools/liaison/README.md
+  - tools/liaison/requirements.txt
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 1 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: hr-wecom-aibot-liaison/U1/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：1. 通道可行性与服务骨架
+  单元: 通道可行性与服务骨架
+  依赖: []
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit1-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit1 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
+- id: hr-wecom-aibot-liaison/U2
+  场景: M0
+  阶段: build
+  标题: 2. 存储基座与幂等不变式
+  单元: 存储基座与幂等不变式
+  依赖:
+  - hr-wecom-aibot-liaison/U1
+  - hr-wecom-aibot-liaison/U2/plan
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg2
+  触碰区:
+  - app/storage/db.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 2 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: hr-wecom-aibot-liaison/U2/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：2. 存储基座与幂等不变式
+  单元: 存储基座与幂等不变式
+  依赖:
+  - hr-wecom-aibot-liaison/U1
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit2-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit2 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
+- id: hr-wecom-aibot-liaison/U3
+  场景: M0
+  阶段: build
+  标题: 3. 准入名单
+  单元: 准入名单
+  依赖:
+  - hr-wecom-aibot-liaison/U2
+  - hr-wecom-aibot-liaison/U3/plan
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg2
+  触碰区:
+  - tools/liaison/config/whitelist.yaml
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 3 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: hr-wecom-aibot-liaison/U3/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：3. 准入名单
+  单元: 准入名单
+  依赖:
+  - hr-wecom-aibot-liaison/U2
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit3-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit3 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
+- id: hr-wecom-aibot-liaison/U4
+  场景: M0
+  阶段: build
+  标题: 4. 消息归档
+  单元: 消息归档
+  依赖:
+  - hr-wecom-aibot-liaison/U3
+  - hr-wecom-aibot-liaison/U4/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 4 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: hr-wecom-aibot-liaison/U4/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：4. 消息归档
+  单元: 消息归档
+  依赖:
+  - hr-wecom-aibot-liaison/U3
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit4-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit4 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
+- id: hr-wecom-aibot-liaison/U5
+  场景: M0
+  阶段: build
+  标题: 5. 值守任务队列
+  单元: 值守任务队列
+  依赖:
+  - hr-wecom-aibot-liaison/U4
+  - hr-wecom-aibot-liaison/U5/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 5 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: hr-wecom-aibot-liaison/U5/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：5. 值守任务队列
+  单元: 值守任务队列
+  依赖:
+  - hr-wecom-aibot-liaison/U4
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit5-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit5 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
+- id: hr-wecom-aibot-liaison/U6
+  场景: M0
+  阶段: build
+  标题: 6. 群通知外发
+  单元: 群通知外发
+  依赖:
+  - hr-wecom-aibot-liaison/U5
+  - hr-wecom-aibot-liaison/U6/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: hr-wecom-aibot-liaison/U6/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：6. 群通知外发
+  单元: 群通知外发
+  依赖:
+  - hr-wecom-aibot-liaison/U5
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit6-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit6 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
+- id: hr-wecom-aibot-liaison/U7
+  场景: M0
+  阶段: build
+  标题: 7. 连接生命周期与中断告警
+  单元: 连接生命周期与中断告警
+  依赖:
+  - hr-wecom-aibot-liaison/U6
+  - hr-wecom-aibot-liaison/U7/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg2
+  触碰区:
+  - docs/findings/2026-09-09-aibot-wsclient-表面实测.md
+  - docs/tech-debt.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 7 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+- id: hr-wecom-aibot-liaison/U7/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：7. 连接生命周期与中断告警
+  单元: 连接生命周期与中断告警
+  依赖:
+  - hr-wecom-aibot-liaison/U6
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit7-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit7 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
+- id: hr-wecom-aibot-liaison/U8
+  场景: M0
+  阶段: build
+  标题: 8. 留存清理、进程守护与灰度验收
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/8.6
+  - hr-wecom-aibot-liaison/8.9
+  - hr-wecom-aibot-liaison/U7
+  - hr-wecom-aibot-liaison/U8/plan
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
+  触碰区:
+  - docs/findings/2026-09-09-win端aibot收发实证-对8.6灰度的三条影响.md
+  - tools/liaison/launchd/com.zhuopin.hr.liaison.plist
+  - tools/liaison/scripts/install_launchd.py
+  - tools/liaison/tests/test_liaison_boundaries.py
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 章节 8 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  备注: 章节 8 全勾（8.6/8.8/8.9 于 2026-09-30 闭环），变更包已归档（7be4062）
+- id: hr-wecom-aibot-liaison/U8/plan
+  场景: M0
+  阶段: plan
+  标题: spec-to-plan：8. 留存清理、进程守护与灰度验收
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/U7
+  触碰区:
+  - docs/superpowers/plans/*-hr-wecom-aibot-liaison-unit8-*.md
+  状态: 完成
+  阻塞类型: 无
+  产出判据: docs/superpowers/plans/ 下存在文件名含 unit8 且含 hr-wecom-aibot-liaison（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md
+  可见: false
+  闸门: G2 hr-wecom-aibot-liaison
 - id: m1-job-profile-intake/1.5b
   场景: M1
   阶段: build
@@ -7276,6 +7069,225 @@ tasks:
   阻塞类型: 无
   产出判据: 已完成（lanes-20260917-182834，OK，2 分钟）；合入 commit 05fd82c
   来源: docs/openers/号池台账.md:230
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 4–6
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg3
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit1-channel-skeleton Task 7
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 7 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit1-channel-skeleton.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit2-storage-and-idempotency Task 4–6
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit2-storage-and-idempotency.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist.md
+  可见: false
+- id: plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit3-admission-whitelist Task 4–5
+  依赖:
+  - plan:2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-08-hr-wecom-aibot-liaison-unit3-admission-whitelist.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit4-message-archive Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit4-message-archive.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit5-task-queue Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit5-task-queue.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit6-group-notify Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit6-group-notify.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit7-connection-lifecycle Task 4–6
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–6 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit7-connection-lifecycle.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-1-retention Task 4–5
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4–5 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 1–3
+  依赖: []
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 1–3 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging.md
+  可见: false
+- id: plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
+  场景: M0
+  阶段: build
+  标题: hr-wecom-aibot-liaison-unit8-4-logging Task 4
+  依赖:
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: Task 4 各自 TDD 通过、spec/code review 两阶段通过；分支合 main 后 `git cherry -v main <分支>` 无 `+`
+  来源: docs/superpowers/plans/2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging.md
+  可见: false
 - id: propose:S-Offer Offer 生成
   场景: S-Offer Offer 生成
   阶段: propose
