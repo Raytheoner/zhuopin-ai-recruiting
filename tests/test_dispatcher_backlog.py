@@ -814,3 +814,91 @@ def test_tag4_old_format_unaffected_by_unrelated_pipe_character_elsewhere():
         "- 【谁做：Shao Peishen】【状态：待人】【判据：两份草稿，请定】【不做会怎样：留在工作区】\n"
     )
     assert _tag_count(text) == 1
+
+
+# ── ⑨ 已移出／不走 plan 识别（0930E）──
+
+
+def test_continuation_line_moved_marks_item_moved_and_completes_unit():
+    """条目行的续行块里出现「⤷ 已移出」（含隔着 ⚠️ 说明行的情形）⇒ 该条目视同已移出，
+    不生成条目、不计入未勾，整章真身判完成。"""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import dispatcher_backlog as db  # noqa: E402
+
+    text = (
+        "# M1\n\n"
+        "## 1. U1 地基\n\n"
+        "- [x] 1.1 建表 job\n"
+        "- [ ] 1.5b 建表 wecom_callback\n"
+        "      ⚠️ 完全未实现\n"
+        "      ⤷ **已移出**到阶段二·企微通道\n"
+    )
+    entries = db.parse_tasks("m1-job-profile-intake", text, "openspec/changes/m1-job-profile-intake/tasks.md", {}, {}, {})
+    byid = {e.id: e for e in entries}
+    assert "m1-job-profile-intake/1.5b" not in byid
+    assert byid["m1-job-profile-intake/U1"].状态 == "完成"
+    assert byid["m1-job-profile-intake/U1/plan"].状态 == "完成"
+    assert byid["change:m1-job-profile-intake"].状态 == "完成"
+
+
+def test_parse_no_plan_units_from_delivery_units_table():
+    """delivery-units.md 单元划分表里规模列写「不走 plan」的行 ⇒ 提取其「第 N 章」章节号。"""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import dispatcher_backlog as db  # noqa: E402
+
+    text = (
+        "## 一、单元划分表\n\n"
+        "| 单元 | 覆盖章节 | tasks | 主要触碰文件 | 依赖 | 被谁依赖 | 规模 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| **B** 兜底档位 | 第 3 章 | 3.1–3.11 | `x.py` | A | D | 13 → **6-7** |\n"
+        "| **G** 回放验证 | 第 8 章 | 8.1–8.9 | `tests/` | 前面全部 | —— | 9 → **不走 plan**，见 §2.5 |\n"
+    )
+    assert db.parse_no_plan_units(text) == {"8"}
+
+
+def make_moved_repo(tmp: Path) -> Path:
+    repo = make_repo(tmp, with_plan=False)
+    m1 = repo / "openspec/changes/m1-job-profile-intake"
+    m1.mkdir(parents=True)
+    (m1 / "tasks.md").write_text(
+        "# M1\n\n"
+        "## 1. U1 地基\n\n"
+        "- [x] 1.1 建表 job\n"
+        "- [ ] 1.5b 建表 wecom_callback\n"
+        "      ⤷ **已移出**到阶段二·企微通道\n\n"
+        "## 9. 验收\n\n"
+        "- [ ] 9.2 端到端测试\n"
+        "      ⤷ **已移出**到阶段二·企微通道\n",
+        encoding="utf-8",
+    )
+    q = repo / "openspec/changes/m1-intake-quality-fixes"
+    q.mkdir(parents=True)
+    (q / "tasks.md").write_text(
+        "# M1\n\n## 8. 回放验证\n\n- [x] 8.1 回放测试\n- [ ] 8.2 发版\n",
+        encoding="utf-8",
+    )
+    (q / "delivery-units.md").write_text(
+        "## 一、单元划分表\n\n"
+        "| 单元 | 覆盖章节 | tasks | 主要触碰文件 | 依赖 | 被谁依赖 | 规模 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| **G** 回放验证 | 第 8 章 | 8.1–8.9 | `tests/` | 前面全部 | —— | 9 → **不走 plan** |\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
+def test_moved_and_no_plan_items_stay_out_of_ready_and_idempotent(tmp_path):
+    repo = make_moved_repo(tmp_path)
+    run(repo)
+    doc = load(repo)
+    t = by_id(doc)
+    # 已移出条目不再生成；早期单元无 plan 落档 ⇒ plan 完成；不走 plan 单元 ⇒ plan 完成
+    assert "m1-job-profile-intake/9.2" not in t
+    assert t["m1-job-profile-intake/U1/plan"]["状态"] == "完成"
+    assert t["m1-intake-quality-fixes/U8/plan"]["状态"] == "完成"
+    for x in ("m1-job-profile-intake/9.2", "m1-job-profile-intake/U1/plan", "m1-intake-quality-fixes/U8/plan"):
+        assert x not in doc["summary"]["ready"]
+    # 生成器幂等
+    first = (repo / "docs/roadmap/任务台账.yaml").read_bytes()
+    run(repo)
+    assert first == (repo / "docs/roadmap/任务台账.yaml").read_bytes()

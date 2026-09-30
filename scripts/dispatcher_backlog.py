@@ -341,16 +341,50 @@ ITEM_RE = re.compile(r"^\s*- \[( |x|X)\]\s*(~~)?(\d+\.\d+[a-z]?(?:bis)?)\s*(.*)$
 CHAPTER_RE = re.compile(r"^## (\d+)\.\s*(.+)$")
 
 
+def _moved_in_continuation(lines: list[str], start: int) -> bool:
+    """tasks.md 条目的续行块里出现「⤷ 开头且含已移出」⇒ 该条目视同已移出（0930E）。
+    续行块 = 紧接条目行的一串缩进行（到空行／下一个条目／章节头／非缩进非空行为止）；
+    5.6／6.8 的「⤷ 已移出」与条目行之间隔着 ⚠️／⏸ 说明行，只查紧邻下一行会漏。"""
+    j = start
+    while j < len(lines):
+        nxt = lines[j]
+        if not nxt.strip():
+            return False  # 空行结束续行块
+        if not nxt[0].isspace():
+            return False  # 非缩进行（新条目／章节头／正文）结束续行块
+        if nxt.lstrip().startswith("⤷") and "已移出" in nxt:
+            return True
+        j += 1
+    return False
+
+
+def parse_no_plan_units(text: str) -> set[str]:
+    """从 delivery-units.md 的单元划分表里找「不走 plan」的单元，返回其章节号集合（字符串）。
+    0930E：这类单元（如 m1-intake-quality-fixes 第 8 章）明文不做 TDD plan，plan 项不得产出「待开」真身。"""
+    out: set[str] = set()
+    for line in text.splitlines():
+        if not line.strip().startswith("|") or is_separator(line):
+            continue
+        if not re.search(r"不走\s*plan", line):
+            continue
+        for m in re.finditer(r"第\s*(\d+)\s*章", line):
+            out.add(m.group(1))
+    return out
+
+
 def parse_tasks(
-    change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], unit_status: dict[str, str], seg_status: dict[str, str] | None = None
+    change: str, text: str, rel: str, plans: dict[str, "PlanInfo"], unit_status: dict[str, str],
+    seg_status: dict[str, str] | None = None, no_plan_units: set[str] | None = None,
 ) -> list[Entry]:
     """`seg_status`（出参）：拆段 id → 「完成」／「待开」，只对能映射到本章条目的段写（映射见 PlanInfo.task_items）；
     映射不到的段不写 ⇒ plan_entries 按「真身判不了」处理（台账状态静默优先）。"""
     seg_status = {} if seg_status is None else seg_status
+    no_plan_units = no_plan_units or set()
     scene = scene_of_change(change)
     chapters: list[dict] = []
     cur: dict | None = None
-    for i, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for i, line in enumerate(lines, 1):
         cm = CHAPTER_RE.match(line)
         if line.startswith("## "):
             if cm:
@@ -371,7 +405,7 @@ def parse_tasks(
         checked = im.group(1).lower() == "x"
         tomb = bool(im.group(2))
         body = im.group(4)
-        moved = "已移出" in body or tomb
+        moved = "已移出" in body or tomb or _moved_in_continuation(lines, i)
         cur["items"].append(
             {"no": im.group(3), "checked": checked, "moved": moved, "body": body, "line": i}
         )
@@ -450,7 +484,7 @@ def parse_tasks(
                 单元=ch["title"],
                 依赖=[prev_unit] if prev_unit else [],
                 触碰区=[f"docs/superpowers/plans/*-{change}-unit{ch['unit_no']}-*.md"],
-                状态="完成" if (matched or done) else "待开",
+                状态="完成" if (matched or done or ch["unit_no"] in no_plan_units) else "待开",
                 阻塞类型="无",
                 产出判据=f"docs/superpowers/plans/ 下存在文件名含 unit{ch['unit_no']} 且含 {change}（或其前缀）的 plan，`grep -c '^### Task '` ≥ 1",
             )
@@ -916,7 +950,9 @@ def generate(repo: Path) -> list[Entry]:
             change = t.parent.name
             if change == "archive":
                 continue
-            entries += parse_tasks(change, t.read_text(encoding="utf-8"), f"{REL['changes']}/{change}/tasks.md", plans, unit_status, seg_status)
+            du = t.parent / "delivery-units.md"
+            no_plan_units = parse_no_plan_units(du.read_text(encoding="utf-8")) if du.is_file() else set()
+            entries += parse_tasks(change, t.read_text(encoding="utf-8"), f"{REL['changes']}/{change}/tasks.md", plans, unit_status, seg_status, no_plan_units)
     entries += plan_entries(plans, unit_status, seg_status)
     UNMATCHED_PLANS[:] = sorted(st for st, p in plans.items() if p.task_count and st not in unit_status)
     changes = {t.parent.name for t in cdir.glob("*/tasks.md") if t.parent.name != "archive"} if cdir.is_dir() else set()
