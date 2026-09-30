@@ -177,3 +177,54 @@ def test_codex_resolved_via_hr_codex_bin_when_not_on_path(sandbox):
     r = run(sandbox, "--yes", "--full-auto", "--only", "0101A")
     assert r.returncode == 0, r.stdout + r.stderr
     assert calls_for(sandbox)["0101A"]
+
+
+GATE_PLAN = """# 测试编排（worktree + 机器判据）
+
+> 泳道：甲
+> 无头豁免注明
+```
+[Mac]0101G-带判据的worktree条
+【设置】执行环境: Codex ｜ Session: 新开 ｜ 分支: lane-gate-test ｜ worktree: ✅ 勾（测试）｜ 工作区: .claude/worktrees/lane-gate-test ｜ 派发: run-lanes.sh
+干活
+```
+"""
+
+
+def test_codex_worktree_gate_runs_inside_worktree(sandbox):
+    """0930G 回归：codex worktree 泳道的 `## 机器判据` 必须在**泳道 worktree 内**跑。
+
+    判据块故意写成历史 opener 的形态——首行硬编码主仓绝对路径、检查只存在于泳道产物的文件：
+    修复前它在 main 上跑（产物还没合回）⇒ 假阴 GATE-FAIL（0930E 实证，Q-63）；
+    修复后执行器改写 `cd` 并在 worktree 内跑 ⇒ OK。
+    """
+    import shutil
+
+    repo = sandbox["repo"]
+    shutil.rmtree(repo / ".git")
+
+    def g(*a: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+
+    g("init", "-q", "-b", "main")
+    (repo / "README.md").write_text("x", encoding="utf-8")
+    opener = repo / "docs" / "openers" / "0101G-带判据的worktree条.md"
+    opener.parent.mkdir(parents=True)
+    opener.write_text(
+        "## 机器判据\n\n```bash\ncd /Users/paulshao/Projects/HumanResource\ntest -f gate-marker.txt\n```\n",
+        encoding="utf-8",
+    )
+    g("add", "README.md", "docs/openers/0101G-带判据的worktree条.md")
+    g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    # 假 codex：在当前目录（= 泳道 worktree）写 marker 后输出哨兵
+    fake = sandbox["script"].parent / "bin" / "codex"
+    fake.write_text(
+        "#!/usr/bin/env bash\ncat >/dev/null\ntouch gate-marker.txt\necho OPENER_DONE\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    r = run(sandbox, "--yes", "--full-auto", "--only", "0101G", plan_text=GATE_PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+    results = next((repo / ".claude" / "handoff").glob("lanes-*/results.tsv"))
+    rows = {l.split("\t")[1]: l.split("\t") for l in results.read_text(encoding="utf-8").splitlines()}
+    assert rows["0101G"][2] == "OK", rows["0101G"]

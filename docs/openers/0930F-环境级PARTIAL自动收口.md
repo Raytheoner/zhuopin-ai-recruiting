@@ -53,9 +53,11 @@ set -e
 ./venv/bin/python -m pytest tests/test_lane_collect.py -q -p no:cacheprovider
 ./venv/bin/python -m pytest tests/test_run_lanes_model_codex.py -q -p no:cacheprovider
 ./venv/bin/python - <<'PY'
+import os
 from pathlib import Path
 from scripts.lane_collect import is_sandbox_git_only_partial
-logs = sorted(Path('.claude/handoff/lanes-20260930-072754').glob('*.log'))
+main = os.environ.get('HR_GATE_MAIN', '.')
+logs = sorted(Path(main, '.claude/handoff/lanes-20260930-072754').glob('*.log'))
 hits = [p.name for p in logs if is_sandbox_git_only_partial(p.read_text(encoding='utf-8', errors='replace'))]
 assert len(hits) == 3, hits
 assert not is_sandbox_git_only_partial('OPENER_PARTIAL: 等 .51 低峰窗口再发版')

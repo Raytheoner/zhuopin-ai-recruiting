@@ -667,14 +667,14 @@ PY
 # ---------------------------------------------------------------------------
 # 机器判据闸（0920K）三个 helper。背景：0920I 在一条 grep 判据实测为 0 的情况下照样打了 OPENER_DONE
 # ——判据只写在正文里靠泳道自觉，没有消费者。这里给它装消费者：泳道自报 DONE 不算数，脚本自己跑一遍。
-#   gate_extract <id>  按 docs/openers/<id>-*.md 取 `## 机器判据` 节后第一个 ```bash 块（stdout）。
+#   gate_extract <id> [repo]  按 <repo>/docs/openers/<id>-*.md 取 `## 机器判据` 节后第一个 ```bash 块（stdout）。
 #                      🔴 向后兼容：glob 匹配数 ≠ 1、无该节、无 bash 块 ⇒ 输出空 ⇒ 不拦。拦错一条会停整条泳道。
 #   gate_unsafe <file> 安全预检：命中黑名单 ⇒ 打印命中模式、退出 0。🔴 先于执行——命中即不跑。
-#   gate_run <file> <log> 在仓库根跑，GATE_TIMEOUT 超时（整个进程组一起杀，⛔ 不留 sleep 孤儿挂住管道），
+#   gate_run <file> <log> [repo] 在 [repo]（默认主工作区）跑，GATE_TIMEOUT 超时（整个进程组一起杀，⛔ 不留 sleep 孤儿挂住管道），
 #                      stdout 打退出码（超时 = 124），块输出末 30 行追加进 <log>。
 # ---------------------------------------------------------------------------
 gate_extract() {
-  python3 - "$REPO" "$1" <<'PY'
+  python3 - "${2:-$REPO}" "$1" <<'PY'
 import glob, re, sys
 repo, oid = sys.argv[1:3]
 files = glob.glob(f"{repo}/docs/openers/{oid}-*.md")
@@ -704,10 +704,13 @@ gate_unsafe() {
 }
 
 gate_run() {
-  python3 - "$1" "$2" "$REPO" "$GATE_TIMEOUT" <<'PY'
+  python3 - "$1" "$2" "${3:-$REPO}" "$GATE_TIMEOUT" "$REPO" <<'PY'
 import os, signal, subprocess, sys
-script, log, repo, tmo = sys.argv[1:5]
-p = subprocess.Popen(["bash", script], cwd=repo, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+script, log, repo, tmo, main = sys.argv[1:6]
+# HR_GATE_REPO＝判据实际运行根（codex worktree 泳道＝该 worktree）；HR_GATE_MAIN＝主工作区，
+# 供需要读主仓独有状态（gitignored 日志等）的判据块显式引用（0930G）。
+env = {**os.environ, "HR_GATE_REPO": repo, "HR_GATE_MAIN": main}
+p = subprocess.Popen(["bash", script], cwd=repo, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                      stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
 try:
     out, _ = p.communicate(timeout=float(tmo))
@@ -929,20 +932,36 @@ PY
     else                                             status="NO-SENTINEL"; fi
 
     # 机器判据闸（0920K）：只对自报 OK 的条目跑——PARTIAL/CTX-RELAY 本来就没干完，跑判据必不过、会把预期内的留步
-    # 误判成失败；FAIL/NO-SENTINEL 已经停了。判据按原条 root 取（续棒条收口验的是原 opener 的判据），
-    # 在仓库根跑（worktree 条此时已 ff-only 合回主工作区）。GATE-UNSAFE 是「不执行＋记账」，⛔ 不先跑再判。
+    # 误判成失败；FAIL/NO-SENTINEL 已经停了。判据按原条 root 取（续棒条收口验的是原 opener 的判据）。
+    # 🔴 0930G（2026-09-30）：codex worktree 泳道的判据必须在**泳道 worktree 内**跑——codex 泳道受沙箱限制
+    # 不能自行提交（0930D 起由 lane_collect 在泳道退出后代提交到分支、stage2 才合 main），在 main 上跑判据
+    # 读的是「未含泳道产物」的旧状态，会把通过的泳道假阴成 GATE-FAIL（0930E 实证，Q-63）。
+    # claude 泳道自提交、worktree 条此时已合回主工作区，仍在仓库根跑。GATE-UNSAFE 是「不执行＋记账」，⛔ 不先跑再判。
     if [[ "$status" == "OK" ]]; then
-      local gate_block gate_sh gate_hit gate_rc
-      gate_block="$(gate_extract "$root")"
+      local gate_block gate_sh gate_hit gate_rc gate_repo="$REPO"
+      [[ "$ENGINE" == codex && $is_wt -eq 1 ]] && gate_repo="$run_dir"
+      gate_block="$(gate_extract "$root" "$gate_repo")"
       if [[ -n "$gate_block" ]]; then
         gate_sh="$LOGDIR/gate-${root}.sh"
         printf '%s\n' "$gate_block" > "$gate_sh"
+        # 0930G：历史 opener 的判据块首行硬编码 `cd 主仓绝对路径`。worktree 内跑时必须改写为
+        # 实际运行根，否则判据又回到未含产物的 main（假阴根因）。需要主仓独有状态的判据
+        # 用 `$HR_GATE_MAIN` 显式引用（见 AGENTS.md §4）。
+        if [[ "$gate_repo" != "$REPO" ]]; then
+          python3 - "$gate_sh" <<'PY'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read()
+t = t.replace("cd /Users/paulshao/Projects/HumanResource", 'cd "$(pwd -P)"')
+open(p, "w", encoding="utf-8").write(t)
+PY
+        fi
         if gate_hit="$(gate_unsafe "$gate_sh")"; then
           status="GATE-UNSAFE"
           echo "gate: UNSAFE 命中黑名单「${gate_hit}」，判据块未执行（$gate_sh）" >> "$log"
           printf '%s\t%s\n' "$root" "UNSAFE" >> "$LOGDIR/gates.tsv"
         else
-          gate_rc="$(gate_run "$gate_sh" "$log")"
+          gate_rc="$(gate_run "$gate_sh" "$log" "$gate_repo")"
           if [[ "$gate_rc" == "0" ]]; then
             printf '%s\t%s\n' "$root" "PASS" >> "$LOGDIR/gates.tsv"
           else

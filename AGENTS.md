@@ -50,6 +50,10 @@
   收口改由执行器代做——`run-lanes.sh` 退出每条泳道时调 `scripts/lane_collect.py stage1` 代提交到
   泳道分支，一轮收敛后 `stage2` 只把「OK＋机器判据 PASS」的泳道合回 main 并推送；PARTIAL/GATE-*
   只留分支待人工。⇒ Codex 泳道的 opener ⛔ 不再写 git commit/merge/push 步骤。
+  ⚠️ 同理（`0930G`，2026-09-30）：codex worktree 泳道的 `## 机器判据` 由执行器**在该泳道 worktree 内**跑
+  （产物此时还没合 main）——⛔ 不要在 main 上复跑这些判据来判它该不该合，那是 0930E 假阴 GATE-FAIL 的根因。
+  判据块里需要读主仓独有状态（gitignored 日志等）时，用 `$HR_GATE_MAIN` 显式引用主工作区；普通
+  `cd /Users/paulshao/Projects/HumanResource` 会被执行器在 worktree 运行时改写为实际运行根。
 - 无头执行需要联网（模型推理）。Codex 交互沙箱禁网，真实泳道由 launchd（用户态）发起，不受此限。
 - **拆件受限会话的 Edit 路径级 deny（0930A 已实现）**：Codex PreToolUse hook
   （`scripts/hooks/codex_unpack_guard.py` + 项目层 `.codex/hooks.json`），
