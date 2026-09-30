@@ -43,8 +43,12 @@
 - Codex 的 `workspace-write` 沙箱把写权限锁在会话 cwd（泳道 worktree 条目＝泳道目录），
   天然禁止改主工作区——worktree 隔离不再依赖 hook。
 - 无头执行需要联网（模型推理）。Codex 交互沙箱禁网，真实泳道由 launchd（用户态）发起，不受此限。
-- **已知缺口（后续项，⛔ 不假装已解决）**：拆件受限会话的「Edit 路径级 deny」尚未做
-  Codex PreToolUse hook 化；当前由 workspace-write 沙箱 + 章程正文 + 网络沙箱（禁 git push）共同约束。
+- **拆件受限会话的 Edit 路径级 deny（0930A 已实现）**：Codex PreToolUse hook
+  （`scripts/hooks/codex_unpack_guard.py` + 项目层 `.codex/hooks.json`），
+  `HR_LIAISON_UNPACK=1` 时按 `dispatch.CHARTER_WRITABLE_PATHS`（唯一真源）拦截
+  编辑类工具与整体性 git 动作（`git add -A`/`git add .`/`git commit -a`/`git stash`/
+  `git push`）；测试 `tests/test_unpack_guard_hook.py`；无头会话经
+  `--dangerously-bypass-hook-trust` 跳过 hook 信任流程（已自审 hook 源）。
 
 ## 5. 目录与提交
 
