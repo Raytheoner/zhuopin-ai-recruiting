@@ -11,6 +11,7 @@ summary:
   阻塞·外部: 25
   conflicts:
   - channel-resume-intake/0.1
+  - hr-wecom-aibot-liaison/8.8
   - m1-intake-quality-fixes/8.9
   - m2-resume-parse-and-rank/0.1
   - propose:S-M3
@@ -1005,24 +1006,6 @@ tasks:
   来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:238
   可见: false
   队列: Q-10 待答
-- id: hr-wecom-aibot-liaison/8.8
-  场景: M0
-  阶段: build
-  标题: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突
-  单元: 留存清理、进程守护与灰度验收
-  依赖:
-  - hr-wecom-aibot-liaison/U7
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
-  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
-  触碰区: []
-  状态: 阻塞
-  阻塞类型: 外部
-  产出判据: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
-  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:242
-  可见: false
-  队列: Q-F5 待答
 - id: hr-wecom-aibot-liaison/8.9
   场景: M0
   阶段: build
@@ -1065,7 +1048,6 @@ tasks:
   单元: 留存清理、进程守护与灰度验收
   依赖:
   - hr-wecom-aibot-liaison/8.6
-  - hr-wecom-aibot-liaison/8.8
   - hr-wecom-aibot-liaison/8.9
   - hr-wecom-aibot-liaison/U7
   - hr-wecom-aibot-liaison/U8/plan
@@ -6607,6 +6589,25 @@ tasks:
   可见: false
   队列: Q-21 已答 a
   备注: 泳道「06清单标作废与合规草稿与TD13与grill超时默认」opener 0917AU，task-dispatcher·answers-mapped-20260917-190659 发车
+- id: hr-wecom-aibot-liaison/8.8
+  场景: M0
+  阶段: build
+  标题: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突
+  单元: 留存清理、进程守护与灰度验收
+  依赖:
+  - hr-wecom-aibot-liaison/U7
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-1-retention/seg2
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg1
+  - plan:2026-09-09-hr-wecom-aibot-liaison-unit8-4-logging/seg2
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  备注: 2026-09-30 `[Mac]0930H` 收窗（Q-F5 答 3a）：观察结论落 `docs/findings/2026-09-30-liaison一周观察结论.md`、tasks.md 8.8 已勾、分支已合 main（`7066fdc`）。⚠️ 8.9 归档仍待 8.6 闭（8.6 须 Shao Peishen 本人私信一次机器人）
+  产出判据: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
+  来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:242
+  可见: false
+  队列: Q-F5 待答
 - id: m1-job-profile-intake/1.5b
   场景: M1
   阶段: build

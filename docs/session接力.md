@@ -294,3 +294,22 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   **`模型: Haiku`（＝Flash 档 `deepseek-flash`）**，看护为本会话手工看守（心跳已暂停）。
   ⚠️ 泳道**内部子代理**仍是 sonnet 档：`--subagent-model haiku` 不在 `lane-launcher` 白名单里，
   要降档须单独授权改白名单（属执行器改动）。
+
+**12:09 批次收敛（`lanes-20260930-120355`，两条均 Flash 档，3 分钟级）**
+
+- `0930H` = **PARTIAL**：8.8 一周观察结论已落档 `docs/findings/2026-09-30-liaison一周观察结论.md`
+  （三条观察项＋覆盖区间＋5 条数据缺口；结论要点：窗内 5 条告警全是 `startup_gap` 重启噪音、零网络断线型
+  中断；限流零命中但**结构上未接通**（⛔ 不得判「已验证正常」）；归档 10 份零重名冲突、⚠️ 附件互撞无样本）。
+  tasks.md 8.8 已勾；**8.6 仍待 Shao Peishen 私信一次机器人 ⇒ ⛔ 不勾 8.6、8.9 不归档**。
+  分支 `lane-0930h-liaison-observation`（`7bea9e6`）由本会话人工合回 main（`7066fdc`，PARTIAL 不在
+  收口器自动合并范围）。
+- `0930I` = **OK**：`scripts/codex_jsonl_summary.py` 的 `upeak` 口径归正（逐轮增量、不再重复计
+  cache_read；0930F 样本 12,849,173 → **6,454,677**）＋新增 `tests/test_codex_jsonl_summary.py`；
+  收口器判据 PASS 并自动合回 main（`99b70ca`），主工作区复跑 6 passed 复核通过。
+  ⚠️ 遗留：`run-lanes.sh` 收工汇总里的「≥150k 越线」播报对 codex 泳道仍是按单轮累计口径比较，
+  语义已在 `0930I` 的 docstring 写明，改播报口径属执行器改动，**未做**（登记待派）。
+- 台账：`hr-wecom-aibot-liaison/8.8` 已标**完成**（备注写明 8.9 待 8.6）；`Q-F5` 维持待答（归档未完成）。
+- 顺带修：`docs/openers/wait-lanes.sh` 判活补 `lsof` 复核（`e768abc`）——本批 12:04 它曾对运行中的
+  批次误报 EXITED（Seatbelt 对 launchd 进程 `kill -0` 假阴，AGENTS.md §4 同族）。
+- `0930H` 结论里登记 1 条**判据缺口**（开窗文件「误报」判据的第二分支「实际没有消息被漏收」服务侧
+  不可判定）——只登记未动，属改判据、超出 3a 授权。
