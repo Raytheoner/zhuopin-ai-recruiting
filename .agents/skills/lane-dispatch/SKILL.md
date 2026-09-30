@@ -20,6 +20,11 @@ description: 编排并发车一批泳道任务（Codex 引擎）。当 Shao Peis
    发车。`run-lanes.sh` 默认引擎即 codex，⛔ 不需要额外参数。
 5. **模型档词汇不变**：只有推理密集条目在【设置】行写 `｜ 模型: Opus`；映射见 `AGENTS.md` §2。
 
+6. **Codex 泳道 ⛔ 不自行 git 提交／合并**（0930D，2026-09-30）：worktree 沙箱下 `.git` 只读，
+   泳道内 `git add/commit/merge/push` 必失败。无头块「七、收口」写到「改动留 worktree＋测试全绿＋
+   顶格 `OPENER_DONE`」即止；提交/合并/推送由 `run-lanes.sh` 收口阶段代做（`scripts/lane_collect.py`，
+   launchd 非沙箱）：stage1 代提交到泳道分支，stage2 只把「OK＋机器判据 PASS」的泳道合回 main。
+
 ## 机器闸（照正本，⛔ 不绕）
 
 ```bash

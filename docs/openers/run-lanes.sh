@@ -812,7 +812,7 @@ run_lane() {
     # HR_LANE_ISOLATE=1 / HR_LANE_MAIN / HR_LANE_WORKTREE 给 hook `scripts/hooks/worktree-guard.py`——
     # 泳道即使 cd 回主工作区，改文件与 git add/commit 也会被拦。路径取【设置】「工作区」里的 .claude/worktrees/<名>，
     # 分支取「分支」字段；取不到用 lane-<编号>。建不出来 ⇒ WORKTREE-FAIL，停本泳道。
-    local run_dir="$REPO" iso_env=()
+    local run_dir="$REPO" iso_env=() is_wt=0
     if printf '%s\n' "$body" | grep -m1 '【设置】' | grep -qE 'worktree(:|：)[[:space:]]*(✅|☑)'; then
       local setl wt_rel br
       setl="$(printf '%s\n' "$body" | grep -m1 '【设置】')"
@@ -836,6 +836,7 @@ run_lane() {
       fi
       iso_env=(HR_LANE_ISOLATE=1 "HR_LANE_MAIN=$REPO" "HR_LANE_WORKTREE=$run_dir")
       echo "worktree=$wt_rel branch=$br" >> "$log"
+      is_wt=1
     fi
 
     # -p 模式默认只等后台子任务 600 秒就强杀（2026-09-16 0916S 实证：final review 派出的修复子代理被杀、判 NO-SENTINEL）。
@@ -962,6 +963,15 @@ PY
     if [[ "$status" == "OK" || "$status" == "PARTIAL" ]]; then
       if [[ "$rn" -gt 0 ]]; then mark_done "$root" "$lane" "${status}·续棒${rn}"
       else mark_done "$id" "$lane" "$status"; fi
+    fi
+
+    # 批次收口 stage1（0930D）：codex 泳道受 workspace-write 沙箱限制无法自行 git 提交
+    # （worktree 的 git 元数据在主工作区 .git 下，不在可写根内）。由执行器（launchd 非沙箱）
+    # 代提交，改动仍只落在泳道分支——⛔ 不碰主工作区。claude 引擎泳道自提交，不代劳。
+    if [[ "$ENGINE" == codex && $is_wt -eq 1 && -f "$REPO/scripts/lane_collect.py" ]]; then
+      python3 "$REPO/scripts/lane_collect.py" stage1 --repo "$REPO" --logdir "$LOGDIR" \
+        --lane "$lane" --id "$id" --status "$status" --worktree "$run_dir" --branch "$br" \
+        --engine codex >> "$log" 2>&1 || true
     fi
 
     # 上下文续棒（0920H）：抓哨兵五字段 → 写续棒正文 → 放进本泳道「待续棒」槽位，下一轮先跑它。续棒条不进号池台账
@@ -1094,6 +1104,15 @@ echo "   cd $REPO && git log --oneline -12 && git status --short"
 echo "   git worktree list"
 echo "   for b in \$(git branch --format='%(refname:short)' | grep '^claude/'); do"
 echo "     echo \"\$b: \$(git cherry -v main \$b | grep -c '^+') 条真未合\"; done"
+
+# ---------------------------------------------------------------------------
+# 批次收口 stage2（0930D）：一轮收敛后，把 status=OK 且机器判据 PASS／无判据块的泳道
+# 自动合回 main 并推送；PARTIAL/GATE-* 只留分支待人工；冲突自动 abort 并点名（⛔ 不硬解）。
+# 由执行器（launchd 非沙箱）代做——泳道自己在沙箱里做不到这件事（AGENTS.md §4）。
+# ---------------------------------------------------------------------------
+if [[ -s "$LOGDIR/collect.tsv" && -f "$REPO/scripts/lane_collect.py" ]]; then
+  python3 "$REPO/scripts/lane_collect.py" stage2 --repo "$REPO" --logdir "$LOGDIR" || true
+fi
 
 # ---------------------------------------------------------------------------
 # 链式接续：本轮收敛后重扫编排，还有带泳道标注的待执行条目就接着跑下一轮。

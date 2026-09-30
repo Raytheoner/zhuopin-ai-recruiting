@@ -42,6 +42,11 @@
   退出时自删、`scripts/action_request.py` 读它判活。
 - Codex 的 `workspace-write` 沙箱把写权限锁在会话 cwd（泳道 worktree 条目＝泳道目录），
   天然禁止改主工作区——worktree 隔离不再依赖 hook。
+- **泳道也因此不能自行 git 提交**（2026-09-30 `0930D` 修复）：worktree 的 git 元数据在主工作区
+  `.git/worktrees/<名>` 下，泳道内 `git add/commit` 报 `Operation not permitted`（0930A/B/C 实证）。
+  收口改由执行器代做——`run-lanes.sh` 退出每条泳道时调 `scripts/lane_collect.py stage1` 代提交到
+  泳道分支，一轮收敛后 `stage2` 只把「OK＋机器判据 PASS」的泳道合回 main 并推送；PARTIAL/GATE-*
+  只留分支待人工。⇒ Codex 泳道的 opener ⛔ 不再写 git commit/merge/push 步骤。
 - 无头执行需要联网（模型推理）。Codex 交互沙箱禁网，真实泳道由 launchd（用户态）发起，不受此限。
 - **拆件受限会话的 Edit 路径级 deny（0930A 已实现）**：Codex PreToolUse hook
   （`scripts/hooks/codex_unpack_guard.py` + 项目层 `.codex/hooks.json`），

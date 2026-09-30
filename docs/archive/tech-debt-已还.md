@@ -1912,3 +1912,22 @@ discard_thread_checkpoints(graph.checkpointer, job_id)   # 删 checkpoints / wri
 **不还的后果**：极低概率下，业务经理发了一句无关的话，屏幕上等来的是一个 500 错误
 而不是那句"没听懂是不是用人需求，可以试试…"，而**日志里不会有任何东西说明
 引导语其实已经生成过、只是连同 outbox 行一起被删了**。
+
+
+<!-- 〔归档工具〕 2026-09-30 搬入：~~TD-54~~ · Codex 泳道无法自行 git 提交（worktree git 元数据在沙箱可写根外）【已还】 -->
+
+## ~~TD-54~~ · Codex 泳道无法自行 git 提交（worktree git 元数据在沙箱可写根外）【已还】
+
+**欠的是什么**：Codex `workspace-write` 沙箱把写权限锁在泳道 worktree 工作树，而 worktree 的
+git 元数据（`.git/worktrees/<名>`）在主工作区 `.git` 下——泳道内 `git add/commit/merge/push`
+一律 `Operation not permitted`（2026-09-30 `0930A/B/C` 三条实证，产物全部滞留 worktree）。
+
+**销账时间**：2026-09-30（`0930D`，Shao Peishen 答 3a；按 `lane-dispatch` 正本「改 run-lanes.sh
+禁入泳道」由主会话直执）。收口改由执行器代做：`run-lanes.sh` 在每条泳道退出时调
+`scripts/lane_collect.py stage1` 代提交到泳道分支；一轮收敛后 `stage2` 只把「status=OK 且机器判据
+PASS／无判据块」的泳道合回 main 并推送；PARTIAL/GATE-* 只留分支点名，冲突 abort 不硬解。
+行为测试 `tests/test_lane_collect.py`（5 条）＋既有 run-lanes 测试 35 条全绿。
+
+**剩余边界**：① PARTIAL 泳道产物仍只留在分支上、需人工判断（刻意如此——留步项不该自动合并）；
+② 泳道内仍不能跑 `git`（沙箱未改），改动一律经执行器收口；③ Win 端沙箱行为不同，需在对等
+技能（`.agents/skills/`）落地后另行实测。

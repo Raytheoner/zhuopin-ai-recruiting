@@ -102,6 +102,15 @@ ls -t docs/superpowers/plans/*.md | head -6   # 哪些单元的 plan 已就绪
 - 所以块正文里：⛔ 不再写「git worktree add」（脚本做）；回勾 tasks.md、登记 tech-debt **在 worktree 里改并提交在分支上**，再 `git -C <主工作区> merge --ff-only <分支>` 与 push
 - 不写代码的块（文档、提交、计划）照旧 `worktree: ❌`，在仓库根跑，hook 不生效
 
+**Codex 引擎的泳道 ⛔ 不自行 git 提交／合并（2026-09-30 `0930D`）**：`workspace-write` 沙箱锁的是
+worktree 工作树，而 worktree 的 git 元数据在主工作区 `.git/worktrees/<名>` 下——泳道内
+`git add/commit/merge/push` 一律 `Operation not permitted`（0930A/B/C 三条实证）。⇒ Codex 泳道的
+opener「七、收口」只写到「改动留在 worktree ＋ 测试全绿 ＋ 顶格 `OPENER_DONE`」；提交与合并由
+执行器收口阶段代做：`run-lanes.sh` 在每条泳道退出时调 `scripts/lane_collect.py stage1` 代提交到
+泳道分支（worktree 隔离，改动全属本泳道），一轮收敛后 `stage2` 只把「status=OK 且机器判据 PASS／
+无判据块」的泳道合回 main 并推送；PARTIAL / GATE-* 只留分支、汇总点名；冲突自动 abort（⛔ 不硬解）。
+claude 引擎泳道照旧自提交，⛔ 两套行为不要互抄。
+
 ### ④ 核对并发车
 
 ```bash

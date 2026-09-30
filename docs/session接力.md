@@ -239,3 +239,10 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - 【谁做：Shao Peishen】【状态：✅ 已闭环 2026-09-30 07:31（Shao Peishen 答 1a 授权直提）】
   【判据：4 个文件已一次性提交并推送为 `0a61d13`（`docs/openers/run-lanes.sh`＋`scripts/dispatcher_event.sh`
   ＋两个测试，84 passed，pre-commit 全过），`git status` 不再出现这 4 个文件，origin/main 与本地一致】
+
+- 【谁做：Shao Peishen】【状态：✅ 已闭环 2026-09-30（`0930D` 主会话直执，未进泳道）】
+  【判据：Codex 泳道收口不再靠人——`run-lanes.sh` 每条泳道退出时调 `scripts/lane_collect.py stage1`
+  代提交到泳道分支，一轮收敛后 `stage2` 只把「OK＋机器判据 PASS／无判据块」的泳道合回 main 并推送；
+  PARTIAL/GATE-* 只留分支点名，冲突 abort 不硬解。5 条新行为测试＋既有 35 条 run-lanes 测试全绿；
+  Q-62（三条 PARTIAL 滞留）同轮救援完毕：main 上 conflicts 37→0、缺映射 6→0，`origin/main`＝`e28a68a`】
+  【不做会怎样：每一批 Codex 泳道都会以「产物滞留 worktree」收尾，自动构建链停在最后一公里】
