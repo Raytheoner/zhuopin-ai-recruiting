@@ -27,6 +27,10 @@ BUDGET_ENV = "HR_LIAISON_UNPACK_BUDGET_USD"
 AGENT_ENGINE_ENV = "HR_AGENT_ENGINE"
 CODEX_BIN_ENV = "HR_CODEX_BIN"
 CODEX_FORCED_LOGIN_ENV = "HR_CODEX_FORCED_LOGIN"
+#: 拆件会话 Codex PreToolUse 守卫开关（0930A）：hook 只在它置 1 时拦截。
+#: ⛔ 只在这里写死一次——hook 脚本 `scripts/hooks/codex_unpack_guard.py` 与
+#: 单测都对齐这个字面量，⛔ 不许各处重写。
+UNPACK_GUARD_ENV = "HR_LIAISON_UNPACK"
 
 #: 默认执行引擎（2026-09-29 Codex 迁移）：codex。claude 是回退引擎（旧单测与历史契约）。
 AGENT_ENGINE_DEFAULT = "codex"
@@ -239,6 +243,7 @@ _CHILD_ENV_ALLOWLIST: tuple[str, ...] = (
     CODEX_BIN_ENV,
     AGENT_ENGINE_ENV,
     CODEX_FORCED_LOGIN_ENV,
+    UNPACK_GUARD_ENV,
     "PATH",
     "HOME",
     "CODEX_HOME",
@@ -271,9 +276,13 @@ def build_headless_argv_codex(codex_bin: str, env: Mapping[str, str]) -> list[st
     - `-c approval_policy=never`：无人值守，升级请求自动拒绝并回报给会话
     - `-c forced_login_method=chatgpt`：对齐本机 auth.json 的 ChatGPT 会话态
       （全局 config 写死 api 登录会造成启动认证冲突，实测必炸）
+    - `--dangerously-bypass-hook-trust`：无头会话无法走 `/hooks` 信任流程；本项目
+      hook 源（`scripts/hooks/codex_unpack_guard.py` + `.codex/hooks.json`）已自审，
+      用此旗标跳过持久化信任（⛔ 唯一允许路径，不用卸载/覆盖 hooks 绕过）
     - 末尾 `-`：prompt 从 stdin 读（调用方照旧 write stdin 后 close）
     章程 §三 的「只改白名单路径」由 workspace-write 沙箱与章程正文共同约束；
-    细粒度 Edit 路径 deny 的 Codex PreToolUse hook 化是后续项（见 AGENTS.md 迁移注记）。
+    细粒度 Edit 路径 deny 由 Codex PreToolUse hook 执行（`HR_LIAISON_UNPACK=1` 时，
+    见 `scripts/hooks/codex_unpack_guard.py`）。
     """
     login = (env.get(CODEX_FORCED_LOGIN_ENV) or "chatgpt").strip() or "chatgpt"
     return [
@@ -286,6 +295,7 @@ def build_headless_argv_codex(codex_bin: str, env: Mapping[str, str]) -> list[st
         "approval_policy=never",
         "-c",
         f"forced_login_method={login}",
+        "--dangerously-bypass-hook-trust",
         "-",
     ]
 
@@ -380,13 +390,17 @@ def dispatch_headless_unpack(
                     raise _AgentBinaryNotFound()
                 budget = (env.get(BUDGET_ENV) or DEFAULT_BUDGET_USD).strip()
                 argv = build_headless_argv(claude_bin, budget)
+            # 0930A：显式把守卫开关置 1——hook 只在拆件会话里拦截，正常会话不受影响。
+            # ⛔ 不依赖父进程环境里恰好有这个键（父进程环境是白名单外不可信的）。
+            child_env = _filter_child_env(env)
+            child_env[UNPACK_GUARD_ENV] = "1"
             process = popen(
                 argv,
                 cwd=str(REPO_ROOT),
                 stdin=subprocess.PIPE,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
-                env=_filter_child_env(env),
+                env=child_env,
             )
         except _AgentBinaryNotFound:
             return DispatchOutcome(status="failed", reason="binary_not_found")

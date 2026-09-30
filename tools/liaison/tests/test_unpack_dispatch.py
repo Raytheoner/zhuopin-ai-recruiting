@@ -77,6 +77,7 @@ from tools.liaison.unpack.dispatch import (
     BUDGET_ENV,
     CLAUDE_BIN_ENV,
     CODEX_BIN_ENV,
+    UNPACK_GUARD_ENV,
     DEFAULT_BUDGET_USD,
     build_headless_argv,
     build_headless_argv_codex,
@@ -148,6 +149,7 @@ def test_build_headless_argv_codex_shape():
         "approval_policy=never",
         "-c",
         "forced_login_method=chatgpt",
+        "--dangerously-bypass-hook-trust",
         "-",
     ]
 
@@ -511,6 +513,7 @@ def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
         "USER": "paulshao",
         "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
         AGENT_ENGINE_ENV: "claude",
+        UNPACK_GUARD_ENV: "1",
     }
 
 
@@ -524,14 +527,15 @@ def test_filter_child_env_omits_keys_absent_from_the_source_env():
 
 def test_filter_child_env_never_leaks_hr_liaison_secrets_regardless_of_allowlist_growth():
     """凭据边界回归闸（TD-47）：无论白名单以后为登录态再补多少非秘密系统变量，
-    任意 `HR_LIAISON_*`（除 `HR_LIAISON_CLAUDE_BIN` 这个二进制路径覆盖键外）
-    都不得进入子进程环境。"""
+    任意 `HR_LIAISON_*`（除 `HR_LIAISON_CLAUDE_BIN` 与 `HR_LIAISON_UNPACK` 这两个
+    非秘密键外）都不得进入子进程环境。"""
     from tools.liaison.unpack.dispatch import _filter_child_env
 
     source_env = {
         "PATH": "/usr/bin",
         "USER": "paulshao",
         "HR_LIAISON_CLAUDE_BIN": "/usr/local/bin/claude",
+        UNPACK_GUARD_ENV: "1",
         "HR_LIAISON_BOT_SECRET": "top-secret",
         "HR_LIAISON_GROUP_WEBHOOK": "https://example.invalid/webhook",
         "HR_LIAISON_FUTURE_UNKNOWN_SECRET": "should-never-leak",
@@ -542,13 +546,16 @@ def test_filter_child_env_never_leaks_hr_liaison_secrets_regardless_of_allowlist
     leaked_secrets = {
         key
         for key in result
-        if key.startswith("HR_LIAISON_") and key != "HR_LIAISON_CLAUDE_BIN"
+        if key.startswith("HR_LIAISON_")
+        and key not in ("HR_LIAISON_CLAUDE_BIN", UNPACK_GUARD_ENV)
     }
     assert leaked_secrets == set()
+    assert result.get(UNPACK_GUARD_ENV) == "1"
 
 
 def test_dispatch_codex_engine_starts_with_codex_argv_and_prompt(tmp_path, monkeypatch):
-    """codex 引擎（默认）：argv 走 `exec --json --sandbox workspace-write`，prompt 仍从 stdin 写入。"""
+    """codex 引擎（默认）：argv 走 `exec --json --sandbox workspace-write`，prompt 仍从 stdin 写入；
+    0930A：argv 含 `--dangerously-bypass-hook-trust`，子进程环境含 `HR_LIAISON_UNPACK=1`。"""
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
     )
@@ -572,6 +579,8 @@ def test_dispatch_codex_engine_starts_with_codex_argv_and_prompt(tmp_path, monke
     assert argv[0] == "/usr/local/bin/codex"
     assert argv[1:4] == ["exec", "--json", "--sandbox"]
     assert "workspace-write" in argv and "approval_policy=never" in argv
+    assert "--dangerously-bypass-hook-trust" in argv
     assert argv[-1] == "-"
+    assert kwargs["env"][UNPACK_GUARD_ENV] == "1"
     assert process.stdin.closed_with == "给拆件会话的完整 prompt".encode("utf-8")
     assert kwargs["cwd"] == str(_repo_root_for_test())
