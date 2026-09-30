@@ -138,5 +138,6 @@ id: ^m2-resume-parse-and-rank/(3|6|9)\.\d+$      # M2 U2 上传与解析（3.x�
 | `Q-53b` | 语音主机采购暂缓（Shao Peishen 2026-09-21） | — | `voice-structured-interview/0.4`、`5.11` 保持阻塞·决策（⛔ 不阻塞 M3 其余单元） |
 | `Q-54a` | opener「## 机器判据」闸已由 `0920K` 落地（同族收尾） | — | 只消缺映射，`relay:tag#5c585390` 来源已勾选/消失 |
 | `Q-59a` | 两条部分命中回件均判不完整，退回汤丽萍补齐后整信闭环（`0923R2`） | — | `relay:tag#4391ebf4`、`relay:tag#8f75eddb` 保持阻塞·决策 |
+| `Q-62a` | Codex 泳道 git 沙箱阻断已由 `0930D` 根治（执行器代收口 `scripts/lane_collect.py`），三条滞留分支已合回 main | — | `relay:tag#f2aa6e39`、`relay:tag#b3ce0a62` 来源已勾选 ✅，只消缺映射 |
 
 **新答复怎么进来**：Cowork 填答复 ⇒ 提交通道 ⇒ `decision-*` 事件 ⇒ 调度器重跑生成器。键无映射 ⇒ 登记行出现在定夺队列，由下一个动 `dispatcher_answers.py` 的会话补映射（同时补本表一行）——⛔ 调度器不自己猜映射。

@@ -305,6 +305,16 @@ def test_map_task_ids_are_unique_and_prefixed():
 ANSWERED_20260930 = ["Q-01a", "Q-08", "Q-48", "Q-53b", "Q-54a", "Q-59a"]
 
 
+# ── `0930D`：Q-62a（Codex 泳道 git 阻断收口）销账映射 ──
+
+
+def test_0930d_q62a_mapping_registered_and_documented_in_rules_section_7():
+    assert "Q-62a" in A.ANSWER_MAP, "0930D：Q-62a 销账映射缺失"
+    rules = RULES.read_text(encoding="utf-8")
+    sec = rules.split("## 7. 答复→任务映射", 1)[1]
+    assert "`Q-62a`" in sec, "rules.md §7 缺 Q-62a"
+
+
 def test_0930b_six_missing_mappings_are_all_registered_and_documented_in_rules_section_7():
     missing = [k for k in ANSWERED_20260930 if k not in A.ANSWER_MAP]
     assert missing == [], f"0930B 缺映射补登记缺失：{missing}"

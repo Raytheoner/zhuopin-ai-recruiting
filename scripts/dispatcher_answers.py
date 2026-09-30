@@ -292,6 +292,14 @@ ANSWER_MAP: dict[str, Mapping] = {
             "relay:tag#8f75eddb": ("决策", "人事部#3 决策点b 回件不完整，退回汤丽萍补小时数/牵头人姓名后整信闭环（Q-59a）"),
         },
     ),
+    "Q-62a": Mapping(
+        说明=(
+            "无新动作：三条滞留分支已救援合回 main（`86af16d`／`bdf1f53`／`21df3a8`＋`.codex/hooks.json` `e28a68a`），"
+            "根治由 `0930D` 主会话直执（`run-lanes.sh` 收口阶段代提交/代合并，`scripts/lane_collect.py`），Q-62 已销账；"
+            "`relay:tag#f2aa6e39`／`relay:tag#b3ce0a62` 的来源（session接力 09-29 两条「待派」）已勾选 ✅。"
+            "只消缺映射，不生成新任务"
+        ),
+    ),
 }
 
 
