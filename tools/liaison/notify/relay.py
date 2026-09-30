@@ -51,24 +51,49 @@ from tools.liaison.notify.webhook import (
     send_group_notify as send_group_notify_via_channel,
 )
 
-#: 回推文案。**只有三段**：会话、消息、任务摘要。
+#: 回推文案。**可读化**（2026-10-01，Shao Peishen 要求）：`来源`写**人名 ＋ 渠道**、
+#: `时间`写 CST 分钟、`追踪号`只留 `msgid` 前 `TRACE_PREFIX_LEN` 位——⛔ 完整
+#: `msgid`／`thread_id` 这类内部不透明标识不再进群消息（它们对群里的人不可读）。
 #:
 #: ⛔ 正文本身不进这里（它可能是简历材料）：`summary` 由 `queue.compute_task_summary`
 #: 机械截断产出（默认 ≤120 字符），与队列视图里显示的是**同一个字符串**；本条消息
 #: 因此永远落在 `MODE_DIRECT`，附件承载那条路走不到——"完整正文见附件"这件事在
 #: 回推里不会发生。
-#: ⛔ 里面没有、也永远不许有收件对象字段或凭据：`msgid`/`chatid` 都是不透明标识。
+#: ⛔ 里面没有、也永远不许有收件对象字段或凭据。不透明标识只留短追踪号。
 TASK_RELAY_TEMPLATE = (
     "【值守通道·新任务已登记】\n"
-    "来源会话：{thread_id}\n"
-    "来源消息：{msgid}\n"
-    "摘要：{summary}"
+    "来源：{sender_label}（{channel_label}）\n"
+    "时间：{occurred_at}\n"
+    "摘要：{summary}\n"
+    "追踪号：{trace}"
 )
 
+#: 追踪号 = `msgid` 前几位：够在台账里对账，又不会把内部不透明标识整段甩进群里。
+TRACE_PREFIX_LEN = 8
 
-def compute_task_relay_text(*, thread_id: str, msgid: str, summary: str) -> str:
-    """回推文案。**纯函数**（工程铁律 2 的形状）。⛔ 不读时钟、不记日志、不碰库。"""
-    return TASK_RELAY_TEMPLATE.format(thread_id=thread_id, msgid=msgid, summary=summary)
+
+def compute_task_relay_text(
+    *,
+    sender_label: str,
+    channel_label: str,
+    occurred_at: str,
+    msgid: str,
+    summary: str,
+) -> str:
+    """回推文案。**纯函数**（工程铁律 2 的形状）。⛔ 不读时钟、不记日志、不碰库。
+
+    `sender_label`／`channel_label`／`occurred_at` 都由调用方算好传进来——收件人姓名
+    要读名单、渠道要读帧的 `chattype`、时间要取本机时刻，三件事都不属于纯函数。
+    ⛔ 内部不透明标识（完整 `msgid`／`thread_id`）不进文案，只留 `msgid` 前
+    `TRACE_PREFIX_LEN` 位的追踪号。
+    """
+    return TASK_RELAY_TEMPLATE.format(
+        sender_label=sender_label,
+        channel_label=channel_label,
+        occurred_at=occurred_at,
+        summary=summary,
+        trace=msgid[:TRACE_PREFIX_LEN],
+    )
 
 
 def refuse_delivery(_plan: NotifyPlan) -> NotifyRecord:

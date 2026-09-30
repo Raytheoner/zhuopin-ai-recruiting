@@ -192,7 +192,10 @@ def test_a_group_message_is_pushed_back_exactly_once(svc, roster, tmp_path, cloc
     assert fake.sent_msgtypes() == ["markdown"], "回推走既有的 send_markdown 通道"
     body = fake.sent_markdown_bodies()[0]
     assert "新任务已登记" in body
-    assert "MSG-G-1" in body and GROUP_CHAT_ID in body
+    assert "MSG-G-1" in body, "短追踪号进群消息"
+    assert "汤丽萍（群消息）" in body, "来源写人名＋渠道（2026-10-01 可读化）"
+    assert "2026-09-30 10:00" in body, "时间写 CST 分钟"
+    assert GROUP_CHAT_ID not in body, "⛔ 完整来源会话标识不进群消息"
     assert "下周要两个嵌入式" in body, "回推内容是任务摘要"
     # 铁律 1 恒等式：effect_log 条数 == 业务表行数
     assert count(
@@ -339,26 +342,84 @@ def test_a_missing_webhook_is_rejected_and_alerted_without_killing_the_thread(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# ⑤ 文案：只有任务摘要，⛔ 没有正文、⛔ 没有凭据
+# ⑤ 文案：可读（人名＋渠道／分钟／短追踪号），⛔ 无正文、⛔ 无不透明标识、⛔ 无凭据
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_the_relay_text_carries_the_summary_and_never_the_whole_body():
-    """回推内容是**任务摘要**（与队列视图同一个字符串），⛔ 不是正文。
+def test_the_relay_text_is_readable_and_never_carries_the_whole_body():
+    """回推文案**可读化**（2026-10-01，Shao Peishen 要求）：`来源`写人名＋渠道、
+    `时间`写 CST 分钟、`追踪号`只留 `msgid` 前 8 位；内容是**任务摘要**（与队列视图
+    同一个字符串），⛔ 不是正文。
 
     正文可能是简历材料：把它整段发进群里，既越过了"只回推摘要"的口径，也让
     "完整正文见附件"那条降级路在群通知里活过来。摘要由 `compute_task_summary`
-    机械截断（默认 ≤120 字符），本条用 300 字正文把这条边界钉住。
+    机械截断（默认 ≤120 字符），本条用 300 字正文把这条边界钉住；同时把
+    **完整 `msgid` 与完整 `thread_id` 都不进文案**（只留 `e3015852` 短追踪号）钉住——
+    它们是内部不透明标识，直接甩给群里的人不可读。
     """
     content = "甲" * 300
     summary = liaison_main.compute_task_summary(content, msgtype="text")
-    text = notify.compute_task_relay_text(thread_id=GROUP_CHAT_ID, msgid="MSG-G-6", summary=summary)
+    msgid = "e30158528d8f959cc0a3511dd7960319"
+    thread_id = "wrvDL_DAAAnkeGLkk1_bu2Ne1oQfc4BA"
+    text = notify.compute_task_relay_text(
+        sender_label="邵培申",
+        channel_label="群消息",
+        occurred_at="2026-10-01 00:02",
+        msgid=msgid,
+        summary=summary,
+    )
 
     print("[⑤文案] 摘要长度=", len(summary), " 文案长度=", len(text), sep="")
+    print(text)
     assert summary in text
     assert content not in text, "⛔ 正文整段不许进群消息"
-    assert "MSG-G-6" in text and GROUP_CHAT_ID in text
+    assert "邵培申（群消息）" in text, "来源写人名＋渠道"
+    assert "2026-10-01 00:02" in text, "时间写 CST 分钟"
+    assert "e3015852" in text and msgid not in text, "⛔ 只留短追踪号，完整 msgid 不进文案"
+    assert thread_id not in text, "⛔ 完整来源会话标识不进群消息"
     assert FAKE_WEBHOOK not in text, "⛔ webhook 地址（本身即凭据）不许出现在文案里"
+
+
+def test_a_missing_name_falls_back_to_the_userid(svc, tmp_path, clock):
+    """人名取不到（名单里该成员 `name` 为空）⇒ 回退 `sender_userid`，⛔ 不许抛、
+    ⛔ 不许把这条通知整条吞掉。准入不受影响——`load_whitelist` 只看 userid，
+    姓名缺失只在 `load_whitelist_names` 那一侧反映（两者对脏数据的容忍度不同是刻意的）。"""
+    roster = tmp_path / "whitelist.yaml"
+    roster.write_text(
+        "members:\n"
+        f"  - userid: {ADMITTED_USERID}\n"
+        "    name: ''\n"
+        "    role: HR\n",
+        encoding="utf-8",
+    )
+    fake = FakeTransport([0])
+    ports = make_ports(
+        tmp_path,
+        roster,
+        group_notify=make_relay(clock, fake, env={GROUP_WEBHOOK_ENV: FAKE_WEBHOOK}),
+    )
+
+    run_frames(svc, ports, [(T0, make_frame(chattype="group", msgid="MSG-G-7"))])
+
+    bodies = fake.sent_markdown_bodies()
+    print("[②回退] 实发正文=", bodies, sep="")
+    assert len(bodies) == 1, "回退 userid 也要真发出去，⛔ 不许静默吞掉"
+    assert f"来源：{ADMITTED_USERID}（群消息）" in bodies[0], "取不到姓名 ⇒ 回退 userid"
+
+
+def test_a_private_channel_is_labelled():
+    """渠道标签：`私信` 也要能被文案原样渲染（渠道由调用方按 `frame_chattype` 判定后
+    传入，纯函数只负责拼）。顺带钉住调用点的映射——⛔ 不许拿 `thread_id` 的形状去猜。"""
+    text = notify.compute_task_relay_text(
+        sender_label="汤丽萍",
+        channel_label="私信",
+        occurred_at="2026-10-01 09:05",
+        msgid="0123456789abcdef0123456789abcdef",
+        summary="回件已收",
+    )
+    print("[③私信] 文案=", text, sep="")
+    assert "来源：汤丽萍（私信）" in text
+    assert liaison_main.compute_channel_label(frames.SINGLE_CHAT_CHATTYPE) == "私信"
 
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -33,6 +33,7 @@ import logging
 import os
 import queue
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -271,11 +272,60 @@ def _dump_unknown_attachment_frame(
     return dump_path
 
 
+#: 回推文案里的渠道标签（2026-10-01 可读化）：由 `frames.frame_chattype(frame)` 判定
+#: 后映射成中文，⛔ 不许拿 `thread_id` 的形状去猜——私信的 `thread_id` 就是 `userid`，
+#: 猜必错。取不到或不认识的 `chattype` 回退「未知渠道」（⛔ 不抛）。
+CHANNEL_LABEL_BY_CHATTYPE = {
+    frames.SINGLE_CHAT_CHATTYPE: "私信",
+    "group": "群消息",
+}
+CHANNEL_LABEL_UNKNOWN = "未知渠道"
+
+
+def compute_channel_label(chattype: str | None) -> str:
+    """帧的 `chattype` → 「群消息」／「私信」。纯映射，⛔ 不读时钟、不记日志。"""
+    return CHANNEL_LABEL_BY_CHATTYPE.get(chattype, CHANNEL_LABEL_UNKNOWN)
+
+
+def compute_minute_stamp(moment: datetime) -> str:
+    """`moment` → CST 的 `YYYY-MM-DD HH:MM`（分钟精度）。
+
+    复用 `session.format_instant`（全仓唯一的时间字面量口径，恒定带 `+08:00`），
+    只裁到分钟——⛔ 不新造第二套时区／格式化逻辑。
+    """
+    return session.format_instant(moment)[:16].replace("T", " ")
+
+
+def compute_relay_occurred_at(
+    conn: sqlite3.Connection,
+    *,
+    fields: frames.InboundFrameFields,
+    moment: datetime,
+) -> str:
+    """回推文案里的「时间」：取**这条消息首次归档那一刻**（`liaison_message.received_at`）。
+
+    ⚠️ 刻意**不**用本次处理时刻 `moment`：同一 `msgid` 重投时 `moment` 会变，而回推文本
+    本身就是幂等键 `{thread_id}:effect_send_group_notify:{sha256(text)}` 的一段——用
+    `moment` 会让重投算出第二个 digest，幂等失效、群里收到第二条（本泳道实测过）。
+    首次归档时刻在重投时不改写（`effect_archive_message` 幂等命中），既稳定、又正好就是
+    "消息什么时候到的"。查不到（理论上走不到，归档在回推之前）回退 `moment`。
+    """
+    row = conn.execute(
+        "SELECT received_at FROM liaison_message WHERE thread_id = ? AND msgid = ?",
+        (fields.thread_id, fields.msgid),
+    ).fetchone()
+    if row is None:
+        return compute_minute_stamp(moment)
+    return compute_minute_stamp(datetime.fromisoformat(row[0]))
+
+
 def _push_group_task_notice(
     svc: session.LiaisonSession,
     ports: InboundPorts,
     fields: frames.InboundFrameFields,
     moment: datetime,
+    *,
+    chattype: str | None,
 ) -> None:
     """群帧入队成功后的回推（0930K）＋成功后的队列回写（0930L）。**永不上抛**。
 
@@ -305,8 +355,19 @@ def _push_group_task_notice(
     # 摘要与 `handle_inbound_message` 入队时用的是**同一个纯函数**（`compute_task_summary`）、
     # 同一个默认长度，所以这里算出来的就是队列视图里那一份，⛔ 不是第二处摘要口径。
     summary = compute_task_summary(fields.content, msgtype=fields.msgtype)
+    # 回推文案可读化（2026-10-01，Shao Peishen）：来源写**人名 ＋ 渠道**、时间写 CST 分钟、
+    # 追踪号只留 `msgid` 前 8 位——⛔ 完整 `msgid`／`thread_id` 这类内部不透明标识不
+    # 进群消息。名单映射在**调用点**现取（⛔ `notify/` 里不读文件）；取不到姓名回退
+    # `sender_userid`（⛔ 不抛）。渠道标签由 `frames.frame_chattype(frame)` 判定后传入，
+    # ⛔ 不许拿 `thread_id` 的形状去猜（私信 `thread_id` 就是 `userid`，猜必错）。
+    names = load_whitelist_names(ports.whitelist_path)
+    sender_label = names.get(fields.sender_userid.strip()) or fields.sender_userid
     text = notify.compute_task_relay_text(
-        thread_id=fields.thread_id, msgid=fields.msgid, summary=summary
+        sender_label=sender_label,
+        channel_label=compute_channel_label(chattype),
+        occurred_at=compute_relay_occurred_at(svc.conn, fields=fields, moment=moment),
+        msgid=fields.msgid,
+        summary=summary,
     )
     try:
         state = ports.group_notify.send_group_notify(
@@ -436,9 +497,10 @@ def handle_message_frame(
     # 通知——顺序反了就会出现"群里说已登记、库里没有这条待办"，而那个方向看不出错。
     # 「不是 single ⇒ 群帧」与上面「附件只走私信」用同一个判据：`compute_inbound_frame`
     # 对非 single/group 的 chattype 已经 fail-closed，能走到这里的只可能是两者之一。
-    is_group_frame = frames.frame_chattype(frame) != frames.SINGLE_CHAT_CHATTYPE
+    chattype = frames.frame_chattype(frame)
+    is_group_frame = chattype != frames.SINGLE_CHAT_CHATTYPE
     if result.route.should_enqueue and is_group_frame:
-        _push_group_task_notice(svc, ports, fields, moment)
+        _push_group_task_notice(svc, ports, fields, moment, chattype=chattype)
 
     if result.route.admitted:
         # 8.5bis 之后新增：归档＋入队已提交，桥（P0）在此之后跑，失败
