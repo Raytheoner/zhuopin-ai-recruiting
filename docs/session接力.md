@@ -276,3 +276,21 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - 【谁做：下一条机制泳道】【状态：待派（本场新发现）】【判据：修 `scripts/codex_jsonl_summary.py` 的 `peak`
   口径（逐轮增量、不重复计 cache）并补测试】【不做会怎样：codex 泳道上下文越线判据恒假阳，
   续棒／拆分无从判断】
+
+**12:0x 追加（Shao Peishen 答 `1b，2a，3a，4a`）**
+
+- 🔴 **全局暂停（1b）**：automation `hr`（心跳看护）自 08:50 起保持 `PAUSED`；本轮另把
+  **task-dispatcher 触发器**停掉——`launchctl disable gui/502/com.zhuopin.hr.task-dispatcher`
+  （持久，重启也不起）。⛔ 两周内不会有任何自动发车／自动刷新台账；**新机制两周后替代**。
+  恢复＝`launchctl enable gui/502/com.zhuopin.hr.task-dispatcher` ＋
+  `python3 scripts/install_task_dispatcher.py`（幂等）。`lane-launcher`／`commit-launcher` 是
+  被动型（只认请求文件），保留不动；值守类（`liaison*`）属生产监听，不在暂停范围。
+- **2a 已闭环**：Q-57／Q-58 销号——`Q-53b`／`Q-54a` 映射早由 `0930B`（`7235cb8`）落地，
+  `缺映射=0`；定夺队列待答 **11 → 9**（余 Q-04／Q-10／Q-16／Q-52／Q-F1–F5）。
+- **3a／4a 已发车（12:03:55，pid 76998，`--only 0930H,0930I`）**：
+  `0930H` 收 `hr-wecom-aibot-liaison` 8.8 一周观察结论（泳道「机制-8.8观察收尾」，
+  worktree `lane-0930h-liaison-observation`）；`0930I` 修 codex `upeak` 口径
+  （泳道「机制-upeak口径」，worktree `lane-0930i-upeak-caliber`）。两条均
+  **`模型: Haiku`（＝Flash 档 `deepseek-flash`）**，看护为本会话手工看守（心跳已暂停）。
+  ⚠️ 泳道**内部子代理**仍是 sonnet 档：`--subagent-model haiku` 不在 `lane-launcher` 白名单里，
+  要降档须单独授权改白名单（属执行器改动）。

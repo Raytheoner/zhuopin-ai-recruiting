@@ -1,13 +1,13 @@
 version: 1
 说明: 由 scripts/dispatcher_backlog.py 从路线图／openspec tasks.md／superpowers plans／session接力／号池台账合并生成。状态以本文件为准；与真身不一致的条目带 conflicts:。⛔ 不要手工改 id。
 summary:
-  条目数: 559
+  条目数: 563
   按状态:
-    待开: 199
+    待开: 200
     在跑: 7
     完成: 275
-    阻塞: 78
-  阻塞·决策: 52
+    阻塞: 81
+  阻塞·决策: 55
   阻塞·外部: 25
   conflicts:
   - channel-resume-intake/0.1
@@ -23,6 +23,7 @@ summary:
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
+  - relay:tag#3a219b10
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -6428,6 +6429,51 @@ tasks:
   产出判据: 确认 `docs/openers/0923C-TD51附件字段映射与下载口销账.md`「三、机器判据」第 1 行 `>=3` 是否应 改为 `>=1`（或 `==1`，或改成 `"file" in ... and len(...["file"]) >= 2`）；确认后由下一条泳道/看护顺手 改掉该 opener
     存档文件，⛔ 不改代码
   来源: docs/session接力.md:200
+  可见: false
+- id: relay:tag#83ac02ac
+  场景: 构建自动化
+  阶段: build
+  标题: 心跳看护 automation `hr` 自 2026-09-30 08:50 起为 `PAUSED`，答「恢复」则 30 分钟心跳复活；答「保持暂停」则只在本会话手工看护
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: 心跳看护 automation `hr` 自 2026-09-30 08:50 起为 `PAUSED`，答「恢复」则 30 分钟心跳复活；答「保持暂停」则只在本会话手工看护
+  来源: docs/session接力.md:269
+  可见: false
+- id: relay:tag#bb5bab1d
+  场景: 构建自动化
+  阶段: build
+  标题: Q-57／Q-58 两条「答复→任务映射缺失」答 (a) 授权补映射 后重跑生成器，或 (b) 只解阻塞不生成任务
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: Q-57／Q-58 两条「答复→任务映射缺失」答 (a) 授权补映射 后重跑生成器，或 (b) 只解阻塞不生成任务
+  来源: docs/session接力.md:272
+  可见: false
+- id: relay:tag#7b5b093a
+  场景: M0
+  阶段: build
+  标题: Q-F5 答 (a) 派机制泳道收 8.8 一周观察结论 并归档 `hr-wecom-aibot-liaison`，或 (b) 继续等待
+  依赖: []
+  触碰区: []
+  状态: 阻塞
+  阻塞类型: 决策
+  产出判据: Q-F5 答 (a) 派机制泳道收 8.8 一周观察结论 并归档 `hr-wecom-aibot-liaison`，或 (b) 继续等待
+  来源: docs/session接力.md:274
+  可见: false
+- id: relay:tag#3a219b10
+  场景: 构建自动化
+  阶段: build
+  标题: 修 `scripts/codex_jsonl_summary.py` 的 `peak` 口径（逐轮增量、不重复计 cache）并补测试
+  依赖: []
+  触碰区:
+  - scripts/codex_jsonl_summary.py
+  状态: 待开
+  阻塞类型: 无
+  产出判据: 修 `scripts/codex_jsonl_summary.py` 的 `peak` 口径（逐轮增量、不重复计 cache）并补测试
+  来源: docs/session接力.md:276
   可见: false
 - id: answer:Q-02
   场景: M2
