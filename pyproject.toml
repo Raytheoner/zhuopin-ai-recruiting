@@ -25,3 +25,14 @@ testpaths = ["tests", "tools/liaison/tests"]
 markers = [
     "compliance: 合规红线断言与其反证（tasks.md 第 6 章）",
 ]
+# 只收敛两条已知噪音，⛔ 不全局 -W ignore。
+# ① asyncio.iscoroutinefunction 弃用（Python 3.14→3.16）：langsmith／starlette／fastapi 内部调用，
+#   上游发版改用 inspect.iscoroutinefunction() 后即可移除本行（跟踪上游 langsmith/starlette/fastapi 更新）。
+# ② langgraph checkpoint.base 的 allowed_objects 默认值预告（LangChainPendingDeprecationWarning，
+#   须按全限定类名 langchain_core._api.deprecation.LangChainPendingDeprecationWarning 精确匹配，
+#   基类 PendingDeprecationWarning 在 pytest 过滤里命中不了）：本仓库显式传 allowed_objects
+#   （或上游定死默认值）后移除本行。
+filterwarnings = [
+    "ignore:.*asyncio.iscoroutinefunction.*:DeprecationWarning:langsmith|starlette|fastapi",
+    "ignore::langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
+]

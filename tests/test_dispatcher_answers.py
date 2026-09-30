@@ -299,6 +299,55 @@ def test_map_task_ids_are_unique_and_prefixed():
     assert all(i.startswith("answer:Q-") for i in ids)
 
 
+# ── `0930B`：六条缺映射清零（Q-01a／Q-08／Q-48／Q-53b／Q-54a／Q-59a）──
+
+
+ANSWERED_20260930 = ["Q-01a", "Q-08", "Q-48", "Q-53b", "Q-54a", "Q-59a"]
+
+
+def test_0930b_six_missing_mappings_are_all_registered_and_documented_in_rules_section_7():
+    missing = [k for k in ANSWERED_20260930 if k not in A.ANSWER_MAP]
+    assert missing == [], f"0930B 缺映射补登记缺失：{missing}"
+    rules = RULES.read_text(encoding="utf-8")
+    sec = rules.split("## 7. 答复→任务映射", 1)[1]
+    for key in ANSWERED_20260930:
+        assert f"`{key}`" in sec, f"rules.md §7 缺 {key}"
+
+
+def test_0930b_six_mappings_resolve_to_unblock_or_keep_blocked_and_report_no_missing():
+    entries = [
+        ent("m2-resume-parse-and-rank/0.1", 状态="阻塞", 阻塞类型="外部"),
+        ent("m2-resume-parse-and-rank/U6", 状态="阻塞", 阻塞类型="外部"),
+        ent("m2-resume-parse-and-rank/1.1", 状态="阻塞", 阻塞类型="外部"),
+        ent("voice-structured-interview/0.4", 状态="阻塞", 阻塞类型="决策"),
+        ent("voice-structured-interview/5.11", 状态="阻塞", 阻塞类型="决策"),
+        ent("relay:tag#5c585390", 状态="阻塞", 阻塞类型="决策"),
+        ent("relay:tag#4391ebf4", 状态="阻塞", 阻塞类型="决策"),
+        ent("relay:tag#8f75eddb", 状态="阻塞", 阻塞类型="决策"),
+    ]
+    q = queue_md([
+        row("Q-01", "M2", "外部输入（Shao Peishen 或汤丽萍）", "`m2-resume-parse-and-rank/0.1`、`m2-resume-parse-and-rank/U6`", "已答", "a：已提供（字段路径已确认）"),
+        row("Q-08", "M2", "外部输入（需 `.51` 访问）", "`m2-resume-parse-and-rank/1.1`", "已答", "已提供：0920M 实跑"),
+        row("Q-48", "构建自动化", "决策（改调度器自身脚本）", "", "已答", "核实为已修复，无需重复修"),
+        row("Q-53", "M3", "决策（预算与外部采购，不可代）", "`voice-structured-interview/0.4`、`voice-structured-interview/5.11`", "已答", "b：暂缓采购"),
+        row("Q-54", "构建自动化", "决策（opener 机制变更）", "`relay:tag#5c585390`", "已答", "a：现在派（`0920K` 已落地该闸）"),
+        row("Q-59", "人事部", "决策（跟进信回件处置口径，不可代）", "`relay:tag#4391ebf4`、`relay:tag#8f75eddb`", "已答", "a：两条均视为不完整，退回汤丽萍补齐"),
+    ])
+    rep = A.apply_answers(entries, q, new_entry=Entry)
+    byid = {e.id: e for e in entries}
+    # 无新动作 ⇒ 只解阻塞
+    assert (byid["m2-resume-parse-and-rank/0.1"].状态, byid["m2-resume-parse-and-rank/0.1"].阻塞类型) == ("待开", "无")
+    assert (byid["m2-resume-parse-and-rank/U6"].状态, byid["m2-resume-parse-and-rank/U6"].阻塞类型) == ("待开", "无")
+    assert (byid["m2-resume-parse-and-rank/1.1"].状态, byid["m2-resume-parse-and-rank/1.1"].阻塞类型) == ("待开", "无")
+    assert byid["relay:tag#5c585390"].状态 == "待开"  # 0920K 已落地，来源已勾选/消失
+    # 暂缓 ⇒ 保持阻塞
+    assert byid["voice-structured-interview/0.4"].状态 == "阻塞"
+    assert byid["voice-structured-interview/5.11"].状态 == "阻塞"
+    assert byid["relay:tag#4391ebf4"].状态 == "阻塞"
+    assert byid["relay:tag#8f75eddb"].状态 == "阻塞"
+    assert rep.缺映射 == [] and rep.生成 == []
+
+
 # ── 端到端：真身生成器 ──
 
 
