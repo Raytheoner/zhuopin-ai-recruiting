@@ -362,3 +362,21 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   - **8.6 ⛔ 不勾**（2/3），`tasks.md` 第 238 行原样保留 `- [ ]`；8.9 归档因此仍不跑。
 - 待办（`0930J` 的「需你定夺」原样转记）：① 链路三接线（派泳道补「入队后回推值守群」）／重定义
   8.6 验收面为两条后勾／继续挂起；② 本 findings 结论是否补进 `tasks.md` 8.6 注记（推荐补）。
+
+**19:5x 追加（Shao Peishen 答 `1a，2a`）：`0930K` 接线已合回 main**
+
+- **`2a` 已做**：`openspec/changes/hr-wecom-aibot-liaison/tasks.md` 8.6 注记已补（`0930J` 结论 2/3＋
+  链路三成因改为「未接线」＋恒等不变式 10/0），随 `33624d2` 落档。
+- **`1a` 已做**：`[Mac]0930K` 接线泳道 **OK（11 分钟，Flash 档）**，改动落在
+  `tools/liaison/__main__.py`（+71 行）、`tools/liaison/notify/{__init__,guard,relay,store}.py`、
+  `tools/liaison/tests/`（新增 `notify/relay.py` 162 行）——群帧**入队成功后**回推、私信不回推、
+  复用既有幂等（`effect_send_group_notify`）与限流门面。代提交 `e42d6ae`，执行器自动合回 main
+  （`ff11df4`）。
+- **判据补跑（看护者真身核验）**：因我把 opener 的提交排在发车之后，泳道 worktree 里**没有**
+  `docs/openers/0930K-*.md` ⇒ 执行器 `gate_extract` 找不到判据块、**机器判据没跑**（`gates.tsv` 空）。
+  我在 main 上按 opener 的判据块原样补跑：**`tools/liaison/tests` 1223 passed / 5 skipped**
+  （基线 1216／5，+7 条新用例）＋「回推接线结构 OK」，rc=0。
+  🔴 **教训（下批照做）**：新 opener 必须先落档（提交推送）**再**发车，否则 worktree 里看不到它。
+- **值守已二次重启**吃进接线：`pid=37076`、`since=2026-09-30T19:47:37`（15:24 那次是吃 webhook）。
+- **链路三的真实投递验证待做**：需要 Shao Peishen 在值守群发一条文字（他本人 `ShaoPeiShen` 在白名单里）
+  ⇒ 系统入队后应自动回推一条群通知 ⇒ 核 `liaison_group_notify` 新行＋日志 ⇒ 才勾 8.6、随后跑 8.9 归档。
