@@ -399,3 +399,19 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - ⚠️ **登记未改（新发现）**：回推后 `liaison_task.send_status` 仍为 `pending`——0930K 只落
   `liaison_group_notify` 终态、**未回写队列行** ⇒ 队列视图会显示「未推送」。通知确已送达，影响面小，
   建议另开一条小泳道对齐口径（⛔ 未擅改）。
+
+**23:5x 追加（Shao Peishen 答 1a）：`0930L` 回写接线已合回 main**
+
+- **`0930L` = OK（2 分钟，Flash 档）**：`tools/liaison/__main__.py::_push_group_task_notice` 接住回推返回值，
+  **只在终态 `STATE_SENT`** 时调既有 `queue.mark_task_pushed`（幂等键
+  `{thread_id}:effect_mark_task_pushed:{msgid}` ＋ `send_status <> 'pushed'` 两道防线，⛔ 未另写 UPDATE）；
+  `rejected`／`pending_resend`／幂等命中（`None`）一律不回写；`pushed_at` 取 `session.format_instant(moment)`
+  （与同一条消息的 `received_at` 同源同格式）。测试 **1226 passed／5 skipped**（+3 条）。
+  ⚠️ 本次机器判据**自动跑过**（`gates.tsv: PASS`）——因为按 `0930K` 的教训**先落档再发车**（opener `572bc62`）。
+  代提交 `95e336c`，收口器自动合回 main。
+- **值守第三次重启加载新代码**：`pid 11877`、`since 2026-09-30T23:56:13`。
+- **历史一行已补齐**：`#13`（23:48:30 那条，接线前推的）用**同一套幂等**补成
+  `send_status='pushed'`、`pushed_at=2026-09-30T23:48:30.770486+08:00`（事件时刻），
+  `effect_log` 现有 1 行 `effect_mark_task_pushed`。
+- **待验证**：请 Shao Peishen 再发一条群消息（值守此刻已加载新代码）⇒ 应**自动**回写 `pushed`；
+  验到即闭环，否则按 PARTIAL 登记。
