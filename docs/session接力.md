@@ -415,3 +415,14 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   `effect_log` 现有 1 行 `effect_mark_task_pushed`。
 - **待验证**：请 Shao Peishen 再发一条群消息（值守此刻已加载新代码）⇒ 应**自动**回写 `pushed`；
   验到即闭环，否则按 PARTIAL 登记。
+
+**00:0x 追加（2026-10-01，Shao Peishen「已发」）：自动回写实测通过 ✅**
+
+- 他 **2026-10-01 00:02:32** 在值守群发「@MAC机器人 回写验证」（`msgid=2aa8deae565d0de3…`）⇒
+  入队 `liaison_task` **#14** ⇒ 群通知回推 `state='sent'`（`liaison_group_notify` 第 2 行）⇒
+  **值守自动回写**：`send_status='pushed'`、`pushed_at=2026-10-01T00:02:32.199461+08:00`
+  （事件时刻，与 `received_at` 同源同格式），`effect_log` 新增
+  `wrvDL_…:effect_mark_task_pushed:2aa8deae…`。
+- 至此链路三的**真投递**与**队列状态回写**两环都在生产上实证；`effect_mark_task_pushed` 现 2 行
+  （#14 由值守自动、#13 本场幂等补齐）。`hr-wecom-aibot-liaison` 归档后的两个增量
+（`0930K` 接线、`0930L` 回写）**均已闭环**，无遗留项。
