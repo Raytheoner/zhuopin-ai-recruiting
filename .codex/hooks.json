@@ -1,0 +1,27 @@
+{
+  "description": "拆件受限会话的 Codex PreToolUse 路径级 deny（0930A）。仅在 HR_LIAISON_UNPACK=1 时由 guard 脚本拦截；未置位时 guard 静默放行。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/hooks/codex_unpack_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/hooks/codex_unpack_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
