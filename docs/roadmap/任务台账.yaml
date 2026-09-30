@@ -3,15 +3,14 @@ version: 1
 summary:
   条目数: 563
   按状态:
-    待开: 200
+    待开: 199
     在跑: 7
-    完成: 275
-    阻塞: 81
+    完成: 277
+    阻塞: 80
   阻塞·决策: 55
-  阻塞·外部: 25
+  阻塞·外部: 24
   conflicts:
   - channel-resume-intake/0.1
-  - hr-wecom-aibot-liaison/8.8
   - m1-intake-quality-fixes/8.9
   - m2-resume-parse-and-rank/0.1
   - propose:S-M3
@@ -19,12 +18,12 @@ summary:
   - propose:S-入职
   - propose:S-排期
   - propose:S-渠道
+  - relay:tag#3a219b10
   ready:
   - interview-scheduling/0.2
   - offer-generation/0.2
   - offer-generation/0.5
   - onboarding-flow/0.2
-  - relay:tag#3a219b10
   闸门待放行:
   - channel-resume-intake/U1/plan ← G2 `channel-resume-intake`（已答·未放行）
   - interview-scheduling/U1/plan ← G2 `interview-scheduling`（已答·未放行）
@@ -6452,11 +6451,17 @@ tasks:
   依赖: []
   触碰区:
   - scripts/codex_jsonl_summary.py
-  状态: 待开
+  状态: 完成
   阻塞类型: 无
   产出判据: 修 `scripts/codex_jsonl_summary.py` 的 `peak` 口径（逐轮增量、不重复计 cache）并补测试
   来源: docs/session接力.md:276
   可见: false
+  conflicts:
+    状态:
+      台账: 完成
+      真身: 待开
+  备注: 2026-09-30 `[Mac]0930I` 修 upeak 口径（OK，自动合回 main `99b70ca`/`5ec833df`）：`scripts/codex_jsonl_summary.py` peak 改逐轮增量、不再重复计 cache_read，新增 `tests/test_codex_jsonl_summary.py`；机器判据
+    PASS。task-dispatcher·lanes-done-20260930-120355 核实
 - id: answer:Q-02
   场景: M2
   阶段: build
@@ -6603,7 +6608,8 @@ tasks:
   触碰区: []
   状态: 完成
   阻塞类型: 无
-  备注: 2026-09-30 `[Mac]0930H` 收窗（Q-F5 答 3a）：观察结论落 `docs/findings/2026-09-30-liaison一周观察结论.md`、tasks.md 8.8 已勾、分支已合 main（`7066fdc`）。⚠️ 8.9 归档仍待 8.6 闭（8.6 须 Shao Peishen 本人私信一次机器人）
+  备注: 2026-09-30 `[Mac]0930H` 收窗（Q-F5 答 3a）：观察结论落 `docs/findings/2026-09-30-liaison一周观察结论.md`、tasks.md 8.8 已勾、分支已合 main（`7066fdc`）。⚠️ 8.9 归档仍待 8.6 闭（8.6 须 Shao Peishen
+    本人私信一次机器人）
   产出判据: 一周观察窗口的观察项落档：漏消息告警是否误报、限流是否被触发、归档是否有重名冲突。⚠️ 观察结论写 `docs/findings/`，⛔ 不在观察期内改判据
   来源: openspec/changes/hr-wecom-aibot-liaison/tasks.md:242
   可见: false
