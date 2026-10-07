@@ -83,3 +83,28 @@ def test_app_css_has_narrow_media_query_with_full_width_buttons():
         "窄屏媒体查询块内没有给 .btn 全宽（width: 100%）——§8 要求候选人侧"
         "按钮在窄屏下全宽可点。"
     )
+
+
+def test_narrow_media_query_also_covers_the_candidate_pages_bare_buttons():
+    """③b 候选人两页的**裸按钮**也必须被窄屏全宽规则覆盖（2026-10-07 `1001F` 实测）。
+
+    实证：375×812 下「签发」按钮只有 42.67px、「查看验证码」82.66px——它们没有
+    `class="btn"`，所以只写 `.btn { width:100% }` 覆盖不到。这条把五个 id 钉住，
+    ⛔ 别把这条当成"样式洁癖"删掉：它是 375px 实测掉出来的真缺陷。
+    """
+    app_css = (STATIC / "app.css").read_text(encoding="utf-8")
+    match = _NARROW_MEDIA_RE.search(app_css)
+    assert match, "app.css 缺少 @media (max-width: 480px) 块。"
+    block = match.group(1)
+
+    for selector in (
+        "#issue-form button",
+        "#code-btn",
+        "#submit-consent-btn",
+        "#request-code-btn",
+        "#verify-btn",
+    ):
+        assert selector in block, (
+            f"窄屏媒体查询块内缺 `{selector}`——候选人页的这个按钮在 375px 下不会全宽"
+            "（1001F 实测：签发 42.67px / 查看验证码 82.66px）。"
+        )

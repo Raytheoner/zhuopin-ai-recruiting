@@ -41,6 +41,9 @@ from pathlib import Path
 DEFAULT_JOBS_DIR = "data/eval/m1-9.1/jobs"
 DEFAULT_OUT_DIR = "data/eval/m1-9.1/results"
 DEFAULT_XLSX = "docs/templates/m1-画像技术栈评估表.xlsx"
+#: `--make-report` 的默认落点（2026-10-07 1001E 补跑：结果文档**由脚本生成**，
+#: ⛔ 不手抄——换模型/换岗位重跑后一条命令就能刷新，避免"文档与 JSON 各说各话"。
+DEFAULT_REPORT = "docs/findings/2026-10-07-m1-9.1-画像重跑结果.md"
 
 # doc 里每个岗位的标题行形如「<岗位名>岗位需求」。
 _HEADING_SUFFIX = "岗位需求"
@@ -323,6 +326,76 @@ def build_eval_table(results_dir: Path, jobs_dir: Path, xlsx_path: Path) -> Path
     return xlsx_path
 
 
+def build_report(results_dir: Path, jobs_dir: Path, md_path: Path) -> Path:
+    """由 `results_dir/*.json` 生成**结果记录**（给人看的机械部分）。
+
+    ⛔ 这不是 9.1 的验收结论：9.1 = 重跑 ＋ **HR／业务经理评估**（准确率 ≥80%），
+    人评那一半不在这里，也不由脚本代打勾。
+    """
+    jobs = list_jobs(jobs_dir)
+    if not jobs:
+        raise SystemExit(f"{jobs_dir} 下没有 JD txt——先跑 --extract-doc")
+
+    lines: list[str] = [
+        "# 2026-10-07 M1 9.1 画像重跑结果（机械部分）",
+        "",
+        "> ⚠️ 本文件由 `scripts/m1_acceptance_replay.py --make-report` **生成**，⛔ 不要手改——重跑后同一条命令刷新。",
+        "> 材料来源与跑法见 `docs/findings/2026-10-07-m1-9.1-画像重跑记录.md`；"
+        "人工评估用 `docs/templates/m1-画像技术栈评估表.xlsx`。",
+        "> ⛔ **这不是 9.1 的验收结论**：9.1 = 10 个真实历史岗位重跑 ＋ **HR 与业务经理评估**"
+        "技术栈字段准确率 ≥80%；人评那一半不在此文件。",
+        "",
+        "## 一、跑批摘要",
+        "",
+        "| # | 岗位 | 模型 | 耗时 ms | 画像字段数 | 追问条数 | 结果文件 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+
+    payloads: list[tuple[Path, dict]] = []
+    for idx, job in enumerate(jobs, 1):
+        result_path = results_dir / f"{job.stem}.json"
+        if not result_path.is_file():
+            lines.append(f"| {idx:02d} | {job.stem} | {NOT_RUN} | — | — | — | 缺 |")
+            continue
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+        payloads.append((job, data))
+        patch = data.get("profile_patch") or {}
+        lines.append(
+            f"| {idx:02d} | {job.stem} | {data.get('model') or '—'} | "
+            f"{data.get('elapsed_ms', '—')} | {len(patch)} | "
+            f"{data.get('questions_count', '—')} | `{result_path.name}` |"
+        )
+
+    lines += ["", "## 二、逐岗位技术栈字段（AI 取值，未提及＝JD 里没写）", ""]
+    for job, data in payloads:
+        patch = data.get("profile_patch") or {}
+        lines += [f"### {job.stem}", "", "| 维度 | AI 值 |", "|---|---|"]
+        for fld in TECH_STACK_FIELDS:
+            lines.append(f"| `{fld}` | {_render_value(patch.get(fld))} |")
+        others = [
+            (k, _render_value(v))
+            for k, v in patch.items()
+            if k not in TECH_STACK_FIELDS and k != "job_title"
+        ]
+        if others:
+            lines += ["", "其余抽取字段：" + "；".join(f"`{k}`={v}" for k, v in others)]
+        lines.append("")
+
+    lines += [
+        "## 三、下一步（人评）",
+        "",
+        "1. 打开 `docs/templates/m1-画像技术栈评估表.xlsx`，逐行对照 JD 原文判 `AI 值` 对不对；",
+        "2. 命中填 ✓、未命中填 ✗ 并写上正确值（判定口径见该表「填写说明」sheet）；",
+        "3. 汇总 sheet 的准确率 ≥80% 才算 9.1 技术栈字段验收通过；通过后由看护者勾 9.1 并归档",
+        "   `m1-job-profile-intake` / `m1-intake-quality-fixes`。",
+        "",
+    ]
+
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+    return md_path
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 四、CLI
 # ──────────────────────────────────────────────────────────────────────
@@ -347,6 +420,13 @@ def main(argv: list[str] | None = None) -> int:
         const=DEFAULT_XLSX,
         help=f"由 --out 的 results/*.json 生成评估表（默认 {DEFAULT_XLSX}）",
     )
+    parser.add_argument(
+        "--make-report",
+        metavar="MD",
+        nargs="?",
+        const=DEFAULT_REPORT,
+        help=f"由 --out 的 results/*.json 生成结果记录（默认 {DEFAULT_REPORT}）",
+    )
     args = parser.parse_args(argv)
 
     jobs_dir = Path(args.jobs_dir)
@@ -360,6 +440,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.make_table:
         xlsx = build_eval_table(out_dir, jobs_dir, Path(args.make_table))
         print(f"[table] {xlsx}")
+        return 0
+
+    if args.make_report:
+        md = build_report(out_dir, jobs_dir, Path(args.make_report))
+        print(f"[report] {md}")
         return 0
 
     jobs = list_jobs(jobs_dir)

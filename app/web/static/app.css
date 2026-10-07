@@ -145,6 +145,20 @@ table {
     width: 100%;
   }
 
+  /* 候选人侧两页（同意 interview_consent／邀约 interview_invite_issue）的裸按钮：
+     2026-10-07 `1001F` 实测在 375×812 下「签发」只有 42.67px、「查看验证码」82.66px，
+     「请求验证码／提交验证码／提交」同样不是全宽。`09-UI-Design.md` §8 要求这两页
+     「单列、按钮全宽、字号 ≥16px 防缩放」⇒ 这里按 id 定点补，⛔ 不挂 `.btn`
+     （`.btn` 的 font-size:14px 会把字号压到 16 以下）。 */
+  #issue-form button,
+  #code-btn,
+  #submit-consent-btn,
+  #request-code-btn,
+  #verify-btn {
+    width: 100%;
+    font-size: 16px;
+  }
+
   body,
   .container {
     padding: 0 12px;

@@ -523,3 +523,22 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - ⚠️ **375px 是静态判据通过**：仓库 venv 无 playwright、无浏览器二进制 ⇒ **浏览器/真机实测未做**（已如实登记，
   见 opener §五红线：不许声称"已实测无横向滚动"）。
 - 至此 `09-UI-Design.md` §11 ①② 全部落地；§10 清单里 ⑤（破坏性动作二次确认）要等 M2 批量确认页实现后才具备验收对象。
+
+**2026-10-07 18:2x 追加（Shao Peishen 答 `1a，2a`）：`1001E`／`1001F` 两条泳道补跑闭合**
+
+- 两条泳道都撞在**同一个环境墙**（都如实 PARTIAL、产物都对）：
+  ① `1001E` 真 LLM 跑不了——**codex `--sandbox workspace-write` 禁网**（`CODEX_SANDBOX_NETWORK_DISABLED=1`），
+  而 `AGENTS.md` §4 原写「真实泳道由 launchd 发起不受此限」**不成立**（禁网的是 codex 自己的沙箱层，与 launchd 无关）；
+  ② `1001F` 起不了 Chrome——同一层 Seatbelt 拦浏览器进程（`SIGABRT`）。
+  ⇒ 已按 0930F 先例：人工合并分支，再由看护者在**非沙箱**环境补跑缺失步骤。
+- ✅ **M1 9.1 机械部分闭合**：`--extract-doc`（10 份 JD，从归档 `10个岗位需求.doc`）→ `--live`
+  **10/10 全通**（`deepseek-flash`，各岗位 3–7 个字段，5.1–11.9s）→ 生成
+  `docs/findings/2026-10-07-m1-9.1-画像重跑结果.md`（脚本生成，⛔ 不手改）＋评估表 AI 值列预填（61 行）。
+  **剩人评**：HR／业务经理按 `docs/templates/m1-画像技术栈评估表.xlsx` 打勾，≥80% 即 9.1 通过。
+- ✅ **375px 真机实测通过（并修掉一个真缺陷）**：补跑第一次即复现——两页无横滚（`scrollWidth=375`）但
+  「签发」按钮仅 **42.67px**、`#code-btn` 82.66px；修法＝`app.css` 窄屏媒体查询按 id 给五个裸按钮
+  `width:100%; font-size:16px`（⛔ 不挂 `.btn`，它的 14px 会压破 §8 的 ≥16px）＋
+  `tests/test_candidate_pages_narrow.py` 增一条钉住这五个 id；**复测 rc=0**（按钮 335px 全宽）。
+- 🔴 **机制缺口（登记，待你定夺）**：需要联网/起浏览器的活，**codex 泳道做不了**。两条路：
+  (a) 给 `run-lanes.sh` 的 codex 参数加 `-c sandbox_workspace_write.network_access=true`（改执行器，需你点头）；
+  (b) 维持现状：这类活固定走「主会话非沙箱补跑」（本轮的形态）。
