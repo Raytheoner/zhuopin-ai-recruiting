@@ -54,6 +54,10 @@
 1. **先审**：用 `product-design:audit` 对现有 8 个页面（`app/web/static/*.html`）出**截图取证 + 逐条结论**
    （信息架构、层级、可读性、状态覆盖、无障碍、与 v1.0 原则的偏差）。截图落 `data/eval/ui-audit/`
    （gitignored），结论落 `docs/findings/`。
+
+   ⚠️ **先确认插件可达**：本场开头把 `product-design` 的 `index`/`audit` 技能名点一遍（`Skill(product-design:index)`）。
+   若报未知技能/加载失败 ⇒ **停下报 Shao Peishen**，并登记「⏸ 留步：product-design 不可达」——
+   ⛔ 不许退回"自己手写 CSS 硬做"，那会丢掉本条的审计取证与设计 QA 两层保证（同族教训：`superpowers` 不可达那条）。
 2. **再定方向**：按 audit 结论给**一版设计方向**（不是一堆选项；同一结果只给一种做法）＋页面级改造清单
    （哪页改什么、为什么、验收什么）。需要视觉探索时用 `product-design:ideate`，产出的图落 `data/`。
 3. **再落地**：用 `product-design:image-to-code`（或插件内等价路径）把方案落到 `app/web/static/**`。
