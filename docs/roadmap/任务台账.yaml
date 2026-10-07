@@ -3,9 +3,9 @@ version: 1
 summary:
   条目数: 563
   按状态:
-    待开: 197
+    待开: 195
     在跑: 7
-    完成: 281
+    完成: 283
     阻塞: 78
   阻塞·决策: 55
   阻塞·外部: 22
@@ -2772,20 +2772,6 @@ tasks:
   产出判据: 章节 6 全部 checkbox 勾选且各拆段合 main（`git cherry -v main <分支>` 无 `+`）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md
   可见: true
-- id: m2-resume-parse-and-rank/7.1
-  场景: M2
-  阶段: build
-  标题: 「判例批改表」xlsx 模板（固定列：样本标识、岗位、六字段人工值、人工排序名次、标注人、标注时刻）与填写说明，存 `docs/templates/m2-判例批改表.xlsx` + `.md`；给 0.4 用
-  单元: U6 评测集导入与指标脚本
-  依赖:
-  - m2-resume-parse-and-rank/U5
-  - m2-resume-parse-and-rank/U6/plan
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 「判例批改表」xlsx 模板（固定列：样本标识、岗位、六字段人工值、人工排序名次、标注人、标注时刻）与填写说明，存 `docs/templates/m2-判例批改表.xlsx` + `.md`；给 0.4 用
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:93
-  可见: false
 - id: m2-resume-parse-and-rank/7.2
   场景: M2
   阶段: build
@@ -2800,7 +2786,7 @@ tasks:
   阻塞类型: 无
   产出判据: '`scripts/eval_m2.py import <file> --job <id> --source <archive_path|local>`：逐行校验（必填列、类型、样本存在、类别非 live、≤20 行），任一失败整批拒并列出行；幂等：同批次重复导入不重复，值变化以最新为准保留历史；记录归档件路径
     ↔ 批次'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:94
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:95
   可见: false
 - id: m2-resume-parse-and-rank/7.3
   场景: M2
@@ -2815,7 +2801,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 指标计算 `scripts/eval_m2.py report --job <id>`：字段准确率（design D9 归一化口径）、Spearman、Top-10 召回、span 可回溯率；门槛与通过/不通过；样本 < 10 ⇒ "不足"；记录模型／prompt／解析器版本；只读（测试：跑前后业务表哈希一致）
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:95
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:96
   可见: false
 - id: m2-resume-parse-and-rank/7.4
   场景: M2
@@ -2829,7 +2815,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 本地路径导入兜底（不依赖 G1 链路）：`--source local` 直接读文件；测试用 3 份合成样本跑通 import → report
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:96
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:97
   可见: false
 - id: m2-resume-parse-and-rank/7.5
   场景: M2
@@ -2845,7 +2831,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 评测集目录 `data/eval/` 加 `.gitignore` 与 README（访问控制、留存期 90 天——Q7 已裁决、禁止训练用途）；`tests/test_eval_no_training_use.py`：grep 训练／微调相关 import 不得出现在 `scripts/eval_m2.py`
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:97
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:98
   可见: false
 - id: m2-resume-parse-and-rank/7.6
   场景: M2
@@ -2859,7 +2845,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: '`report` 输出非"样本不足"'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:98
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:99
   可见: false
   队列: Q-F1 待答
 - id: m2-resume-parse-and-rank/7.7
@@ -2875,7 +2861,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 用全部已标注样本跑 `report`，结果落 `docs/m2-eval-report.md`；未达标项回到对应单元返工并登记
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:99
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:100
   可见: false
 - id: m2-resume-parse-and-rank/U6/plan
   场景: M2
@@ -2899,7 +2885,6 @@ tasks:
   单元: U6 评测集导入与指标脚本
   依赖:
   - m2-resume-parse-and-rank/0.1
-  - m2-resume-parse-and-rank/7.1
   - m2-resume-parse-and-rank/7.2
   - m2-resume-parse-and-rank/7.3
   - m2-resume-parse-and-rank/7.4
@@ -2930,7 +2915,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 新增断言「评分 100% 可回溯」：`criterion_score.evidence_ref` 解析后分片存在且偏移不越界；反证：造一条越界记录
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:104
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:105
   可见: false
 - id: m2-resume-parse-and-rank/8.3
   场景: M2
@@ -2944,7 +2929,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 新增断言「真实简历入库闸默认关闭」：无配置环境下 `is_live_resume_intake_enabled()` 为 False；反证：临时改默认值
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:105
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:106
   可见: false
 - id: m2-resume-parse-and-rank/8.4
   场景: M2
@@ -2958,7 +2943,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: 新增断言「简历访问留痕不可缺」：表缺失判失败；被读取过的简历至少一条留痕；反证
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:106
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:107
   可见: false
 - id: m2-resume-parse-and-rank/8.5
   场景: M2
@@ -2973,20 +2958,6 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: '`-m compliance` 标记覆盖 8.1–8.4，CI 接入；`tests/test_audit_assertion_effectiveness.py` 扩展四条反证'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:107
-  可见: false
-- id: m2-resume-parse-and-rank/8.6
-  场景: M2
-  阶段: build
-  标题: 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
-  单元: U7 合规断言与真实简历入库闸
-  依赖:
-  - m2-resume-parse-and-rank/U6
-  - m2-resume-parse-and-rank/U7/plan
-  触碰区: []
-  状态: 待开
-  阻塞类型: 无
-  产出判据: 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:108
   可见: false
 - id: m2-resume-parse-and-rank/8.8
@@ -3004,7 +2975,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: '`.51` 上 `live` 上传被接收且访问留痕可查'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:110
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:112
   可见: false
   队列: Q-F2 待答
 - id: m2-resume-parse-and-rank/8.9
@@ -3020,7 +2991,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: '`docs/deploy-51-server.md` 记录本次发版与依赖'
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:111
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:113
   可见: false
   队列: Q-F3 待答
 - id: m2-resume-parse-and-rank/8.10
@@ -3036,7 +3007,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: 【Q-03 已答 b·仍阻塞：真实简历入库闸未开（Q-F2，8.8 由本人亲自改配置）】试运行：0.3 选定岗位在闸开启后跑一批真实简历，用真实样本复算一次四项指标落 `docs/m2-eval-report.md`「真实样本」节；🔴 试运行期间的任何淘汰确认由 HR 执行、Shao Peishen 抽查留痕
-  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:112
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:114
   可见: false
   队列: Q-03 已答 b
   备注: Q-03 已答 b 已解岗位选定，仍受 M2 真实简历门槛（登录＋访问留痕未就位）阻塞，⛔ 不解禁
@@ -3067,7 +3038,6 @@ tasks:
   - m2-resume-parse-and-rank/8.3
   - m2-resume-parse-and-rank/8.4
   - m2-resume-parse-and-rank/8.5
-  - m2-resume-parse-and-rank/8.6
   - m2-resume-parse-and-rank/8.8
   - m2-resume-parse-and-rank/8.9
   - m2-resume-parse-and-rank/U6
@@ -6896,6 +6866,22 @@ tasks:
   产出判据: 字段校对页：左原文右六字段，置信度与来源高亮（按 span offset 切字符串）；队列字段醒目；提交走 3.10
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:68
   备注: dispatcher-20260917-233156 核实：本条已被 `0917BA` 移入第 9 章 9.3（可见薄片），tasks.md:83 留墓碑「已移入 9.3，不是漏跑」；`m2-resume-parse-and-rank/9.3` 已是台账独立条目，本条判超越（不再发车）
+- id: m2-resume-parse-and-rank/7.1
+  场景: M2
+  阶段: build
+  标题: 「判例批改表」xlsx 模板（固定列：样本标识、岗位、六字段人工值、人工排序名次、标注人、标注时刻）与填写说明，存 `docs/templates/m2-判例批改表.xlsx` + `.md`；给 0.4 用
+  单元: U6 评测集导入与指标脚本
+  依赖:
+  - m2-resume-parse-and-rank/U5
+  - m2-resume-parse-and-rank/U6/plan
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 「判例批改表」xlsx 模板（固定列：样本标识、岗位、六字段人工值、人工排序名次、标注人、标注时刻）与填写说明，存 `docs/templates/m2-判例批改表.xlsx` + `.md`；给 0.4 用
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:93
+  可见: false
+  备注: 2026-10-07 `[Mac]1001B` 提前交付（不等 U5：模板列由 design D4/D9 与 ResumeFields 定死，且 Q-04 明写「模板由 U6 提供」卡着汤丽萍的评测集标注）：`docs/templates/m2-判例批改表.xlsx`（11 列＋示例行）＋`docs/templates/m2-判例批改表-填写说明.md`；判据
+    PASS，提交 1286a75
 - id: m2-resume-parse-and-rank/8.1
   场景: M2
   阶段: build
@@ -6912,6 +6898,21 @@ tasks:
   来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:103
   可见: false
   备注: dispatcher-20260918-084350(lanes-done-20260918-075616) 核实 tasks.md:103 已 [x]（0918B 收口记录：与 U1 Task 3 同批交付于 906ee01），改判完成
+- id: m2-resume-parse-and-rank/8.6
+  场景: M2
+  阶段: build
+  标题: 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
+  单元: U7 合规断言与真实简历入库闸
+  依赖:
+  - m2-resume-parse-and-rank/U6
+  - m2-resume-parse-and-rank/U7/plan
+  触碰区: []
+  状态: 完成
+  阻塞类型: 无
+  产出判据: 合规文档接线：`docs/compliance/` 放 PIA／同意条款／留存策略的落档位置与索引（内容由 0.2 产出，本条只建目录与索引）
+  来源: openspec/changes/m2-resume-parse-and-rank/tasks.md:108
+  可见: false
+  备注: 2026-10-07 `[Mac]1001B` 交付：`docs/compliance/README.md` 索引三份草稿（PIA／同意条款／留存策略，均「草稿·待签认」、对接人谷雨、起草日 2026-09-17、对应 Q-02）；判据 PASS，提交 1286a75
 - id: m2-resume-parse-and-rank/9.1
   场景: M2
   阶段: build
