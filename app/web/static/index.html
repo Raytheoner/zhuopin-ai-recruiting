@@ -7,7 +7,8 @@
 <title>卓品智能招聘助手 · 内网 Demo</title>
 <style>
   body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
-  .banner { background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; padding: 12px 16px; border-radius: 8px; margin-bottom: 24px; font-weight: 600; }
+  /* 顶部提示条：配色走共用层 .notice，这里只留页面级布局（间距/加粗）。 */
+  .banner { margin-bottom: 24px; font-weight: 600; }
   .chat { border: 1px solid #ddd; border-radius: 8px; padding: 16px; min-height: 200px; margin-bottom: 16px; }
   /* pre-wrap：questions_text 兜底分支里是多行文本，不加这条换行会被折叠成一行
      （这是改动前就存在的显示缺陷，本单元按问题逐条渲染后顺带修掉）。 */
@@ -16,16 +17,18 @@
   .qblock + .qblock { padding-top: 10px; border-top: 1px dashed #e9ecef; }
   /* 重问的视觉区分（tasks 5.4）：左边框 + 徽标。光靠文本前缀不够——它和
      问题正文同字号同颜色，混在两三条新问题里一眼看不出来。 */
-  .qblock.reask { border-left: 3px solid #fd7e14; padding-left: 10px; }
-  .reask-badge { display: inline-block; background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; border-radius: 4px; padding: 1px 6px; margin-right: 6px; font-size: 12px; vertical-align: middle; }
+  .qblock.reask { border-left: 3px solid var(--color-accent-reask); padding-left: 10px; }
+  /* 重问徽标：class 由 JS 写死（badge.className = "reask-badge"），
+     这里沿用共用令牌取色，不再重复颜色字面量。 */
+  .reask-badge { display: inline-block; background: var(--color-warn-bg); border: 1px solid var(--color-warn-border); color: var(--color-warn-fg); border-radius: 4px; padding: 1px 6px; margin-right: 6px; font-size: 12px; vertical-align: middle; }
   /* 标识文案的样式刻意做得可读而不是"小字免责声明"：《AI 生成合成内容标识
      办法》要的是让人看见，不是让人看不见。 */
-  .ai-hint { font-size: 13px; color: #6c757d; margin: 6px 0 6px; }
+  .ai-hint { font-size: 13px; color: var(--color-text-muted); margin: 6px 0 6px; }
   .opts { display: flex; flex-wrap: wrap; gap: 8px; }
   .opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #adb5bd; border-radius: 16px; padding: 4px 12px; cursor: pointer; font-size: 14px; }
   .opt input { margin: 0; }
   .turn.done .opt { opacity: 0.45; cursor: default; }
-  .turn.user { text-align: right; color: #0d6efd; }
+  .turn.user { text-align: right; color: var(--color-primary); }
   .turn.assistant { color: #333; }
   textarea { width: 100%; box-sizing: border-box; padding: 8px; }
   button { margin-top: 8px; padding: 8px 16px; cursor: pointer; }
@@ -34,19 +37,22 @@
   #jd-panel #jd-output { display: block; margin-top: 0; }
   .jd-actions { margin-top: 8px; }
   .jd-actions button { margin: 0 8px 0 0; }
-  .jd-hint { font-size: 13px; color: #6c757d; margin-left: 4px; }
+  .jd-hint { font-size: 13px; color: var(--color-text-muted); margin-left: 4px; }
   #jd-editor { display: none; margin-top: 8px; }
   /* 未溯源提示是**提醒**不是拦截（design 决策 12）：用中性的黄，⛔ 不用
      gap-warning 那套红色——红色会让人以为文案被系统拦下了。 */
-  .jd-grounding { background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; padding: 10px 14px; border-radius: 8px; margin-top: 10px; font-size: 14px; }
+  /* 未溯源提示条：配色走共用层 .notice，这里只留页面级字号/间距。 */
+  .jd-grounding { margin-top: 10px; font-size: 14px; }
   /* 人工撰写徽标：AI 标识没了之后，界面上必须还看得出这份文案的作者是谁。 */
-  .jd-authorship { font-size: 13px; color: #0f5132; background: #d1e7dd; border: 1px solid #badbcc; border-radius: 6px; padding: 6px 10px; margin-top: 10px; }
-  .gap-warning { background: #f8d7da; border: 2px solid #dc3545; color: #58151c; padding: 14px 16px; border-radius: 8px; margin: 16px 0 8px; }
+  /* 人工撰写徽标：配色走共用层 .notice-success。 */
+  .jd-authorship { font-size: 13px; margin-top: 10px; }
+  /* 缺口警示：配色走共用层 .notice-danger，这里只留页面级间距。 */
+  .gap-warning { padding: 14px 16px; margin: 16px 0 8px; }
   .gap-warning h3 { margin: 0 0 8px; font-size: 15px; }
   .gap-warning ul { margin: 0 0 10px; padding-left: 20px; }
   .gap-warning .consequence { font-weight: 600; margin-bottom: 12px; }
   .gap-warning button { margin: 0 8px 0 0; }
-  .profile-summary { border: 1px solid #0d6efd; border-radius: 8px; padding: 14px 16px; margin: 16px 0 8px; }
+  .profile-summary { border: 1px solid var(--color-primary); border-radius: 8px; padding: 14px 16px; margin: 16px 0 8px; }
   .profile-summary h3 { margin: 0 0 10px; font-size: 15px; }
   .profile-summary dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
   .profile-summary dt { font-weight: 600; color: #495057; }
@@ -54,20 +60,19 @@
   .approval-actions { margin-top: 8px; }
   .approval-actions button { margin: 0 8px 0 0; }
   #revise-box { display: none; margin-top: 8px; }
-  .nav { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; }
+  .nav { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--color-border); }
   .nav-btn { margin: 0 0 -1px; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px 8px 0 0; background: none; font-size: 15px; }
-  .nav-btn.active { border-color: #dee2e6 #dee2e6 #fff; background: #fff; font-weight: 600; }
-  .job-card { border: 1px solid #dee2e6; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+  .nav-btn.active { border-color: var(--color-border) var(--color-border) #fff; background: #fff; font-weight: 600; }
+  .job-card { border: 1px solid var(--color-border); border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
   .job-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
   .job-title { font-weight: 600; font-size: 16px; }
-  .badge { display: inline-block; border: 1px solid #adb5bd; border-radius: 12px; padding: 1px 10px; font-size: 12px; color: #495057; }
   /* 「待人工」用与 gap-warning 同一套红：它和缺口警示是同一类"需要人来处理"
      的信号，两处用不同的颜色只会让人重新学一遍配色含义。 */
-  .badge-manual { background: #f8d7da; border-color: #dc3545; color: #58151c; }
-  .job-meta { font-size: 13px; color: #6c757d; margin-bottom: 6px; }
-  .reason { background: #fff3cd; border: 1px solid #ffe69c; color: #664d03; border-radius: 6px; padding: 6px 10px; margin: 6px 0; font-size: 13px; }
-  .muted { color: #6c757d; font-size: 14px; }
-  .version-block { border-left: 3px solid #0d6efd; padding: 4px 0 4px 12px; margin: 16px 0; }
+  .badge-manual { background: #f8d7da; border: 1px solid #dc3545; color: #58151c; }
+  .job-meta { font-size: 13px; color: var(--color-text-muted); margin-bottom: 6px; }
+  .reason { background: var(--color-warn-bg); border: 1px solid var(--color-warn-border); color: var(--color-warn-fg); border-radius: 6px; padding: 6px 10px; margin: 6px 0; font-size: 13px; }
+  .muted { color: var(--color-text-muted); font-size: 14px; }
+  .version-block { border-left: 3px solid var(--color-primary); padding: 4px 0 4px 12px; margin: 16px 0; }
   .profile-dl { margin: 8px 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
   .profile-dl dt { font-weight: 600; color: #495057; }
   .profile-dl dd { margin: 0; white-space: pre-wrap; }
@@ -76,7 +81,7 @@
 </style>
 </head>
 <body>
-  <div class="banner">⚠️ 演示环境，不进入正式招聘流程</div>
+  <div class="notice banner">⚠️ 演示环境，不进入正式招聘流程</div>
 
   <!-- 三个视图之间用按钮切换，⛔ 不用 <a href> 或 hash 路由：那会和 <base href>
        的解析纠缠出一类只在挂了 root_path 时才现形的 bug（部署约束 1）。
@@ -98,7 +103,7 @@
     <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
     <button id="send-btn">发送</button>
     <div id="profile-summary" class="profile-summary" style="display:none;"></div>
-    <div id="gap-warning" class="gap-warning" style="display:none;"></div>
+    <div id="gap-warning" class="notice notice-danger gap-warning" style="display:none;"></div>
     <div id="approval-actions" class="approval-actions" style="display:none;">
       <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
       <button id="revise-btn">我要改一下</button>
@@ -111,8 +116,8 @@
 
     <div id="jd-panel">
       <div id="jd-output"></div>
-      <div id="jd-grounding" class="jd-grounding" style="display:none;"></div>
-      <div id="jd-authorship" class="jd-authorship" style="display:none;"></div>
+      <div id="jd-grounding" class="notice jd-grounding" style="display:none;"></div>
+      <div id="jd-authorship" class="notice notice-success jd-authorship" style="display:none;"></div>
       <div class="jd-actions">
         <button id="jd-copy-btn">复制全文</button>
         <button id="jd-edit-btn">编辑文案</button>

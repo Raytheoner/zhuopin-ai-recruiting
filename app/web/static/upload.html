@@ -8,7 +8,7 @@
 </head>
 <body>
   <h1>上传简历</h1>
-  <p>只能上传 <strong>合成替身 / 脱敏 / 历史离职</strong> 样本，真实在招简历（live）当前不开放上传。</p>
+  <p class="notice">只能上传 <strong>合成替身 / 脱敏 / 历史离职</strong> 样本，真实在招简历（live）当前不开放上传。</p>
   <form id="upload-form">
     <label>目标岗位（只列已审批画像的岗位）
       <select id="job-select" required></select>
@@ -24,7 +24,7 @@
       <input id="file-input" type="file" multiple accept=".pdf,.docx" required>
     </label>
     <br>
-    <button type="submit">上传</button>
+    <button type="submit" class="btn btn-primary">上传</button>
   </form>
   <p id="error" style="color:red"></p>
   <table id="result-table" border="1" style="display:none">

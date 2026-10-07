@@ -31,6 +31,20 @@ body {
   border-radius: 8px;
 }
 
+/* 提示条变体：与 .notice 同结构，只换配色。
+   成功（如「人工撰写」横幅）／危险（缺口警示、「待人工」）。 */
+.notice-success {
+  background: #d1e7dd;
+  border: 1px solid #badbcc;
+  color: #0f5132;
+}
+
+.notice-danger {
+  background: #f8d7da;
+  border: 1px solid #f5c2c7;
+  color: #58151c;
+}
+
 /* 小徽标（AI 标识、状态标记等） */
 .badge {
   display: inline-block;
@@ -116,4 +130,32 @@ mark {
 .empty-hint {
   color: var(--color-text-muted);
   font-size: 14px;
+}
+
+/* 收口：图片与表格不撑破容器（窄屏 / 门户 iframe 内不产生横向滚动） */
+img,
+table {
+  max-width: 100%;
+}
+
+/* 窄屏（≤480px，覆盖候选人在手机上打开同意/邀约页）：
+   按钮全宽、左右内边距收紧、表格横向滚动而不是把视口撑破。 */
+@media (max-width: 480px) {
+  .btn {
+    width: 100%;
+  }
+
+  body,
+  .container {
+    padding: 0 12px;
+  }
+
+  .data-table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  #raw-text {
+    max-height: 85vh;
+  }
 }
