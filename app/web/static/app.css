@@ -1,0 +1,119 @@
+/* app.css —— 卓品智能招聘助手共用样式层（09-UI-Design.md v1.0 §3 设计令牌）
+ *
+ * 极简共用样式表：无框架、无构建链、不引第三方库。只承载设计令牌与跨页复用的
+ * 组件类，除下面点名的页面级规则（#raw-text）外不接管各页的页面级布局。
+ * 品牌色沿用现有蓝 --color-primary: #0d6efd（拿到卓品 VI 色值后再统一替换）。
+ */
+
+:root {
+  --color-primary: #0d6efd;
+  --color-primary-weak: #339af0;
+  --color-warn-bg: #fff3cd;
+  --color-warn-border: #ffe69c;
+  --color-warn-fg: #664d03;
+  --color-accent-reask: #fd7e14;
+  --color-text: #212529;
+  --color-text-muted: #6c757d;
+  --color-border: #dee2e6;
+}
+
+body {
+  font-family: -apple-system, "PingFang SC", sans-serif;
+  color: var(--color-text);
+}
+
+/* AI 提示条：warn 底／边／字。页面把黄色原样写死过三遍，收敛到这里。 */
+.notice {
+  background: var(--color-warn-bg);
+  border: 1px solid var(--color-warn-border);
+  color: var(--color-warn-fg);
+  padding: 12px 16px;
+  border-radius: 8px;
+}
+
+/* 小徽标（AI 标识、状态标记等） */
+.badge {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 12px;
+}
+
+/* 数据表：表头加粗、行 hover、单元格内边距、边框用 --color-border */
+.data-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.data-table th,
+.data-table td {
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.data-table th {
+  font-weight: 600;
+}
+
+.data-table tbody tr:hover {
+  background: #f8f9fa;
+}
+
+/* 按钮 */
+.btn {
+  display: inline-block;
+  padding: 6px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn-danger {
+  border-color: #dc3545;
+  background: #dc3545;
+  color: #fff;
+}
+
+/* 字段校对页：可点选的字段行与选中态（选中用次要描边 --color-primary-weak） */
+.field-row {
+  cursor: pointer;
+  padding: 4px;
+}
+
+.field-row.selected {
+  outline: 2px solid var(--color-primary-weak);
+}
+
+/* 原文区：保留 pre-wrap 与滚动，供字段校对页的高亮偏移定位 */
+#raw-text {
+  white-space: pre-wrap;
+  border: 1px solid var(--color-border);
+  padding: 8px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+mark {
+  background: #ffec99;
+}
+
+/* 待校对字段底色：与 --color-warn-bg 同源 */
+.pending {
+  background: var(--color-warn-bg);
+}
+
+/* 空态文案 */
+.empty-hint {
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
