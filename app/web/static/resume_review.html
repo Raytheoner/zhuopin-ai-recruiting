@@ -206,7 +206,12 @@
       const parsed = body.parsed_json || {};
       parsedFields = {};
       for (const [name, field] of Object.entries(parsed)) {
-        parsedFields[name] = { ...field, review_pending: false };
+        // 待校对状态来自后端只读旁路键 field_review_status（1001H）：本页的数据源
+        // 只有 parsed_json 时前端拿不到队列状态，黄底/徽标就永远不显示。
+        parsedFields[name] = {
+          ...field,
+          review_pending: body.field_review_status?.[name] === "pending",
+        };
       }
       renderFields();
       renderRawText([]);

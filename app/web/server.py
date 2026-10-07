@@ -1457,7 +1457,19 @@ def create_app(
         row = _require_resume(resume_id)
         record_resume_access(conn, accessor=reviewer_of(request), resume_id=resume_id,
                               access_type="parsed_result")
-        return {"resume_id": resume_id, "parsed_json": json.loads(row[3]) if row[3] else None}
+        # field_review_status：只读的"字段校对状态"旁路键（1001H，finding R-1）。
+        # 校对页的待校对黄底/徽标早已写好，但数据源只回 parsed_json，前端拿不到
+        # 状态、只能把 review_pending 写死 false，真实数据下永远不显示。这里按
+        # 字段给出最近一条队列行的 status；无记录的字段不出现在 map 里。
+        # ⛔ 只加键，不往 parsed_json 里塞东西（存储与响应兼容性不动）。
+        review_rows = _latest_field_review_rows(resume_id)
+        return {
+            "resume_id": resume_id,
+            "parsed_json": json.loads(row[3]) if row[3] else None,
+            "field_review_status": {
+                field: review["status"] for field, review in review_rows.items()
+            },
+        }
 
     @router.get("/api/resumes/{resume_id}/download")
     def download_resume(request: Request, resume_id: str):

@@ -677,3 +677,5 @@ codex 泳道**恒为 `-`**（`docs/openers/run-lanes.sh` 2026-09-30 起显式写
 只能按 opener 条数近似；`context-guard` 若失效，看护侧没有兜底证据。
 
 ---
+
+- 2026-10-07 `1001H` 闭环 `docs/findings/2026-10-07-1001G-UI审计与升级.md` §七 R-1（校对页"待校对"黄底/徽标在真实数据下不显示）：`GET /api/resumes/{id}/parsed` 新增只读键 `field_review_status`（按字段给出最近一条 `field_review_queue` 行的 `status`），`app/web/static/resume_review.html` 的 `loadParsed()` 据此置 `review_pending`；用例 `tests/test_resume_review_pending.py`。
