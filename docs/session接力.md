@@ -493,3 +493,21 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - 落地第一步已发车：`[Mac]1001C`（泳道「机制-UI共用层」，Flash 档）＝ 新建 `app/web/static/app.css`
   （§3 令牌＋§6 组件类）＋8 页加 `<link>`＋三页（resume_review／resume_list／upload）样式收敛；
   判据含 7 个前端测试文件 + 令牌/链接/字面量收敛断言（见 opener §三）。
+
+**2026-10-07 17:3x 追加：`1001C` 已合回 main（a48188f）＋ 揪出并修掉一个「只在主工作区才炸」的坑**
+
+- `1001C` 泳道自报 **PARTIAL**，但**产物是对的**：它发现我 opener 里判据写错——页面挂在根路径
+  （`/`、`/login`）而 `<base href>` 是 `/hr/recruit-agent/`，所以链接必须写 `href="static/app.css"`
+  （`app.css` 会 404）；它按红线选了正确形态并做了端到端实证（8 页逐一按 `<base>` 解析请求 ⇒ 8/8 → 200）。
+  ⇒ 我订正 opener 判据（`098a0d8`）→ 人工合并分支（`a48188f`）→ **在 main 上补跑订正后的判据：90 passed ＋「UI 共用层 OK」**。
+- 🔴 **顺带揪出的真坑（与 1001C 无关）**：合并后在 main 上跑判据时 `tests/test_web_api.py` **46 条红**——
+  根因是**仓库根 `.env` 里那行 `HR_LIAISON_GROUP_WEBHOOK`**（2026-09-30 我让他加的，实为 liaison 的键）。
+  `app/config.py::Settings` 是 `env_file=".env"` + **extra=forbid** ⇒ `Settings()` 直接抛
+  `ValidationError: Extra inputs are not permitted`。⚠️ **泳道看不见它**：判据在 worktree 里跑，而 worktree
+  不带 gitignored 的 `.env`。
+  - **处置**：根 `.env` 里那行**注释保留原值**（⛔ 不删凭据）+ 加 3 行说明；`tools/liaison/.env` **一字未动**
+    （值守本就读它，CLI 自己打印「⛔ 仓库根的 .env 不再被本服务读」）。修后那 7 个判据文件 **90 passed**。
+  - **止损**：全量 `pytest tests/ tools/liaison/tests` = **3819 passed / 10 skipped**（102s）。
+  - **回归**：新增 `tests/test_root_dotenv_keys.py`（两条：键名白名单 + 真构造一次 `Settings()`），
+    且用"临时塞一个未知键"做了负例验证（两条都红，还原后绿）。
+- 结论：`09-UI-Design.md` §11 ① 已落地（共用样式层在 main 上生效）；② 逐页对齐（M2 工作台三页）待那三页有实现后再做。
