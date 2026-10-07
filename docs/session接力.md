@@ -511,3 +511,15 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   - **回归**：新增 `tests/test_root_dotenv_keys.py`（两条：键名白名单 + 真构造一次 `Settings()`），
     且用"临时塞一个未知键"做了负例验证（两条都红，还原后绿）。
 - 结论：`09-UI-Design.md` §11 ① 已落地（共用样式层在 main 上生效）；② 逐页对齐（M2 工作台三页）待那三页有实现后再做。
+
+**2026-10-07 17:5x 追加：`1001D` 已合回 main（e55be73）——UI 收尾第 ② 步（现有 8 页）完成**
+
+- `app.css`：新增 `.notice-success`／`.notice-danger`、`img, table { max-width: 100% }`、
+  `@media (max-width: 480px)`（`.btn` 全宽、表格横向滚动、容器内边距收窄）。
+- `index.html`：**33 处颜色字面量（14 种色值）收敛**为共用类／令牌（`.notice*`／`var(--color-warn-*)`／`.badge`／`.btn*`），
+  ⛔ 文案与 JS 一字未动；三面试页加 viewport meta（3/3）。
+- 新增 `tests/test_candidate_pages_narrow.py`（3 条：候选人两页 viewport／三页无 >375px 固定宽度／媒体查询给 `.btn` 全宽）。
+- 判据：**117 passed ＋「UI 逐页对齐与窄屏 OK」**（执行器自动 PASS 并合回）。
+- ⚠️ **375px 是静态判据通过**：仓库 venv 无 playwright、无浏览器二进制 ⇒ **浏览器/真机实测未做**（已如实登记，
+  见 opener §五红线：不许声称"已实测无横向滚动"）。
+- 至此 `09-UI-Design.md` §11 ①② 全部落地；§10 清单里 ⑤（破坏性动作二次确认）要等 M2 批量确认页实现后才具备验收对象。
