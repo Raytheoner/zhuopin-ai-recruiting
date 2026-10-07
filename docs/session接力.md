@@ -7,37 +7,21 @@
 
 ---
 
-## 🔴 新 session 先看这一节（2026-09-23 10:2x，Cowork·`0923R` 续棒看护实核）
+## 🔴 新 session 先看这一节（2026-10-07 18:5x 更新，Codex·`[Mac]0930R`）
 
-⚠️ 本节之后的历史节一律以本节为准。推进依据＝任务驱动：`docs/roadmap/任务驱动上线路线图.md`。
+**泳道看护的状态与入口**（历史节已归档到 `docs/archive/session接力-归档.md`）：
 
-### 一、09-23 已落地
-
-1. **`0921E`／`0921E续1`／`0921F` 三条「自报 DONE 但 main 上全空」的旧账已清**：合并重做为 `0923A`，机判 7 条含 3 条新测试全过（`tests/test_attachments_unknown_frame_dump.py`），已确认 ff 合回 `main`（commit `48f346f`，`origin/main` 与本机 `main` 一致），并在主工作区复跑核实——不是只信自报。
-2. **附件只走私信口径已生效**：`tools/liaison/frames.py`／`__main__.py::handle_message_frame` 群帧附件一律忽略；单聊（私信）帧才会尝试解析。⚠️ **`ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` 仍故意留空**（fail-closed）——私信帧到达时只落一份结构取证（键路径＋类型名，⛔ 无取值）到 `unknown_attachment_log_dir`，文件本体尚未真正能收。需汤丽萍下次真的私信发一次文件，取证帧到手后再派一条泳道填表，才能真正收到文件内容。已就此口径当面答复过 Shao Peishen（本场对话）。
-3. **决策点 c 漏收诊断仍留步**：`人事部#2` 09-20 17:04 那条 `@MAC机器人` 决策点c文本为何未进归档，本机与本 worktree 均无 `data/liaison/logs`，需 `.51` 上的真实入站日志才能排除四个候选成因，⏸ 待具备 `.51` 只读权限的泳道或 Shao Peishen 现场核对。
-4. **`0923B`（拆 `人事部#3` 四条 pending）结果 PARTIAL**：4 条全部复核，均不满足拆件章程完整性判据（决策点b缺时数/人名；信件正文A/B/C/D场景仍完全未答），全部折进同一条 `Q-59` 待人，**未新解锁任何一条**，`data/liaison/unpack-signal.json` 里 4 条 pending 数量未变。
-5. 已给 Shao Peishen 一份可直接发送的微信私信草稿（发给汤丽萍）：① 请她改走**私信**（非群）重发 `10个岗位需求.doc`；② 决策点b补投入小时数/牵头人姓名；③ 请回信正文 A/B/C/D 场景与路线图——尚未确认他是否已发出。
-6. 清理：已删除本场为 `0923A/0923B` 设的一次性回查提醒（`trig_01H1Bf5nvB9qnvL2jxwBmEQo`），因已在本场手工核实完毕，避免重复报告。
-7. **`0923R2`（续棒二次核实）**：`queue_pending`／`dispatcher_backlog --dry-run`／最新 `lanes-20260923-094859/results.tsv` 三项与本节结论**逐项核对一致**，本轮未新跑任何泳道。`ready` 集合较写本节时新增 `interview-scheduling/0.2`（共 4 条），已用 `grep 任务台账.yaml` 核实其「阶段」仍为 `gate`——不是可发车项。未新增开口项，未新增决策项。
-8. **`Q-59` 已答（Shao Peishen `0923R2` 回 `1a`）**：`人事部#3` 两条部分命中回件（决策点a清单无实体、决策点b缺时数/姓名）均判**不完整**，退回汤丽萍补齐，`人事部#3` 维持整信待齐 A/B/C/D 场景与决策点a/b/c 全部到齐后一次性转闭环——已回填 `docs/roadmap/定夺队列.md` `Q-59` 行状态与答复列。下一步：需一条跟进信泳道向汤丽萍催补（决策点a清单实体＋决策点b时数/姓名），本场未派，留给调度器或下次机制类泳道。
-9. **`Q-01`（G1 私信附件真实帧确认）已答（`0923R2`）**：Shao Peishen 报「文件又给私信发了一遍」（微信私信截图核对），对应真实帧证据实为 `2026-09-21 11:08:40` 那次私信触发的 fail-closed 日志（`data/liaison/logs/liaison.log:274`）——键路径已确认 `body.file.url`（341字符）／`body.file.aeskey`（43字符），**帧里无 filename 字段**（WeCom 文件回调不带原文件名）。该证据早于 `unknown_attachment_log_dir` 落盘功能（随 `0923A` 才合入 main）,故当时只落日志行、无 JSON 取证文件，但键路径信息已足够。⚠️ `data/liaison/liveness.json` 显示值守进程自 `2026-09-22 10:48` 起连续运行、**尚未重启**，仍在跑 `0923A` 合并前的旧代码。下一步需一条实现泳道：① 按上述键路径 + 文件命名方案（无 filename，需另定）填 `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE`；② 重启值守。本场只回填队列答案，未派该泳道。
-10. **`0923C` 已发车（`0923R2`）**：TD-51 附件字段映射与下载口销账，正文 `docs/openers/0923C-TD51附件字段映射与下载口销账.md`，泳道「附件销账」，worktree `lane-0923c-td51-attachment`，经 launch 请求通道发车（`run-lanes.sh --full-auto --yes --only 0923C`）。范围：填 `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE`（含无 filename 键的落盘命名方案）＋接真实下载口＋翻正测试＋`docs/tech-debt.md` TD-51 销账戳记；⛔ 不重启值守（留给 Shao Peishen 本人）。同时按 CLAUDE.md「环境与工具链操作」可代类目，直接采纳了 `Q-60`/`Q-61`（两条「答复→任务映射缺失」机制类决策，均系统推荐 a）——不是业务决策，未占用他的定夺队列位。
-**台账扫描结论**：`ready` 集合目前只有 4 条 gate（均等上游交付），阻塞·决策 56 ／阻塞·外部 32 是主体，多数等他本人拍板或汤丽萍/其他专员回件；`0923C` 是本轮唯一可独立发车的建造类工作。⚠️ 场景需求线下大对齐（他本轮提到「还没有回灌」）尚未反映进台账/路线图——本场未凭空猜测该对齐的范围去派工，对齐结果回灌后需重新跑一次 `dispatcher_backlog` 看是否解锁新的 ready 集合。
-
-### 二、开口项（截至 `0923R`）
-
-- 台账 `ready` 三条 `offer-generation/0.2`、`offer-generation/0.5`、`onboarding-flow/0.2` **阶段全是 `gate`**（等上游交付），不是可发车。
-- 待外部输入、挂起不追问：`Q-01`（附件取证已就位，等汤丽萍真实私信一次文件）、`Q-04`（汤丽萍回件）、`Q-08`、`Q-10`、`Q-16`、`Q-52`（回 LAN 取客户端侧一手证据）、`Q-59`（`人事部#3` 四条 pending，正文完全未答）。
-- 🔴 须本人：`Q-53` 语音主机采购与预算（阻塞 M3 `5.11` live e2e）、`Q-F1`～`Q-F4`、决策点c的 `.51` 日志核对、微信草稿是否已发。
-
-### 三、下一步（新 session 直接接着做）
-
-1. **本轮无可发车项**：`ready` 三条全是闸。
-2. 若汤丽萍已私信发过文件：先看 `unknown-attachment-frames/` 下是否已落新取证文件，有则派一条泳道据真实结构填 `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE`。
-3. 若他已在 `.51` 上核对过决策点c日志：把结论写回 `Q-01` 并把该项状态由「留步」改「已诊断」。
-4. 其余按调度器自转（daily 09:00 兜底＋批次收敛事件唤醒）。
-5. 续棒口令：新会话打一行 `[Mac]MMDDR 续棒泳道看护`，本文件是接手第一读件。
+- **全局暂停仍在**（Shao Peishen 2026-09-30 答 `1b`／10-07 答 `2b` 维持）：心跳 automation `hr` = `PAUSED`，
+  `com.zhuopin.hr.task-dispatcher` = `disabled` ＋ 未加载；**自动发车与自动刷新台账都关着**，
+  看护由主会话手工执行（跑 `--dry-run` 核对 → 写 launch 请求 → `wait-lanes.sh` 盯 → 合分支 → 刷台账 → 落档）。
+- **最近闭环（2026-10-07）**：`1001A` 回推文案可读化／`1001B` M2 前置两项（判例批改表模板＋合规索引）／
+  `1001C` UI 共用样式层／`1001D` 逐页对齐与窄屏／`1001E` M1 9.1 机械部分（10 岗位真 LLM 重跑）／
+  `1001F` 375px 真机实测（并修掉裸按钮非全宽的真缺陷）；另有 `08-PRD.md`／`09-UI-Design.md` **v1.0 定稿**。
+- **当前待人**（详见 `docs/roadmap/定夺队列.md`，待答 6 条）：
+  ① M1 9.1 的**人评**（评估表＋转发说明已就绪：`docs/templates/m1-画像技术栈评估表*.md/xlsx`）；
+  ② M2 三样输入（`Q-06` 脱敏样本／`Q-03` 试运行岗位／`Q-05` 定型签认）；③ 四场景 G2 放行；④ 汤丽萍回件。
+- **详细日志**：本文末 `### 🈸 2026-09-30 11:2x 泳道看护接棒实核（Codex·[Mac]0930R 本场实核）` 节
+  （09-30 → 10-07 的逐条追加都在那里面）。
 
 ---
 
@@ -157,95 +141,6 @@
    进编排 → dry-run 核对 → **只给看护者 opener 一整块**。
 5. **`run-lanes.sh` 开跑前自检**：无头块内含 `set_session_title` → `exit 13` 拒跑；
    块外缺豁免注明 → 只 WARN。方向别看反——无头块的**正确状态是不带那一行**。
-
-### 🈸 2026-09-23 拆件会话（`0923B`）· 人事部#3 四条 pending 复核确认，Q-59 仍待答，无新下裁决
-
-按 `liaison-unpack` 章程逐条重新读取归档件（非沿用摘要），四条内容与既往登记一致，无新增证据：
-
-- `7ed6bf11e1b21d321182ac22f0be5935`（决策点a，「10个岗位需求清单」标题，无实际清单）
-- `79ec288dcc53c75df9fa72f3dd1612cd`（决策点b，「选择：1」，缺投入小时数/人名）
-- `7b37bb24af440a172f6ae89b6534289f`（决策点a 第二次尝试，「决策点a 答复中的清单」标题，仍无实际清单）
-- `459b735f7df8204551564a25007329eb`（0 字节空文本）
-
-`docs/roadmap/定夺队列.md` Q-59 本次核对（2026-09-23）仍为「待答」，答复列为空，未见 Shao Peishen 新裁决。
-章程 §二 对四条逐一判定：均落入既有「合并信部分命中，无判据」失败模式（红线③新下裁决），继续折入 Q-59，
-不单开新决策、不写回灌结论、不改台账。`data/liaison/unpack-signal.json` 四条 pending 均未清（工具只支持
-`--clear --before <单一时间戳>` 前缀清除，四条中最早一条即为待人项，无法只清已判定项而保留待人项，
-因此本轮不执行清除，避免误清未决项）。
-
-【谁做：Shao Peishen】【状态：待人（沿用 `Q-59`，本条为复核确认，不构成新裁决）】
-【判据：同 `Q-59` 现有判据——一并裁决四条回件（决策点a 两次尝试、决策点b、空文本）是否已足够完整，
-并明确 `人事部#3` 是整信待齐 A/B/C/D+a/b/c 后一次性转闭环、还是允许按决策点分批部分关闭】
-【不做会怎样：`data/liaison/unpack-signal.json` 中四条 pending 信号继续保留，
-`docs/跟进信/README-跟进信清单.md` 里人事部#3 行维持「📨 回件已到，待拆件 2026-09-20 17:04 CST」
-原状态不变，下一轮拆件会话探测仍会再探到全部四条，不会丢；机器判据里 `pending<4` 断言本轮预期不过，
-是待人的正常结果，不代表处理失败】
-
-### 🈸 2026-09-23 续棒 0923C 第1/3棒 · 合回 main 完成，机器判据「len>=3」疑似笔误待确认
-
-`lane-0923C`（TD-51 附件字段映射与下载口销账）已合并进 main：因 main 同期新增 5 条 docs/dispatcher
-commit，`--ff-only` 不可用，改用 `git merge lane-0923C --no-edit`（无冲突），合并 commit `78c7290`。
-主工作区复跑 `tools/liaison/tests/test_inbound_attachment_wiring.py` + `test_unpack_bridge.py`：
-48 passed。`docs/tech-debt.md` TD-51 销账戳记随合并落地。
-
-`docs/openers/0923C-TD51附件字段映射与下载口销账.md`「三、机器判据」第 1 行
-`assert len(f.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE) >= 3` 实测为 `1`
-（`{'file': {'download_url': ..., 'aes_key': ...}}`），不通过。核实：该断言把"填三条字段路径"
-（download_url／aes_key／filename）误算成"顶层 msgtype 条目数≥3"；但 filename 无真实键，按方案改走
-`_guess_attachment_filename` 兜底，不是字典项；`image`／`voice` 两个 msgtype 无真实帧证据，opener 正文
-「零、为什么」与 `frames.py` 代码注释都明确⛔ 不可瞎填。`len==1` 是正确、诚实的实现结果，怀疑 `>=3`
-是 opener 作者断言笔误。本棒未擅自改 opener 存档或伪造条目让判据"通过"——这触及验收判据本身的正确性，
-登记待确认，不越权替他改验收标准。
-
-【谁做：Shao Peishen】
-【状态：待人确认（技术判据疑似笔误，非合规红线／淘汰规则／对外通道等不可代事项，但触及验收标准本身，未擅自改）】
-【判据：确认 `docs/openers/0923C-TD51附件字段映射与下载口销账.md`「三、机器判据」第 1 行 `>=3` 是否应
-改为 `>=1`（或 `==1`，或改成 `"file" in ... and len(...["file"]) >= 2`）；确认后由下一条泳道/看护顺手
-改掉该 opener 存档文件，⛔ 不改代码】
-【不做会怎样：opener 存档文件的机器判据与实际正确实现永久不一致，下次任何人重跑该判据脚本都会得到
-"未过"的假阴性，需要反复重新排查同一个已查清的问题】
-
-### 🈸 2026-09-29 Codex 迁移实核 · 泳道看护接棒（本会话实核，commit `8efc1a1` 本地已落盘）
-
-已完成并验收：P0 红灯清零（全量 pytest **3769 passed / 0 failed**、`-m compliance` **74 passed**）；
-`run-lanes.sh`／`dispatcher_event.sh`／`tools/liaison/unpack/dispatch.py` 三执行器双引擎
-（`HR_AGENT_ENGINE` 默认 `codex`，`claude` 回退）；`scripts/codex_jsonl_summary.py`（JSONL 哨兵＋用量收敛）
-与 `scripts/codex_sdd_runner.py`（替代 superpowers 插件）落地；`AGENTS.md` 适配层＋9 个技能迁
-`.agents/skills/`；`pgrep` 沙箱兜底（`run-lanes.pid`）；真实 worktree 无头冒烟（workspace-write 写文件＋
-OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadmap/任务台账.yaml` 改动原样保留、未动。
-
-- 【谁做：Shao Peishen】【状态：✅ 已闭环 2026-09-29 17:2x】【判据：`origin/main` 已推到 `f2b6f87`→`3aa5d13`→`ffa6437`，与本地一致】
-- 【谁做：泳道看护心跳（automation `hr`，30 分钟）】【状态：✅ 首轮已实跑 2026-09-29 17:2x（无可发车项；
-  调度器 17:36–17:47 以 codex 引擎补跑 rc=0、积压事件已归档）| 判据：后续唤醒按安静原则只在有变化时汇报】
-  【不做会怎样：HR 项目构建停在当前待办，无人接棒】
-- 【谁做：下一条机制泳道】【状态：✅ 已闭环 2026-09-30（`0930A`）】【判据：拆件受限会话的「Edit 路径级 deny」做 Codex PreToolUse
-  hook 化并有测试（`AGENTS.md` §4 已知缺口）】【不做会怎样：拆件会话可写全仓——沙箱与章程正文仍挡，
-  但缺机器级路径 deny】
-- 【谁做：下一条机制泳道】【状态：✅ 已闭环 2026-09-30（`0930B`）】【判据：`dispatcher_answers.py` 6 条缺映射（Q-01a/Q-08/Q-48/
-  Q-53b/Q-54a/Q-59a）补齐；pyproject 收敛 3.6 万条 Python 3.14 弃用警告】【不做会怎样：调度告警与测试噪音长期存在】
-
-**17:2x 首轮泳道看护实核（Codex 引擎，本会话）**：`origin/main` 已推到 `f2b6f87`；三执行器判活改走
-`run-lanes.pid`（无 pid 文件＝未在跑）；台账 558 条／ready 4 条**全是 gate**（等上游交付），最新批次
-`lanes-20260923-134523` 两条均为 `CTX-RELAY`／`PARTIAL`（正常，无 FAIL）；编排文件里 0920I 的
-`> 泳道：机制落档` 是陈旧残留（其下方 HEAD 里就有「✅ 已完成 2026-09-20」，交付物见 commit `af6435e`
-与 `.claude/skills/lane-watch-relay/SKILL.md` §4），本轮**已摘除该残留、未重复发车**——首轮看护因此
-避免了一次对已完成 opener 的重复执行。**本轮无可发车项**，等心跳后续周期或汤丽萍回件解锁 ready。
-
-**17:5x 遗留（须落档，⛔ 不要丢弃工作区改动）**：launchd 下 codex 路径兜底修复已改**未提交**——
-`docs/openers/run-lanes.sh`＋`scripts/dispatcher_event.sh`（解析顺序 `HR_CODEX_BIN`→PATH→`~/.local/bin`→
-应用内置路径；修复前调度器 17:35 因 PATH 无 codex 一秒退出）＋ `tests/test_run_lanes_model_codex.py`、
-`tests/test_task_dispatcher.py` 两个新用例（100 passed）。
-
-- 【谁做：Shao Peishen】【状态：✅ 已闭环 2026-09-30 07:31（Shao Peishen 答 1a 授权直提）】
-  【判据：4 个文件已一次性提交并推送为 `0a61d13`（`docs/openers/run-lanes.sh`＋`scripts/dispatcher_event.sh`
-  ＋两个测试，84 passed，pre-commit 全过），`git status` 不再出现这 4 个文件，origin/main 与本地一致】
-
-- 【谁做：Shao Peishen】【状态：✅ 已闭环 2026-09-30（`0930D` 主会话直执，未进泳道）】
-  【判据：Codex 泳道收口不再靠人——`run-lanes.sh` 每条泳道退出时调 `scripts/lane_collect.py stage1`
-  代提交到泳道分支，一轮收敛后 `stage2` 只把「OK＋机器判据 PASS／无判据块」的泳道合回 main 并推送；
-  PARTIAL/GATE-* 只留分支点名，冲突 abort 不硬解。5 条新行为测试＋既有 35 条 run-lanes 测试全绿；
-  Q-62（三条 PARTIAL 滞留）同轮救援完毕：main 上 conflicts 37→0、缺映射 6→0，`origin/main`＝`e28a68a`】
-  【不做会怎样：每一批 Codex 泳道都会以「产物滞留 worktree」收尾，自动构建链停在最后一公里】
 
 ### 🈸 2026-09-30 11:2x 泳道看护接棒实核（Codex·`[Mac]0930R` 本场实核）
 
@@ -542,3 +437,14 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - 🔴 **机制缺口（登记，待你定夺）**：需要联网/起浏览器的活，**codex 泳道做不了**。两条路：
   (a) 给 `run-lanes.sh` 的 codex 参数加 `-c sandbox_workspace_write.network_access=true`（改执行器，需你点头）；
   (b) 维持现状：这类活固定走「主会话非沙箱补跑」（本轮的形态）。
+
+**2026-10-07 18:4x 追加（Shao Peishen 答 `1a，2a`）**
+
+- **1a 已落地（`cf609e8`）**：`run-lanes.sh` 的 codex argv 加 `-c sandbox_workspace_write.network_access=true`
+  ——codex 的 workspace-write **默认还禁网**（`CODEX_SANDBOX_NETWORK_DISABLED=1`），这是 `1001E`（真调 LLM）
+  与 `1001F`（起 Chrome）双双失败的根因，且失败形态像业务 bug。写入仍锁 `run_dir`，不扩大信任面
+  （泳道本来就以无头会话在调 LLM）。`tests/test_run_lanes_model_codex.py` 补 argv 断言，run-lanes 家族 **49 passed**。
+  ⇒ 以后 M2 的模型对比/评测类泳道可在泳道内直接联网跑，不必再人工补跑。
+- **2a 已交付**：`docs/templates/m1-画像技术栈评估表-转发说明.md` —— 含**可直接粘贴的企微消息**（带 `<称呼>`／
+  `<截止日>` 占位）、评估人填写口径（同义/大小写/中英混写算命中；「未提及」而 JD 里有 ⇒ 未命中）、
+  回收流程（原文件回传 ⇒ 看护者只统计落档、⛔ 不代填）。⏭ 待 Shao Peishen 指定评估人并转发。
