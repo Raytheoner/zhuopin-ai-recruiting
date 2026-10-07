@@ -801,12 +801,17 @@ run_lane() {
     # forced_login_method=chatgpt：本机 ~/.codex/config.toml 写死 api 登录而 auth.json 是
     # ChatGPT 会话态，两者冲突会让 codex exec 启动即报认证错——按 auth.json 真身对齐。
     # workspace-write 沙箱把写权限锁在 run_dir（worktree 条目＝泳道目录），天然禁改主工作区。
+    # network_access=true（2026-10-07 `1001E`/`1001F` 实证后开）：codex 的 workspace-write
+    # **默认还禁网**（`CODEX_SANDBOX_NETWORK_DISABLED=1`），于是「泳道里跑脚本真调 LLM／下载依赖／
+    # 起浏览器」这类活全部失败——且失败形态是脚本内部报连接错，看着像业务 bug。这不是安全边界的
+    # 让步：泳道本来就以无头会话在跑 LLM（模型推理走的就是外网），脚本再出网不扩大信任面；
+    # 写入仍锁 run_dir。⛔ 别删这行——删了 M2 的模型对比/评测类泳道会再次整批阵亡。
     local codex_args=()
     if [[ "$ENGINE" == codex ]]; then
       local cm_args cs_args
       cm_args="$(codex_model_args "$lmodel")"
       cs_args="$(codex_subagent_args)"
-      read -r -a codex_args <<< "exec --json --sandbox workspace-write -c approval_policy=$([[ $FULL_AUTO -eq 1 ]] && printf never || printf on-request) -c forced_login_method=$CODEX_LOGIN_METHOD $cm_args $cs_args"
+      read -r -a codex_args <<< "exec --json --sandbox workspace-write -c sandbox_workspace_write.network_access=true -c approval_policy=$([[ $FULL_AUTO -eq 1 ]] && printf never || printf on-request) -c forced_login_method=$CODEX_LOGIN_METHOD $cm_args $cs_args"
     fi
     echo "engine=$ENGINE model=$lmodel（$lsrc）subagent=$SUBAGENT_MODEL" >> "$log"
 

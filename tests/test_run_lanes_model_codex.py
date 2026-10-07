@@ -124,6 +124,9 @@ def test_real_run_passes_codex_argv_and_usage_columns(sandbox):
     a, b = c["0101A"], c["0101B"]
     for ln in (a, b):
         assert "--sandbox workspace-write" in ln
+        # 2026-10-07（1001E/1001F 实证）：workspace-write 默认还禁网 ⇒ 显式开 network_access，
+        # 否则泳道里任何"真调 LLM／下载／起浏览器"的脚本都会以连接错收场。
+        assert "-c sandbox_workspace_write.network_access=true" in ln
         assert "-c approval_policy=never" in ln
         assert "-c forced_login_method=chatgpt" in ln
         assert "LANE=1" in ln
