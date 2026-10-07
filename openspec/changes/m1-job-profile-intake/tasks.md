@@ -395,6 +395,12 @@
 
 - [ ] 9.1 **画像质量验收**：10 个真实历史岗位重跑，HR 与业务经理双方评估技术栈字段准确率，目标 ≥80%
       ⚠️ 未做。0.11 的试点是**另一件事**（3 位经理各跑 1 个**新**岗位、收集主观反馈），不是 10 个**历史**岗位重跑 + 双方评估准确率。保持未勾
+      > 🔎 2026-10-07 [Mac]1001E：机械部分已就绪——10 个岗位已从归档 doc 提取（`data/eval/m1-9.1/jobs/`，gitignored），
+      > 回放脚本 `scripts/m1_acceptance_replay.py` 与评估表 `docs/templates/m1-画像技术栈评估表.xlsx` 已建
+      > （记录见 `docs/findings/2026-10-07-m1-9.1-画像重跑记录.md`）。
+      > **⏸ 留步**：本泳道执行环境无网（`CODEX_SANDBOX_NETWORK_DISABLED=1`），真 LLM intake 未跑成——
+      > 有网环境补跑 `python -m scripts.m1_acceptance_replay --live` 即闭合（代码/干跑/评估表均已就绪）。
+      > **待 HR／业务经理评估**，⛔ 本行不勾。
 - [ ] 9.2 端到端测试：从企微发起到 JD 产出的完整链路
       ⤷ **已移出**到阶段二·企微通道（Web 通道的等价链路已由 `tests/test_web_api.py` 覆盖），见文末「已移出」清单
 - [x] 9.3 审计断言：每个画像都能追溯到 `analysis_run`；每次人工决策都有 `human_review` 记录 → **`human_review` 那一半已实现**：`app/audit/assertions.py` 断言四 `assert_every_decision_has_human_review`，已注册进 `COMPLIANCE_ASSERTIONS`（3 条 → 4 条），反证在 `tests/test_audit_assertion_effectiveness.py`。⚠️ `analysis_run` 那一半随 1.3/2.6 已移出到 `ai-audit-trail-and-outbound-gate`，不在本包
