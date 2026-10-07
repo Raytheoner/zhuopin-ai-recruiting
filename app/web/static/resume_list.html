@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css">
   <title>解析结果列表 · 卓品智能招聘助手</title>
 </head>
 <body>
   <h1>解析结果列表</h1>
   <p><strong>本页六字段由 AI 自动抽取，仅供参考，未经人工校对前不代表最终事实。</strong></p>
-  <table id="resume-table" border="1">
+  <table id="resume-table" class="data-table">
     <thead>
       <tr>
         <th>候选人</th><th>样本类别</th><th>解析状态</th><th>解析版本</th>
@@ -17,7 +18,7 @@
     </thead>
     <tbody id="resume-body"></tbody>
   </table>
-  <p id="empty-hint" style="display:none">该岗位暂无上传的简历。</p>
+  <p id="empty-hint" class="empty-hint" style="display:none">该岗位暂无上传的简历。</p>
   <p id="error" style="color:red"></p>
 
   <script>
