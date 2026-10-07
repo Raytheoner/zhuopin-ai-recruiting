@@ -3,19 +3,37 @@
 <head>
   <meta charset="utf-8">
   <!--BASE_HREF-->
-  <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/app.css?v=20261007">
   <title>字段校对 · 卓品智能招聘助手</title>
 </head>
 <body>
-  <h1>字段校对</h1>
-  <p class="notice"><strong>右侧字段由 AI 自动抽取，点击字段可在左侧原文中看到依据；未经确认前仅供参考。</strong></p>
-  <div style="display:flex; gap:16px">
-    <div style="flex:1"><div id="raw-text">加载中…</div></div>
-    <div style="flex:1" id="fields-panel">加载中…</div>
-  </div>
-  <p id="error" style="color:red"></p>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 字段校对</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">字段校对</h1>
+    <p class="notice"><strong>右侧字段由 AI 自动抽取，点击字段可在左侧原文中看到依据；未经确认前仅供参考。</strong></p>
+    <div style="display:flex; gap:16px; flex-wrap:wrap">
+      <div style="flex:1 1 320px"><div class="card" style="margin:0"><div id="raw-text">加载中…</div></div></div>
+      <div style="flex:1 1 320px"><div class="card" style="margin:0"><div id="fields-panel">加载中…</div></div></div>
+    </div>
+    <p id="error" style="color:red"></p>
+  </main>
 
   <script>
+    // 内部字段标识 → 中文名（界面上不出现英文 snake_case；2026-10-07 1001G 审计）。
+    const FIELD_LABELS = {
+      name: "姓名",
+      years_of_experience: "工作年限",
+      skills: "技能列表",
+      companies: "公司经历",
+      education: "教育（最高学历与院校）",
+      expected_city: "期望城市",
+    };
+
     function resumeIdFromPath() {
       const m = window.location.pathname.match(/\/resumes\/([^/]+)\/review\/?$/);
       return m ? m[1] : null;
@@ -101,40 +119,62 @@
       const panel = document.getElementById("fields-panel");
       panel.innerHTML = "";
       for (const [fieldName, field] of Object.entries(parsedFields)) {
+        const fieldLabel = FIELD_LABELS[fieldName] || fieldName;
         const row = document.createElement("div");
         row.className = "field-row" + (field.review_pending ? " pending" : "");
         row.id = `field-row-${fieldName}`;
+        // 键盘可达（09-UI-Design.md §6）：Enter/Space 与鼠标点击等价。
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
         row.addEventListener("click", () => selectField(fieldName));
+        row.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            selectField(fieldName);
+          }
+        });
 
         const title = document.createElement("div");
-        title.textContent = `${fieldName}：${fieldDisplayValue(field)}（置信度 ${field.confidence}）`;
+        title.textContent = `${fieldLabel}：${fieldDisplayValue(field)}`;
+        const meta = document.createElement("span");
+        meta.className = "field-meta";
+        meta.textContent = `AI 置信度 ${field.confidence}`;
+        title.appendChild(meta);
         row.appendChild(title);
 
         if (field.review_pending) {
           const badge = document.createElement("span");
-          badge.textContent = "【待校对】";
+          badge.className = "badge badge-ai";
+          badge.textContent = "待校对";
           row.appendChild(badge);
         }
 
+        const controls = document.createElement("div");
+        controls.className = "field-controls";
         const confirmBtn = document.createElement("button");
+        confirmBtn.className = "btn btn-sm";
         confirmBtn.textContent = "确认";
         confirmBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           submitReview(fieldName, fieldDisplayValue(field));
         });
-        row.appendChild(confirmBtn);
+        controls.appendChild(confirmBtn);
 
         const editInput = document.createElement("input");
+        editInput.type = "text";
         editInput.placeholder = "改为…";
-        row.appendChild(editInput);
+        editInput.addEventListener("click", (e) => e.stopPropagation());
+        controls.appendChild(editInput);
 
         const editBtn = document.createElement("button");
+        editBtn.className = "btn btn-sm btn-ghost";
         editBtn.textContent = "提交修改";
         editBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           if (editInput.value.trim()) submitReview(fieldName, editInput.value.trim());
         });
-        row.appendChild(editBtn);
+        controls.appendChild(editBtn);
+        row.appendChild(controls);
 
         panel.appendChild(row);
       }

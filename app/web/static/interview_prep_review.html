@@ -4,39 +4,70 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!--BASE_HREF-->
-  <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/app.css?v=20261007">
   <title>面试题确认 · 卓品智能招聘助手</title>
   <style>
-    .question { border: 1px solid #ccc; padding: 12px; margin-bottom: 12px; }
+    .question { border: 1px solid var(--color-border); border-radius: 8px; padding: 16px; margin-bottom: 12px; background: #fff; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 8px; }
-    .badge-ai { background: #d0ebff; color: #1864ab; }
+    .badge-ai { background: var(--color-warn-bg); border: 1px solid var(--color-warn-border); color: var(--color-warn-fg); }
     .badge-edited { background: #fff3bf; color: #856404; }
     textarea { width: 100%; min-height: 60px; }
     .actions button { margin-right: 8px; }
-    #status-bar { padding: 8px; margin-bottom: 12px; }
+    #status-bar { padding: 12px 16px; margin-bottom: 16px; border-radius: 8px; }
     .status-draft { background: #fff3cd; }
     .status-frozen { background: #d3f9d8; }
+    .q-meta { color: var(--color-text-muted); font-size: 13px; margin: 4px 0 8px; }
   </style>
 </head>
 <body>
-  <h1>面试题确认</h1>
-  <p><strong>以下题目由 AI 自动生成，供业务经理逐题确认。确认前可修改、删除、重生成；确认后生成不可变的题目快照。</strong></p>
-  <div id="status-bar">加载中…</div>
-  <div id="questions"></div>
-  <div class="actions">
-    <button id="generate-btn">生成/重新生成整套</button>
-    <button id="freeze-btn">全部采纳并确认冻结</button>
-  </div>
-  <p id="error" style="color:red"></p>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">业务经理 · 面试题确认</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">面试题确认</h1>
+    <p><strong>以下题目由 AI 自动生成，供业务经理逐题确认。确认前可修改、删除、重生成；确认后生成不可变的题目快照。</strong></p>
+    <div id="status-bar">加载中…</div>
+    <div id="questions"></div>
+    <div class="actions toolbar">
+      <button id="generate-btn" class="btn">生成/重新生成整套</button>
+      <button id="freeze-btn" class="btn btn-primary">全部采纳并确认冻结</button>
+    </div>
+    <p id="error" style="color:red"></p>
+  </main>
 
   <script>
+    // rubric 在后端是不透明的字符串（PrepQuestionEditRequest.rubric: str），沿用
+    // 现有契约提交；这里只把 JSON 解析成可读的「评分维度 / 满分」，⛔ 不改接口语义。
+    function parseRubric(raw) {
+      try {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === "object") {
+          return {
+            dimension: typeof obj.dimension === "string" ? obj.dimension : "",
+            maxScore: obj.max_score !== undefined ? obj.max_score : null,
+          };
+        }
+      } catch (e) {
+        // 解析失败按"无可读维度"处理，保存时原样回传，绝不丢数据。
+      }
+      return { dimension: "", maxScore: null };
+    }
+
     function applicationIdFromPath() {
       const m = window.location.pathname.match(/\/applications\/([^/]+)\/prep\/(\d+)\/review\/?$/);
       return m ? { applicationId: m[1], version: Number(m[2]) } : null;
     }
 
     function escapeHtml(s) {
-      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      // 额外转义引号，保证同一份转义结果在属性值（value="…"）上下文里也安全。
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
     }
 
     const parsed = applicationIdFromPath();
@@ -63,22 +94,28 @@
       data.questions.forEach((q) => {
         const div = document.createElement("div");
         div.className = "question";
+        const rubric = parseRubric(q.rubric);
         const badge = q.origin === "ai_edited"
           ? '<span class="badge badge-edited">AI 生成、人工修改</span>'
           : '<span class="badge badge-ai">AI 生成</span>';
+        const maxScoreText = rubric.maxScore === null ? "" : `（满分 ${escapeHtml(String(rubric.maxScore))}）`;
         div.innerHTML = `
           <div><strong>第 ${q.seq} 题</strong>（${escapeHtml(q.dimension)} / ${escapeHtml(q.difficulty)}）${badge}</div>
-          <div>依据：${escapeHtml(q.rationale)}</div>
+          <div class="q-meta">依据：${escapeHtml(q.rationale)}</div>
           <textarea class="text-input" data-seq="${q.seq}" ${editable ? "" : "readonly"}>${escapeHtml(q.text)}</textarea>
-          <textarea class="rubric-input" data-seq="${q.seq}" ${editable ? "" : "readonly"}>${escapeHtml(q.rubric)}</textarea>
-          <div>预埋追问：${q.follow_ups.map(escapeHtml).join("；")}</div>
+          <div class="field" style="margin-top:8px">
+            <label class="field-label">评分维度${maxScoreText}</label>
+            <input class="dimension-input" type="text" data-seq="${q.seq}" value="${escapeHtml(rubric.dimension)}" ${editable ? "" : "readonly"}>
+          </div>
+          <div class="q-meta">预埋追问：${q.follow_ups.map(escapeHtml).join("；")}</div>
           ${editable ? `
             <div class="actions">
-              <button class="save-btn" data-seq="${q.seq}">保存修改</button>
-              <button class="delete-btn" data-seq="${q.seq}">删除</button>
-              <button class="regenerate-btn" data-seq="${q.seq}">重新生成</button>
+              <button class="save-btn btn btn-sm btn-primary" data-seq="${q.seq}">保存修改</button>
+              <button class="delete-btn btn btn-sm" data-seq="${q.seq}">删除</button>
+              <button class="regenerate-btn btn btn-sm" data-seq="${q.seq}">重新生成</button>
             </div>` : ""}
         `;
+        div.dataset.rawRubric = q.rubric;
         container.appendChild(div);
       });
 
@@ -110,7 +147,13 @@
 
     async function saveQuestion(seq) {
       const text = document.querySelector(`.text-input[data-seq="${seq}"]`).value;
-      const rubric = document.querySelector(`.rubric-input[data-seq="${seq}"]`).value;
+      const dimension = document.querySelector(`.dimension-input[data-seq="${seq}"]`).value;
+      const wrapper = document.querySelector(`.dimension-input[data-seq="${seq}"]`).closest(".question");
+      const original = parseRubric(wrapper ? wrapper.dataset.rawRubric || "" : "");
+      // 只回写「维度名」，满分沿用原值；解析不出结构时原样回传原字符串。
+      const rubric = original.maxScore === null
+        ? (wrapper ? wrapper.dataset.rawRubric || "" : "")
+        : JSON.stringify({ dimension: dimension, max_score: original.maxScore });
       const resp = await fetch(`api/applications/${applicationId}/prep/${version}/questions/${seq}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

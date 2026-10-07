@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!--BASE_HREF-->
-  <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/app.css?v=20261007">
   <title>面试邀约签发 · 卓品智能招聘助手</title>
   <style>
     .field { margin-bottom: 8px; }
@@ -15,27 +15,40 @@
   </style>
 </head>
 <body>
-  <h1>面试邀约签发</h1>
-  <p>为已冻结题目快照的投递签发一次性面试邀请链接。</p>
-  <form id="issue-form">
-    <div class="field"><label>投递 ID：</label><input name="application_id" id="application-id-input" required></div>
-    <div class="field"><label>题目快照版本：</label><input name="prep_snapshot_version" type="number" value="1" required></div>
-    <div class="field">
-      <label>场次类型：</label>
-      <select name="sample_class">
-        <option value="internal_sim">内部模拟</option>
-        <option value="live">真实候选人</option>
-      </select>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 面试邀约签发</span>
     </div>
-    <button type="submit">签发</button>
-  </form>
-  <div id="link-box"></div>
-  <hr>
-  <p>验证码（短信通道未配置时的降级路径：候选人在同意页请求验证码后，HR 点击下方按钮读取明文，
-     通过电话/企微人工告知候选人）：</p>
-  <button id="code-btn" disabled>查看验证码</button>
-  <div id="code-box"></div>
-  <p id="error"></p>
+  </header>
+  <main class="page">
+    <h1 class="page-title">面试邀约签发</h1>
+    <p class="page-subtitle">为已冻结题目快照的投递签发一次性面试邀请链接。</p>
+    <div class="card">
+      <form id="issue-form">
+        <div class="field"><label class="field-label" for="application-id-input">投递 ID：</label><input name="application_id" id="application-id-input" required></div>
+        <div class="field"><label class="field-label" for="prep-version-input">题目快照版本：</label><input name="prep_snapshot_version" id="prep-version-input" type="number" value="1" required></div>
+        <div class="field">
+          <label class="field-label" for="sample-class-select">场次类型：</label>
+          <select name="sample_class" id="sample-class-select">
+            <option value="internal_sim">内部模拟</option>
+            <option value="live">真实候选人</option>
+          </select>
+        </div>
+        <div class="toolbar">
+          <button type="submit" class="btn btn-primary">签发</button>
+        </div>
+      </form>
+      <div id="link-box"></div>
+    </div>
+    <div class="card">
+      <p>验证码（短信通道未配置时的降级路径：候选人在同意页请求验证码后，HR 点击下方按钮读取明文，
+         通过电话/企微人工告知候选人）：</p>
+      <button id="code-btn" class="btn" disabled>查看验证码</button>
+      <div id="code-box"></div>
+    </div>
+    <p id="error"></p>
+  </main>
 
   <script>
     function applicationIdFromPath() {

@@ -3,25 +3,48 @@
 <head>
   <meta charset="utf-8">
   <!--BASE_HREF-->
-  <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/app.css?v=20261007">
   <title>解析结果列表 · 卓品智能招聘助手</title>
 </head>
 <body>
-  <h1>解析结果列表</h1>
-  <p class="notice"><strong>本页六字段由 AI 自动抽取，仅供参考，未经人工校对前不代表最终事实。</strong></p>
-  <table id="resume-table" class="data-table">
-    <thead>
-      <tr>
-        <th>候选人</th><th>样本类别</th><th>解析状态</th><th>解析版本</th>
-        <th>待校对字段数</th><th>操作</th>
-      </tr>
-    </thead>
-    <tbody id="resume-body"></tbody>
-  </table>
-  <p id="empty-hint" class="empty-hint" style="display:none">该岗位暂无上传的简历。</p>
-  <p id="error" style="color:red"></p>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 解析结果列表</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">解析结果列表</h1>
+    <p class="notice"><strong>本页六字段由 AI 自动抽取，仅供参考，未经人工校对前不代表最终事实。</strong></p>
+    <div class="card">
+      <table id="resume-table" class="data-table">
+        <thead>
+          <tr>
+            <th>候选人</th><th>样本类别</th><th>解析状态</th><th>解析版本</th>
+            <th>待校对字段数</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="resume-body"></tbody>
+      </table>
+      <p id="empty-hint" class="empty-hint" style="display:none">该岗位暂无上传的简历。</p>
+    </div>
+    <p id="error" style="color:red"></p>
+  </main>
 
   <script>
+    // 内部枚举值 → 中文（界面上不出现英文 snake_case 取值；2026-10-07 1001G 审计）。
+    const SAMPLE_LABELS = {
+      synthetic: "合成替身",
+      anonymized: "脱敏样本",
+      departed: "历史离职",
+      live: "真实在招",
+    };
+    const PARSE_LABELS = {
+      parsed: "已解析",
+      unreadable: "不可读（需人工处理）",
+      pending: "处理中",
+    };
+
     function jobIdFromPath() {
       const m = window.location.pathname.match(/\/jobs\/([^/]+)\/resumes\/?$/);
       return m ? m[1] : null;
@@ -53,8 +76,8 @@
         const tr = document.createElement("tr");
         const cells = [
           item.candidate_display_name,
-          item.sample_class,
-          item.parse_status,
+          SAMPLE_LABELS[item.sample_class] || item.sample_class,
+          PARSE_LABELS[item.parse_status] || item.parse_status,
           item.parser_version || "-",
           String(item.pending_review_count),
         ];
@@ -67,6 +90,7 @@
         const link = document.createElement("a");
         link.href = `resumes/${item.resume_id}/review`;
         link.textContent = "查看并校对";
+        link.className = "link";
         actionTd.appendChild(link);
         tr.appendChild(actionTd);
         tbody.appendChild(tr);

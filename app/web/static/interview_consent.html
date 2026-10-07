@@ -4,49 +4,125 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!--BASE_HREF-->
-  <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/app.css?v=20261007">
   <title>AI 结构化面试 · 卓品智能招聘助手</title>
   <style>
-    .term { border: 1px solid #ccc; padding: 12px; margin-bottom: 12px; white-space: pre-wrap; }
     #error { color: red; }
     #invalid-page, #consent-step, #phone-step, #done-step { display: none; }
     .actions button { margin-right: 8px; }
   </style>
 </head>
 <body>
-  <h1>AI 结构化面试</h1>
-  <div id="loading">加载中…</div>
-
-  <div id="invalid-page">
-    <p>链接已失效或已被使用。如需重新获取邀约，请联系 HR。</p>
-  </div>
-
-  <div id="consent-step">
-    <p>本环节由 AI 主持结构化面试，结果仅供业务经理参考，不作为自动淘汰依据。请分别确认以下两项：</p>
-    <div id="terms"></div>
-    <div class="actions">
-      <button id="submit-consent-btn">提交</button>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能</span>
+      <span class="brand-sub">AI 结构化面试</span>
     </div>
-  </div>
+  </header>
+  <main class="page" style="max-width:720px">
+    <h1 class="page-title">AI 结构化面试</h1>
+    <div id="loading" class="loading">加载中…</div>
 
-  <div id="phone-step">
-    <p>请点击下方按钮请求验证码，随后 HR 会通过电话/企微告知您 6 位验证码，收到后填入并提交：</p>
-    <div class="actions">
-      <button id="request-code-btn">请求验证码</button>
+    <div id="invalid-page">
+      <p>链接已失效或已被使用。如需重新获取邀约，请联系 HR。</p>
     </div>
-    <input id="code-input" maxlength="6" placeholder="6 位验证码">
-    <div class="actions">
-      <button id="verify-btn">提交验证码</button>
+
+    <div id="consent-step">
+      <p>本环节由 AI 主持结构化面试，结果仅供业务经理参考，不作为自动淘汰依据。请分别确认以下两项：</p>
+      <div id="terms"></div>
+      <div class="actions toolbar">
+        <button id="submit-consent-btn" class="btn btn-primary">提交</button>
+      </div>
     </div>
-  </div>
 
-  <div id="done-step">
-    <p>验证通过，请等待 HR 通知开始面试。</p>
-  </div>
+    <div id="phone-step">
+      <p>请点击下方按钮请求验证码，随后 HR 会通过电话/企微告知您 6 位验证码，收到后填入并提交：</p>
+      <div class="actions">
+        <button id="request-code-btn" class="btn">请求验证码</button>
+      </div>
+      <input id="code-input" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码">
+      <div class="actions">
+        <button id="verify-btn" class="btn btn-primary">提交验证码</button>
+      </div>
+    </div>
 
-  <p id="error"></p>
+    <div id="done-step">
+      <p>验证通过，请等待 HR 通知开始面试。</p>
+    </div>
+
+    <p id="error"></p>
+  </main>
 
   <script>
+    // 条款正文是运营可编辑的 Markdown 文件（config/consent/*.md）。⛔ 不引
+    // 第三方渲染库：这里做“先转义、再做最小的段落/列表/加粗/行内码渲染”，
+    // 保证任何原文都不会以 HTML 注入，同时不再把 Markdown 源码（#、**）直接
+    // 展示给候选人（2026-10-07 1001G UI 审计发现）。
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderMarkdown(text) {
+      const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+      const out = [];
+      let listOpen = false;
+      let paragraph = [];
+      const inline = (s) =>
+        escapeHtml(s)
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+          .replace(/`([^`]+)`/g, "<code>$1</code>");
+      const closeList = () => {
+        if (listOpen) {
+          out.push("</ol>");
+          listOpen = false;
+        }
+      };
+      const flushParagraph = () => {
+        if (paragraph.length) {
+          out.push(`<p>${paragraph.join("<br>")}</p>`);
+          paragraph = [];
+        }
+      };
+      for (const rawLine of lines) {
+        const line = rawLine.replace(/\s+$/, "");
+        const item = line.match(/^\s*\d+\.\s+(.*)$/);
+        if (item) {
+          flushParagraph();
+          if (!listOpen) {
+            out.push("<ol>");
+            listOpen = true;
+          }
+          out.push(`<li>${inline(item[1])}</li>`);
+          continue;
+        }
+        if (line.trim() === "") {
+          flushParagraph();
+          closeList();
+          continue;
+        }
+        // 缩进的续行（如列表项里被折行的长句）并入上一条，不另起段落。
+        if (listOpen && /^\s/.test(line)) {
+          const last = out.pop();
+          out.push(last.replace(/<\/li>$/, ` ${inline(line.trim())}</li>`));
+          continue;
+        }
+        closeList();
+        if (/^#{1,6}\s+/.test(line)) {
+          flushParagraph();
+          out.push(`<h3>${inline(line.replace(/^#{1,6}\s+/, ""))}</h3>`);
+        } else {
+          paragraph.push(inline(line.trim()));
+        }
+      }
+      flushParagraph();
+      closeList();
+      return out.join("\n");
+    }
+
     function tokenFromPath() {
       const m = window.location.pathname.match(/\/interview\/([^/]+)\/?$/);
       return m ? m[1] : null;
@@ -74,11 +150,11 @@
           ? "AI 面试同意（含结果仅供参考、可申请人工面试说明）"
           : "身份核验同意（手机号验证码）";
         const div = document.createElement("div");
-        div.className = "term";
+        div.className = "term-card";
         div.innerHTML = `
-          <strong>${label}（版本 ${term.version}）</strong>
-          <div>${term.text}</div>
-          <label><input type="checkbox" class="consent-checkbox" data-kind="${term.kind}"> 我已阅读并同意</label>
+          <h3>${label}（版本 ${escapeHtml(term.version)}）</h3>
+          <div class="term-body">${renderMarkdown(term.text)}</div>
+          <label class="term-agree"><input type="checkbox" class="consent-checkbox" data-kind="${term.kind}"> 我已阅读并同意</label>
         `;
         container.appendChild(div);
       });

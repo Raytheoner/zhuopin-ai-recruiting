@@ -3,17 +3,36 @@
 <head>
   <meta charset="utf-8">
   <!--BASE_HREF-->
-  <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/app.css?v=20261007">
   <title>登录 · 卓品智能招聘助手</title>
 </head>
 <body>
-  <h1>HR 登录</h1>
-  <form id="login-form">
-    <label>用户名 <input id="username" required></label>
-    <label>口令 <input id="password" type="password" required></label>
-    <button type="submit" class="btn btn-primary">登录</button>
-  </form>
-  <p id="error" style="color:red"></p>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台</span>
+    </div>
+  </header>
+  <main class="page" style="max-width:420px">
+    <div class="card">
+      <h1 class="page-title">HR 登录</h1>
+      <p class="page-subtitle">请使用 HR 本地账号登录（可识别到人的登录 + 简历访问留痕）。</p>
+      <form id="login-form">
+        <div class="field">
+          <label class="field-label" for="username">用户名</label>
+          <input id="username" type="text" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label class="field-label" for="password">口令</label>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </div>
+        <div class="toolbar">
+          <button type="submit" class="btn btn-primary">登录</button>
+        </div>
+      </form>
+      <p id="error" style="color:red"></p>
+    </div>
+  </main>
   <script>
     document.getElementById("login-form").addEventListener("submit", async (e) => {
       e.preventDefault();

@@ -3,35 +3,51 @@
 <head>
   <meta charset="utf-8">
   <!--BASE_HREF-->
-  <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/app.css?v=20261007">
   <title>上传简历 · 卓品智能招聘助手</title>
 </head>
 <body>
-  <h1>上传简历</h1>
-  <p class="notice">只能上传 <strong>合成替身 / 脱敏 / 历史离职</strong> 样本，真实在招简历（live）当前不开放上传。</p>
-  <form id="upload-form">
-    <label>目标岗位（只列已审批画像的岗位）
-      <select id="job-select" required></select>
-    </label>
-    <br>
-    <label>样本类别
-      <label><input type="radio" name="sample_class" value="synthetic" checked> 合成替身</label>
-      <label><input type="radio" name="sample_class" value="anonymized"> 脱敏样本</label>
-      <label><input type="radio" name="sample_class" value="departed"> 历史离职候选人</label>
-    </label>
-    <br>
-    <label>选择文件（可多选，支持 PDF / Word）
-      <input id="file-input" type="file" multiple accept=".pdf,.docx" required>
-    </label>
-    <br>
-    <button type="submit" class="btn btn-primary">上传</button>
-  </form>
-  <p id="error" style="color:red"></p>
-  <table id="result-table" border="1" style="display:none">
-    <thead><tr><th>文件名</th><th>结果</th></tr></thead>
-    <tbody id="result-body"></tbody>
-  </table>
-  <p><a id="to-list-link" href="#">上传完成后查看解析结果列表</a></p>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 简历上传</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">上传简历</h1>
+    <p class="notice">只能上传 <strong>合成替身 / 脱敏 / 历史离职</strong> 样本，真实在招简历（live）当前不开放上传。</p>
+    <div class="card">
+      <form id="upload-form">
+        <div class="field">
+          <label class="field-label" for="job-select">目标岗位</label>
+          <select id="job-select" required></select>
+          <span class="field-hint">只列已审批画像的岗位</span>
+        </div>
+        <div class="field">
+          <span class="field-label">样本类别</span>
+          <label><input type="radio" name="sample_class" value="synthetic" checked> 合成替身</label>
+          <label><input type="radio" name="sample_class" value="anonymized"> 脱敏样本</label>
+          <label><input type="radio" name="sample_class" value="departed"> 历史离职候选人</label>
+        </div>
+        <div class="field">
+          <label class="field-label" for="file-input">选择文件</label>
+          <input id="file-input" type="file" multiple accept=".pdf,.docx" required>
+          <span class="field-hint">可多选，支持 PDF / Word</span>
+        </div>
+        <div class="toolbar">
+          <button type="submit" class="btn btn-primary">上传</button>
+        </div>
+      </form>
+      <p id="error" style="color:red"></p>
+    </div>
+    <div class="card">
+      <table id="result-table" class="data-table" style="display:none">
+        <thead><tr><th>文件名</th><th>结果</th></tr></thead>
+        <tbody id="result-body"></tbody>
+      </table>
+      <p><a id="to-list-link" class="link" href="#">上传完成后查看解析结果列表</a></p>
+    </div>
+  </main>
 
   <script>
     const jobSelect = document.getElementById("job-select");
