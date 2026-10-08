@@ -961,3 +961,362 @@ def test_会话结束通知正文形状():
             f"- 时刻：{NOW.isoformat()}",
         )
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 1001L（2026-10-08 Shao Peishen 答 2a）：拆件会话的收口搬到值守侧。
+# 10-08 人事部#3 的 codex 首跑把结论全写完却卡在收口（沙箱对 .git 只读），
+# 文档已写、无法提交、信号清不掉 ⇒ 修法＝wrapper 在引擎退出后**代提交**章程
+# §三 白名单路径并按 §一.5 清信号（照 0930D「执行器代提交」先例）。
+# 🔴 本节所有 git / CLI 调用一律注入替身（_FakeRunner），⛔ 一条都不真跑 git——
+# 真实 git add/commit 会在跑测试的工作区上留下真实提交。
+# ─────────────────────────────────────────────────────────────────────────
+
+import sys  # noqa: E402
+
+from tools.liaison.unpack.dispatch import (  # noqa: E402
+    CHARTER_WRITABLE_PATHS,
+    NO_LETTER_NUMBER_PLACEHOLDER,
+)
+from tools.liaison.unpack.session_runner import (  # noqa: E402
+    NO_CHECKPOINT_NOTE,
+    NONZERO_EXIT_NOTE,
+    build_unpack_commit_message,
+    clear_unpack_signal,
+    collect_changes_and_clear_signal,
+)
+
+CHECKPOINT = "2026-10-08T12:35:00.000000+08:00"
+
+
+class _Completed:
+    """subprocess.CompletedProcess 的最小替身：只留调用方真会看的三样。"""
+
+    def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+class _FakeRunner:
+    """按 argv 形状返回预置结果的替身，并逐条记录调用（⛔ 不真跑 git / CLI）。"""
+
+    def __init__(
+        self,
+        *,
+        status_out: str = "",
+        tracked_out: str = "",
+        status_rc: int = 0,
+        add_rc: int = 0,
+        commit_rc: int = 0,
+        clear_rc: int = 0,
+    ) -> None:
+        self._status_out = status_out
+        self._tracked_out = tracked_out
+        self._status_rc = status_rc
+        self._add_rc = add_rc
+        self._commit_rc = commit_rc
+        self._clear_rc = clear_rc
+        self.calls: list[tuple[list[str], Path, dict | None]] = []
+
+    def __call__(self, argv, *, cwd, env=None):
+        self.calls.append((list(argv), cwd, env))
+        if argv[:3] == ["git", "status", "--porcelain"]:
+            return _Completed(self._status_rc, self._status_out)
+        if argv[:2] == ["git", "ls-files"]:
+            return _Completed(0, self._tracked_out)
+        if argv[:2] == ["git", "add"]:
+            return _Completed(self._add_rc)
+        if argv[:2] == ["git", "commit"]:
+            return _Completed(self._commit_rc)
+        if argv[1:4] == ["-m", "tools.liaison", "unpack-signal"]:
+            return _Completed(self._clear_rc)
+        raise AssertionError(f"替身收到未预期的命令：{argv}")
+
+    @property
+    def argvs(self) -> list[list[str]]:
+        return [argv for argv, _, _ in self.calls]
+
+    def argvs_of(self, *head: str) -> list[list[str]]:
+        return [argv for argv in self.argvs if argv[: len(head)] == list(head)]
+
+
+def test_代提交_无改动时不commit但清信号(tmp_path):
+    """`git status` 空 ⇒ 视为已落档，直接进第 3 步清信号（⛔ 不做空提交）。"""
+    runner = _FakeRunner(status_out="")
+
+    note = collect_changes_and_clear_signal(
+        exit_code=0,
+        checkpoint=CHECKPOINT,
+        letter_number="人事部#3",
+        msgid="MSG-NOCHANGE",
+        cwd=tmp_path,
+        run_command=runner,
+    )
+
+    assert runner.argvs[0] == [
+        "git", "status", "--porcelain", "--untracked-files=all", "--", *CHARTER_WRITABLE_PATHS
+    ]
+    assert runner.argvs_of("git", "ls-files") == [], "无改动时不必再探可暂存路径"
+    assert runner.argvs_of("git", "add") == []
+    assert runner.argvs_of("git", "commit") == []
+    assert runner.argvs[-1][:5] == [
+        sys.executable,
+        "-m",
+        "tools.liaison",
+        "unpack-signal",
+        "--clear",
+    ]
+    assert runner.argvs[-1][5:] == ["--before", CHECKPOINT]
+    assert "无改动" in note
+    assert note.endswith(f"信号已清（before={CHECKPOINT}）")
+    # 清信号必须在仓库根、`PYTHONPATH=.` 下跑（否则 import 不到 tools.liaison）。
+    _, clear_cwd, clear_env = runner.calls[-1]
+    assert clear_cwd == tmp_path
+    assert clear_env["PYTHONPATH"] == "."
+
+
+def test_代提交_有改动则先add并commit再清信号(tmp_path):
+    """有改动 ⇒ `git add -- <可暂存的白名单路径>` → `git commit -m …` → 清信号。
+
+    白名单里的四条并非都存在（`docs/跟进信/回件/` 首次回件前是空的、
+    `docs/跟进信/口径点台账.md` 未转态前不存在），而 `git add` 对匹配不到的
+    pathspec 是致命错误（exit 128、什么都不暂存）⇒ 必须先按「工作区存在 or 索引已跟踪」
+    收窄，本用例把这条也钉住。
+    """
+    status_out = " M docs/session接力.md\n?? docs/跟进信/回件/人事部#3-2026-10-08.md\n"
+    runner = _FakeRunner(status_out=status_out, tracked_out="docs/session接力.md\n")
+    # 新落档的文件在盘上真的存在；台账/README 两条不存在也不该进 add 列表。
+    new_file = tmp_path / "docs" / "跟进信" / "回件" / "人事部#3-2026-10-08.md"
+    new_file.parent.mkdir(parents=True)
+    new_file.write_text("回灌结论\n", encoding="utf-8")
+
+    note = collect_changes_and_clear_signal(
+        exit_code=0,
+        checkpoint=CHECKPOINT,
+        letter_number="人事部#3",
+        msgid="abcdef12-3456-7890",
+        cwd=tmp_path,
+        run_command=runner,
+    )
+
+    assert runner.argvs[1] == ["git", "ls-files", "--", *CHARTER_WRITABLE_PATHS]
+    assert runner.argvs[2] == [
+        "git",
+        "add",
+        "--",
+        "docs/跟进信/回件/",
+        "docs/session接力.md",
+    ]
+    commit_argv = runner.argvs[3]
+    assert commit_argv[:3] == ["git", "commit", "-m"]
+    assert commit_argv[3] == "chore(unpack): 人事部#3 回灌落档（abcdef12）"
+    # 顺序：先提交、后清信号（章程 §一.5）。
+    assert runner.argvs[4][3:5] == ["unpack-signal", "--clear"]
+    assert "代提交 2 文件" in note
+    assert note.endswith(f"信号已清（before={CHECKPOINT}）")
+
+
+def test_代提交_白名单路径都不存在时不add且不清信号(tmp_path):
+    """白名单四条都既不在工作区也不在索引里 ⇒ 无可暂存内容，⛔ 不拿空 add 去撞
+    `git add` 的 128，也⛔不清信号（fail-closed）。"""
+    runner = _FakeRunner(status_out=" M docs/session接力.md\n", tracked_out="")
+
+    note = collect_changes_and_clear_signal(
+        exit_code=0,
+        checkpoint=CHECKPOINT,
+        letter_number="人事部#3",
+        msgid="MSG-EMPTY-ADD",
+        cwd=tmp_path,
+        run_command=runner,
+    )
+
+    assert runner.argvs_of("git", "add") == []
+    assert runner.argvs_of("git", "commit") == []
+    assert runner.argvs_of(sys.executable, "-m") == []
+    assert note == "代提交失败（白名单路径无可暂存内容），未代提交、未清信号"
+
+
+def test_代提交_commit失败则不清信号且通知带失败备注(tmp_path):
+    runner = _FakeRunner(
+        status_out=" M docs/session接力.md\n",
+        tracked_out="docs/session接力.md\n",
+        commit_rc=1,
+    )
+
+    rc = session_runner.run_session(
+        ["/usr/local/bin/codex"],
+        msgid="MSG-COMMIT-FAIL",
+        log_path="/x/9.log",
+        popen=lambda argv, **kwargs: _ExitProcess(0),
+        monotonic=_stepping_monotonic([0.0, 1.0]),
+        now=lambda: NOW,
+        checkpoint=CHECKPOINT,
+        letter_number="人事部#3",
+        run_command=runner,
+    )
+
+    assert rc == 0
+    assert runner.argvs_of("git", "commit") != []
+    assert runner.argvs_of(sys.executable, "-m") == [], "commit 失败后 ⛔ 不许清信号"
+    (_, body), = _outbox_rows()
+    assert "备注：代提交失败（git commit 退出码 1），未代提交、未清信号" in body
+
+
+def test_代提交_非零退出不动git不清信号(tmp_path):
+    """引擎中途死掉时白名单路径可能只写了一半——半份结论 ⛔ 不提交，信号也不清。"""
+    runner = _FakeRunner()
+
+    rc = session_runner.run_session(
+        ["/usr/local/bin/codex"],
+        msgid="MSG-NONZERO-EXIT",
+        log_path="/x/8.log",
+        popen=lambda argv, **kwargs: _ExitProcess(3),
+        monotonic=_stepping_monotonic([0.0, 2.0]),
+        now=lambda: NOW,
+        checkpoint=CHECKPOINT,
+        letter_number="人事部#3",
+        run_command=runner,
+    )
+
+    assert rc == 3
+    assert runner.calls == []
+    (_, body), = _outbox_rows()
+    assert f"备注：{NONZERO_EXIT_NOTE}" in body
+    assert "未代提交、未清信号" in body
+
+
+def test_代提交_没拿到检查点时整条留步(tmp_path):
+    """没检查点就无从判断「清到哪儿为止」——代提交也一并跳过，⛔ 不留半吊子态。"""
+    runner = _FakeRunner(status_out=" M docs/session接力.md\n")
+
+    note = collect_changes_and_clear_signal(
+        exit_code=0,
+        checkpoint="",
+        letter_number="人事部#3",
+        msgid="MSG-NOCHECKPOINT",
+        cwd=tmp_path,
+        run_command=runner,
+    )
+
+    assert runner.calls == []
+    assert note == NO_CHECKPOINT_NOTE
+
+
+def test_代提交_只带白名单路径且白名单外路径进不了任何命令(tmp_path):
+    """并发协议的机器判据：`git status`／`git add` 只提这四条白名单路径——
+    `git status` 输出里的白名单外改动（别人的泳道）⛔ 一个字都不进 argv。"""
+    out_of_scope = "tools/liaison/unpack/dispatch.py"
+    runner = _FakeRunner(
+        status_out=f" M {out_of_scope}\n M docs/session接力.md\n",
+        tracked_out="docs/session接力.md\n",
+    )
+
+    collect_changes_and_clear_signal(
+        exit_code=0,
+        checkpoint=CHECKPOINT,
+        letter_number="人事部#3",
+        msgid="MSG-SCOPE",
+        cwd=tmp_path,
+        run_command=runner,
+    )
+
+    for argv in runner.argvs:
+        if argv[:2] == ["git", "add"]:
+            assert argv[:3] == ["git", "add", "--"]
+            assert set(argv[3:]) <= set(CHARTER_WRITABLE_PATHS)
+            assert argv[3:] == ["docs/session接力.md"], "白名单外的改动 ⛔ 不许进 add"
+    joined = " ".join(token for argv in runner.argvs for token in argv)
+    assert out_of_scope not in joined
+    assert "git add -A" not in joined and "git add ." not in joined
+
+
+def test_代提交_commit_message缺信件编号用占位():
+    assert build_unpack_commit_message(letter_number=None, msgid="0123456789") == (
+        f"chore(unpack): {NO_LETTER_NUMBER_PLACEHOLDER} 回灌落档（01234567）"
+    )
+    assert build_unpack_commit_message(letter_number="人事部#7", msgid="short") == (
+        "chore(unpack): 人事部#7 回灌落档（short）"
+    )
+
+
+def test_清信号命令失败只留备注不上抛(tmp_path):
+    """清信号失败 ⇒ 备注写明原因（信号原样保留给下一轮），⛔ 不上抛、⛔ 不改返回值。"""
+    runner = _FakeRunner(status_out="", clear_rc=1)
+
+    note = clear_unpack_signal(checkpoint=CHECKPOINT, cwd=tmp_path, run_command=runner)
+
+    assert note == "清信号失败（退出码 1），信号保留待下一轮"
+
+
+def test_wrapper_main_把检查点与信件编号带进收口(tmp_path):
+    """argv 解析这一段：`--checkpoint`／`--letter-number` 要真的走到收口（否则
+    生产里 wrapper 拿到空检查点 ⇒ 整条留步，本次修复等于没生效）。"""
+    runner = _FakeRunner(
+        status_out=" M docs/session接力.md\n", tracked_out="docs/session接力.md\n"
+    )
+
+    rc = session_runner.main(
+        [
+            "--msgid", "M-1001L",
+            "--log-path", "/x/7.log",
+            "--checkpoint", CHECKPOINT,
+            "--letter-number", "人事部#3",
+            "--",
+            "/usr/local/bin/codex", "exec", "--json", "-",
+        ],
+        popen=lambda argv, **kwargs: _ExitProcess(0),
+        now=lambda: NOW,
+        run_command=runner,
+    )
+
+    assert rc == 0
+    assert runner.argvs_of("git", "commit")[0][3] == (
+        "chore(unpack): 人事部#3 回灌落档（M-1001L）"
+    )
+    assert runner.argvs[-1][5:] == ["--before", CHECKPOINT]
+
+
+def test_dispatch_把检查点与信件编号透传给wrapper(tmp_path, monkeypatch):
+    """1001L 交付物 1：`dispatch_headless_unpack` 收的两个字段原样进 wrapper argv
+    （位置在 `--` 之前，引擎 argv 仍逐字透传在 `--` 之后）。缺省时传空串——
+    wrapper 侧据此整条留步，⛔ 不在这里替调用方编造检查点。"""
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False)
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_codex_bin", lambda env: "/usr/local/bin/codex"
+    )
+    popen = _fake_popen_factory(_FakeProcess())
+
+    dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        msgid="MSG-CP",
+        letter_number="人事部#3",
+        checkpoint=CHECKPOINT,
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    argv, _ = popen.calls[0]
+    head = argv[: argv.index("--")]
+    assert head[head.index("--checkpoint") + 1] == CHECKPOINT
+    assert head[head.index("--letter-number") + 1] == "人事部#3"
+
+    # 缺省（未传）⇒ 空串，而不是某个编造的时刻。
+    popen = _fake_popen_factory(_FakeProcess())
+    dispatch_headless_unpack(
+        charter_text="章程全文",
+        prompt="prompt",
+        msgid="MSG-CP-EMPTY",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=popen,
+    )
+    argv, _ = popen.calls[0]
+    head = argv[: argv.index("--")]
+    assert head[head.index("--checkpoint") + 1] == ""
+    assert head[head.index("--letter-number") + 1] == ""

@@ -140,6 +140,9 @@ def bridge_dispatch(
         signal_path, letter_number=letter_number, msgid=msgid
     )
 
+    # 1001L：检查点只取一次——prompt 前言里写的、与 wrapper 退出后清信号用的
+    # （`--checkpoint`）必须是**同一个字符串**，否则清信号会清出别的区间。
+    checkpoint_iso = session.format_instant(_clock())
     if charter_text is None:
         prompt = ""
     else:
@@ -147,7 +150,7 @@ def bridge_dispatch(
             letter_number=resolved_letter_number,
             msgid=msgid,
             signal_relpath=_resolve_signal_relpath(signal_path, repo_root),
-            checkpoint_iso=session.format_instant(_clock()),
+            checkpoint_iso=checkpoint_iso,
             charter_text=charter_text,
         )
     outcome = dispatch_headless_unpack(
@@ -155,6 +158,7 @@ def bridge_dispatch(
         prompt=prompt,
         msgid=msgid,
         letter_number=resolved_letter_number,
+        checkpoint=checkpoint_iso,
         log_dir=DEFAULT_LOG_DIR,
         lock_path=DEFAULT_LOCK_PATH,
         env=os.environ,

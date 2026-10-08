@@ -387,3 +387,40 @@ def test_checkpoint_is_strictly_after_this_signals_at_so_clear_actually_works(
     assert probe_signal(signal_path) is False, (
         "checkpoint 必须严格晚于触发本轮的这一项，否则 clear 永远清不掉它"
     )
+
+
+def test_给wrapper的检查点就是前言里那一份(conn, monkeypatch, tmp_path):
+    """1001L：wrapper 退出后清信号用的 `--checkpoint` 必须与 prompt 前言里写的
+    「检查点时刻」是**同一个字符串**——两者若各取一次时钟，就会清出别的区间
+    （轻则清错、重则清不掉触发本轮的那一项，正是 95b4d15 记过的那个坑的变体）。
+
+    判据用**步进时钟**钉死：`_clock` 第二次被调用会返回另一个时刻，
+    所以「读两次」这条回归当场转红。
+    """
+    charter_text = "章程正文占位\n"
+    _write_charter(tmp_path, charter_text)
+
+    captured: dict = {}
+
+    def _capturing(**kwargs):
+        captured.update(kwargs)
+        return DispatchOutcome(status="started", pid=1, log_path="x.log")
+
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack", _capturing
+    )
+
+    later = TRIGGER_NOW + timedelta(seconds=5)
+    moments = iter([TRIGGER_NOW, later])
+    bridge_dispatch(
+        conn, thread_id="t1", msgid="m12", sender_userid="u1", letter_number="人事部#7",
+        now=TRIGGER_NOW, repo_root=tmp_path, _clock=lambda: next(moments),
+    )
+
+    checkpoint_iso = session.format_instant(TRIGGER_NOW)
+    assert captured["checkpoint"] == checkpoint_iso
+    assert f"检查点时刻：{checkpoint_iso}" in captured["prompt"]
+    assert session.format_instant(later) not in captured["prompt"], (
+        "检查点被读了两次：前言与 wrapper 的清信号会各拿一个时刻"
+    )
+    assert captured["letter_number"] == "人事部#7"

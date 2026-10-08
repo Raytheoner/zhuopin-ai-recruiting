@@ -347,14 +347,23 @@ def build_session_runner_argv(
     msgid: str,
     log_path: str | os.PathLike[str],
     python_bin: str,
+    checkpoint: str | None = None,
+    letter_number: str | None = None,
 ) -> list[str]:
     """把引擎 argv 包成 wrapper argv（1001I）。**纯函数**，⛔ 不读环境、不起进程。
 
     形状：`<python> -m tools.liaison.unpack.session_runner --msgid <M>
-    --log-path <L> -- <引擎 argv 逐字>`。`--` 之后**原样透传**——wrapper 不解释
+    --log-path <L> --checkpoint <C> --letter-number <N> -- <引擎 argv 逐字>`。
+    `--` 之后**原样透传**——wrapper 不解释
     引擎旗标（codex 的 `--json`／claude 的 `--allowedTools …` 都可能是它不认识的）。
     `-m` 而非脚本路径：子进程 cwd 已固定为仓库根，`-m` 会把 cwd 放进 `sys.path`，
     因此 wrapper 能 import `tools.liaison.*`，不依赖父进程环境里恰好有 `PYTHONPATH`。
+
+    1001L（2026-10-08）：`--checkpoint`／`--letter-number` 把**本次 prompt 用的那一份
+    取值**同源带给 wrapper——wrapper 退出后据此代提交白名单路径、并按章程
+    `unpack-signal --clear --before <检查点>` 清信号（⛔ 不再靠主会话人工补提交）。
+    值可以是空串（`None` ⇒ 空串）：wrapper 侧拿到空检查点时**不清信号**（fail-closed），
+    ⛔ 不在这里替调用方编造时刻。
     """
     return [
         python_bin,
@@ -362,6 +371,8 @@ def build_session_runner_argv(
         SESSION_RUNNER_MODULE,
         "--msgid", msgid,
         "--log-path", str(log_path),
+        "--checkpoint", checkpoint or "",
+        "--letter-number", letter_number or "",
         "--",
         *engine_argv,
     ]
@@ -477,6 +488,7 @@ def dispatch_headless_unpack(
     env: Mapping[str, str],
     now: datetime,
     letter_number: str | None = None,
+    checkpoint: str | None = None,
     popen: Callable[..., Any] = subprocess.Popen,
 ) -> DispatchOutcome:
     """非阻塞起一个拆件会话。⛔ **本函数不读写信号文件**（spec 明写）——信号由
@@ -489,6 +501,10 @@ def dispatch_headless_unpack(
 
     1001I：四类失败**各给本人留一条私信**（`_notify_owner_of_dispatch_failure`，
     幂等键 `unpack-dispatch-failed:{msgid}`）；`skipped_busy` 不通知（避免噪音）。
+
+    1001L：`checkpoint`／`letter_number` 原样转给 wrapper argv（见
+    `build_session_runner_argv`）——必须与 prompt 前言里的检查点**同一份取值**，
+    否则清信号会清错区间（或清不掉触发本轮的那一项）。
 
     起的是 **wrapper**（`python -m …session_runner`，见 `build_session_runner_argv`），
     不是引擎二进制本身；锁文件记的是 wrapper 的 pid——`compute_is_busy` 判活的
@@ -543,6 +559,8 @@ def dispatch_headless_unpack(
                 msgid=msgid,
                 log_path=log_path,
                 python_bin=resolve_python_bin(),
+                checkpoint=checkpoint,
+                letter_number=letter_number,
             )
             # 0930A：显式把守卫开关置 1——hook 只在拆件会话里拦截，正常会话不受影响。
             # ⛔ 不依赖父进程环境里恰好有这个键（父进程环境是白名单外不可信的）。
