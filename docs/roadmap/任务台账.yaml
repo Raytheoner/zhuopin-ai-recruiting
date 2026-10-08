@@ -5836,7 +5836,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: 心跳看护 automation `hr` 自 2026-09-30 08:50 起为 `PAUSED`，答「恢复」则 30 分钟心跳复活；答「保持暂停」则只在本会话手工看护
-  来源: docs/session接力.md:187
+  来源: docs/session接力.md:194
   可见: false
 - id: relay:tag#bb5bab1d
   场景: 构建自动化
@@ -5847,7 +5847,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: Q-57／Q-58 两条「答复→任务映射缺失」答 (a) 授权补映射 后重跑生成器，或 (b) 只解阻塞不生成任务
-  来源: docs/session接力.md:190
+  来源: docs/session接力.md:197
   可见: false
 - id: relay:tag#7b5b093a
   场景: M0
@@ -5858,7 +5858,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: Q-F5 答 (a) 派机制泳道收 8.8 一周观察结论 并归档 `hr-wecom-aibot-liaison`，或 (b) 继续等待
-  来源: docs/session接力.md:192
+  来源: docs/session接力.md:199
   可见: false
 - id: relay:tag#3a219b10
   场景: 构建自动化
@@ -5870,7 +5870,7 @@ tasks:
   状态: 完成
   阻塞类型: 无
   产出判据: 修 `scripts/codex_jsonl_summary.py` 的 `peak` 口径（逐轮增量、不重复计 cache）并补测试
-  来源: docs/session接力.md:194
+  来源: docs/session接力.md:201
   可见: false
   conflicts:
     状态:
