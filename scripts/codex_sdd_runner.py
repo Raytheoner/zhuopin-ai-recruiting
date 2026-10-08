@@ -60,8 +60,10 @@ def resolve_codex_bin(env: Mapping[str, str] | None = None) -> str:
         if Path(candidate).exists():
             return candidate
     return CODEX_BIN
-DEFAULT_MODEL = "deepseek-v4-pro"
-DEFAULT_REASON = "high"
+#: 默认模型＝Haiku 档映射（flash/low）。2026-10-08 `1001G` Shao Peishen 指令：
+#: 本项目**子任务一律 flash**（含 review 会话）；要单次覆盖用 `--model` / `--reason`。
+DEFAULT_MODEL = "deepseek-flash"
+DEFAULT_REASON = "low"
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,8 @@ HEADLESS_RULES = """【无头执行引导】本会话由 scripts/codex_sdd_runne
 ③ 环境不可达时留步并登记，⛔ 不假装闭合。
 ④ 收工必做：列出新增/修改文件清单（commit 由 runner 代做，见⑥）。
 ⑤ 本 worktree **没有 venv**：跑测试一律用环境变量 SDD_PYTHON 指的解释器（"$SDD_PYTHON" -m pytest …），
-   ⛔ 不要用 ./venv/bin/python（worktree 里不存在）。
+   ⛔ 不要用 ./venv/bin/python（worktree 里不存在）；计划里的裸 `python3`（含 `python3 -c …` 验收命令）
+   一律先换成 "$SDD_PYTHON" 再跑——本机 python3＝3.9，导入 app 即失败（1001G 实测）。
 ⑥ **提交由 runner 代做**（worktree 的 git 元数据在主仓 .git/worktrees/<名> 下，本会话沙箱内 git add/commit
    必失败——0930D 同源）：⛔ 不要尝试 git add/commit；改动留在 worktree 即可，runner 会在两轮 review 通过后代提交。
 """
