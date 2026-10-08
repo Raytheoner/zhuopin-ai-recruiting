@@ -52,7 +52,27 @@ def test_candidate_letter_table_exists_with_expected_columns(conn):
     }
 
 
+def test_offer_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "offer")
+    assert _columns(conn, "offer") == {
+        "id", "application_id", "job_id", "department", "start_date", "report_to",
+        "note", "status", "approval_round", "created_by", "created_at",
+        "updated_by", "updated_at",
+    }
+
+
+def test_offer_table_has_no_salary_columns(conn):
+    """本包合规红线断言：offer 表列名不匹配薪资关键词。"""
+    forbidden = ("salary", "pay", "compensation", "bonus", "薪")
+    offending = [
+        col
+        for col in _columns(conn, "offer")
+        if any(k in col.lower() or k in col for k in forbidden)
+    ]
+    assert offending == []
+
+
 def test_offer_new_tables_never_enter_the_add_column_path():
     tables_touched = {table for table, _column, _ddl in _ADDED_COLUMNS}
-    new_tables = {"letter_template", "candidate_letter"}
+    new_tables = {"letter_template", "candidate_letter", "offer"}
     assert not (new_tables & tables_touched)

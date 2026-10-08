@@ -1117,6 +1117,31 @@ CREATE TABLE IF NOT EXISTS candidate_letter (
 
 CREATE INDEX IF NOT EXISTS idx_candidate_letter_application
     ON candidate_letter (application_id);
+
+CREATE TABLE IF NOT EXISTS offer (
+    -- Offer 记录。application_id 唯一：一份投递最多一条 Offer（design D5 语义）。
+    --
+    -- ⛔ 本包合规红线：无任何薪资/股权/签字费/津贴类列——只存岗位/部门/入职日/
+    -- 汇报对象/备注/审批状态/答复（offer-record-and-approval spec「Offer 记录的
+    -- 字段边界」）。note 是自由文本，页面提示"不得填薪资"，⛔ 不做内容审查
+    -- （design D2：做不准，登记为残余风险）。
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL UNIQUE REFERENCES application(id),
+    job_id TEXT NOT NULL REFERENCES job(id),
+    department TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    report_to TEXT NOT NULL,
+    note TEXT,
+    status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (
+        status IN ('pending_approval', 'needs_revision', 'approved', 'exported',
+                   'accepted', 'declined', 'negotiating')
+    ),
+    approval_round INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by TEXT,
+    updated_at TEXT
+);
 """
 
 
