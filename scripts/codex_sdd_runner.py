@@ -33,6 +33,11 @@ CONSTRAINTS_RE = re.compile(
     r"^#{2,3}\s*Global\s+Constraints\b", re.IGNORECASE | re.MULTILINE
 )
 
+#: Global Constraints 段的结束边界＝下一个**同级或更高级**标题，或裸 `### Task N:`。
+#: ⛔ 段内的 `###` 子标题（工程铁律/合规红线/部署约束…）属于约束正文，不能当边界——
+#: 2026-10-08 `1001G` 实测：按任意 `#{1,3}` 截断会把四份 U1 计划的约束透镜截成 56 字符
+#: （只剩一句 blockquote 引言），子会话与 reviewer 都拿不到铁律。
+
 #: 默认二进制名（PATH 可用时等价）。真正执行前用 `resolve_codex_bin()` 解析，
 #: 因为本机 `codex` 常常不在 PATH（只随 ChatGPT/Codex 应用分发，见 AGENTS.md §1）。
 CODEX_BIN = "codex"
@@ -77,8 +82,12 @@ def parse_plan(text: str) -> ParsedPlan:
     constr = ""
     cm = CONSTRAINTS_RE.search(text)
     if cm:
+        level = len(cm.group(0).split()[0])  # `##` → 2；`###` → 3
+        end_re = re.compile(
+            rf"^(?:#{{1,{level}}}\s|###\s+Task\s+\d+\s*[:：])", re.MULTILINE
+        )
         tail = text[cm.end():]
-        nm = re.search(r"^#{1,3}\s", tail, re.MULTILINE)
+        nm = end_re.search(tail)
         constr = (tail[: nm.start()] if nm else tail).strip()
 
     tasks: list[tuple[int, str]] = []

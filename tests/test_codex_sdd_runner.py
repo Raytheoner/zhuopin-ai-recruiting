@@ -57,6 +57,34 @@ def test_parse_plan_without_constraints_is_empty():
     assert [n for n, _ in parsed.tasks] == [1]
 
 
+def test_parse_plan_keeps_nested_headings_inside_constraints():
+    """1001G 实测：约束段内 `### 工程铁律/合规红线…` 是正文，不能当边界（否则透镜只剩 56 字符）。"""
+    plan = (
+        "## Global Constraints\n\n"
+        "> 从 CLAUDE.md 逐字复制与本单元相关的条目。\n\n"
+        "### 工程铁律（不可违背）\n\n"
+        "1. 幂等键 `{thread_id}:{node_name}:{business_key}`。\n\n"
+        "### 合规红线（逐字）\n\n"
+        "- AI 只做排序推荐，不做自动淘汰。\n\n"
+        "## 1. File Structure\n\n"
+        "app/storage/db.py\n\n"
+        "### Task 1: 建表\n\n改 db.py。\n"
+    )
+    parsed = parse_plan(plan)
+    assert "工程铁律" in parsed.constraints and "合规红线" in parsed.constraints
+    assert "幂等键" in parsed.constraints
+    assert "File Structure" not in parsed.constraints
+    assert [n for n, _ in parsed.tasks] == [1]
+
+
+def test_parse_plan_ends_constraints_at_bare_task_heading():
+    """没有下一级 `##` 标题时，裸 `### Task N:` 仍是约束段的结束边界。"""
+    plan = "## Global Constraints\n\n- 铁律一\n\n### Task 1: 建表\n\n改 db.py。\n"
+    parsed = parse_plan(plan)
+    assert parsed.constraints == "- 铁律一"
+    assert [n for n, _ in parsed.tasks] == [1]
+
+
 def test_build_codex_argv_shapes():
     run = build_codex_argv(model="deepseek-v4-pro", reason="high")
     assert run[0:4] == ["codex", "exec", "--json", "--sandbox"]
