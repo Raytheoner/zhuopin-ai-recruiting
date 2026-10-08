@@ -55,6 +55,11 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     (r / "docs" / "roadmap" / "定夺队列.md").write_text(G4_RELEASED, encoding="utf-8")  # 0917AO：G4 已放行是「能发」的第二个前提
     (r / "scripts").mkdir()
     (r / "scripts" / "install_demo_agent.py").write_text("print('hi')\n", encoding="utf-8")
+    (r / "docs" / "superpowers" / "plans").mkdir(parents=True)
+    (r / "docs" / "superpowers" / "plans" / "demo-plan.md").write_text(
+        "### Task 1: x\n\n## Global Constraints\n", encoding="utf-8"
+    )
+    (r / ".claude" / "worktrees" / "wt-a").mkdir(parents=True)
     ar.configure(r)
     monkeypatch.setattr(ar, "PGREP_PATTERN", NEVER_MATCHES)
     monkeypatch.setattr(ar, "DRAIN_WAIT_SECONDS", 0)
@@ -338,6 +343,52 @@ def test_install_agent_rejects_anything_outside_the_pattern(repo: Path, recorder
     write_action(repo, "20260917-173100", {"action": "install-agent", "script": script})
     assert ar.main() == 0
     o = outcomes(repo, "20260917-173100")
+    assert o["done"] is None and o["rejected"] is not None, o
+    assert recorder.calls == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run-sdd（1001U）：plan/tasks/cwd 三闸 ＋ 调用形状
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_run_sdd_invokes_runner_with_repo_venv_and_flags(repo: Path, recorder: Recorder) -> None:
+    write_action(
+        repo,
+        "20261008-183000",
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/demo-plan.md", "tasks": "1-3",
+         "cwd": ".claude/worktrees/wt-a"},
+    )
+    assert ar.main() == 0
+    o = outcomes(repo, "20261008-183000")
+    assert o["done"] is not None, o
+    (call,) = recorder.calls
+    assert call["cmd"] == [
+        str(repo / "venv/bin/python"), "-m", "scripts.codex_sdd_runner",
+        "--plan", "docs/superpowers/plans/demo-plan.md", "--tasks", "1-3",
+        "--yes", "--cwd", ".claude/worktrees/wt-a",
+    ]
+    assert call["env"]["PYTHONPATH"] == "."
+    assert_no_residue(repo, "20261008-183000")
+
+
+@pytest.mark.parametrize(
+    "req",
+    [
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/missing.md", "tasks": "1-3", "cwd": ".claude/worktrees/wt-a"},
+        {"action": "run-sdd", "plan": "docs/跟进信/HR-3.md", "tasks": "1-3", "cwd": ".claude/worktrees/wt-a"},
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/../plans/demo-plan.md", "tasks": "1-3", "cwd": ".claude/worktrees/wt-a"},
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/demo-plan.md", "tasks": "1-3; rm -rf /", "cwd": ".claude/worktrees/wt-a"},
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/demo-plan.md", "tasks": None, "cwd": ".claude/worktrees/wt-a"},
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/demo-plan.md", "tasks": "1-3", "cwd": "/tmp/x"},
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/demo-plan.md", "tasks": "1-3", "cwd": ".claude/worktrees/missing"},
+        {"action": "run-sdd", "plan": "docs/superpowers/plans/demo-plan.md", "tasks": "1-3", "cwd": ".claude/worktrees/../worktrees/wt-a"},
+    ],
+)
+def test_run_sdd_rejects_anything_outside_the_gates(repo: Path, recorder: Recorder, req) -> None:
+    write_action(repo, "20261008-183100", req)
+    assert ar.main() == 0
+    o = outcomes(repo, "20261008-183100")
     assert o["done"] is None and o["rejected"] is not None, o
     assert recorder.calls == []
 

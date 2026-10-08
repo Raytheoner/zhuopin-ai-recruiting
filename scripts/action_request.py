@@ -23,6 +23,12 @@ Cowork 写 `<时间戳>.action`（JSON），`commit-launcher.sh` 先调本脚本
 - `launch-queue-drain`（0917AK，R1 出队）：`{"action":"launch-queue-drain"}`，无参数。无 run-lanes 在跑 ⇒
   把 `launch/queue/` 里最早一条移回 `launch/`（WatchPaths 由此触发发车）；在跑 ⇒ 不动，`drained=null`。
   R2 调度器处理 `events/lanes-done-*` 时直接调 `drain_launch_queue()` 或 CLI `action_request.py launch-queue-drain`。
+- `run-sdd`（1001U，2026-10-08）：`{"action":"run-sdd","plan":"docs/superpowers/plans/<文件>.md","tasks":"1-3","cwd":".claude/worktrees/<名>"}`
+  闸：plan 须在 `docs/superpowers/plans/` 下且存在；`tasks` 形如 `1-3`／`2`；`cwd` 须是已存在的
+  `.claude/worktrees/<名>`（代码只许落在泳道 worktree）。执行：本脚本（launchd 非沙箱）用仓库 venv
+  起 `scripts.codex_sdd_runner`（**同步**，超时 `ACTION_RUN_SDD_TIMEOUT` 默认 7200s；构建期间提交通道被
+  占用＝已知限制）。依据：泳道会话内嵌套 codex 被 Seatbelt 拦，runner 必须由非沙箱父进程执行
+  （`docs/findings/2026-10-08-codex-run-build执行器缺口与修法.md`）。
 
 结果：`<同名>.done`（rc=0）或 `<同名>.failed`／`<同名>.rejected`，内含输出末 60 行（`key=` 后内容打码）。
 认领件 `<同名>.action-claiming` 处理完改名 `<同名>.processed`（09-17 真机曾留着 claiming 与 .done 并存）。
@@ -208,6 +214,67 @@ def handle_install_agent(req: dict) -> tuple[str, dict]:
     return ("done" if r.returncode == 0 else "failed"), {"script": rel, "rc": r.returncode, "output_tail": _tail(r.stdout + r.stderr, 60)}
 
 
+# ── run-sdd（1001U，2026-10-08）───────────────────────────────────────────────
+#
+# 为什么有它：`codex_sdd_runner` 要在**非沙箱父进程**里跑（泳道会话内嵌套 codex 被 Seatbelt 拦，
+# 见 `docs/findings/2026-10-08-codex-run-build执行器缺口与修法.md`）。本动作由 launchd
+# （Shao Peishen 用户态、非沙箱）执行：主会话只写一个 `.action`，runner 与它起的嵌套
+# `codex exec` 都不在 Seatbelt 里。⚠️ 同步执行、超时默认 7200s —— 构建期间提交通道会被占用
+# （已知限制；文档见 findings）。
+
+_SDD_PLAN_RE = re.compile(r"^docs/superpowers/plans/[^/\s]+\.md$")
+_SDD_WORKTREE_RE = re.compile(r"^\.claude/worktrees/[^/\s]+$")
+_SDD_TASKS_RE = re.compile(r"^\d+(-\d+)?$")
+SDD_TIMEOUT_SECONDS = float(os.environ.get("ACTION_RUN_SDD_TIMEOUT", "7200"))
+
+
+def handle_run_sdd(req: dict) -> tuple[str, dict]:
+    plan = req.get("plan")
+    tasks = req.get("tasks")
+    cwd = req.get("cwd")
+    if (
+        not isinstance(plan, str)
+        or ".." in plan
+        or not _SDD_PLAN_RE.match(plan)
+        or not (REPO / plan).is_file()
+    ):
+        return "rejected", {"reason": "plan 不合法或不存在（须 docs/superpowers/plans/<文件>.md）"}
+    if not isinstance(tasks, str) or not _SDD_TASKS_RE.match(tasks):
+        return "rejected", {"reason": "tasks 须形如 1-3 或 2"}
+    if (
+        not isinstance(cwd, str)
+        or ".." in cwd
+        or not _SDD_WORKTREE_RE.match(cwd)
+        or not (REPO / cwd).is_dir()
+    ):
+        return "rejected", {"reason": "cwd 须是已存在的 .claude/worktrees/<名>（代码只许落在泳道 worktree）"}
+    cmd = [
+        str(REPO / "venv/bin/python"),
+        "-m",
+        "scripts.codex_sdd_runner",
+        "--plan",
+        plan,
+        "--tasks",
+        tasks,
+        "--yes",
+        "--cwd",
+        cwd,
+    ]
+    r = subprocess.run(
+        cmd,
+        cwd=REPO,
+        env={**os.environ, "PYTHONPATH": "."},
+        capture_output=True,
+        text=True,
+        timeout=SDD_TIMEOUT_SECONDS,
+    )
+    return (
+        "done" if r.returncode == 0 else "failed",
+        {"plan": plan, "tasks": tasks, "cwd": cwd, "rc": r.returncode,
+         "output_tail": _tail(r.stdout + r.stderr, 60)},
+    )
+
+
 # ── launch-lanes ─────────────────────────────────────────────────────────────
 
 
@@ -296,6 +363,7 @@ HANDLERS = {
     "send-followup": lambda req, base: handle_send_followup(req),
     "kickstart-liaison": lambda req, base: handle_kickstart(req),
     "install-agent": lambda req, base: handle_install_agent(req),
+    "run-sdd": lambda req, base: handle_run_sdd(req),
     "launch-lanes": handle_launch_lanes,
     "launch-queue-drain": lambda req, base: handle_launch_queue_drain(req),
 }

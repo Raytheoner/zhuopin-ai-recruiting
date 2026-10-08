@@ -291,7 +291,8 @@ def main(argv: list[str]) -> int:
         frc, ffinal = _run(
             "你是只读 Final Reviewer。对照 Global Constraints 与本次执行的 Task 清单，核验："
             "① 每个 Task 都有对应提交（`git log --oneline` 可见）；② `git status` 干净、无未提交改动；"
-            "③ 用 \"$SDD_PYTHON\" -m pytest 跑一次本段相关测试，全绿。"
+            "③ ⛔ 不在本会话跑 pytest（只读沙箱没有可用临时目录，pytest 的 tmp_path 初始化必失败——"
+            "测试是否全绿以各 Task 提交时的记录与执行器的 `## 机器判据` 为准）。"
             "⛔ 不要要求本分支已合入 main——合并由执行器（lane_collect stage2）代做，不在本步判。"
             f"最后输出 VERDICT: PASS 或 VERDICT: FAIL <原因>。\n\n{parsed.constraints}",
             review_argv, cwd, progress_dir / "final-review.log",
