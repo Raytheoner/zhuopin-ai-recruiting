@@ -1060,6 +1060,125 @@ CREATE TABLE IF NOT EXISTS interview_live_event (
 
 CREATE INDEX IF NOT EXISTS idx_interview_live_event_session
     ON interview_live_event (session_id);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 6 张表属变更包 offer-generation（交付单元 U1「Offer 域模型」）。
+-- 全部新表，走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径
+-- 只服务"老库缺列"这一种情况，新表不需要它。
+--
+-- 本包合规红线：薪资等敏感字段不入库。offer 表只存岗位/部门/入职日/汇报对象/
+-- 备注/审批状态/答复，⛔ 不设薪资、股权、签字费、津贴类列；列名反证断言见
+-- tests/test_db_offer_schema.py。
+-- ─────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS letter_template (
+    -- 文书模板（Offer/拒信共用）。版本化：每次更新产生新版本而不覆盖旧版
+    -- （candidate-letter-engine spec「文书模板由 HR 维护并版本化」）。
+    -- (kind, version) 是天然键：同一类文书的同一版本号出现两次即 bug。
+    kind TEXT NOT NULL CHECK (kind IN ('offer', 'rejection')),
+    version INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (kind, version)
+);
+
+CREATE TABLE IF NOT EXISTS candidate_letter (
+    -- 一份投递的一版文书草稿（Offer 或拒信）。version 是草稿自身版本（每次重新
+    -- 生成递增），template_version 记录生成时所用的模板版本（candidate-letter-
+    -- engine spec「每一版都留痕可回溯」）。
+    --
+    -- ai_generated 用 INTEGER CHECK (0,1) 承载 BOOL（SQLite 无 BOOL，与
+    -- hard_requirement.blocking 同一手法）。authorship_* 三列记录"标记为人工
+    -- 撰写"的谁/何时/原 AI 版本号（spec「编辑不去标，显式标记人工撰写才去标」，
+    -- design D7：标识落本包自己的表，不碰 human_review 的 CHECK）。
+    --
+    -- analysis_run_id 指向 AI 生成留痕（analysis_run，铁律 3），可空：允许未来
+    -- 出现"非 AI 生成"的边界行而不必为它伪造一条评分留痕。
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    kind TEXT NOT NULL CHECK (kind IN ('offer', 'rejection')),
+    version INTEGER NOT NULL,
+    template_version INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    ai_generated INTEGER NOT NULL CHECK (ai_generated IN (0, 1)),
+    authorship_marked_by TEXT,
+    authorship_marked_at TEXT,
+    authorship_from_version INTEGER,
+    analysis_run_id TEXT REFERENCES analysis_run(id),
+    sent_status TEXT NOT NULL DEFAULT 'none' CHECK (
+        sent_status IN ('none', 'exported', 'copied', 'sent', 'system_queued')
+    ),
+    sent_channel TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (application_id, kind, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidate_letter_application
+    ON candidate_letter (application_id);
+
+CREATE TABLE IF NOT EXISTS offer (
+    -- Offer 记录。application_id 唯一：一份投递最多一条 Offer（design D5 语义）。
+    --
+    -- ⛔ 本包合规红线：无任何薪资/股权/签字费/津贴类列——只存岗位/部门/入职日/
+    -- 汇报对象/备注/审批状态/答复（offer-record-and-approval spec「Offer 记录的
+    -- 字段边界」）。note 是自由文本，页面提示"不得填薪资"，⛔ 不做内容审查
+    -- （design D2：做不准，登记为残余风险）。
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL UNIQUE REFERENCES application(id),
+    job_id TEXT NOT NULL REFERENCES job(id),
+    department TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    report_to TEXT NOT NULL,
+    note TEXT,
+    status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (
+        status IN ('pending_approval', 'needs_revision', 'approved', 'exported',
+                   'accepted', 'declined', 'negotiating')
+    ),
+    approval_round INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by TEXT,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS offer_approval_chain (
+    -- 审批链是岗位级配置（design D6）。天然键 (job_id, level)：同一岗位同一级
+    -- 出现两次即 bug。approver_account_ids 存 JSON 数组，元素是可识别账号
+    -- （hr_account.username）——spec「审批人为可识别账号」「MUST NOT 由 AI
+    -- 生成或推荐审批人」。
+    job_id TEXT NOT NULL REFERENCES job(id),
+    level INTEGER NOT NULL,
+    approver_account_ids TEXT NOT NULL DEFAULT '[]',
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (job_id, level)
+);
+
+CREATE TABLE IF NOT EXISTS offer_approval (
+    -- 每级审批一行（design D6）。(offer_id, round, level) 唯一是审批幂等的
+    -- 存储层第二道防线（第一道是 U3 effect_record_approval 的 effect_log 幂等键，
+    -- 本单元只建 schema）。
+    --
+    -- approver 的非空 CHECK 与 rejection_record.decided_by 同一手法（trim 第二参数
+    -- 显式列出空格/制表/换行/回车）：空审批人等于没有留痕，且由数据库强制。
+    id TEXT PRIMARY KEY NOT NULL,
+    offer_id TEXT NOT NULL REFERENCES offer(id),
+    round INTEGER NOT NULL,
+    level INTEGER NOT NULL,
+    approver TEXT NOT NULL CHECK (
+        approver IS NOT NULL
+        AND trim(approver, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    decision TEXT NOT NULL CHECK (decision IN ('approved', 'returned')),
+    comment TEXT,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (offer_id, round, level)
+);
+
+CREATE INDEX IF NOT EXISTS idx_offer_approval_offer
+    ON offer_approval (offer_id);
 """
 
 
