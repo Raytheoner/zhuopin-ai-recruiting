@@ -66,6 +66,44 @@ def test_build_codex_argv_shapes():
     assert "read-only" in review and "workspace-write" not in review
 
 
+def test_resolve_codex_bin_prefers_env_override_and_falls_back(tmp_path):
+    from scripts.codex_sdd_runner import resolve_codex_bin
+
+    fake = tmp_path / "codex"
+    fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    assert resolve_codex_bin({"HR_CODEX_BIN": str(fake)}) == str(fake)
+    # 不给覆盖时也必须返回一个非空字符串（PATH 或已知安装兜底，最差是默认名）
+    assert resolve_codex_bin({}) != ""
+    # 传进来的二进制必须进 argv[0]
+    argv = build_codex_argv(model="m", reason="high", codex_bin="/tmp/x/codex")
+    assert argv[0] == "/tmp/x/codex"
+
+
+def test_git_commit_commits_worktree_changes(tmp_path):
+    """runner 代提交（1001U）：有改动 ⇒ 真提交；无改动 ⇒ 返回 True 不产生空提交。"""
+    import subprocess
+
+    from scripts.codex_sdd_runner import _git_commit
+
+    repo = tmp_path / "wt"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    assert _git_commit(repo, message="chore(sdd): Task 1 — t") is True
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout
+    assert "Task 1" in log
+    # 无改动：再调一次仍 True，且不新增提交
+    assert _git_commit(repo, message="chore(sdd): Task 1 — t") is True
+    log2 = subprocess.run(
+        ["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout
+    assert log2 == log
+
+
 def test_prompts_carry_constraints_and_discipline():
     parsed = parse_plan(PLAN)
     task = parsed.tasks[0]

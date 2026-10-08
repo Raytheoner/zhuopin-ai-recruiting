@@ -17,9 +17,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +33,33 @@ CONSTRAINTS_RE = re.compile(
     r"^#{2,3}\s*Global\s+Constraints\b", re.IGNORECASE | re.MULTILINE
 )
 
+#: 默认二进制名（PATH 可用时等价）。真正执行前用 `resolve_codex_bin()` 解析，
+#: 因为本机 `codex` 常常不在 PATH（只随 ChatGPT/Codex 应用分发，见 AGENTS.md §1）。
 CODEX_BIN = "codex"
+
+#: 已知安装兜底（与 `tools/liaison/unpack/dispatch.resolve_codex_bin` 同精神，⛔ 不抄它那份实现）。
+_CODEX_BIN_FALLBACKS = (
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+)
+
+
+def resolve_codex_bin(env: Mapping[str, str] | None = None) -> str:
+    """三级解析：`HR_CODEX_BIN` → PATH 查找 → 已知安装路径兜底；都没有 ⇒ 返回默认名。
+
+    2026-10-08 `1001U`：泳道里 `codex --version` 报 `command not found` 的直接修法——
+    runner 自己解析二进制，不依赖调用方把它放上 PATH。
+    """
+    env = os.environ if env is None else env
+    override = (env.get("HR_CODEX_BIN") or "").strip()
+    if override and Path(override).exists():
+        return override
+    found = shutil.which(CODEX_BIN)
+    if found:
+        return found
+    for candidate in _CODEX_BIN_FALLBACKS:
+        if Path(candidate).exists():
+            return candidate
+    return CODEX_BIN
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_REASON = "high"
 
@@ -60,11 +89,16 @@ def parse_plan(text: str) -> ParsedPlan:
     return ParsedPlan(constraints=constr, tasks=tasks)
 
 
-def build_codex_argv(*, model: str, reason: str, read_only: bool = False) -> list[str]:
-    """无头 codex exec 的 argv。审批/认证旗标与本机实测口径一致（见 AGENTS.md §1）。"""
+def build_codex_argv(
+    *, model: str, reason: str, read_only: bool = False, codex_bin: str | None = None
+) -> list[str]:
+    """无头 codex exec 的 argv。审批/认证旗标与本机实测口径一致（见 AGENTS.md §1）。
+
+    `codex_bin` 省略时用默认名（保持测试/`--dry-run` 的稳定打印）；实跑由 `main()` 传解析结果。
+    """
     sandbox = "read-only" if read_only else "workspace-write"
     return [
-        CODEX_BIN,
+        codex_bin or CODEX_BIN,
         "exec",
         "--json",
         "--sandbox",
@@ -86,14 +120,19 @@ HEADLESS_RULES = """【无头执行引导】本会话由 scripts/codex_sdd_runne
 ② 并发协议：只 git add 本任务明确列出的路径；⛔ git add -A / git add . / git commit -a / git stash；
    push 被拒才 git pull --rebase --autostash origin main 重试 ≤3 次；.git/index.lock 存在则等 5 秒重试 ≤5 次，绝不删锁。
 ③ 环境不可达时留步并登记，⛔ 不假装闭合。
-④ 收工必做：列出新增/修改文件清单 + 实际 commit hash，并反查 git log/status 确认真的提交了。
+④ 收工必做：列出新增/修改文件清单（commit 由 runner 代做，见⑥）。
+⑤ 本 worktree **没有 venv**：跑测试一律用环境变量 SDD_PYTHON 指的解释器（"$SDD_PYTHON" -m pytest …），
+   ⛔ 不要用 ./venv/bin/python（worktree 里不存在）。
+⑥ **提交由 runner 代做**（worktree 的 git 元数据在主仓 .git/worktrees/<名> 下，本会话沙箱内 git add/commit
+   必失败——0930D 同源）：⛔ 不要尝试 git add/commit；改动留在 worktree 即可，runner 会在两轮 review 通过后代提交。
 """
 
 
 def build_task_prompt(task: tuple[int, str], constraints: str) -> str:
     return (
         f"{HEADLESS_RULES}\n"
-        f"执行计划中的 Task {task[0]}，严格按计划文本 TDD 五步（先写测试→实现→跑测试→提交）。\n\n"
+        f"执行计划中的 Task {task[0]}，严格按计划文本 TDD（先写测试→实现→跑测试）；"
+        f"⛔ 不要 git add/commit（runner 代提交，见⑥）。\n\n"
         f"## Global Constraints（逐字生效，reviewer 的注意力透镜）\n{constraints}\n\n"
         f"## Task {task[0]}\n{task[1]}\n"
     )
@@ -106,6 +145,7 @@ def build_review_prompt(task: tuple[int, str], constraints: str, role: str) -> s
         f"- Spec 合规重点：每个 effect_* 节点独占且带幂等键 {{thread_id}}:{{node_name}}:{{business_key}}、"
         f"compute_* 无副作用、temperature=0、模型版本显式锁定、evidence_ref 非空。\n"
         f"- 代码质量重点：命名/接口一致、错误处理、可测性、无越界改动（git status 不该出现本 Task 之外的改动）。\n"
+        f"- 跑测试用 \"$SDD_PYTHON\" -m pytest …（本 worktree 没有 venv，⛔ 不要用 ./venv/bin/python）。\n"
         f"最后输出一行 VERDICT: PASS 或 VERDICT: FAIL <原因>，并列出 findings。\n\n"
         f"## Global Constraints\n{constraints}\n\n## Task {task[0]}\n{task[1]}\n"
     )
@@ -113,12 +153,14 @@ def build_review_prompt(task: tuple[int, str], constraints: str, role: str) -> s
 
 def _run(prompt: str, argv: list[str], cwd: Path, log_path: Path) -> tuple[int, str]:
     """起一次 codex exec，prompt 走 stdin。返回 (rc, 最终文本)。"""
+    env = {**os.environ, "SDD_PYTHON": sys.executable}
     proc = subprocess.run(
         argv,
         cwd=str(cwd),
         input=prompt.encode("utf-8"),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        env=env,
     )
     fields, final, _saw = summarize(proc.stdout.decode("utf-8", errors="replace"))
     try:
@@ -128,6 +170,32 @@ def _run(prompt: str, argv: list[str], cwd: Path, log_path: Path) -> tuple[int, 
     except OSError:
         pass
     return proc.returncode, final
+
+
+def _git_commit(cwd: Path, *, message: str) -> bool:
+    """由 runner（父进程，有 git 写权限）代提交本 Task 的改动。
+
+    2026-10-08 `1001U`：worktree 的 git 元数据在主仓 `.git/worktrees/<名>` 下，
+    **Task 会话（workspace-write 沙箱，cwd=worktree）自己 `git add/commit` 必失败**
+    （0930D 同源）。runner 在非沙箱父进程里跑，代提交才可行；提交失败 ⇒ 返回 False，
+    调用方**不勾进度、直接收工**（fail-closed，绝不把"没提交的任务"记成完成）。
+    """
+    add = subprocess.run(
+        ["git", "add", "-A"], cwd=str(cwd), capture_output=True, text=True
+    )
+    if add.returncode != 0:
+        print(f"  ✗ 代提交失败（git add）：{add.stderr.strip()[-300:]}", file=sys.stderr)
+        return False
+    diff = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(cwd))
+    if diff.returncode == 0:
+        return True  # 无改动 ⇒ 视为已落定
+    commit = subprocess.run(
+        ["git", "commit", "-m", message], cwd=str(cwd), capture_output=True, text=True
+    )
+    if commit.returncode != 0:
+        print(f"  ✗ 代提交失败（git commit）：{commit.stderr.strip()[-300:]}", file=sys.stderr)
+        return False
+    return True
 
 
 def main(argv: list[str]) -> int:
@@ -165,8 +233,11 @@ def main(argv: list[str]) -> int:
 
     cwd = Path(a.cwd).resolve()
     plan_name = plan_path.stem
-    run_argv = build_codex_argv(model=a.model, reason=a.reason)
-    review_argv = build_codex_argv(model=a.model, reason=a.reason, read_only=True)
+    codex_bin = resolve_codex_bin()
+    run_argv = build_codex_argv(model=a.model, reason=a.reason, codex_bin=codex_bin)
+    review_argv = build_codex_argv(
+        model=a.model, reason=a.reason, read_only=True, codex_bin=codex_bin
+    )
     print(f"计划：{plan_path}｜Global Constraints {len(parsed.constraints)} 字符｜任务 {len(tasks)} 条（{', '.join(str(t[0]) for t in tasks)}）")
     print(f"cwd：{cwd}")
     print(f"执行 argv：{' '.join(run_argv)}")
@@ -200,26 +271,33 @@ def main(argv: list[str]) -> int:
         for role in ("Spec 合规", "代码质量"):
             print(f"  · {role} review")
             rrc, rfinal = _run(build_review_prompt((n, body), parsed.constraints, role), review_argv, cwd, progress_dir / f"review-{n}-{role}.log")
-            if "VERDICT: FAIL" in rfinal:
-                print(f"  ✗ Task {n} {role} review FAIL：{rfinal[-300:]}")
+            # fail-closed：没有明确 PASS（含空输出/rc≠0）都算没通过——空 review 不许当绿灯。
+            if rrc != 0 or "VERDICT: PASS" not in rfinal:
+                print(f"  ✗ Task {n} {role} review 未通过（rc={rrc}）：{rfinal[-300:]}")
                 failed += 1
                 break
         else:
+            if not _git_commit(cwd, message=f"chore(sdd): Task {n} — {plan_name}"):
+                print(f"  ✗ Task {n} 代提交失败，不勾进度、收工")
+                failed += 1
+                break
             done = progress.read_text(encoding="utf-8").replace(f"- [ ] Task {n}", f"- [x] Task {n}")
             progress.write_text(done, encoding="utf-8")
             continue
         break
 
     if failed == 0:
-        print("▶ 全分支 Final Review（只读）：核 `git cherry -v main <分支>` 无 `+` 才算真合")
+        print("▶ 全分支 Final Review（只读）：核本段任务是否全部提交、工作区是否干净、测试是否全绿")
         frc, ffinal = _run(
-            "你是只读 Final Reviewer。对照 Global Constraints 与全计划，核验所有 Task 已合入 main："
-            "`git cherry -v main <当前分支>` 不允许出现 `+` 行；出现任何 `+` 即输出 VERDICT: FAIL。"
+            "你是只读 Final Reviewer。对照 Global Constraints 与本次执行的 Task 清单，核验："
+            "① 每个 Task 都有对应提交（`git log --oneline` 可见）；② `git status` 干净、无未提交改动；"
+            "③ 用 \"$SDD_PYTHON\" -m pytest 跑一次本段相关测试，全绿。"
+            "⛔ 不要要求本分支已合入 main——合并由执行器（lane_collect stage2）代做，不在本步判。"
             f"最后输出 VERDICT: PASS 或 VERDICT: FAIL <原因>。\n\n{parsed.constraints}",
             review_argv, cwd, progress_dir / "final-review.log",
         )
-        if "VERDICT: FAIL" in ffinal:
-            print(f"✗ Final Review FAIL：{ffinal[-300:]}")
+        if frc != 0 or "VERDICT: PASS" not in ffinal:
+            print(f"✗ Final Review 未通过（rc={frc}）：{ffinal[-300:]}")
             return 1
     print(f"收工：{'全部通过' if failed == 0 else f'{failed} 处失败'}")
     return 0 if failed == 0 else 1
