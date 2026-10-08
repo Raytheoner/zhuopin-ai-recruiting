@@ -75,6 +75,8 @@ def test_resume_table_exists_with_expected_columns(conn):
         # M2 U2 task 3：抽取出的全文，resume_text_span 的偏移量相对这份原文。
         "raw_text",
         "uploaded_by", "uploaded_at",
+        # channel-resume-intake U1 tasks 1.3：来源与来源赋值机制。
+        "source", "source_origin",
     }
 
 

@@ -803,13 +803,21 @@ def test_legacy_pre_m3_db_gains_all_new_tables_after_init_schema(tmp_path):
 def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
     """M3 U1 的字面判据：老库升级后既有表一行不改。既比列集合，也比
     sqlite_master.sql 原文（CHECK/DEFAULT/REFERENCES 措辞是否被悄悄改写），
-    还比几张关键表的行数。"""
+    还比几张关键表的行数。
+
+    resume 是本判据的刻意例外：channel-resume-intake U1 tasks 1.3 经
+    _ADDED_COLUMNS 给 resume 合法新增 source/source_origin 两列，这是被设计
+    文档认可的加列机制，不是本测试要拦的"未声明改动"。resume 的新列集合由
+    tests/test_resume_source_schema.py 与 tests/test_db_migration.py 的漂移守卫
+    单独钉住，这里只把 resume 从"DDL 原文逐字不变"的老表未触碰判据里摘出去，
+    其余老表的保护力度不变（行数比对仍保留 resume，确认加列不改行）。"""
     conn = _legacy_pre_m3_db(tmp_path)
     known_names = {
         row[0]
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
+        if row[0] != "resume"
     }
     before_sql = _legacy_sqlite_master_sql(conn, known_names)
     before_counts = {

@@ -316,7 +316,9 @@ CREATE TABLE IF NOT EXISTS resume (
     parser_version TEXT,
     raw_text TEXT,
     uploaded_by TEXT NOT NULL,
-    uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source TEXT,
+    source_origin TEXT CHECK (source_origin IN ('detected', 'default', 'corrected'))
 );
 
 -- 重复上传去重（resume-upload-and-gate spec「同一文件重复上传」）：按
@@ -356,6 +358,41 @@ CREATE TABLE IF NOT EXISTS resume_parse_version (
     parsed_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (resume_id, parser_version)
 );
+
+-- 来源改正留痕（channel-resume-intake U1 tasks 1.3）。from_source 允许 NULL：
+-- 老库/单文件上传的简历 source 本来就是 NULL，第一次改正的"原值"就是 NULL。
+-- corrected_by 的 CHECK 与 human_review.reviewer 同一手法（trim 第二参数显式
+-- 列出空格/制表/换行/回车）：空改正人等于没留痕。
+CREATE TABLE IF NOT EXISTS source_correction_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    resume_id TEXT NOT NULL REFERENCES resume(id),
+    from_source TEXT,
+    to_source TEXT NOT NULL,
+    corrected_by TEXT NOT NULL CHECK (
+        corrected_by IS NOT NULL
+        AND trim(corrected_by, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_correction_log_resume
+    ON source_correction_log (resume_id);
+
+-- 导出包接收结果快照（channel-resume-intake U1 tasks 1.4）。一行 = 一个
+-- (job_id, bundle_sha256) 的接收结果：completed 存逐文件结果 JSON，重跑时原样
+-- 返回；rejected_gate 是 live 闸关闭时的一次被拒尝试留痕（不存任何文件内容）。
+-- 唯一索引是幂等第二道防线（第一道是 effect_log 唯一键）。
+CREATE TABLE IF NOT EXISTS bundle_ingest_result (
+    id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL,
+    bundle_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('completed', 'rejected_gate')),
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_ingest_result_job_hash
+    ON bundle_ingest_result (job_id, bundle_sha256);
 
 -- 阶段池：全局共享，stage_type 是语义标签（逻辑只认类型），name 是可自定义
 -- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行，id 与 stage_type 同名——
@@ -975,6 +1012,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # U4 tasks 5.9：effect_fetch_recording 校验并记录回传录音的 sha256，供
     # 审计与重复拉取判重使用。
     ("interview_session", "recording_sha256", "TEXT"),
+    # channel-resume-intake U1 tasks 1.3：resume 加来源与来源赋值机制。source 值域
+    # 由应用层约束（Source 枚举），source_origin 三态由 DB CHECK 兜底。
+    ("resume", "source", "TEXT"),
+    ("resume", "source_origin", "TEXT CHECK (source_origin IN ('detected', 'default', 'corrected'))"),
 )
 
 
