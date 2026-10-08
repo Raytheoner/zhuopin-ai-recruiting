@@ -913,6 +913,37 @@ CREATE TABLE IF NOT EXISTS invitation_template (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 候选人面试阶段联系方式（candidate-contact-vault spec；design D6）。
+-- application_id 唯一：一份投递只有一条联系方式记录，登记覆盖＝更新同一行。
+-- phone_enc/email_enc 存 AES-GCM 密文 BLOB，⛔ 无任何明文列。
+-- source 的 CHECK 是 spec「来源 HR 手填/候选人口头确认」枚举的存储层落点。
+CREATE TABLE IF NOT EXISTS candidate_contact (
+    application_id TEXT PRIMARY KEY NOT NULL REFERENCES application(id),
+    phone_enc BLOB,
+    email_enc BLOB,
+    registered_by TEXT NOT NULL,
+    registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source TEXT NOT NULL CHECK (source IN ('hr_manual', 'candidate_confirmed')),
+    purged_at TEXT,
+    purge_reason TEXT
+);
+
+-- 联系方式访问留痕（candidate-contact-vault spec「每次读取留痕，留痕失败则
+-- 读取失败」；design D6）。⛔ 不建 application_id 外键——与 resume_access_log
+-- 同一形态：留痕表按事件记事实，把可写性绑在业务表上会让「留痕写不进去」变成
+-- 「读取整个失败」，而「先留痕后返回内容」应由应用层写入顺序保证。
+-- 无内容列（spec「留痕本身 MUST NOT 含明文」）。
+CREATE TABLE IF NOT EXISTS candidate_contact_access_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL,
+    application_id TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidate_contact_access_log_application
+    ON candidate_contact_access_log (application_id);
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
 -- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
