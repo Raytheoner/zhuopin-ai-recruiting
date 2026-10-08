@@ -689,6 +689,44 @@ CREATE TABLE IF NOT EXISTS hr_session (
 CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 以下属变更包 interview-scheduling（交付单元 U1）。全部新表，走 CREATE TABLE
+-- IF NOT EXISTS，**不进 _ADDED_COLUMNS**（加列路径只服务「老库缺列」，新表不需要）。
+-- .51 现网 demo.db 既有表一行不改，无数据迁移（design.md Migration Plan 第 1 条）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- 面试官名单（interviewer-availability spec「面试官记录来自 HR 维护的名单」；
+-- design D7）。account_id UNIQUE 外键到 hr_account——每个面试官对应一个可登录账号，
+-- 账号与名单行一一对应。interviewable_jobs 存 JSON 数组（可面岗位）。
+-- ⛔ 名单 MUST NOT 由 AI 生成或推荐：本表只有 HR 手工维护，无模型调用。
+CREATE TABLE IF NOT EXISTS interviewer (
+    id TEXT PRIMARY KEY NOT NULL,
+    account_id TEXT NOT NULL UNIQUE REFERENCES hr_account(id),
+    name TEXT NOT NULL,
+    department TEXT,
+    interviewable_jobs TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 面试官可用时段（interviewer-availability spec「面试官登记可用时段」；
+-- design D2）。时段属于面试官，不属于任何投递。start_at/end_at 是 SQLite
+-- datetime('now') 同格式的 UTC 文本。同一面试官时段不重叠由应用层校验＋测试
+-- （本表不加 CHECK——SQLite 无法在表级表达「跨行互不重叠」）。
+CREATE TABLE IF NOT EXISTS interviewer_availability (
+    id TEXT PRIMARY KEY NOT NULL,
+    interviewer_id TEXT NOT NULL REFERENCES interviewer(id),
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    note TEXT,
+    registered_by TEXT NOT NULL,
+    on_behalf INTEGER NOT NULL DEFAULT 0 CHECK (on_behalf IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interviewer_availability_interviewer
+    ON interviewer_availability (interviewer_id);
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
 -- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
 -- "老库缺列"这一种情况，新表不需要它。.51 现网 demo.db 既有表一行不改，
