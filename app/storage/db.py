@@ -768,6 +768,35 @@ CREATE TABLE IF NOT EXISTS interview_slot_interviewer (
 CREATE INDEX IF NOT EXISTS idx_interview_slot_interviewer_interviewer
     ON interview_slot_interviewer (interviewer_id);
 
+-- 邀约文案草稿（interview-invitation-drafting spec「按场次生成邀约文案」
+-- 「人工改写后的标识处置」；design D5）。version 是同一场次内的递增草稿版本，
+-- (slot_id, version) 唯一——重复生成产生新版本、旧版永久保留。
+-- ai_generated + authorship_marked_by/at 是「AI 生成标识 + 标记为人工撰写留痕」
+-- 的存储层落点（合规红线「AI 生成的邀约须带标识」）。
+CREATE TABLE IF NOT EXISTS interview_invitation_draft (
+    id TEXT PRIMARY KEY NOT NULL,
+    slot_id TEXT NOT NULL REFERENCES interview_slot(id),
+    version INTEGER NOT NULL,
+    template_version TEXT NOT NULL,
+    body TEXT NOT NULL,
+    ai_generated INTEGER NOT NULL CHECK (ai_generated IN (0, 1)),
+    authorship_marked_by TEXT,
+    authorship_marked_at TEXT,
+    analysis_run_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (slot_id, version)
+);
+
+-- 邀约文案模板（interview-invitation-drafting spec「文案模板的来源与版本」；
+-- design D5）。version 是单调递增的字符串标签（'v1'/'v2'/...），一版一行、不覆盖。
+-- 模板 MUST NOT 含候选人评分/排名/淘汰理由的占位符（由 U3 模板内容测试反证）。
+CREATE TABLE IF NOT EXISTS invitation_template (
+    version TEXT PRIMARY KEY NOT NULL,
+    body TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
 -- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
