@@ -1060,6 +1060,63 @@ CREATE TABLE IF NOT EXISTS interview_live_event (
 
 CREATE INDEX IF NOT EXISTS idx_interview_live_event_session
     ON interview_live_event (session_id);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 6 张表属变更包 offer-generation（交付单元 U1「Offer 域模型」）。
+-- 全部新表，走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径
+-- 只服务"老库缺列"这一种情况，新表不需要它。
+--
+-- 本包合规红线：薪资等敏感字段不入库。offer 表只存岗位/部门/入职日/汇报对象/
+-- 备注/审批状态/答复，⛔ 不设薪资、股权、签字费、津贴类列；列名反证断言见
+-- tests/test_db_offer_schema.py。
+-- ─────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS letter_template (
+    -- 文书模板（Offer/拒信共用）。版本化：每次更新产生新版本而不覆盖旧版
+    -- （candidate-letter-engine spec「文书模板由 HR 维护并版本化」）。
+    -- (kind, version) 是天然键：同一类文书的同一版本号出现两次即 bug。
+    kind TEXT NOT NULL CHECK (kind IN ('offer', 'rejection')),
+    version INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (kind, version)
+);
+
+CREATE TABLE IF NOT EXISTS candidate_letter (
+    -- 一份投递的一版文书草稿（Offer 或拒信）。version 是草稿自身版本（每次重新
+    -- 生成递增），template_version 记录生成时所用的模板版本（candidate-letter-
+    -- engine spec「每一版都留痕可回溯」）。
+    --
+    -- ai_generated 用 INTEGER CHECK (0,1) 承载 BOOL（SQLite 无 BOOL，与
+    -- hard_requirement.blocking 同一手法）。authorship_* 三列记录"标记为人工
+    -- 撰写"的谁/何时/原 AI 版本号（spec「编辑不去标，显式标记人工撰写才去标」，
+    -- design D7：标识落本包自己的表，不碰 human_review 的 CHECK）。
+    --
+    -- analysis_run_id 指向 AI 生成留痕（analysis_run，铁律 3），可空：允许未来
+    -- 出现"非 AI 生成"的边界行而不必为它伪造一条评分留痕。
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    kind TEXT NOT NULL CHECK (kind IN ('offer', 'rejection')),
+    version INTEGER NOT NULL,
+    template_version INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    ai_generated INTEGER NOT NULL CHECK (ai_generated IN (0, 1)),
+    authorship_marked_by TEXT,
+    authorship_marked_at TEXT,
+    authorship_from_version INTEGER,
+    analysis_run_id TEXT REFERENCES analysis_run(id),
+    sent_status TEXT NOT NULL DEFAULT 'none' CHECK (
+        sent_status IN ('none', 'exported', 'copied', 'sent', 'system_queued')
+    ),
+    sent_channel TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (application_id, kind, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidate_letter_application
+    ON candidate_letter (application_id);
 """
 
 
