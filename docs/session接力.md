@@ -115,6 +115,16 @@
   `tests/test_letter_md_to_docx.py` 3 条），并用它重生成 `人事部#4` 的 docx（15:10；旧版保留在
   git 历史 `40e61f5`）。**不需要借力本机 MS Word**：Word 可在最终目检时打开看效果；
   是否把修正版附件**补发**给汤丽萍待定夺。
+- **2026-10-08 16:3x：泳道看护已恢复（答"能开尽开"）· 第一批（4 条 spec-to-plan）全绿闭环**——
+  `1001M/N/O/P` 四包 U1 计划（渠道/排期/Offer/入职）全部 **OK＋判据 PASS**，执行器自动合回 main
+  （merge 提交 `d6fb96e`/`f0c6c7f`(P)/`fabde0e`(N)/`afcc01b`(M)）；产物
+  `docs/superpowers/plans/2026-10-08-*`（渠道 7 Task/1510 行、排期 10/1330、Offer 9/1204、入职 5/1216，
+  均含 Global Constraints）。A/B 行：条数 4／全部 `sonnet`（results.tsv 第 6 列）／无失败；
+  ⚠️ Token 治理 P2 基线属 Claude 线（已结项），本批未回填。台账已按真身解冲突（完成 283→285）。
+- **2026-10-08 16:5x：第二批已编排待发车（串行，`--max-parallel 1`）**——`1001Q/R/S/T`：
+  四包 U1 的 **run-build Task 1–3**（`codex_sdd_runner`）。🔴 四者全触碰 `app/storage/db.py`＋
+  `app/web/server.py` ⇒ **同批串行**（分泳道判据＝触碰文件重叠），各自 worktree/branch、各自判据、
+  各自自动合并。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。
