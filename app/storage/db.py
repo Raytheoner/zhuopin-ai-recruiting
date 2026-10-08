@@ -689,6 +689,115 @@ CREATE TABLE IF NOT EXISTS hr_session (
 CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 以下属变更包 interview-scheduling（交付单元 U1）。全部新表，走 CREATE TABLE
+-- IF NOT EXISTS，**不进 _ADDED_COLUMNS**（加列路径只服务「老库缺列」，新表不需要）。
+-- .51 现网 demo.db 既有表一行不改，无数据迁移（design.md Migration Plan 第 1 条）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- 面试官名单（interviewer-availability spec「面试官记录来自 HR 维护的名单」；
+-- design D7）。account_id UNIQUE 外键到 hr_account——每个面试官对应一个可登录账号，
+-- 账号与名单行一一对应。interviewable_jobs 存 JSON 数组（可面岗位）。
+-- ⛔ 名单 MUST NOT 由 AI 生成或推荐：本表只有 HR 手工维护，无模型调用。
+CREATE TABLE IF NOT EXISTS interviewer (
+    id TEXT PRIMARY KEY NOT NULL,
+    account_id TEXT NOT NULL UNIQUE REFERENCES hr_account(id),
+    name TEXT NOT NULL,
+    department TEXT,
+    interviewable_jobs TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 面试官可用时段（interviewer-availability spec「面试官登记可用时段」；
+-- design D2）。时段属于面试官，不属于任何投递。start_at/end_at 是 SQLite
+-- datetime('now') 同格式的 UTC 文本。同一面试官时段不重叠由应用层校验＋测试
+-- （本表不加 CHECK——SQLite 无法在表级表达「跨行互不重叠」）。
+CREATE TABLE IF NOT EXISTS interviewer_availability (
+    id TEXT PRIMARY KEY NOT NULL,
+    interviewer_id TEXT NOT NULL REFERENCES interviewer(id),
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    note TEXT,
+    registered_by TEXT NOT NULL,
+    on_behalf INTEGER NOT NULL DEFAULT 0 CHECK (on_behalf IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interviewer_availability_interviewer
+    ON interviewer_availability (interviewer_id);
+
+-- 面试场次（interview-slot-scheduling spec「安排/改期/取消/完成」；design D4）。
+-- 状态挂在 application 上（CLAUDE.md 数据模型要点：状态属投递不属候选人）。
+-- mode/status/invitation_status/kind 的 CHECK 是 spec 枚举在存储层的落点。
+-- reminder_sent_count 默认 0 只预留字段，本包不实现任何定时发送（design D8）。
+-- kind 一期只有 'human'，M3 若纳入自动排期再加 'ai_live'，本包不预建。
+CREATE TABLE IF NOT EXISTS interview_slot (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    round INTEGER NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('onsite', 'phone', 'online')),
+    location_or_link TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK (
+        status IN ('scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show')
+    ),
+    cancel_reason TEXT,
+    invitation_status TEXT NOT NULL DEFAULT 'none' CHECK (
+        invitation_status IN ('none', 'drafted', 'sent', 'confirmed', 'declined', 'reschedule_requested')
+    ),
+    sent_channel TEXT,
+    reminder_sent_count INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'human' CHECK (kind IN ('human')),
+    created_by TEXT,
+    updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_slot_application ON interview_slot (application_id);
+
+-- 场次与面试官的多对多（interview-slot-scheduling spec「指定面试官一至多位」）。
+-- 复合主键天然保证同一场次同一面试官只出现一次。
+CREATE TABLE IF NOT EXISTS interview_slot_interviewer (
+    interview_slot_id TEXT NOT NULL REFERENCES interview_slot(id),
+    interviewer_id TEXT NOT NULL REFERENCES interviewer(id),
+    PRIMARY KEY (interview_slot_id, interviewer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_slot_interviewer_interviewer
+    ON interview_slot_interviewer (interviewer_id);
+
+-- 邀约文案草稿（interview-invitation-drafting spec「按场次生成邀约文案」
+-- 「人工改写后的标识处置」；design D5）。version 是同一场次内的递增草稿版本，
+-- (slot_id, version) 唯一——重复生成产生新版本、旧版永久保留。
+-- ai_generated + authorship_marked_by/at 是「AI 生成标识 + 标记为人工撰写留痕」
+-- 的存储层落点（合规红线「AI 生成的邀约须带标识」）。
+CREATE TABLE IF NOT EXISTS interview_invitation_draft (
+    id TEXT PRIMARY KEY NOT NULL,
+    slot_id TEXT NOT NULL REFERENCES interview_slot(id),
+    version INTEGER NOT NULL,
+    template_version TEXT NOT NULL,
+    body TEXT NOT NULL,
+    ai_generated INTEGER NOT NULL CHECK (ai_generated IN (0, 1)),
+    authorship_marked_by TEXT,
+    authorship_marked_at TEXT,
+    analysis_run_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (slot_id, version)
+);
+
+-- 邀约文案模板（interview-invitation-drafting spec「文案模板的来源与版本」；
+-- design D5）。version 是单调递增的字符串标签（'v1'/'v2'/...），一版一行、不覆盖。
+-- 模板 MUST NOT 含候选人评分/排名/淘汰理由的占位符（由 U3 模板内容测试反证）。
+CREATE TABLE IF NOT EXISTS invitation_template (
+    version TEXT PRIMARY KEY NOT NULL,
+    body TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
 -- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
 -- "老库缺列"这一种情况，新表不需要它。.51 现网 demo.db 既有表一行不改，
