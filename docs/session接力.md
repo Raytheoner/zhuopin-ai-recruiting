@@ -141,6 +141,23 @@
   +9 条（86 passed 同跑）；② **渠道包 U1 Task 1–3 已跑通并合回 main**（`bb99fc8`；runner 代提交
   `a21c1a2/af545ba/9a7922c`；判据 `tests/test_bundle_unpack.py tests/test_db_migration.py` = **20 passed**）；
   ③ Final Review 口径修正（只读会话不再要求跑 pytest）；④ 排期 seg1 起由 **`run-sdd` 通道冒烟推进**。
+- **2026-10-08 22:0x（`1001G` 本场）：子任务全部换挡 flash ＋ 排期包 U1 seg1 闭环**——① Shao Peishen 指令
+  「所有子任务都用 flash」：`codex_sdd_runner` 默认模型 `deepseek-v4-pro/high` → **`deepseek-flash/low`**
+  （`625cbca`，含 dry-run 钉死断言；无头纪律⑤补一句「计划里的裸 `python3` 一律换 `$SDD_PYTHON`」——本机
+  python3=3.9 导入 app 即失败，Task 2/3 实测已用）；换挡时排期 Task 1 已由 v4-pro 双 review PASS 并代提交
+  （`ef3639b`，保留不重跑），Task 2 起用 flash 重投（`20261008-215400-排期seg1-flash.action`；旧 action 落
+  `.failed`＝诚实记录）；② **排期 seg1 已闭环**：Task 2/3 flash 红→绿（27＋16 用例）＋双 review 全 PASS＋
+  Final Review PASS，`.done` rc=0（21:52→22:06，**14 分钟**）；判据 `pytest test_db_migration + 两个新 schema 套件`
+  ＝ **57 passed** ＋ 两条 grep → 合回 main **`9a39875`**（已推）。产物＝`app/storage/db.py` 六张新表
+  （interviewer／interviewer_availability／interview_slot／interview_slot_interviewer／
+  interview_invitation_draft／invitation_template）＋ `tests/test_db_interview_slot_schema.py` ＋
+  `tests/test_db_interview_invitation_draft_schema.py`；③ **执行器缺陷修复**（flash 的质量 review 实测带出）：
+  `parse_plan` 把 Global Constraints 截成 **56 字符**（段内 `### 工程铁律/红线` 被误当边界 ⇒ 透镜静默为空），
+  已修为「同级/更高级标题或裸 `### Task N:` 收尾」，四计划实测 56 → **1329~2809 字符**（`d5b8c5f`，89 passed，已推）；
+  ④ 续跑中：Offer seg1（`lane-1001s-offer-u1-build`，已 ff 到 main）→ 入职 seg1（`lane-1001t-onboard-u1-build`），
+  均 flash 经 run-sdd 通道；⑤ ⚠️ 遗留提醒：排期计划 Task 9 的聚合测试文件 `tests/test_db_interview_schema.py`
+  与 seg1 已落的两个分文件 schema 测试重叠——下一段开工时定「聚合复测 or 合并去重」；
+  `interviewer_availability` 目前无专门测试文件引用（Task 1 计划未要求，Final Review 建议 stage2 前留意）。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。
