@@ -158,6 +158,22 @@
   均 flash 经 run-sdd 通道；⑤ ⚠️ 遗留提醒：排期计划 Task 9 的聚合测试文件 `tests/test_db_interview_schema.py`
   与 seg1 已落的两个分文件 schema 测试重叠——下一段开工时定「聚合复测 or 合并去重」；
   `interviewer_availability` 目前无专门测试文件引用（Task 1 计划未要求，Final Review 建议 stage2 前留意）。
+- **2026-10-08 22:5x（`1001G` 本场收口）：四包 U1 的 seg1 全部落地（Task 1–3）**——① 今晚由 run-sdd 通道
+  ＋ **flash** 连跑三段：排期（21:52→22:06，14 分钟）／Offer（22:08→22:29，21 分钟）／入职（22:30→22:49，
+  19 分钟）；每段＝3 个 Task（红→绿＋双只读 review）＋全分支 Final Review，**全部 PASS、`.done` rc=0**；
+  ② 判据（worktree 内跑＋main 复跑同口径）：排期 **57 passed**＋2 grep；Offer **22 passed**＋五表 grep＋
+  `offer` 表列块零薪资类词（红线反证）；入职 **34 passed**＋六表 grep＋六表列块零「内容/附件/证件号」类词
+  （材料不入库反证）；③ 合回 main：`9a39875`（排期）／`924b423`（Offer）／`46494fe`（入职）——均已推送；
+  ④ 本场新增产物：`app/storage/db.py` **17 张域表**（排期 6：interviewer／interviewer_availability／
+  interview_slot／interview_slot_interviewer／interview_invitation_draft／invitation_template；Offer 5：
+  letter_template／candidate_letter／offer／offer_approval_chain／offer_approval；入职 6：onboarding_template／
+  onboarding_checklist／onboarding_item／onboarding_item_history／onboarding_access_log／
+  data_disposition_queue）＋四个新测试文件（`test_db_interview_slot_schema.py`／
+  `test_db_interview_invitation_draft_schema.py`／`test_db_offer_schema.py`／`test_db_onboarding_schema.py`）；
+  ⑤ 待续段（下一场可接，均走 run-sdd＋flash）：排期 Task 4–6（含 `stage` CHECK 四值重建迁移——触碰
+  `.51` 现网表结构，开跑前需人核）／Offer Task 4–6（stage 五值＋`letter_access_log`＋审批链存储）／
+  入职 Task 4–5（`hr_account.role/department` 加列＋占位模板种子）／渠道 Task 4–6；⑥ `任务台账.yaml`
+  已按真身刷新（seg1 四条仍显示 ready——tasks.md 未回勾是 opener 约定，⛔ 不是漏做）。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。
