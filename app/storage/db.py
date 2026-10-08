@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -687,6 +688,32 @@ CREATE TABLE IF NOT EXISTS hr_session (
 );
 
 CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 6 张表属变更包 onboarding-flow（交付单元 U1 入职域模型）。全部新表，
+-- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**（新表不需要加列路径）。
+-- ⛔ 材料不入库：onboarding_item 无 content / attachment / id_number / file 类列
+-- （tests/test_db_onboarding_schema.py 用列名反证）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- 清单模板（design D1/D6）：按岗位（scope_type='job'）或部门（'department'）维护，
+-- 版本化（(scope_type, scope_id, version) 唯一）。items 存 JSON 数组，每个元素
+-- {name, owner_party, due_offset_days, required}——只跟踪状态，不存材料内容。
+CREATE TABLE IF NOT EXISTS onboarding_template (
+    id TEXT PRIMARY KEY NOT NULL,
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('job', 'department')),
+    scope_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    items TEXT NOT NULL,
+    updated_by TEXT NOT NULL CHECK (
+        updated_by IS NOT NULL
+        AND trim(updated_by, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_template_scope_version
+    ON onboarding_template (scope_type, scope_id, version);
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下属变更包 interview-scheduling（交付单元 U1）。全部新表，走 CREATE TABLE
