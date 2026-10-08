@@ -3,10 +3,13 @@
 <head>
 <meta charset="UTF-8" />
 <!--BASE_HREF-->
-<link rel="stylesheet" href="static/app.css?v=20261007">
+<link rel="stylesheet" href="static/app.css?v=20261008">
 <title>卓品智能招聘助手 · 内网 Demo</title>
 <style>
-  body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  /* 2026-10-08 `1001J`：外层骨架换成与其它 7 页一致的「品牌条 + 居中内容列」。
+     旧的 body{max-width:720px; margin:40px auto} 会把整页（含品牌条）锁进一个
+     窄盒子里，与新外壳直接冲突，故删除；字的字体/颜色 app.css 的 body 规则已有，
+     列宽与居中改由 .topbar/.page 承载。 */
   /* 顶部提示条：配色走共用层 .notice，这里只留页面级布局（间距/加粗）。 */
   .banner { margin-bottom: 24px; font-weight: 600; }
   .chat { border: 1px solid #ddd; border-radius: 8px; padding: 16px; min-height: 200px; margin-bottom: 16px; }
@@ -60,9 +63,9 @@
   .approval-actions { margin-top: 8px; }
   .approval-actions button { margin: 0 8px 0 0; }
   #revise-box { display: none; margin-top: 8px; }
-  .nav { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--color-border); }
-  .nav-btn { margin: 0 0 -1px; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px 8px 0 0; background: none; font-size: 15px; }
-  .nav-btn.active { border-color: var(--color-border) var(--color-border) #fff; background: #fff; font-weight: 600; }
+  /* 导航/标签页：.nav / .nav-btn 三条已由 app.css 的 .tabs / .tab 覆盖，删除。
+     JS 里 switchView() 的 classList.toggle("active", ...) 不用改——app.css 有
+     .tab.active 承接同一个类名。 */
   .job-card { border: 1px solid var(--color-border); border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
   .job-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
   .job-title { font-weight: 600; font-size: 16px; }
@@ -81,68 +84,84 @@
 </style>
 </head>
 <body>
-  <div class="notice banner">⚠️ 演示环境，不进入正式招聘流程</div>
-
-  <!-- 三个视图之间用按钮切换，⛔ 不用 <a href> 或 hash 路由：那会和 <base href>
-       的解析纠缠出一类只在挂了 root_path 时才现形的 bug（部署约束 1）。
-       "上传简历"这一项不是视图切换，是真的跳到另一个独立页面（M2 U2.5，
-       resumes/upload），<base href> 对普通页面跳转的相对路径解析是正常
-       工作的（resume_list.html / upload.html 之间互跳已经这么用），跟上面
-       那条按钮/hash 路由的禁令不是同一回事——用 <a>，只是样式对齐 .nav-btn
-       看起来跟按钮一致（finding 5：这是本单元目前唯一的入口，从这里进）。 -->
-  <div class="nav">
-    <button id="nav-intake" class="nav-btn active">提需求</button>
-    <button id="nav-list" class="nav-btn">岗位列表</button>
-    <button id="nav-queue" class="nav-btn">转人工队列</button>
-    <a id="nav-resume-upload" class="nav-btn" href="resumes/upload">上传简历</a>
-  </div>
-
-  <div id="view-intake">
-    <h1>一句话提用人需求</h1>
-    <div class="chat" id="chat"></div>
-    <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
-    <button id="send-btn">发送</button>
-    <div id="profile-summary" class="profile-summary" style="display:none;"></div>
-    <div id="gap-warning" class="notice notice-danger gap-warning" style="display:none;"></div>
-    <div id="approval-actions" class="approval-actions" style="display:none;">
-      <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
-      <button id="revise-btn">我要改一下</button>
-      <button id="abandon-btn">放弃这个岗位</button>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">内网 Demo</span>
     </div>
-    <div id="revise-box">
-      <textarea id="revise-input" rows="2" placeholder="要改什么？例如：人数改成 3 个，学历放宽到大专"></textarea>
-      <button id="revise-submit">提交修改意见</button>
+  </header>
+  <main class="page">
+    <div class="notice banner">⚠️ 演示环境，不进入正式招聘流程</div>
+
+    <!-- 三个视图之间用按钮切换，⛔ 不用 <a href> 或 hash 路由：那会和 <base href>
+         的解析纠缠出一类只在挂了 root_path 时才现形的 bug（部署约束 1）。
+         "上传简历"这一项不是视图切换，是真的跳到另一个独立页面（M2 U2.5，
+         resumes/upload），<base href> 对普通页面跳转的相对路径解析是正常
+         工作的（resume_list.html / upload.html 之间互跳已经这么用），跟上面
+         那条按钮/hash 路由的禁令不是同一回事——用 <a>，样式对齐 .tab（外加
+         app.css 的 .tab-link 去掉链接下划线）看起来跟按钮一致（finding 5：
+         这是本单元目前唯一的入口，从这里进）。 -->
+    <div class="tabs">
+      <button id="nav-intake" class="tab active">提需求</button>
+      <button id="nav-list" class="tab">岗位列表</button>
+      <button id="nav-queue" class="tab">转人工队列</button>
+      <a id="nav-resume-upload" class="tab tab-link" href="resumes/upload">上传简历</a>
     </div>
 
-    <div id="jd-panel">
-      <div id="jd-output"></div>
-      <div id="jd-grounding" class="notice jd-grounding" style="display:none;"></div>
-      <div id="jd-authorship" class="notice notice-success jd-authorship" style="display:none;"></div>
-      <div class="jd-actions">
-        <button id="jd-copy-btn">复制全文</button>
-        <button id="jd-edit-btn">编辑文案</button>
-        <button id="jd-human-btn">标记为人工撰写</button>
-        <span id="jd-copy-hint" class="jd-hint"></span>
+    <div id="view-intake">
+      <h1 class="page-title">一句话提用人需求</h1>
+      <!-- 对话区（气泡 + 输入 + 审批动作）整块收进一张 .card；
+           ⛔ 容器内所有 id 与既有 DOM 结构逐字不变，只多了一层包壳。 -->
+      <div class="card">
+        <div class="chat" id="chat"></div>
+        <textarea id="input" rows="3" placeholder="例如：要个做嵌入式开发的，能写驱动"></textarea>
+        <button id="send-btn">发送</button>
+        <div id="profile-summary" class="profile-summary" style="display:none;"></div>
+        <div id="gap-warning" class="notice notice-danger gap-warning" style="display:none;"></div>
+        <div id="approval-actions" class="approval-actions" style="display:none;">
+          <button id="confirm-btn" style="display:none;">确认画像，生成 JD</button>
+          <button id="revise-btn">我要改一下</button>
+          <button id="abandon-btn">放弃这个岗位</button>
+        </div>
+        <div id="revise-box">
+          <textarea id="revise-input" rows="2" placeholder="要改什么？例如：人数改成 3 个，学历放宽到大专"></textarea>
+          <button id="revise-submit">提交修改意见</button>
+        </div>
       </div>
-      <div id="jd-editor">
-        <textarea id="jd-editor-input" rows="12"></textarea>
-        <button id="jd-save-btn">保存文案</button>
-        <button id="jd-cancel-btn">取消</button>
+
+      <div id="jd-panel" class="card">
+        <div id="jd-output"></div>
+        <div id="jd-grounding" class="notice jd-grounding" style="display:none;"></div>
+        <div id="jd-authorship" class="notice notice-success jd-authorship" style="display:none;"></div>
+        <div class="jd-actions">
+          <button id="jd-copy-btn">复制全文</button>
+          <button id="jd-edit-btn">编辑文案</button>
+          <button id="jd-human-btn">标记为人工撰写</button>
+          <span id="jd-copy-hint" class="jd-hint"></span>
+        </div>
+        <div id="jd-editor">
+          <textarea id="jd-editor-input" rows="12"></textarea>
+          <button id="jd-save-btn">保存文案</button>
+          <button id="jd-cancel-btn">取消</button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div id="view-list" style="display:none;">
-    <h1>岗位列表</h1>
-    <div id="job-list"></div>
-    <div id="job-detail" style="display:none;"></div>
-  </div>
+    <div id="view-list" style="display:none;">
+      <h1 class="page-title">岗位列表</h1>
+      <!-- .card 直接挂在 #job-list / #job-detail 上（⛔ 不另包一层）：
+           loadJobDetail() 会把 #job-list 设成 display:none，卡片必须跟着它一起
+           消失，另包一层会留下一个空的边框盒子。 -->
+      <div id="job-list" class="card"></div>
+      <div id="job-detail" class="card" style="display:none;"></div>
+    </div>
 
-  <div id="view-queue" style="display:none;">
-    <h1>转人工队列</h1>
-    <p class="muted">这里列出需要 HR 人工介入的岗位，等得最久的排在最前面。本页只看不动手：处置动作要回到对应岗位上、由人逐个做。</p>
-    <div id="queue-list"></div>
-  </div>
+    <div id="view-queue" style="display:none;">
+      <h1 class="page-title">转人工队列</h1>
+      <p class="muted">这里列出需要 HR 人工介入的岗位，等得最久的排在最前面。本页只看不动手：处置动作要回到对应岗位上、由人逐个做。</p>
+      <div id="queue-list" class="card"></div>
+    </div>
+  </main>
 
   <script>
     // 全部请求用相对路径（不带开头的 "/"），配合 <head> 里的 <base href> 解析，
