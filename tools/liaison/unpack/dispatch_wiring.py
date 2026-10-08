@@ -22,7 +22,11 @@ from pathlib import Path
 from tools.liaison import session
 from tools.liaison.storage import effects
 from tools.liaison.unpack import charter, unpack_cli
-from tools.liaison.unpack.dispatch import DispatchOutcome, dispatch_headless_unpack
+from tools.liaison.unpack.dispatch import (
+    NO_LETTER_NUMBER_PLACEHOLDER,
+    DispatchOutcome,
+    dispatch_headless_unpack,
+)
 from tools.liaison.unpack.signal import find_pending
 
 logger = logging.getLogger("tools.liaison.unpack.dispatch_wiring")
@@ -61,7 +65,7 @@ def _resolve_letter_number_for_prompt(
         return letter_number
     entry = find_pending(signal_path, msgid)
     resolved = entry.get("letter_number") if entry else None
-    return resolved or "（未匹配）"
+    return resolved or NO_LETTER_NUMBER_PLACEHOLDER
 
 
 def _resolve_signal_relpath(signal_path: Path, repo_root: Path) -> str:
@@ -127,14 +131,20 @@ def bridge_dispatch(
     except charter.CharterMissing:
         charter_text = None
 
+    # 1001I：信件编号在**两个**地方要用——起活 prompt 的检查点前言，与起活失败的
+    # 本人通知正文。P0 的零参 `dispatch()` 契约把 `letter_number` 绑成 `None`
+    # （见 `__main__.py` 的绑定处），所以这里统一按信号文件补查一次，两处共用；
+    # 查不到时占位 `NO_LETTER_NUMBER_PLACEHOLDER`，⛔ 不抛异常、⛔ 不阻断起活。
+    signal_path = unpack_cli._resolve_signal_path()
+    resolved_letter_number = _resolve_letter_number_for_prompt(
+        signal_path, letter_number=letter_number, msgid=msgid
+    )
+
     if charter_text is None:
         prompt = ""
     else:
-        signal_path = unpack_cli._resolve_signal_path()
         prompt = charter.compute_prompt(
-            letter_number=_resolve_letter_number_for_prompt(
-                signal_path, letter_number=letter_number, msgid=msgid
-            ),
+            letter_number=resolved_letter_number,
             msgid=msgid,
             signal_relpath=_resolve_signal_relpath(signal_path, repo_root),
             checkpoint_iso=session.format_instant(_clock()),
@@ -143,6 +153,8 @@ def bridge_dispatch(
     outcome = dispatch_headless_unpack(
         charter_text=charter_text,
         prompt=prompt,
+        msgid=msgid,
+        letter_number=resolved_letter_number,
         log_dir=DEFAULT_LOG_DIR,
         lock_path=DEFAULT_LOCK_PATH,
         env=os.environ,

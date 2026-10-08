@@ -57,6 +57,19 @@ def _audit_rows(conn, msgid: str) -> list[tuple]:
     ).fetchall()
 
 
+def _owner_notify_rows() -> list[tuple]:
+    """读本服务**默认库路径**上的发件箱（夹具已顶到 tmp）。通知不经
+    `bridge_dispatch` 的 `conn`，而是按 `liaison_db.DEFAULT_DB_PATH` 自己落行。"""
+    outbox = liaison_db.get_connection()
+    try:
+        liaison_db.init_schema(outbox)
+        return outbox.execute(
+            "SELECT dedupe_key, body FROM owner_notify_outbox ORDER BY id"
+        ).fetchall()
+    finally:
+        outbox.close()
+
+
 def test_started_outcome_writes_dispatch_started_audit(conn, monkeypatch, tmp_path):
     _write_charter(tmp_path)
     monkeypatch.setattr(
@@ -114,6 +127,56 @@ def test_charter_missing_still_produces_one_audit_row(conn, monkeypatch, tmp_pat
     assert outcome.status == "failed"
     assert outcome.reason == "charter_missing"
     assert _audit_rows(conn, "m4") == [("dispatch_failed",)]
+
+
+def test_起活失败经生产路径在发件箱留一行且幂等(conn, monkeypatch, tmp_path):
+    """1001I：**生产路径本体**——`bridge_dispatch` 走真实的 `dispatch_headless_unpack`
+    （章程读不到 ⇒ `failed(charter_missing)`），失败要给本人留一条私信；同一 msgid
+    重投只留一行（幂等键 `unpack-dispatch-failed:{msgid}`）。
+
+    ⚠️ 通知按**本服务的默认库路径**（`liaison_db.DEFAULT_DB_PATH`）落行——生产里
+    它就是值守线程那条连接指向的同一个 `data/liaison.db`（`__main__.py:204` 也是
+    `get_connection()` 零参调用）；本用例的 `conn` 是另一个 tmp 库文件，所以从默认
+    路径读那一行。夹具已把默认路径顶到 tmp（⛔ 不碰真实库）。
+    """
+    kwargs = dict(
+        conn=conn, thread_id="t1", msgid="m-fail-notify", sender_userid="u1",
+        letter_number="人事部#7", now=NOW, repo_root=tmp_path,
+    )
+    outcome = bridge_dispatch(**kwargs)
+    second = bridge_dispatch(**kwargs)
+
+    assert outcome.status == "failed" and second.status == "failed"
+    rows = _owner_notify_rows()
+    assert len(rows) == 1, rows
+    (dedupe_key, body), = rows
+    assert dedupe_key == "unpack-dispatch-failed:m-fail-notify"
+    assert "charter_missing" in body
+    assert "m-fail-notify" in body
+    assert "人事部#7" in body
+    assert "候选人" not in body
+
+
+def test_起活成功与跳过忙都不进发件箱(conn, monkeypatch, tmp_path):
+    """`started`／`skipped_busy` 都不通知（避免噪音）。"""
+    _write_charter(tmp_path)
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
+        lambda **kwargs: DispatchOutcome(status="started", pid=1, log_path="x.log"),
+    )
+    bridge_dispatch(
+        conn, thread_id="t1", msgid="m-ok", sender_userid="u1", letter_number="人事部#1",
+        now=NOW, repo_root=tmp_path,
+    )
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch_wiring.dispatch_headless_unpack",
+        lambda **kwargs: DispatchOutcome(status="skipped_busy"),
+    )
+    bridge_dispatch(
+        conn, thread_id="t1", msgid="m-busy", sender_userid="u1", letter_number="人事部#1",
+        now=NOW, repo_root=tmp_path,
+    )
+    assert _owner_notify_rows() == []
 
 
 def test_same_msgid_dispatch_twice_only_one_started_audit_row(conn, monkeypatch, tmp_path):

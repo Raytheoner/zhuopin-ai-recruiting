@@ -137,9 +137,11 @@ def unpack_dispatch_main(argv: list[str]) -> int:
         print(f"章程正本读不到，⛔ 不起进程：{exc}", file=sys.stderr)
         return 1
     signal_path = _resolve_signal_path()
+    msgid = f"FORCE-{now:%Y%m%dT%H%M%SZ}"
+    letter_number = "（验收起活·无真实回件）"
     prompt = charter.compute_prompt(
-        letter_number="（验收起活·无真实回件）",
-        msgid=f"FORCE-{now:%Y%m%dT%H%M%SZ}",
+        letter_number=letter_number,
+        msgid=msgid,
         signal_relpath=_signal_relpath(signal_path, REPO_ROOT),
         checkpoint_iso=now.isoformat(),
         charter_text=charter_text,
@@ -153,6 +155,8 @@ def unpack_dispatch_main(argv: list[str]) -> int:
     outcome = dispatch_headless_unpack(
         charter_text=charter_text,
         prompt=prompt,
+        msgid=msgid,
+        letter_number=letter_number,
         log_dir=DEFAULT_LOG_DIR,
         lock_path=DEFAULT_LOCK_PATH,
         env=env,

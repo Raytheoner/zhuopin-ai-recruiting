@@ -2,7 +2,21 @@
 以受限权限启动」「起活失败只审计不上抛」）。
 
 ⛔ 本模块 ⛔ 不 import `tools.liaison.storage.db`（spec「子命令不碰库」，Task 6
-的 AST 测试守着整条 `unpack-dispatch` 子命令的 import 面，含本模块）。
+的 AST 测试守着整条 `unpack-dispatch` 子命令的 import 面，含本模块）——**模块级
+import 面必须保持"拉不到值守库依赖"**：`unpack-signal`／`unpack-dispatch
+--dry-run` 会在没有值守库的机器上跑。
+
+1001I（2026-10-08）起本模块多两件事，都刻意不破坏上面这条：
+
+1. **起活失败给本人留一条私信**：四类失败各写一行 `owner_notify_outbox`
+   （`build_dispatch_failure_notice` 拼正文与幂等键）。写入经 `session_runner`
+   的 `effect_*` 节点，且**只在失败分支懒加载**——正常路径（探测/清信号/起活
+   成功）一字节不碰库。
+2. **起活方式改为「起 wrapper」**：`popen` 的目标不再是引擎二进制本身，而是
+   `python -m …session_runner --msgid M --log-path L -- <引擎 argv>`。wrapper
+   spawn 引擎、原样转发 prompt、等退出，再给本人发一条会话结束通知（见
+   `session_runner.py`）。锁文件记的仍是这次 `popen` 的 pid＝wrapper 的 pid，
+   「会话活着＝锁活着」的语义不变。
 """
 
 from __future__ import annotations
@@ -12,7 +26,8 @@ import logging
 import os
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+import sys
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +59,21 @@ CODEX_BIN_FALLBACKS: tuple[str, ...] = (
 #: 预算默认值（design D16，Shao Peishen 2026-09-10 答 2a）。取字符串——它只会被
 #:拼进 argv，⛔ 不参与任何数值运算，存成 `str` 免得调用方还要 `str(int(...))`。
 DEFAULT_BUDGET_USD = "5"
+
+#: 会话 wrapper 的模块名（1001I）。`dispatch_headless_unpack` `popen` 的是它，
+#: 不是引擎二进制本身——wrapper 负责 spawn 引擎、原样转发 stdin、等退出，再往
+#: 本人通知发件箱写一行。⛔ 只在这里写死一次。
+SESSION_RUNNER_MODULE = "tools.liaison.unpack.session_runner"
+
+#: 起活失败本人通知的幂等键前缀（1001I）。完整键＝`{前缀}:{msgid}`，
+#: 正文由 `build_dispatch_failure_notice` 拼。⛔ 只在这里写死一次。
+DISPATCH_FAILURE_DEDUPE_PREFIX = "unpack-dispatch-failed"
+
+#: 通知正文里"没有日志文件"时的占位。⛔ 不是路径字面量，只是给人看的说明。
+NO_LOG_PATH_PLACEHOLDER = "（未生成）"
+
+#: 通知正文里"信件编号查不到"时的占位（与 `dispatch_wiring` 的 prompt 同一措辞）。
+NO_LETTER_NUMBER_PLACEHOLDER = "（未匹配）"
 
 
 def compute_is_alive(pid: int, *, _kill: Callable[[int, int], None] = os.kill) -> bool:
@@ -300,6 +330,104 @@ def build_headless_argv_codex(codex_bin: str, env: Mapping[str, str]) -> list[st
     ]
 
 
+def resolve_python_bin() -> str:
+    """会话 wrapper 的解释器（1001I）。默认＝**服务自己怎么跑起来的**就怎么跑
+    （`sys.executable`）；退化到 `python3` 只为空 `sys.executable` 的极端宿主。
+
+    ⚠️ 单独一个函数（不是内联 `sys.executable`）是给测试用的注入缝：把它指到
+    一个不存在的路径，`popen` 当场 `FileNotFoundError`，就得到与"引擎二进制
+    不存在"同款的「没起真实进程」判据（见 `tests/conftest.py` 的 TD-49 夹具）。
+    """
+    return sys.executable or "python3"
+
+
+def build_session_runner_argv(
+    engine_argv: Sequence[str],
+    *,
+    msgid: str,
+    log_path: str | os.PathLike[str],
+    python_bin: str,
+) -> list[str]:
+    """把引擎 argv 包成 wrapper argv（1001I）。**纯函数**，⛔ 不读环境、不起进程。
+
+    形状：`<python> -m tools.liaison.unpack.session_runner --msgid <M>
+    --log-path <L> -- <引擎 argv 逐字>`。`--` 之后**原样透传**——wrapper 不解释
+    引擎旗标（codex 的 `--json`／claude 的 `--allowedTools …` 都可能是它不认识的）。
+    `-m` 而非脚本路径：子进程 cwd 已固定为仓库根，`-m` 会把 cwd 放进 `sys.path`，
+    因此 wrapper 能 import `tools.liaison.*`，不依赖父进程环境里恰好有 `PYTHONPATH`。
+    """
+    return [
+        python_bin,
+        "-m",
+        SESSION_RUNNER_MODULE,
+        "--msgid", msgid,
+        "--log-path", str(log_path),
+        "--",
+        *engine_argv,
+    ]
+
+
+def build_dispatch_failure_notice(
+    *,
+    outcome: "DispatchOutcome",
+    msgid: str,
+    letter_number: str | None,
+    now: datetime,
+) -> tuple[str, str] | None:
+    """起活失败 ⇒ `(dedupe_key, 正文)`；`started`／`skipped_busy` ⇒ `None`。**纯函数**。
+
+    `dedupe_key = "unpack-dispatch-failed:{msgid}"`——同一 msgid 只留一条。
+    正文**只由这五个入参拼出**：信件编号、msgid、失败原因、日志路径、时刻。
+    ⛔ 不回指归档件、不含任何候选人个人信息，也不判定拆件结论（结论按章程落 `docs/`）。
+    """
+    if outcome.status != "failed":
+        return None
+    dedupe_key = f"{DISPATCH_FAILURE_DEDUPE_PREFIX}:{msgid}"
+    body = "\n".join(
+        (
+            "【HR·拆件会话起活失败】",
+            f"- 信件编号：{letter_number or NO_LETTER_NUMBER_PLACEHOLDER}",
+            f"- 消息标识（msgid）：{msgid}",
+            f"- 失败原因：{outcome.reason or outcome.status}",
+            f"- 日志路径：{outcome.log_path or NO_LOG_PATH_PLACEHOLDER}",
+            f"- 时刻：{now.isoformat()}",
+        )
+    )
+    return dedupe_key, body
+
+
+def _notify_owner_of_dispatch_failure(
+    *,
+    outcome: "DispatchOutcome",
+    msgid: str,
+    letter_number: str | None,
+    now: datetime,
+) -> None:
+    """失败分支给本人留一条私信（1001I）。⛔ 任何异常只记日志、不上抛——与起活
+    审计同一基调（一条发不出去的提示，⛔ 不配有让起活结果变形的破坏力）。
+
+    ⚠️ `session_runner` 是**在函数内**懒加载的：本模块的模块级 import 面必须保持
+    「拉不到值守库依赖」（见模块 docstring）。只有真的起活失败才会走到这里，
+    此刻本来就没有会话在跑，用一条库写入换「本人能被通知到」是划算的。
+    """
+    notice = build_dispatch_failure_notice(
+        outcome=outcome, msgid=msgid, letter_number=letter_number, now=now
+    )
+    if notice is None:
+        return
+    dedupe_key, body = notice
+    try:
+        from tools.liaison.unpack import session_runner
+
+        session_runner.enqueue_owner_notify(dedupe_key=dedupe_key, body=body)
+    except Exception:  # noqa: BLE001 —— 见 docstring
+        logger.error(
+            "起活失败通知写入失败（dedupe_key=%s），起活本身的结果不受影响",
+            dedupe_key,
+            exc_info=True,
+        )
+
+
 # tools/liaison/unpack/dispatch.py → parents[0]=unpack, [1]=liaison, [2]=tools, [3]=仓库根
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -343,10 +471,12 @@ def dispatch_headless_unpack(
     *,
     charter_text: str | None,
     prompt: str,
+    msgid: str,
     log_dir: Path,
     lock_path: Path,
     env: Mapping[str, str],
     now: datetime,
+    letter_number: str | None = None,
     popen: Callable[..., Any] = subprocess.Popen,
 ) -> DispatchOutcome:
     """非阻塞起一个拆件会话。⛔ **本函数不读写信号文件**（spec 明写）——信号由
@@ -356,9 +486,26 @@ def dispatch_headless_unpack(
     `binary_not_found`+`process_create_failed`（同属「进程创建失败」一类，
     两个具体原因） / `unexpected_error`——**全部**转成 `DispatchOutcome(status="failed")`
     返回，⛔ 一个 `raise` 都不许漏到调用方。
+
+    1001I：四类失败**各给本人留一条私信**（`_notify_owner_of_dispatch_failure`，
+    幂等键 `unpack-dispatch-failed:{msgid}`）；`skipped_busy` 不通知（避免噪音）。
+
+    起的是 **wrapper**（`python -m …session_runner`，见 `build_session_runner_argv`），
+    不是引擎二进制本身；锁文件记的是 wrapper 的 pid——`compute_is_busy` 判活的
+    「会话活着＝锁活着」语义因此原样成立（wrapper 活着的充要条件就是引擎还挂着）。
     """
+
+    def _failed(reason: str, *, log_path: str | None = None) -> DispatchOutcome:
+        """落一条失败结果并通知本人（通知失败只记日志）。⛔ 唯一的失败出口——
+        四类失败都经它返回，就不会漏掉通知、也不会有人顺手 `raise`。"""
+        outcome = DispatchOutcome(status="failed", reason=reason, log_path=log_path)
+        _notify_owner_of_dispatch_failure(
+            outcome=outcome, msgid=msgid, letter_number=letter_number, now=now
+        )
+        return outcome
+
     if charter_text is None:
-        return DispatchOutcome(status="failed", reason="charter_missing")
+        return _failed("charter_missing")
 
     try:
         lock_text = lock_path.read_text(encoding="utf-8") if lock_path.is_file() else None
@@ -374,7 +521,7 @@ def dispatch_headless_unpack(
         log_file = open(log_path, "wb")
     except OSError as exc:
         logger.error("拆件会话日志文件建不了：%s", log_path if 'log_path' in dir() else log_dir, exc_info=True)
-        return DispatchOutcome(status="failed", reason="log_file_failed")
+        return _failed("log_file_failed")
 
     try:
         try:
@@ -390,6 +537,13 @@ def dispatch_headless_unpack(
                     raise _AgentBinaryNotFound()
                 budget = (env.get(BUDGET_ENV) or DEFAULT_BUDGET_USD).strip()
                 argv = build_headless_argv(claude_bin, budget)
+            # 1001I：起的是 wrapper，不是引擎本身——wrapper 负责 wait + 会话结束通知。
+            argv = build_session_runner_argv(
+                argv,
+                msgid=msgid,
+                log_path=log_path,
+                python_bin=resolve_python_bin(),
+            )
             # 0930A：显式把守卫开关置 1——hook 只在拆件会话里拦截，正常会话不受影响。
             # ⛔ 不依赖父进程环境里恰好有这个键（父进程环境是白名单外不可信的）。
             child_env = _filter_child_env(env)
@@ -403,10 +557,10 @@ def dispatch_headless_unpack(
                 env=child_env,
             )
         except _AgentBinaryNotFound:
-            return DispatchOutcome(status="failed", reason="binary_not_found")
+            return _failed("binary_not_found")
         except Exception as exc:
             logger.error("拆件会话进程创建失败：%s", exc, exc_info=True)
-            return DispatchOutcome(status="failed", reason="process_create_failed")
+            return _failed("process_create_failed")
     finally:
         # Popen 已经把 log_file 的 fd 复制给子进程（POSIX 语义）；父进程这边
         # 关闭它不影响子进程继续写——⛔ 不许因为"看起来该等"就调 process.wait()，
@@ -435,6 +589,6 @@ def dispatch_headless_unpack(
                 "kill 已起的子进程（pid=%s）本身也失败，可能留下无人监管的会话",
                 getattr(process, "pid", None), exc_info=True,
             )
-        return DispatchOutcome(status="failed", reason="unexpected_error")
+        return _failed("unexpected_error", log_path=str(log_path))
 
     return DispatchOutcome(status="started", pid=process.pid, log_path=str(log_path))

@@ -186,6 +186,32 @@ def test_consumer_sends_only_to_the_owner_userid_from_the_roster(conn, roster):
     assert_effect_log_identity(conn)
 
 
+def test_拆件链路的通知走的还是这条既有通道且只发本人(conn, roster):
+    """1001I：拆件起活失败／会话结束**只写发件箱行**，发送仍是这条既有通道——
+    收件人＝名单里 `OWNER_NAME` 那一条的 userid，⛔ 不进群、⛔ 不发别人。
+
+    本用例把新生产者（`unpack-dispatch-failed:{msgid}`／`unpack-session-exit:{msgid}`）
+    与既有消费者接在一起，证明新增通知没有另开一条旁路。
+    """
+    body = (
+        "【HR·拆件会话起活失败】\n"
+        "- 信件编号：人事部#7\n"
+        "- 消息标识（msgid）：MSG1\n"
+        "- 失败原因：binary_not_found"
+    )
+    enqueue(conn, key="unpack-dispatch-failed:MSG1", body=body)
+
+    port = FakeSendPort()
+    report = owner_notify.drain_owner_notify_outbox(
+        conn, send_port=port, whitelist_path=roster, alert_sink=RecordingSink()
+    )
+
+    assert report.sent == 1
+    assert port.calls == [(OWNER_USERID, body)]
+    assert row(conn, key="unpack-dispatch-failed:MSG1")[0] is not None
+    assert_effect_log_identity(conn)
+
+
 def test_consumer_never_sends_to_tang_even_if_she_is_the_only_member(conn, tmp_path):
     """名单里没有本人 ⇒ fail-closed：不发、记告警、attempts 不动。"""
     path = tmp_path / "whitelist.yaml"

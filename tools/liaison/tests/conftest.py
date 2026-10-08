@@ -111,11 +111,19 @@ def unpack_side_effects_to_tmp(tmp_path, monkeypatch):
       `__main__.UNPACK_SIGNAL_PATH`（三处都要，`__main__` 是 `from … import` 的独立绑定）
     - 锁/日志：`unpack_cli` 与 `dispatch_wiring` 各一份副本，顶成**同一个** tmp 对象
       （`test_signal_root_matches_unpack_cli_data_root` 断言两处相等）
-    - 真实进程闸：`HR_LIAISON_CLAUDE_BIN` 指到不存在的文件，`resolve_claude_bin`
-      优先取它，`Popen` 当场 `FileNotFoundError` ⇒ `process_create_failed`。
-      需要别的行为的用例自己再 `monkeypatch.setenv`（用例级覆盖夹具级）。
+    - 值守库：`liaison_db.DEFAULT_DB_PATH` 也顶到 tmp——1001I 起**起活失败**与
+      **会话结束**都会往 `owner_notify_outbox` 写一行，失败路径的用例（本目录里
+      有一批）不隔离就会往真实 `data/liaison.db` 写行。
+    - 真实进程闸（1001I 起为两段）：`HR_LIAISON_CLAUDE_BIN` 指到不存在的文件，
+      `resolve_claude_bin` 优先取它；同时把会话 wrapper 的解释器
+      （`dispatch.resolve_python_bin`）也指到不存在的文件——起活方式改成
+      「`python -m …session_runner`」后，`Popen` 的目标是**解释器**（一定存在），
+      只钉引擎二进制已拦不住真进程了。两段合起来：`Popen` 当场
+      `FileNotFoundError` ⇒ `process_create_failed`，「没起真实进程」这条判据不变。
+      需要别的行为的用例自己再 `monkeypatch.setenv`／`monkeypatch.setattr` 覆盖。
     """
     from tools.liaison import __main__ as liaison_main
+    from tools.liaison.storage import db as liaison_db
     from tools.liaison.unpack import dispatch, dispatch_wiring, unpack_cli
 
     data_root = tmp_path / "liaison-data"
@@ -130,7 +138,11 @@ def unpack_side_effects_to_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatch_wiring, "DEFAULT_LOG_DIR", log_dir)
     monkeypatch.setattr(dispatch_wiring, "DEFAULT_LOCK_PATH", lock_path)
     monkeypatch.setattr(liaison_main, "UNPACK_SIGNAL_PATH", signal_path)
+    # 库文件：`data/liaison.db` 的目录名保持 "data"（`test_liaison_schema` 的
+    # 「不与 demo.db 混库」判据只看 name/parent.name），位置换成 tmp。
+    monkeypatch.setattr(liaison_db, "DEFAULT_DB_PATH", tmp_path / "data" / "liaison.db")
     monkeypatch.setenv(dispatch.CLAUDE_BIN_ENV, str(tmp_path / "claude-must-not-run"))
+    monkeypatch.setattr(dispatch, "resolve_python_bin", lambda: str(tmp_path / "python-must-not-run"))
     # 拆件测试套件整体钉 claude 引擎：真实进程闸靠「HR_LIAISON_CLAUDE_BIN 指向不存在文件」
     # 成立；默认 codex 引擎会解析到本机真实 codex 并真起会话，破坏测试隔离。
     # 生产默认引擎（codex）的行为由 test_unpack_dispatch.py 单独钉。

@@ -239,6 +239,7 @@ def test_dispatch_charter_missing_is_failed_without_touching_anything(tmp_path):
     outcome = dispatch_headless_unpack(
         charter_text=None,
         prompt="prompt",
+        msgid="MSG-CHARTER",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env={},
@@ -261,6 +262,7 @@ def test_dispatch_skipped_busy_when_lock_alive(tmp_path, monkeypatch):
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="prompt",
+        msgid="MSG-BUSY",
         log_dir=tmp_path / "logs",
         lock_path=lock_path,
         env={},
@@ -285,6 +287,7 @@ def test_dispatch_log_dir_unwritable_is_failed(tmp_path, monkeypatch):
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="prompt",
+        msgid="MSG-LOGDIR",
         log_dir=blocker / "logs",
         lock_path=tmp_path / "lock.json",
         env={},
@@ -307,6 +310,7 @@ def test_dispatch_binary_not_found_is_failed(tmp_path, monkeypatch):
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="prompt",
+        msgid="MSG-NOBIN",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env={AGENT_ENGINE_ENV: "claude"},
@@ -332,6 +336,7 @@ def test_dispatch_popen_raises_is_process_create_failed(tmp_path, monkeypatch):
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="prompt",
+        msgid="MSG-POPEN-RAISES",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env={AGENT_ENGINE_ENV: "claude"},
@@ -355,6 +360,7 @@ def test_dispatch_started_writes_lock_and_stdin_and_does_not_wait(tmp_path, monk
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="给拆件会话的完整 prompt",
+        msgid="MSG-STARTED",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env={AGENT_ENGINE_ENV: "claude"},
@@ -373,7 +379,12 @@ def test_dispatch_started_writes_lock_and_stdin_and_does_not_wait(tmp_path, monk
     assert lock_payload["pid"] == 4242
     # popen 的 argv/cwd/stdin/stdout/stderr 形状正确。
     argv, kwargs = popen.calls[0]
-    assert argv[0] == "/usr/local/bin/claude"
+    # 1001I：起的是 wrapper（`python -m …session_runner -- …`），引擎 argv 逐字跟在 `--` 后。
+    from tools.liaison.unpack.dispatch import SESSION_RUNNER_MODULE, resolve_python_bin
+
+    assert argv[0] == resolve_python_bin()
+    assert argv[1:3] == ["-m", SESSION_RUNNER_MODULE]
+    assert argv[argv.index("--") + 1 :] == build_headless_argv("/usr/local/bin/claude", "5")
     assert kwargs["stdin"] is not None
     assert kwargs["cwd"] == str(_repo_root_for_test())
 
@@ -411,6 +422,7 @@ def test_dispatch_never_raises_even_on_unexpected_stdin_error(tmp_path, monkeypa
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="prompt",
+        msgid="MSG-BROKEN-STDIN",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env={AGENT_ENGINE_ENV: "claude"},
@@ -454,6 +466,7 @@ def test_dispatch_kills_the_child_process_when_lock_write_fails(tmp_path, monkey
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="prompt",
+        msgid="MSG-LOCK-WRITE-FAILS",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env={AGENT_ENGINE_ENV: "claude"},
@@ -494,6 +507,7 @@ def test_dispatch_filters_child_env_to_the_allowlist(tmp_path, monkeypatch):
     dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="prompt",
+        msgid="MSG-ENV",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env=parent_env,
@@ -554,8 +568,10 @@ def test_filter_child_env_never_leaks_hr_liaison_secrets_regardless_of_allowlist
 
 
 def test_dispatch_codex_engine_starts_with_codex_argv_and_prompt(tmp_path, monkeypatch):
-    """codex 引擎（默认）：argv 走 `exec --json --sandbox workspace-write`，prompt 仍从 stdin 写入；
-    0930A：argv 含 `--dangerously-bypass-hook-trust`，子进程环境含 `HR_LIAISON_UNPACK=1`。"""
+    """codex 引擎（默认）：引擎 argv 走 `exec --json --sandbox workspace-write`，prompt 仍从 stdin 写入；
+    0930A：argv 含 `--dangerously-bypass-hook-trust`，子进程环境含 `HR_LIAISON_UNPACK=1`。
+    1001I：`popen` 的目标是 wrapper，引擎 argv 逐字跟在 `--` 之后（wrapper 负责
+    spawn 引擎 + 会话结束通知）。"""
     monkeypatch.setattr(
         "tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False
     )
@@ -567,6 +583,7 @@ def test_dispatch_codex_engine_starts_with_codex_argv_and_prompt(tmp_path, monke
     outcome = dispatch_headless_unpack(
         charter_text="章程全文",
         prompt="给拆件会话的完整 prompt",
+        msgid="MSG-CODEX",
         log_dir=tmp_path / "logs",
         lock_path=tmp_path / "lock.json",
         env={},
@@ -576,11 +593,371 @@ def test_dispatch_codex_engine_starts_with_codex_argv_and_prompt(tmp_path, monke
     assert outcome.status == "started"
     assert outcome.pid == 5151
     argv, kwargs = popen.calls[0]
-    assert argv[0] == "/usr/local/bin/codex"
-    assert argv[1:4] == ["exec", "--json", "--sandbox"]
-    assert "workspace-write" in argv and "approval_policy=never" in argv
-    assert "--dangerously-bypass-hook-trust" in argv
-    assert argv[-1] == "-"
+    from tools.liaison.unpack.dispatch import (
+        SESSION_RUNNER_MODULE,
+        _utc_log_stamp,
+        resolve_python_bin,
+    )
+
+    assert argv[0] == resolve_python_bin()
+    assert argv[1:3] == ["-m", SESSION_RUNNER_MODULE]
+    # wrapper 自己的旗标先走，引擎 argv 一律在 `--` 之后逐字透传。
+    head = argv[: argv.index("--")]
+    assert head[3:5] == ["--msgid", "MSG-CODEX"]
+    assert head[5:7] == ["--log-path", str(tmp_path / "logs" / f"{_utc_log_stamp(NOW)}.log")]
+    engine_argv = argv[argv.index("--") + 1 :]
+    assert engine_argv[0] == "/usr/local/bin/codex"
+    assert engine_argv[1:4] == ["exec", "--json", "--sandbox"]
+    assert "workspace-write" in engine_argv and "approval_policy=never" in engine_argv
+    assert "--dangerously-bypass-hook-trust" in engine_argv
+    assert engine_argv[-1] == "-"
     assert kwargs["env"][UNPACK_GUARD_ENV] == "1"
     assert process.stdin.closed_with == "给拆件会话的完整 prompt".encode("utf-8")
     assert kwargs["cwd"] == str(_repo_root_for_test())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 1001I（2026-10-08 Shao Peishen 答 1a）：拆件链路的结果可见性不能只挂在
+# `unpack-signal.json` 上——起活失败与会话结束各给本人一条私信，零轮询。
+#
+# 本节钉两半：① dispatch 四类失败各入队一行（同 msgid 幂等、busy 不通知、
+# 正文无候选人信息）；② 会话 wrapper 等引擎退出、按退出码入队。
+# ⚠️ 库路径由 `conftest.py` 的 TD-49 夹具顶到 tmp_path（⛔ 不连真库）。
+# ─────────────────────────────────────────────────────────────────────────
+
+from tools.liaison.storage import db as liaison_db  # noqa: E402
+from tools.liaison.unpack import session_runner  # noqa: E402
+from tools.liaison.unpack.dispatch import (  # noqa: E402
+    DISPATCH_FAILURE_DEDUPE_PREFIX,
+    build_dispatch_failure_notice,
+    dispatch_headless_unpack as _dispatch,
+)
+
+
+def _outbox_rows() -> list[tuple[str, str]]:
+    """读（夹具已顶到 tmp 的）发件箱：[(dedupe_key, body)]，按 id。"""
+    conn = liaison_db.get_connection()
+    try:
+        liaison_db.init_schema(conn)
+        return conn.execute(
+            "SELECT dedupe_key, body FROM owner_notify_outbox ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def _failing_call(reason: str, tmp_path, monkeypatch, msgid: str) -> DispatchOutcome:
+    """按 reason 造出对应的那类失败并真调一次 dispatch（⛔ 不真实起进程）。
+
+    同一份 kwargs 复用给五类失败、只按 reason 改一处——这样「四类失败都能走到
+    通知」这条断言才是对机制说的，不是对五个手抄的调用点说的。
+    """
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: False)
+    monkeypatch.setattr(
+        "tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: "/usr/local/bin/claude"
+    )
+    kwargs: dict = dict(
+        charter_text="章程全文",
+        prompt="prompt",
+        msgid=msgid,
+        letter_number="人事部#7",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={AGENT_ENGINE_ENV: "claude"},
+        now=NOW,
+        popen=_fake_popen_factory(_FakeProcess()),
+    )
+    if reason == "charter_missing":
+        kwargs["charter_text"] = None
+    elif reason == "log_file_failed":
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        kwargs["log_dir"] = blocker / "logs"
+    elif reason == "binary_not_found":
+        monkeypatch.setattr("tools.liaison.unpack.dispatch.resolve_claude_bin", lambda env: None)
+    elif reason == "process_create_failed":
+
+        def _raising_popen(argv, **kw):
+            raise FileNotFoundError("二进制没了")
+
+        kwargs["popen"] = _raising_popen
+    elif reason == "unexpected_error":
+
+        def _raising_write_lock_atomic(*args, **kw):
+            raise OSError("磁盘满")
+
+        monkeypatch.setattr(
+            "tools.liaison.unpack.dispatch._write_lock_atomic", _raising_write_lock_atomic
+        )
+
+        class _KillableProcess(_FakeProcess):
+            def kill(self):
+                pass
+
+        kwargs["popen"] = _fake_popen_factory(_KillableProcess())
+    else:  # pragma: no cover —— 参数化里不会出现别的取值
+        raise AssertionError(reason)
+    return _dispatch(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "charter_missing",
+        "log_file_failed",
+        "binary_not_found",
+        "process_create_failed",
+        "unexpected_error",
+    ],
+)
+def test_dispatch_四类失败各入队一行且同msgid幂等(reason, tmp_path, monkeypatch):
+    msgid = f"MSG-{reason}"
+    first = _failing_call(reason, tmp_path, monkeypatch, msgid)
+    second = _failing_call(reason, tmp_path, monkeypatch, msgid)
+
+    assert first.status == "failed" and first.reason == reason
+    assert second.status == "failed"
+    rows = _outbox_rows()
+    assert [key for key, _ in rows] == [f"{DISPATCH_FAILURE_DEDUPE_PREFIX}:{msgid}"], rows
+    (_, body), = rows
+    assert msgid in body and reason in body and "人事部#7" in body
+    assert "候选人" not in body
+
+
+def test_dispatch_skipped_busy_不通知(tmp_path, monkeypatch):
+    """busy 不通知（避免噪音）：锁里 pid 活着 ⇒ 只落审计，发件箱一行为空。"""
+    lock_path = tmp_path / "lock.json"
+    lock_path.write_text('{"pid": 99999, "started_at": "x", "log": "y"}', encoding="utf-8")
+    monkeypatch.setattr("tools.liaison.unpack.dispatch.compute_is_alive", lambda pid: True)
+
+    outcome = _dispatch(
+        charter_text="章程全文",
+        prompt="prompt",
+        msgid="MSG-BUSY-1001I",
+        log_dir=tmp_path / "logs",
+        lock_path=lock_path,
+        env={AGENT_ENGINE_ENV: "claude"},
+        now=NOW,
+        popen=_fake_popen_factory(_FakeProcess()),
+    )
+
+    assert outcome.status == "skipped_busy"
+    assert _outbox_rows() == []
+
+
+def test_dispatch_通知写库失败只记日志不上抛(tmp_path, monkeypatch):
+    """与起活审计同基调：通知写不进去⛔ 不许改变起活结果、⛔ 不许上抛。"""
+
+    def _boom(**kwargs):
+        raise RuntimeError("磁盘满")
+
+    monkeypatch.setattr(session_runner, "enqueue_owner_notify", _boom)
+    outcome = _dispatch(
+        charter_text=None,
+        prompt="",
+        msgid="MSG-NOTIFY-FAILS",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "lock.json",
+        env={},
+        now=NOW,
+        popen=_fake_popen_factory(_FakeProcess()),
+    )
+    assert outcome == DispatchOutcome(
+        status="failed", reason="charter_missing", pid=None, log_path=None
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "charter_missing",
+        "log_file_failed",
+        "binary_not_found",
+        "process_create_failed",
+        "unexpected_error",
+    ],
+)
+def test_起活失败通知正文只由入参拼出(reason):
+    """正文形状逐字钉死——它只含信件编号/msgid/原因/日志/时刻，⛔ 不回指归档件、
+    更不含任何候选人个人信息（候选人信息不进任何对外文案）。"""
+    outcome = DispatchOutcome(status="failed", reason=reason, log_path="/x/1.log")
+    dedupe_key, body = build_dispatch_failure_notice(
+        outcome=outcome, msgid="MSG1", letter_number="人事部#7", now=NOW
+    )
+    assert dedupe_key == f"{DISPATCH_FAILURE_DEDUPE_PREFIX}:MSG1"
+    assert body == "\n".join(
+        (
+            "【HR·拆件会话起活失败】",
+            "- 信件编号：人事部#7",
+            "- 消息标识（msgid）：MSG1",
+            f"- 失败原因：{reason}",
+            "- 日志路径：/x/1.log",
+            f"- 时刻：{NOW.isoformat()}",
+        )
+    )
+
+
+def test_起活失败通知对非失败结果为空并且占位齐全():
+    """`started`／`skipped_busy` ⇒ `None`（⛔ 不发）；信件编号/日志缺失 ⇒ 占位。"""
+    assert (
+        build_dispatch_failure_notice(
+            outcome=DispatchOutcome(status="started", pid=1, log_path="x"),
+            msgid="m",
+            letter_number="人事部#1",
+            now=NOW,
+        )
+        is None
+    )
+    assert (
+        build_dispatch_failure_notice(
+            outcome=DispatchOutcome(status="skipped_busy"),
+            msgid="m",
+            letter_number=None,
+            now=NOW,
+        )
+        is None
+    )
+    _, body = build_dispatch_failure_notice(
+        outcome=DispatchOutcome(status="failed", reason="log_file_failed"),
+        msgid="m",
+        letter_number=None,
+        now=NOW,
+    )
+    assert "- 信件编号：（未匹配）" in body
+    assert "- 日志路径：（未生成）" in body
+
+
+# ── 会话 wrapper（1001I：会话结束给本人一条私信）───────────────────────────
+
+
+class _ExitProcess:
+    """只回答 `wait()` 的替身进程——wrapper 不读它的任何输出（⛔ 不判定结论）。"""
+
+    def __init__(self, rc: int) -> None:
+        self._rc = rc
+
+    def wait(self) -> int:
+        return self._rc
+
+
+def _stepping_monotonic(values):
+    it = iter(values)
+    return lambda: next(it)
+
+
+def test_wrapper_按引擎退出码落库且同msgid幂等(tmp_path):
+    calls: list[tuple[list[str], dict]] = []
+
+    def _popen(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return _ExitProcess(3)
+
+    engine_argv = ["/usr/local/bin/codex", "exec", "--json", "-"]
+    rc = session_runner.run_session(
+        engine_argv,
+        msgid="MSG-EXIT",
+        log_path="/x/1.log",
+        popen=_popen,
+        monotonic=_stepping_monotonic([100.0, 112.5]),
+        now=lambda: NOW,
+    )
+    assert rc == 3
+    # 引擎 argv 逐字透传，stdin/stdout/stderr 全部继承（⛔ 不重定向、不缓冲）。
+    assert calls == [(engine_argv, {"cwd": str(session_runner.REPO_ROOT)})]
+
+    # 同一 msgid 再来一次（重投/重放）⇒ 仍然只有一行。
+    session_runner.run_session(
+        engine_argv,
+        msgid="MSG-EXIT",
+        log_path="/x/1.log",
+        popen=_popen,
+        monotonic=_stepping_monotonic([1.0, 2.0]),
+        now=lambda: NOW,
+    )
+    rows = _outbox_rows()
+    assert [key for key, _ in rows] == [
+        f"{session_runner.SESSION_EXIT_DEDUPE_PREFIX}:MSG-EXIT"
+    ]
+    (_, body), = rows
+    assert "MSG-EXIT" in body
+    assert "退出码：3" in body
+    assert "耗时：12.5 秒" in body
+    assert "/x/1.log" in body
+    assert "候选人" not in body
+
+
+def test_wrapper_引擎起不来也落一行并返回非零(tmp_path):
+    def _raising_popen(argv, **kwargs):
+        raise FileNotFoundError("引擎没了")
+
+    rc = session_runner.run_session(
+        ["/nope/codex"],
+        msgid="MSG-SPAWN-FAIL",
+        log_path="/x/2.log",
+        popen=_raising_popen,
+        now=lambda: NOW,
+    )
+    assert rc == session_runner.SPAWN_FAILED_RC
+    (key, body), = _outbox_rows()
+    assert key == f"{session_runner.SESSION_EXIT_DEDUPE_PREFIX}:MSG-SPAWN-FAIL"
+    assert f"退出码：{session_runner.SPAWN_FAILED_EXIT_CODE}" in body
+    assert "备注：引擎进程未能创建：FileNotFoundError" in body
+
+
+def test_wrapper_入队失败不改变退出码(tmp_path, monkeypatch):
+    def _boom(**kwargs):
+        raise RuntimeError("磁盘满")
+
+    monkeypatch.setattr(session_runner, "enqueue_owner_notify", _boom)
+    rc = session_runner.run_session(
+        ["/usr/local/bin/codex"],
+        msgid="MSG-NOTIFY-BOOM",
+        log_path="/x/3.log",
+        popen=lambda argv, **kwargs: _ExitProcess(0),
+        now=lambda: NOW,
+    )
+    assert rc == 0
+
+
+def test_wrapper_main_把引擎argv逐字转给引擎并剔掉分隔符(tmp_path):
+    seen: dict = {}
+
+    def _popen(argv, **kwargs):
+        seen["argv"] = argv
+        return _ExitProcess(0)
+
+    rc = session_runner.main(
+        [
+            "--msgid", "MSG-MAIN",
+            "--log-path", "/x/4.log",
+            "--",
+            "/usr/local/bin/codex", "exec", "--json", "-",
+        ],
+        popen=_popen,
+        now=lambda: NOW,
+    )
+    assert rc == 0
+    assert seen["argv"] == ["/usr/local/bin/codex", "exec", "--json", "-"]
+    assert _outbox_rows()[0][0] == f"{session_runner.SESSION_EXIT_DEDUPE_PREFIX}:MSG-MAIN"
+
+
+def test_wrapper_main_缺引擎argv时不起进程(capsys):
+    assert session_runner.main(["--msgid", "m", "--log-path", "L"]) == session_runner.SPAWN_FAILED_RC
+    assert "引擎 argv" in capsys.readouterr().err
+
+
+def test_会话结束通知正文形状():
+    key, body = session_runner.build_session_exit_notice(
+        msgid="MSG1", exit_code=1, log_path="/x/1.log", elapsed_seconds=12.34, now=NOW
+    )
+    assert key == f"{session_runner.SESSION_EXIT_DEDUPE_PREFIX}:MSG1"
+    assert body == "\n".join(
+        (
+            "【HR·拆件会话结束】",
+            "- 消息标识（msgid）：MSG1",
+            "- 退出码：1",
+            "- 耗时：12.3 秒",
+            "- 日志路径：/x/1.log",
+            f"- 时刻：{NOW.isoformat()}",
+        )
+    )
