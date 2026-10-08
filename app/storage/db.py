@@ -715,6 +715,40 @@ CREATE TABLE IF NOT EXISTS onboarding_template (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_template_scope_version
     ON onboarding_template (scope_type, scope_id, version);
 
+-- 清单实例（design D3）：一份投递一份清单（application_id 唯一），按模板版本展开。
+-- status 两态：open（进行中）/ closed（已关闭，关闭原因落 closed_reason）。
+CREATE TABLE IF NOT EXISTS onboarding_checklist (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL UNIQUE REFERENCES application(id),
+    template_version INTEGER NOT NULL,
+    start_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    closed_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 清单条目：只跟踪状态，⛔ 无材料内容/附件/证件号字段。status 三态：
+-- pending（待办）/ done（已完成）/ waived（豁免，reason 必填由应用层校验）。
+-- required 用 INTEGER 0/1（SQLite 无原生 BOOLEAN）。
+CREATE TABLE IF NOT EXISTS onboarding_item (
+    id TEXT PRIMARY KEY NOT NULL,
+    checklist_id TEXT NOT NULL REFERENCES onboarding_checklist(id),
+    name TEXT NOT NULL,
+    owner_party TEXT NOT NULL CHECK (
+        owner_party IN ('hr', 'it', 'admin', 'finance', 'dept')
+    ),
+    due_offset_days INTEGER NOT NULL,
+    required INTEGER NOT NULL CHECK (required IN (0, 1)),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'waived')),
+    reason TEXT,
+    acted_by TEXT,
+    acted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_onboarding_item_checklist
+    ON onboarding_item (checklist_id);
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下属变更包 interview-scheduling（交付单元 U1）。全部新表，走 CREATE TABLE
 -- IF NOT EXISTS，**不进 _ADDED_COLUMNS**（加列路径只服务「老库缺列」，新表不需要）。

@@ -97,3 +97,104 @@ def test_onboarding_template_updated_by_cannot_be_blank(conn):
             "(id, scope_type, scope_id, version, items, updated_by) "
             "VALUES ('t-blank', 'department', 'd', 1, '[]', '   ')"
         )
+
+
+# ── Task 2：onboarding_checklist / onboarding_item ───────────────────────
+
+
+def test_onboarding_checklist_columns(conn):
+    assert _columns(conn, "onboarding_checklist") == {
+        "id", "application_id", "template_version", "start_date",
+        "status", "closed_reason", "created_by", "created_at",
+    }
+
+
+def test_onboarding_checklist_application_id_unique(conn):
+    _seed_application(conn, "app-1")
+    conn.execute(
+        "INSERT INTO onboarding_checklist "
+        "(id, application_id, template_version, start_date, created_by) "
+        "VALUES ('cl-1', 'app-1', 1, '2026-10-20', 'hr')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO onboarding_checklist "
+            "(id, application_id, template_version, start_date, created_by) "
+            "VALUES ('cl-2', 'app-1', 1, '2026-10-20', 'hr')"
+        )
+
+
+def test_onboarding_checklist_status_check(conn):
+    _seed_application(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO onboarding_checklist "
+            "(id, application_id, template_version, start_date, status, created_by) "
+            "VALUES ('cl-bad', 'app-1', 1, '2026-10-20', 'bogus', 'hr')"
+        )
+
+
+def test_onboarding_item_columns(conn):
+    assert _columns(conn, "onboarding_item") == {
+        "id", "checklist_id", "name", "owner_party", "due_offset_days",
+        "required", "status", "reason", "acted_by", "acted_at",
+    }
+
+
+def test_onboarding_item_has_no_content_columns(conn):
+    """⛔ 材料不入库：清单条目只跟踪状态，不得出现内容/附件/证件号类列。"""
+    cols = _columns(conn, "onboarding_item")
+    forbidden = {
+        "content", "attachment", "id_number", "file", "file_name",
+        "content_sha256", "raw_text", "parsed_json", "url",
+    }
+    assert not (forbidden & cols)
+
+
+def test_onboarding_item_owner_party_check(conn):
+    _seed_application(conn)
+    conn.execute(
+        "INSERT INTO onboarding_checklist "
+        "(id, application_id, template_version, start_date, created_by) "
+        "VALUES ('cl-1', 'app-1', 1, '2026-10-20', 'hr')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO onboarding_item "
+            "(id, checklist_id, name, owner_party, due_offset_days, required) "
+            "VALUES ('it-bad', 'cl-1', 'n', 'bogus', 0, 1)"
+        )
+
+
+def test_onboarding_item_status_check(conn):
+    _seed_application(conn)
+    conn.execute(
+        "INSERT INTO onboarding_checklist "
+        "(id, application_id, template_version, start_date, created_by) "
+        "VALUES ('cl-1', 'app-1', 1, '2026-10-20', 'hr')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO onboarding_item "
+            "(id, checklist_id, name, owner_party, due_offset_days, required, status) "
+            "VALUES ('it-bad', 'cl-1', 'n', 'hr', 0, 1, 'bogus')"
+        )
+
+
+def test_onboarding_item_required_check(conn):
+    _seed_application(conn)
+    conn.execute(
+        "INSERT INTO onboarding_checklist "
+        "(id, application_id, template_version, start_date, created_by) "
+        "VALUES ('cl-1', 'app-1', 1, '2026-10-20', 'hr')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO onboarding_item "
+            "(id, checklist_id, name, owner_party, due_offset_days, required) "
+            "VALUES ('it-bad', 'cl-1', 'n', 'hr', 0, 2)"
+        )
