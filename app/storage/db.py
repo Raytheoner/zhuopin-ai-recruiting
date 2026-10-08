@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -687,6 +688,121 @@ CREATE TABLE IF NOT EXISTS hr_session (
 );
 
 CREATE INDEX IF NOT EXISTS idx_hr_session_account ON hr_session (hr_account_id);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 以下 6 张表属变更包 onboarding-flow（交付单元 U1 入职域模型）。全部新表，
+-- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**（新表不需要加列路径）。
+-- ⛔ 材料不入库：onboarding_item 无 content / attachment / id_number / file 类列
+-- （tests/test_db_onboarding_schema.py 用列名反证）。
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- 清单模板（design D1/D6）：按岗位（scope_type='job'）或部门（'department'）维护，
+-- 版本化（(scope_type, scope_id, version) 唯一）。items 存 JSON 数组，每个元素
+-- {name, owner_party, due_offset_days, required}——只跟踪状态，不存材料内容。
+CREATE TABLE IF NOT EXISTS onboarding_template (
+    id TEXT PRIMARY KEY NOT NULL,
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('job', 'department')),
+    scope_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    items TEXT NOT NULL,
+    updated_by TEXT NOT NULL CHECK (
+        updated_by IS NOT NULL
+        AND trim(updated_by, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_template_scope_version
+    ON onboarding_template (scope_type, scope_id, version);
+
+-- 清单实例（design D3）：一份投递一份清单（application_id 唯一），按模板版本展开。
+-- status 两态：open（进行中）/ closed（已关闭，关闭原因落 closed_reason）。
+CREATE TABLE IF NOT EXISTS onboarding_checklist (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL UNIQUE REFERENCES application(id),
+    template_version INTEGER NOT NULL,
+    start_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    closed_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 清单条目：只跟踪状态，⛔ 无材料内容/附件/证件号字段。status 三态：
+-- pending（待办）/ done（已完成）/ waived（豁免，reason 必填由应用层校验）。
+-- required 用 INTEGER 0/1（SQLite 无原生 BOOLEAN）。
+CREATE TABLE IF NOT EXISTS onboarding_item (
+    id TEXT PRIMARY KEY NOT NULL,
+    checklist_id TEXT NOT NULL REFERENCES onboarding_checklist(id),
+    name TEXT NOT NULL,
+    owner_party TEXT NOT NULL CHECK (
+        owner_party IN ('hr', 'it', 'admin', 'finance', 'dept')
+    ),
+    due_offset_days INTEGER NOT NULL,
+    required INTEGER NOT NULL CHECK (required IN (0, 1)),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'waived')),
+    reason TEXT,
+    acted_by TEXT,
+    acted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_onboarding_item_checklist
+    ON onboarding_item (checklist_id);
+
+-- 条目状态变更留痕（spec「条目勾选与豁免留痕」）：每次变更写一行，from/to 两态。
+CREATE TABLE IF NOT EXISTS onboarding_item_history (
+    id TEXT PRIMARY KEY NOT NULL,
+    item_id TEXT NOT NULL REFERENCES onboarding_item(id),
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    reason TEXT,
+    acted_by TEXT,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_onboarding_item_history_item
+    ON onboarding_item_history (item_id);
+
+-- 部门经理进度查看留痕（spec「查看写访问留痕」）：只记谁/何时/哪个投递，
+-- ⛔ 不含清单内容本身。
+CREATE TABLE IF NOT EXISTS onboarding_access_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL CHECK (
+        accessor IS NOT NULL
+        AND trim(accessor, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    application_id TEXT NOT NULL REFERENCES application(id),
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_onboarding_access_log_application
+    ON onboarding_access_log (application_id);
+
+-- 入职后招聘数据处置队列（design D4）：登记与执行分离。策略未签认时
+-- policy_version NULL、planned_action='pending'、executed_at 恒空（断言在 U3/U4）。
+-- (application_id, category) 唯一是 effect_enqueue_disposition 幂等键的结构性
+-- 第二道防线。
+CREATE TABLE IF NOT EXISTS data_disposition_queue (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    candidate_id TEXT NOT NULL REFERENCES candidate(id),
+    category TEXT NOT NULL CHECK (
+        category IN (
+            'resume_file', 'parsed_fields', 'scores',
+            'interview', 'contact', 'offer_letter'
+        )
+    ),
+    policy_version TEXT,
+    planned_action TEXT NOT NULL DEFAULT 'pending'
+        CHECK (planned_action IN ('delete', 'anonymize', 'pending')),
+    due_at TEXT,
+    executed_at TEXT,
+    executed_by TEXT,
+    note TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_data_disposition_queue_app_category
+    ON data_disposition_queue (application_id, category);
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下属变更包 interview-scheduling（交付单元 U1）。全部新表，走 CREATE TABLE
