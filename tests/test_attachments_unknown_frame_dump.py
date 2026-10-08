@@ -10,9 +10,10 @@
    （⛔ 无取值）落到
    `InboundPorts.unknown_attachment_log_dir`。
 
-   ⚠️ 生产现状（TD-51，`b464315`）：`ATTACHMENT_FIELD_PATHS_BY_MSGTYPE["file"]` 已填两条
-   真实路径，未知帧分支只剩 `image`／`voice` 两个未映射 msgtype 会走到——用例据此用
-   `image` 帧验证，⛔ 不要再用 `file` 帧测「未知映射」分支（它已不是未知帧）。
+   ⚠️ 生产现状（TD-51）：`ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` 里 `file`（`b464315`）与
+   `image`（2026-10-08 `[Mac]1001K`）都已填真实路径，未知帧分支**只剩 `voice`** 一个
+   未映射 msgtype 会走到——用例据此用 `voice` 帧验证，⛔ 不要再用 `file`／`image` 帧测
+   「未知映射」分支（它们都已不是未知帧）。
 
 ⚠️ 帧用的是 `frames.py` 里已实测的真实路径（`body.msgid`/`body.from.userid`/
 `body.chattype`/`body.chatid`，AT-1b），⛔ 不是占位键名——这样测的才是生产真的会
@@ -44,17 +45,19 @@ def run_one(svc, ports, frame):
     )
 
 
-def make_single_image_frame(*, msgid="MSGID0201", sender=OUTSIDER_USERID):
-    """单聊、未知映射的图片帧：生产 `image` 不在 `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE` 里。"""
+def make_single_voice_frame(*, msgid="MSGID0201", sender=OUTSIDER_USERID):
+    """单聊、未知映射的语音帧：生产 `voice` 仍未进 `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE`
+    （2026-10-08 `[Mac]1001K` 起 `image` 已销账、不再是未知帧 ⇒ 用例改用仍未被映射的
+    `voice`）。"""
     return {
         "cmd": frames.MESSAGE_CALLBACK_CMD,
         "headers": {"req_id": "req-1"},
         "body": {
-            "msgtype": "image",
+            "msgtype": "voice",
             "chattype": "single",
             "msgid": msgid,
             "from": {"userid": sender},
-            "image": {"url": "https://example.invalid/media/unknown-single", "filesize": 999},
+            "voice": {"url": "https://example.invalid/media/unknown-single", "filesize": 999},
         },
     }
 
@@ -126,10 +129,11 @@ def test_group_frame_attachment_is_ignored_and_leaves_no_dump(svc, ports):
 def test_single_chat_unknown_attachment_frame_fails_closed_and_dumps_key_types_only(
     svc, ports
 ):
-    assert "image" not in frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE, "image 必须仍未映射，本用例才走到未知帧分支"
+    assert "voice" not in frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE, "voice 必须仍未映射，本用例才走到未知帧分支"
     assert "file" in frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE, "生产现状：file 已填表（TD-51），⛔ 不要断言整表为空"
+    assert "image" in frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE, "image 已销账（1001K），⛔ 不再是未知帧"
 
-    run_one(svc, ports, make_single_image_frame())
+    run_one(svc, ports, make_single_voice_frame())
 
     row = svc.conn.execute(
         "SELECT attachments_json FROM liaison_message WHERE msgid = ?", ("MSGID0201",)
@@ -137,11 +141,11 @@ def test_single_chat_unknown_attachment_frame_fails_closed_and_dumps_key_types_o
     assert row is not None, "正文应照常归档"
     assert json.loads(row[0]) == [], "fail-closed：附件 ⛔ 不落盘"
 
-    dumped = list(ports.unknown_attachment_log_dir.glob("*-image.json"))
+    dumped = list(ports.unknown_attachment_log_dir.glob("*-voice.json"))
     assert len(dumped) == 1, "单聊未知附件帧必须留一份取证文件"
     dumped_text = dumped[0].read_text(encoding="utf-8")
     payload = json.loads(dumped_text)
-    assert payload.get("body.image.url") == "str"
-    assert payload.get("body.image.filesize") == "int"
+    assert payload.get("body.voice.url") == "str"
+    assert payload.get("body.voice.filesize") == "int"
     assert "example.invalid" not in dumped_text, "⛔ 取证文件里不许出现取值"
     assert "999" not in dumped_text, "⛔ 取证文件里不许出现取值（含数值/长度）"

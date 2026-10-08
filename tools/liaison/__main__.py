@@ -432,9 +432,11 @@ def handle_message_frame(
     # 结构（⛔ 无取值）、正文照常归档。与上面主字段的处置**不同**：主字段取不到是
     # 整条不落库，附件取不到只是不落盘——材料还在企微侧，待办照样生成、人能去要；
     # 整条拦在库外才是丢材料。
+    # `chattype` 取一次复用：附件「只走私信」判据、群通知回推判据、私信回执判据
+    # （1001K）三者用的是同一个值，⛔ 不许拿 `thread_id` 的形状去猜。
+    chattype = frames.frame_chattype(frame)
     attachment_ref = None
     if fields.msgtype in frames.ATTACHMENT_MSGTYPES:
-        chattype = frames.frame_chattype(frame)
         if chattype != frames.SINGLE_CHAT_CHATTYPE:
             # Shao Peishen 2026-09-21 口径：附件只走私信（单聊），群帧附件一律忽略，
             # ⛔ 不尝试取句柄、⛔ 不落取证文件——群帧本来就不该有这份材料。
@@ -479,6 +481,7 @@ def handle_message_frame(
             msgtype=fields.msgtype,
             content=fields.content,
             attachment=attachment,
+            chattype=chattype,
             archive_root=ports.archive_root,
             whitelist_path=ports.whitelist_path,
             reply=ports.reply,
@@ -497,7 +500,6 @@ def handle_message_frame(
     # 通知——顺序反了就会出现"群里说已登记、库里没有这条待办"，而那个方向看不出错。
     # 「不是 single ⇒ 群帧」与上面「附件只走私信」用同一个判据：`compute_inbound_frame`
     # 对非 single/group 的 chattype 已经 fail-closed，能走到这里的只可能是两者之一。
-    chattype = frames.frame_chattype(frame)
     is_group_frame = chattype != frames.SINGLE_CHAT_CHATTYPE
     if result.route.should_enqueue and is_group_frame:
         _push_group_task_notice(svc, ports, fields, moment, chattype=chattype)

@@ -14,8 +14,10 @@ import pytest
 import tools.liaison.inbound as inbound_module
 from tools.liaison.archive import InboundAttachment
 from tools.liaison.inbound import (
+    DM_RECEIPT_TEXT,
     POLITE_NOTICE,
     compute_inbound_route,
+    compute_dm_receipt_text,
     handle_inbound_message,
 )
 from tools.liaison.storage import db as liaison_db
@@ -67,7 +69,18 @@ class ReplySpy:
         self.calls.append((thread_id, text))
 
 
-def _handle(conn, root, roster, *, sender, msgid="m1", thread_id=None, reply=None, payload=None):
+def _handle(
+    conn,
+    root,
+    roster,
+    *,
+    sender,
+    msgid="m1",
+    thread_id=None,
+    reply=None,
+    payload=None,
+    chattype=None,
+):
     return handle_inbound_message(
         conn,
         thread_id=thread_id or sender,
@@ -77,6 +90,7 @@ def _handle(conn, root, roster, *, sender, msgid="m1", thread_id=None, reply=Non
         msgtype="file" if payload is not None else "text",
         content="材料在这里",
         attachment=InboundAttachment(filename="表.xlsx", payload=payload) if payload is not None else None,
+        chattype=chattype,
         archive_root=root,
         whitelist_path=roster,
         reply=reply,
@@ -127,6 +141,113 @@ def test_compute_inbound_route_is_pure():
         if isinstance(node, ast.Call)
     }
     assert not (called & {"open", "now", "today", "getenv", "admit", "print"}), called
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 私信回执（1001K，2026-10-08）：名单内 + 单聊 + 新归档 ⇒ 恰好一条回执
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_admitted_single_chat_message_gets_exactly_one_dm_receipt(conn, root, roster):
+    """名单内单聊 ⇒ 回一条私信回执（⛔ 不是礼貌说明），归档＋入队照旧。"""
+    spy = ReplySpy()
+    result = _handle(
+        conn, root, roster, sender=ADMITTED_USERID, msgid="mDM1", reply=spy, chattype="single"
+    )
+
+    assert result.route.admitted is True
+    assert result.replied is True
+    assert spy.calls == [(ADMITTED_USERID, compute_dm_receipt_text("mDM1"))]
+    assert _message_count(conn) == 1
+    assert _task_count(conn) == 1
+    assert_effect_log_identity(conn)
+
+
+def test_replaying_an_admitted_single_chat_message_does_not_receipt_again(conn, root, roster):
+    """重投同一 msgid ⇒ 归档幂等命中 ⇒ ⛔ 不发第二条回执（那是骚扰）。"""
+    spy = ReplySpy()
+    first = _handle(
+        conn, root, roster, sender=ADMITTED_USERID, msgid="mDM2", reply=spy, chattype="single"
+    )
+    second = _handle(
+        conn, root, roster, sender=ADMITTED_USERID, msgid="mDM2", reply=spy, chattype="single"
+    )
+
+    assert first.replied is True
+    assert second.replied is False
+    assert len(spy.calls) == 1
+    assert _message_count(conn) == 1
+    assert _task_count(conn) == 1
+
+
+def test_admitted_group_message_gets_no_dm_receipt(conn, root, roster):
+    """群帧 ⛔ 不收私信回执（群帧的回推走 notify/relay，与本层无关）。"""
+    spy = ReplySpy()
+    result = _handle(
+        conn, root, roster, sender=ADMITTED_USERID, msgid="mDM3", reply=spy, chattype="group"
+    )
+
+    assert result.route.should_enqueue is True
+    assert result.replied is False
+    assert spy.calls == []
+    assert _message_count(conn) == 1
+
+
+def test_an_outsider_still_gets_the_polite_notice_not_a_dm_receipt(conn, root, roster):
+    """名单外 ⇒ 文案与行为原样，仍是原礼貌说明（⛔ 不是私信回执）。"""
+    spy = ReplySpy()
+    result = _handle(
+        conn, root, roster, sender=OUTSIDER_USERID, msgid="mDM4", reply=spy, chattype="single"
+    )
+
+    assert result.route.admitted is False
+    assert spy.calls == [(OUTSIDER_USERID, POLITE_NOTICE)]
+    assert POLITE_NOTICE != compute_dm_receipt_text("mDM4")
+
+
+def test_the_dm_receipt_carries_only_the_short_msgid_not_content_or_sender():
+    """🔴 回执 ⛔ 不含消息内容与发送人信息——只给 msgid 前 8 位短码与一句话。"""
+    msgid = "e30158528d8f959cc0a3511dd7960319"
+    text = compute_dm_receipt_text(msgid)
+
+    assert text == DM_RECEIPT_TEXT.format(msgid8="e3015852")
+    assert "e3015852" in text and msgid not in text, "⛔ 只留短追踪号，完整 msgid 不进文案"
+    assert "值守通道" in text and "已收到" in text
+    assert ADMITTED_USERID not in text
+
+
+def test_a_missing_reply_port_for_a_dm_receipt_is_logged_not_silently_dropped(
+    conn, root, roster, caplog
+):
+    """没接通道时（第 7 章之前）⛔ 不许静默吞——必须留痕。"""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger=inbound_module.__name__):
+        result = _handle(
+            conn, root, roster, sender=ADMITTED_USERID, msgid="mDM5", reply=None, chattype="single"
+        )
+
+    assert result.replied is False
+    assert _message_count(conn) == 1, "回执发不出去 ⛔ 不影响归档"
+    assert any("私信回执" in record.message for record in caplog.records)
+
+
+def test_a_failing_dm_receipt_port_does_not_undo_the_archive(conn, root, roster, caplog):
+    """回执通道炸了 ⇒ 记 ERROR 继续，⛔ 不许把已经归档的材料回滚掉。"""
+    import logging
+
+    def boom(thread_id, text):
+        raise RuntimeError("通道断了")
+
+    with caplog.at_level(logging.ERROR, logger=inbound_module.__name__):
+        result = _handle(
+            conn, root, roster, sender=ADMITTED_USERID, msgid="mDM6", reply=boom, chattype="single"
+        )
+
+    assert result.replied is False
+    assert _message_count(conn) == 1
+    assert _task_count(conn) == 1
+    assert any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 # ─────────────────────────────────────────────────────────────────────────

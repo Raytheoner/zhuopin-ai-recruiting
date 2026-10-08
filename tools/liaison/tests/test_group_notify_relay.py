@@ -22,6 +22,7 @@ import pytest
 from tools.liaison import __main__ as liaison_main
 from tools.liaison import frames, notify, session
 from tools.liaison.config import GROUP_WEBHOOK_ENV
+from tools.liaison.inbound import compute_dm_receipt_text
 from tools.liaison.notify import ratelimit
 from tools.liaison.notify.store import STATE_REJECTED, STATE_SENT
 from tools.liaison.storage import db as liaison_db
@@ -212,11 +213,14 @@ def test_a_group_message_is_pushed_back_exactly_once(svc, roster, tmp_path, cloc
 
 def test_a_private_message_is_never_pushed_back(svc, roster, tmp_path, clock):
     """私信照旧归档＋入队（那是第 4／5 章的既有契约），但⛔ 一条群通知都不发——
-    回推只对群帧（Shao Peishen 2026-09-30 答 1a 的口径）。"""
+    回推只对群帧（Shao Peishen 2026-09-30 答 1a 的口径）。1001K 起私信另回一条
+    **私信回执**（`inbound.DM_RECEIPT_TEXT`）——那是"已收到"告知，⛔ 与群回推无关。"""
     fake = FakeTransport([0])
+    reply = ReplySpy()
     ports = make_ports(
         tmp_path,
         roster,
+        reply=reply,
         group_notify=make_relay(clock, fake, env={GROUP_WEBHOOK_ENV: FAKE_WEBHOOK}),
     )
 
@@ -226,6 +230,26 @@ def test_a_private_message_is_never_pushed_back(svc, roster, tmp_path, clock):
     assert count(svc.conn, "SELECT COUNT(*) FROM liaison_task") == 1, "私信仍要入队"
     assert count(svc.conn, "SELECT COUNT(*) FROM liaison_group_notify") == 0
     assert fake.json_calls == [] and fake.multipart_calls == []
+    assert reply.calls == [(ADMITTED_USERID, compute_dm_receipt_text("MSG-S-1"))], (
+        "私信回执恰好一条（thread_id 取发送人 userid）"
+    )
+
+
+def test_a_group_message_gets_no_dm_receipt(svc, roster, tmp_path, clock):
+    """群帧 ⛔ 不收私信回执——回执只对单聊（1001K 口径）；群帧走 notify/relay 回推。"""
+    fake = FakeTransport([0])
+    reply = ReplySpy()
+    ports = make_ports(
+        tmp_path,
+        roster,
+        reply=reply,
+        group_notify=make_relay(clock, fake, env={GROUP_WEBHOOK_ENV: FAKE_WEBHOOK}),
+    )
+
+    run_frames(svc, ports, [(T0, make_frame(chattype="group", msgid="MSG-G-9"))])
+
+    assert count(svc.conn, "SELECT COUNT(*) FROM liaison_message") == 1
+    assert reply.calls == [], "群帧 ⛔ 不收回执（既不礼貌说明也不私信回执）"
 
 
 def test_an_outsider_group_message_is_archived_but_never_pushed_back(svc, roster, tmp_path, clock):

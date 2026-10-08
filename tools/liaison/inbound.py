@@ -34,7 +34,11 @@ from tools.liaison.archive import (
     InboundAttachment,
     archive_message,
 )
-from tools.liaison.frames import InboundAttachmentRef, _guess_attachment_filename
+from tools.liaison.frames import (
+    SINGLE_CHAT_CHATTYPE,
+    InboundAttachmentRef,
+    _guess_attachment_filename,
+)
 from tools.liaison.queue import compute_task_summary, enqueue_task
 from tools.liaison.whitelist import admit
 
@@ -52,6 +56,27 @@ POLITE_NOTICE = (
     "您的消息与材料已收到并留档，但当前未在本助手的受理范围内，不会转成待办事项。"
     "如需处理，请直接联系 Shao Peishen。"
 )
+
+#: 私信回执文案（1001K，2026-10-08）。
+#:
+#: **为什么要有它**：此前只有"群帧入队→群回推"，私信发件人（Shao Peishen 的同事）
+#: 看不到任何反馈、会误判"没收到"。这条回执专治那个误判。
+#:
+#: 🔴 **⛔ 不含消息内容与候选人个人信息**——只给 `msgid` 前 8 位短码与一句话。
+#: `{msgid8}` 由 `compute_dm_receipt_text` 填。
+#: **必须带"值守通道"标识**：这不是 AI 生成合成内容（固定模板，不落入
+#: 《AI 生成合成内容标识办法》的适用范围），但收件人不能误以为它是 Shao Peishen
+#: 本人的回复。
+DM_RECEIPT_TEXT = "【值守通道·已收到】消息编号 {msgid8}，已登记；如需答复会另行联系。"
+
+
+def compute_dm_receipt_text(msgid: str) -> str:
+    """`msgid` → 私信回执正文（纯函数，工程铁律 2）。
+
+    只取 `msgid` 前 8 位做短追踪号——与群回推文案的短追踪号同一口径，
+    ⛔ 不回显任何消息内容或发送人信息。
+    """
+    return DM_RECEIPT_TEXT.format(msgid8=msgid[:8])
 
 
 @dataclass(frozen=True)
@@ -188,11 +213,12 @@ def handle_inbound_message(
     msgtype: str,
     content: str = "",
     attachment: InboundAttachment | None = None,
+    chattype: str | None = None,
     archive_root: pathlib.Path = DEFAULT_ARCHIVE_ROOT,
     whitelist_path: pathlib.Path | None = None,
     reply: Callable[[str, str], Any] | None = None,
 ) -> InboundResult:
-    """归档 → （名单内）入队 → （名单外）礼貌回复。
+    """归档 → （名单内）入队 → 回复（名单外礼貌说明／名单内单聊私信回执）。
 
     顺序是**先归档、后回复**：材料落定了才告知对方"收到了但不受理"。
     反过来会出现"回复已发、材料没留住"，事后无从查证。
@@ -200,6 +226,11 @@ def handle_inbound_message(
     回复只在 `newly_archived` 为真时发出——重投同一 `msgid` 时归档会幂等命中，
     这时候再发一遍就是骚扰。⛔ 不要改成"查台账里有没有这一行"来判断：
     那是另一次查询、另一个时刻。
+
+    `chattype`（1001K 新增，默认 `None`）＝帧的会话类型，**只用于**判定私信回执
+    是否该发（名单内 + 单聊）。`None`／`"group"`／其它取值一律不发私信回执——
+    调用方（`__main__.handle_message_frame`）用 `frames.frame_chattype(frame)` 取后传入；
+    ⛔ 不许拿 `thread_id` 的形状去猜（私信的 `thread_id` 就是 `userid`，猜必错）。
     """
     route = compute_inbound_route(admit(sender_userid, whitelist_path))
 
@@ -234,6 +265,12 @@ def handle_inbound_message(
         )
 
     replied = False
+    # 一条入站消息**至多一条**回复，两条来源互斥：
+    # - 名单外 ⇒ 原礼貌说明（文案与行为原样，⛔ 不改）；
+    # - 名单内 + 单聊 ⇒ 私信回执（1001K，2026-10-08）；
+    # - 名单内 + 群聊 ⇒ 不回（群帧的回推走 notify/relay，⛔ 与本层无关）。
+    # 两者都只在 `newly_archived` 为真时发——重投同一 msgid 时归档幂等命中，
+    # 再发一遍就是骚扰。
     if route.reply_text is not None and outcome.newly_archived:
         if reply is None:
             # 第 7 章接通道之前会走到这里。⛔ 不静默吞——"没人回我"和
@@ -252,6 +289,29 @@ def handle_inbound_message(
                 # 回复失败 ⛔ 不许回滚归档——材料已经落定，那是本章更重要的产出。
                 logger.error(
                     "礼貌回复发送失败，材料已归档、不回滚。thread_id=%s msgid=%s",
+                    thread_id,
+                    msgid,
+                    exc_info=True,
+                )
+    elif route.admitted and chattype == SINGLE_CHAT_CHATTYPE and outcome.newly_archived:
+        receipt_text = compute_dm_receipt_text(msgid)
+        if reply is None:
+            # 与礼貌回复同一纪律：没接通道 ⛔ 不静默吞，否则"没回我"与"系统没打算回"
+            # 分不开（第 7 章接通道前会走到这里）。
+            logger.warning(
+                "私信回执未能发出：没有接入 reply 通道（第 6／7 章补）。"
+                "thread_id=%s msgid=%s",
+                thread_id,
+                msgid,
+            )
+        else:
+            try:
+                reply(thread_id, receipt_text)
+                replied = True
+            except Exception:  # noqa: BLE001
+                # 回执失败 ⛔ 不许回滚归档——材料已经落定。
+                logger.error(
+                    "私信回执发送失败，材料已归档、不回滚。thread_id=%s msgid=%s",
                     thread_id,
                     msgid,
                     exc_info=True,

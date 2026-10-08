@@ -135,15 +135,21 @@ def test_text_frames_carry_no_attachment_ref():
     assert frames.compute_attachment_ref({"body": {"msgtype": "text"}}, "text") is None
 
 
-def test_production_attachment_table_maps_the_confirmed_file_frame_and_still_fail_closes_others():
-    """TD-51 销账（2026-09-23 `0923C`）：`file` 的真实帧已确认
-    （`data/liaison/logs/liaison.log:274`），生产表必须直接映射出 ref；`image`／`voice`
-    仍没有真实文件帧依据，⛔ 必须继续 fail-closed，不许照抄 `file` 的容器命名猜。
+def test_production_attachment_table_maps_the_confirmed_file_and_image_frames():
+    """TD-51 销账：`file`（2026-09-23 `0923C`，依据 `data/liaison/logs/liaison.log:274`）
+    与 `image`（2026-10-08 `[Mac]1001K`，依据
+    `data/liaison/logs/unknown-attachment-frames/20261008T095404877835-image.json`）的真实帧
+    都已确认，生产表必须直接映射出 ref；`voice` 仍没有真实文件帧依据，⛔ 必须继续
+    fail-closed，不许照抄 `file`／`image` 的容器命名猜。
     """
     assert frames.ATTACHMENT_FIELD_PATHS_BY_MSGTYPE == {
         "file": {
             "download_url": ("body", "file", "url"),
             "aes_key": ("body", "file", "aeskey"),
+        },
+        "image": {
+            "download_url": ("body", "image", "url"),
+            "aes_key": ("body", "image", "aeskey"),
         },
     }
     real_shaped_frame = {
@@ -159,8 +165,19 @@ def test_production_attachment_table_maps_the_confirmed_file_frame_and_still_fai
         aes_key="stand-in-aes-key",
         filename=None,
     )
-    with pytest.raises(frames.AttachmentFieldsUnverifiedError):
-        frames.compute_attachment_ref({"body": {"msgtype": "image", "image": {}}}, "image")
+    # `image` 与 `file` 同形：body.image.url／body.image.aeskey，且**没有 filename**。
+    real_shaped_image = {
+        "body": {
+            "msgtype": "image",
+            "image": {"url": "https://real.invalid/media/pic", "aeskey": "stand-in-aes-key"},
+        }
+    }
+    assert frames.compute_attachment_ref(real_shaped_image, "image") == frames.InboundAttachmentRef(
+        msgtype="image",
+        download_url="https://real.invalid/media/pic",
+        aes_key="stand-in-aes-key",
+        filename=None,
+    )
     with pytest.raises(frames.AttachmentFieldsUnverifiedError):
         frames.compute_attachment_ref({"body": {"msgtype": "voice", "voice": {}}}, "voice")
 
@@ -292,6 +309,8 @@ def test_filename_falls_back_to_the_download_response_when_the_frame_has_none(
         (b"%PDF-1.7\n...", "MSGIDX.pdf"),
         (b"PK\x03\x04\x14\x00xlsx-bytes", "MSGIDX.docx"),
         (b"\xd0\xcf\x11\xe0\x00\x00doc-bytes", "MSGIDX.doc"),
+        (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01jpeg-bytes", "MSGIDX.jpg"),
+        (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRpng-bytes", "MSGIDX.png"),
         (b"\x00\x01not-a-known-type", "MSGIDX-扩展名不确定.bin"),
     ],
 )
@@ -317,6 +336,69 @@ def test_filename_falls_back_to_the_guessed_name_when_frame_and_response_both_la
     run_one(svc, ports, frame)
     items = attachments_json_of(svc.conn, "MSGID0002")
     assert items[0]["filename"] == "MSGID0002__MSGID0002.docx", "PAYLOAD 是 PK\\x03\\x04 开头"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ③ter `image` 私信图片帧（TD-51，2026-10-08 `[Mac]1001K`）：生产表已映射 `image`
+#   ⇒ 真实帧形状（body.image.url／body.image.aeskey，**无 filename**）经
+#   DownloadSpy 下载后按内容魔数命名落盘（.jpg／.png）。⛔ 不 monkeypatch 表。
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _real_image_frame(*, msgid="MSGID0004", sender=ADMITTED_USERID):
+    """真实帧形状（依据：`data/liaison/logs/unknown-attachment-frames/
+    20261008T095404877835-image.json`，2026-10-08 09:54）：`body.msgid`／
+    `body.from.userid`（AT-1b 已确认的固定路径）＋ `body.image.{url,aeskey}`（本条新确认），
+    **没有 filename**。⛔ 不用 `make_frame()` 的 `stand_in_*` 占位键。"""
+    return {
+        "cmd": frames.MESSAGE_CALLBACK_CMD,
+        "headers": {"req_id": "req-real-img"},
+        "body": {
+            "msgtype": "image",
+            "chattype": "single",
+            "msgid": msgid,
+            "from": {"userid": sender},
+            "image": {"url": "https://real.invalid/media/pic", "aeskey": "stand-in-aes-key"},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_ext"),
+    [
+        (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01jpeg-bytes\xff\xfe", "jpg"),
+        (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRpng-bytes\xff\xfe", "png"),
+    ],
+)
+def test_real_image_frame_is_downloaded_and_stored_with_the_guessed_extension(
+    svc, ports, payload, expected_ext
+):
+    """`image` 帧带 url／aeskey 却没有 filename ⇒ 下载后按内容魔数命名（.jpg／.png）。
+
+    ⛔ 不 monkeypatch `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE`——这条要验的正是生产表
+    现在真的认得这份真实 `image` 帧形状。"""
+    download = DownloadSpy(result=(payload, None))
+    run_ports = liaison_main.InboundPorts(
+        archive_root=ports.archive_root,
+        whitelist_path=ports.whitelist_path,
+        reply=ports.reply,
+        ledger_path=ports.ledger_path,
+        download=download,
+        unknown_attachment_log_dir=ports.unknown_attachment_log_dir,
+    )
+    run_one(svc, run_ports, _real_image_frame())
+
+    assert len(download.calls) == 1
+    assert download.calls[0].msgtype == "image"
+    assert download.calls[0].download_url == "https://real.invalid/media/pic"
+    assert download.calls[0].aes_key == "stand-in-aes-key"
+    items = attachments_json_of(svc.conn, "MSGID0004")
+    assert len(items) == 1
+    assert items[0]["filename"] == f"MSGID0004__MSGID0004.{expected_ext}"
+    assert (run_ports.archive_root / items[0]["relative_path"]).read_bytes() == payload
+    assert not list(ports.unknown_attachment_log_dir.glob("*-image.json")), (
+        "image 已销账 ⇒ ⛔ 不许再落未知附件帧取证文件"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────

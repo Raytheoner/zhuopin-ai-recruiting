@@ -52,9 +52,15 @@ aibot_service/frame_parsing.py` 读的 `body.file.{url,aeskey,filename,md5}` 在
 
 ⇒ `ATTACHMENT_FIELD_PATHS_BY_MSGTYPE["file"]` 已填两条路径（`download_url`／`aes_key`）；
 `filename` 没有真实键可填，落盘命名改由 `_guess_attachment_filename` 兜底（msgid 主干名 +
-按内容魔数猜扩展名，猜不出就 `.bin` 并把"猜不出"写进文件名）。`image`／`voice` 两个 msgtype
-仍不在表里 ⇒ `compute_attachment_ref` 对它们仍抛 `AttachmentFieldsUnverifiedError`，接线层
-（`__main__.handle_message_frame`）只记一行**无取值**的帧键结构、正文照常归档、附件不落盘。
+按内容魔数猜扩展名，猜不出就 `.bin` 并把"猜不出"写进文件名）。
+
+**`image` 亦已销账**（TD-51，2026-10-08 `[Mac]1001K`，依据：2026-10-08 09:54 真实私信图片帧
+取证文件 `data/liaison/logs/unknown-attachment-frames/20261008T095404877835-image.json`）：
+该帧 `body.image.url`／`body.image.aeskey` **与 `file` 同形、同样没有 filename**，两条路径
+据此填入表内。⚠️ `voice` 仍是空——本仓库至今没有一条真实的 `voice` 文件帧，
+⛔ 不许照抄 `image`／`file` 的容器命名套用；`compute_attachment_ref` 对它仍 fail-closed，
+接线层（`__main__.handle_message_frame`）只记一行**无取值**的帧键结构、正文照常归档、
+附件不落盘。
 """
 
 from __future__ import annotations
@@ -135,8 +141,11 @@ def frame_chattype(frame: Any) -> str | None:
 #: 2026-09-21 11:08:40 汤丽萍私信触发的真实帧）：该帧只有 `body.file.url`／`body.file.aeskey`
 #: 两个键，⛔ **没有 `body.file.filename`**——`filename` 不进本表，落盘命名改走
 #: `_guess_attachment_filename`（见下）。
-#: **`image`／`voice` 仍是空**：本仓库至今没有一条真实的这两种 msgtype 的文件帧，
-#: ⛔ 不许照抄 `file` 的容器命名套用——`compute_attachment_ref` 对它们仍 fail-closed。
+#: **`image` 已销账**（TD-51，2026-10-08 `[Mac]1001K`，依据：2026-10-08 09:54 真实私信图片帧
+#: 取证文件 `data/liaison/logs/unknown-attachment-frames/20261008T095404877835-image.json`）：
+#: 该帧 `body.image.url`／`body.image.aeskey` 与 `file` 同形，同样 **没有 filename**。
+#: **`voice` 仍是空**：本仓库至今没有一条真实的 `voice` 文件帧，
+#: ⛔ 不许照抄 `file`／`image` 的容器命名套用——`compute_attachment_ref` 对它仍 fail-closed。
 ATTACHMENT_FIELD_PATHS_BY_MSGTYPE: dict[str, dict[str, tuple[str, ...]]] = {
     "file": {
         # 依据：data/liaison/logs/liaison.log:274，2026-09-21 11:08:40
@@ -144,16 +153,27 @@ ATTACHMENT_FIELD_PATHS_BY_MSGTYPE: dict[str, dict[str, tuple[str, ...]]] = {
         # 依据：data/liaison/logs/liaison.log:274，2026-09-21 11:08:40
         "aes_key": ("body", "file", "aeskey"),
     },
+    "image": {
+        # 依据：data/liaison/logs/unknown-attachment-frames/20261008T095404877835-image.json，
+        # 2026-10-08 09:54（真实私信图片帧：body.image.url，无 filename）
+        "download_url": ("body", "image", "url"),
+        # 依据：同上（body.image.aeskey）
+        "aes_key": ("body", "image", "aeskey"),
+    },
 }
 
-#: 内容前缀（魔数）→ 扩展名。只覆盖 `_guess_attachment_filename` 已知的三种
-#: （2026-09-23 `0923C`）：PDF、旧版二进制 Office（doc）、ZIP 容器族（docx/xlsx/pptx
-#: 共用同一魔数，退化成 `.docx`——汤丽萍这次销账实测发的就是 doc 类文档）。
+#: 内容前缀（魔数）→ 扩展名。覆盖 `_guess_attachment_filename` 已知的五种：
+#: PDF、旧版二进制 Office（doc）、ZIP 容器族（docx/xlsx/pptx 共用同一魔数，退化成
+#: `.docx`——汤丽萍那次销账实测发的就是 doc 类文档），以及 **JPEG／PNG**
+#: （2026-10-08 `[Mac]1001K`：私信图片帧本身不带 filename，只能按魔数命名；JPEG 用
+#: 最常见的 `.jpg` 扩展名）。
 #: ⛔ 顺序即优先级，⛔ 不要为了"整齐"打乱：`startswith` 逐条试。
 _ATTACHMENT_MAGIC_EXTENSIONS: tuple[tuple[bytes, str], ...] = (
     (b"%PDF-", "pdf"),
     (b"PK\x03\x04", "docx"),
     (b"\xd0\xcf\x11\xe0", "doc"),
+    (b"\xff\xd8\xff", "jpg"),
+    (b"\x89PNG\r\n\x1a\n", "png"),
 )
 
 
