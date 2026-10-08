@@ -1142,6 +1142,43 @@ CREATE TABLE IF NOT EXISTS offer (
     updated_by TEXT,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS offer_approval_chain (
+    -- 审批链是岗位级配置（design D6）。天然键 (job_id, level)：同一岗位同一级
+    -- 出现两次即 bug。approver_account_ids 存 JSON 数组，元素是可识别账号
+    -- （hr_account.username）——spec「审批人为可识别账号」「MUST NOT 由 AI
+    -- 生成或推荐审批人」。
+    job_id TEXT NOT NULL REFERENCES job(id),
+    level INTEGER NOT NULL,
+    approver_account_ids TEXT NOT NULL DEFAULT '[]',
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (job_id, level)
+);
+
+CREATE TABLE IF NOT EXISTS offer_approval (
+    -- 每级审批一行（design D6）。(offer_id, round, level) 唯一是审批幂等的
+    -- 存储层第二道防线（第一道是 U3 effect_record_approval 的 effect_log 幂等键，
+    -- 本单元只建 schema）。
+    --
+    -- approver 的非空 CHECK 与 rejection_record.decided_by 同一手法（trim 第二参数
+    -- 显式列出空格/制表/换行/回车）：空审批人等于没有留痕，且由数据库强制。
+    id TEXT PRIMARY KEY NOT NULL,
+    offer_id TEXT NOT NULL REFERENCES offer(id),
+    round INTEGER NOT NULL,
+    level INTEGER NOT NULL,
+    approver TEXT NOT NULL CHECK (
+        approver IS NOT NULL
+        AND trim(approver, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    decision TEXT NOT NULL CHECK (decision IN ('approved', 'returned')),
+    comment TEXT,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (offer_id, round, level)
+);
+
+CREATE INDEX IF NOT EXISTS idx_offer_approval_offer
+    ON offer_approval (offer_id);
 """
 
 

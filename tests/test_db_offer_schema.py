@@ -32,6 +32,24 @@ def conn(tmp_path):
     return c
 
 
+def _seed_parents(conn):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('j1', '底层软件工程师', 'approved')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c1', '张三')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r1', 'j1', 'synthetic', 'a.pdf', 'sha-1', 'hr-1')"
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    conn.execute(
+        "INSERT INTO analysis_run (id, configured_model, prompt_version, temperature, "
+        "input_hash, raw_response) VALUES ('run1', 'deepseek-chat', 'letter-offer-v1', 0.0, 'h', '{}')"
+    )
+    conn.commit()
+
+
 # ── 新库建表齐全 ────────────────────────────────────────────────
 
 
@@ -61,6 +79,20 @@ def test_offer_table_exists_with_expected_columns(conn):
     }
 
 
+def test_offer_approval_chain_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "offer_approval_chain")
+    assert _columns(conn, "offer_approval_chain") == {
+        "job_id", "level", "approver_account_ids", "updated_by", "updated_at",
+    }
+
+
+def test_offer_approval_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "offer_approval")
+    assert _columns(conn, "offer_approval") == {
+        "id", "offer_id", "round", "level", "approver", "decision", "comment", "at",
+    }
+
+
 def test_offer_table_has_no_salary_columns(conn):
     """本包合规红线断言：offer 表列名不匹配薪资关键词。"""
     forbidden = ("salary", "pay", "compensation", "bonus", "薪")
@@ -72,7 +104,28 @@ def test_offer_table_has_no_salary_columns(conn):
     assert offending == []
 
 
+def test_offer_approval_unique_on_offer_round_level(conn):
+    _seed_parents(conn)
+    conn.execute(
+        "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+        "report_to, created_by) VALUES ('o1', 'app1', 'j1', 'd', '2026-10-08', 'r', 'hr-1')"
+    )
+    conn.execute(
+        "INSERT INTO offer_approval (id, offer_id, round, level, approver, decision) "
+        "VALUES ('oa1', 'o1', 1, 1, 'alice', 'approved')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO offer_approval (id, offer_id, round, level, approver, decision) "
+            "VALUES ('oa2', 'o1', 1, 1, 'bob', 'approved')"
+        )
+
+
 def test_offer_new_tables_never_enter_the_add_column_path():
     tables_touched = {table for table, _column, _ddl in _ADDED_COLUMNS}
-    new_tables = {"letter_template", "candidate_letter", "offer"}
+    new_tables = {
+        "letter_template", "candidate_letter", "offer",
+        "offer_approval_chain", "offer_approval",
+    }
     assert not (new_tables & tables_touched)
