@@ -136,6 +136,11 @@
   ④ **过渡执行路径已验证**：主会话非沙箱直跑 runner —— 渠道包 U1 **Task 1/2 已代提交**
   （`a21c1a2`/`af545ba`，分支 `lane-1001q-channel-u1-build`），Task 3 在跑；
   ⑤ **Q-04 已销号**（答 `2a`；跟踪改挂「`#4` 闭环 → M2 模板发出」）；待办：executor 级"动作通道跑 runner"（红线③，候选 (a)/(b)）。
+- **2026-10-08 18:3x：`run-sdd` 通道已落地并首跑（答 `1a`）**——① `scripts/action_request.py` 新增
+  `run-sdd` 动作（三闸＋同步 7200s 超时；launchd 非沙箱执行 runner）；`tests/test_action_request.py`
+  +9 条（86 passed 同跑）；② **渠道包 U1 Task 1–3 已跑通并合回 main**（`bb99fc8`；runner 代提交
+  `a21c1a2/af545ba/9a7922c`；判据 `tests/test_bundle_unpack.py tests/test_db_migration.py` = **20 passed**）；
+  ③ Final Review 口径修正（只读会话不再要求跑 pytest）；④ 排期 seg1 起由 **`run-sdd` 通道冒烟推进**。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。

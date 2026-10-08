@@ -23,11 +23,16 @@
 
 ## 三、仍待办（执行器级，属红线③）
 
-1. **run-build 的非沙箱执行路径**（本场采用"主会话直跑"为过渡）：候选——
-   (a) 动作通道新增动作（如 `run-sdd`）由 launchd 非沙箱执行 runner，主会话投请求；
-   (b) `run-lanes.sh` 对"构建类"条目直接由执行器起 runner（不套外层 codex 会话）。
-   两条都改执行器/动作通道，须专门 opener＋冒烟，⛔ 不进泳道。
-2. 第二批四条泳道（`1001Q/R/S/T`）按 PARTIAL 留痕；worktree/分支保留（干净）。
+1. ✅ **已落地（`1a` 答后当次完成）**：动作通道新增 **`run-sdd`**（`scripts/action_request.py`）——
+   `{"action":"run-sdd","plan":"docs/superpowers/plans/<文件>.md","tasks":"1-3","cwd":".claude/worktrees/<名>"}`；
+   三闸（plan 白名单＋存在、tasks 形状、cwd 必须是泳道 worktree）＋同步执行（超时默认 7200s）。
+   由 launchd 非沙箱执行 ⇒ runner 与它起的嵌套 `codex exec` 都不在 Seatbelt 里。测试
+   `tests/test_action_request.py` 新增 1 正例＋8 反例（与既有 86 条同跑全绿）。
+   ⚠️ 已知限制：同步执行期间提交通道被占用（构建完再提交文档）。
+2. ✅ 另修：runner 的 **Final Review 不再要求"只读会话里跑 pytest"**（只读沙箱无可用临时目录，
+   `tmp_path` 初始化必失败）——测试是否全绿改以任务提交记录与执行器 `## 机器判据` 为准。
+3. 第二批四条泳道（`1001Q/R/S/T`）按 PARTIAL 留痕；**渠道 seg1 已由过渡路径跑通并合回 main**
+   （`bb99fc8`，判据 20 passed）；其余三包 seg1 由 `run-sdd` 通道逐段冒烟推进。
 
 ## 四、验证记录（本场）
 
