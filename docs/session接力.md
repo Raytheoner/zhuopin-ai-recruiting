@@ -68,6 +68,9 @@
   （dedupe `unpack-dispatch-failed:{msgid}`）；② 新增会话 wrapper（`session_runner.py`）——会话结束即写
   `unpack-session-exit:{msgid}`（含 exit_code/日志路径），⛔ 不动拆件章程与拆件会话权限（通知一律由值守侧写）。
   她重发后 codex 首跑无论成败都会有私信到达 Shao Peishen。
+- **2026-10-08 09:4x：`1001I` 已闭环（`807634e` 合回 main，判据 117+10 passed）＋值守已重启**（liveness
+  `since=2026-10-08T09:42:57`，新通知代码生效）；**`1001J` 首页新壳泳道已发车**（Shao Peishen 答 `1a`：
+  首页与其余 7 页统一外壳，⛔ 不动 JS，判据含 `test_static_frontend` 全套 126 passed／3.2s）。
 - **下一步（业务泳道建议，下一场可直接接）**：M1 9.1 人评回收（≥80% ⇒ 勾 9.1＋归档两包；<80% ⇒ 按维度返工）
   → M2 三样输入落地（Q-06 脱敏脚本过审＋样本入库）→ U4/U5/U6 泳道（前置：判例批改表模板发出＋回件）。
 - **🔀 转场说明（2026-10-07 晚，已执行完毕）**：`[Mac]1001G` 已完成"PRD 补全 → @Product Design UI 升级"，
