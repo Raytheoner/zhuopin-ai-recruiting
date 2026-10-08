@@ -726,6 +726,48 @@ CREATE TABLE IF NOT EXISTS interviewer_availability (
 CREATE INDEX IF NOT EXISTS idx_interviewer_availability_interviewer
     ON interviewer_availability (interviewer_id);
 
+-- 面试场次（interview-slot-scheduling spec「安排/改期/取消/完成」；design D4）。
+-- 状态挂在 application 上（CLAUDE.md 数据模型要点：状态属投递不属候选人）。
+-- mode/status/invitation_status/kind 的 CHECK 是 spec 枚举在存储层的落点。
+-- reminder_sent_count 默认 0 只预留字段，本包不实现任何定时发送（design D8）。
+-- kind 一期只有 'human'，M3 若纳入自动排期再加 'ai_live'，本包不预建。
+CREATE TABLE IF NOT EXISTS interview_slot (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    round INTEGER NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('onsite', 'phone', 'online')),
+    location_or_link TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK (
+        status IN ('scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show')
+    ),
+    cancel_reason TEXT,
+    invitation_status TEXT NOT NULL DEFAULT 'none' CHECK (
+        invitation_status IN ('none', 'drafted', 'sent', 'confirmed', 'declined', 'reschedule_requested')
+    ),
+    sent_channel TEXT,
+    reminder_sent_count INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'human' CHECK (kind IN ('human')),
+    created_by TEXT,
+    updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_slot_application ON interview_slot (application_id);
+
+-- 场次与面试官的多对多（interview-slot-scheduling spec「指定面试官一至多位」）。
+-- 复合主键天然保证同一场次同一面试官只出现一次。
+CREATE TABLE IF NOT EXISTS interview_slot_interviewer (
+    interview_slot_id TEXT NOT NULL REFERENCES interview_slot(id),
+    interviewer_id TEXT NOT NULL REFERENCES interviewer(id),
+    PRIMARY KEY (interview_slot_id, interviewer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_slot_interviewer_interviewer
+    ON interview_slot_interviewer (interviewer_id);
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
 -- 走 CREATE TABLE IF NOT EXISTS，**不进 _ADDED_COLUMNS**：加列路径只服务
