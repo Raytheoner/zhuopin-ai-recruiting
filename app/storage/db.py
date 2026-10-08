@@ -749,6 +749,61 @@ CREATE TABLE IF NOT EXISTS onboarding_item (
 CREATE INDEX IF NOT EXISTS idx_onboarding_item_checklist
     ON onboarding_item (checklist_id);
 
+-- 条目状态变更留痕（spec「条目勾选与豁免留痕」）：每次变更写一行，from/to 两态。
+CREATE TABLE IF NOT EXISTS onboarding_item_history (
+    id TEXT PRIMARY KEY NOT NULL,
+    item_id TEXT NOT NULL REFERENCES onboarding_item(id),
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    reason TEXT,
+    acted_by TEXT,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_onboarding_item_history_item
+    ON onboarding_item_history (item_id);
+
+-- 部门经理进度查看留痕（spec「查看写访问留痕」）：只记谁/何时/哪个投递，
+-- ⛔ 不含清单内容本身。
+CREATE TABLE IF NOT EXISTS onboarding_access_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL CHECK (
+        accessor IS NOT NULL
+        AND trim(accessor, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    application_id TEXT NOT NULL REFERENCES application(id),
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_onboarding_access_log_application
+    ON onboarding_access_log (application_id);
+
+-- 入职后招聘数据处置队列（design D4）：登记与执行分离。策略未签认时
+-- policy_version NULL、planned_action='pending'、executed_at 恒空（断言在 U3/U4）。
+-- (application_id, category) 唯一是 effect_enqueue_disposition 幂等键的结构性
+-- 第二道防线。
+CREATE TABLE IF NOT EXISTS data_disposition_queue (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    candidate_id TEXT NOT NULL REFERENCES candidate(id),
+    category TEXT NOT NULL CHECK (
+        category IN (
+            'resume_file', 'parsed_fields', 'scores',
+            'interview', 'contact', 'offer_letter'
+        )
+    ),
+    policy_version TEXT,
+    planned_action TEXT NOT NULL DEFAULT 'pending'
+        CHECK (planned_action IN ('delete', 'anonymize', 'pending')),
+    due_at TEXT,
+    executed_at TEXT,
+    executed_by TEXT,
+    note TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_data_disposition_queue_app_category
+    ON data_disposition_queue (application_id, category);
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下属变更包 interview-scheduling（交付单元 U1）。全部新表，走 CREATE TABLE
 -- IF NOT EXISTS，**不进 _ADDED_COLUMNS**（加列路径只服务「老库缺列」，新表不需要）。

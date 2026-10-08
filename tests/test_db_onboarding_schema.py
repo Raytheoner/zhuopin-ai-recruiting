@@ -198,3 +198,89 @@ def test_onboarding_item_required_check(conn):
             "(id, checklist_id, name, owner_party, due_offset_days, required) "
             "VALUES ('it-bad', 'cl-1', 'n', 'hr', 0, 2)"
         )
+
+
+# ── Task 3：onboarding_item_history / onboarding_access_log / data_disposition_queue ──
+
+
+def test_onboarding_item_history_columns(conn):
+    assert _columns(conn, "onboarding_item_history") == {
+        "id", "item_id", "from_status", "to_status", "reason", "acted_by", "at",
+    }
+
+
+def test_onboarding_access_log_columns(conn):
+    assert _columns(conn, "onboarding_access_log") == {
+        "id", "accessor", "application_id", "at",
+    }
+
+
+def test_onboarding_access_log_accessor_cannot_be_blank(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO onboarding_access_log (id, accessor, application_id) "
+            "VALUES ('log-1', '  ', 'app-x')"
+        )
+
+
+def test_data_disposition_queue_columns(conn):
+    assert _columns(conn, "data_disposition_queue") == {
+        "id", "application_id", "candidate_id", "category", "policy_version",
+        "planned_action", "due_at", "executed_at", "executed_by", "note",
+    }
+
+
+def test_data_disposition_queue_category_check(conn):
+    _seed_application(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO data_disposition_queue (id, application_id, candidate_id, category) "
+            "VALUES ('dq-bad', 'app-1', 'cand-1', 'bogus')"
+        )
+    for category in (
+        "resume_file", "parsed_fields", "scores",
+        "interview", "contact", "offer_letter",
+    ):
+        conn.execute(
+            "INSERT INTO data_disposition_queue (id, application_id, candidate_id, category) "
+            "VALUES (?, 'app-1', 'cand-1', ?)",
+            (f"dq-{category}", category),
+        )
+    conn.commit()
+
+
+def test_data_disposition_queue_planned_action_check(conn):
+    _seed_application(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO data_disposition_queue "
+            "(id, application_id, candidate_id, category, planned_action) "
+            "VALUES ('dq-bad', 'app-1', 'cand-1', 'resume_file', 'archive')"
+        )
+
+
+def test_data_disposition_queue_app_category_unique(conn):
+    _seed_application(conn)
+    conn.execute(
+        "INSERT INTO data_disposition_queue (id, application_id, candidate_id, category) "
+        "VALUES ('dq-1', 'app-1', 'cand-1', 'resume_file')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO data_disposition_queue (id, application_id, candidate_id, category) "
+            "VALUES ('dq-2', 'app-1', 'cand-1', 'resume_file')"
+        )
+
+
+def test_data_disposition_queue_defaults_pending_and_null_policy(conn):
+    _seed_application(conn)
+    conn.execute(
+        "INSERT INTO data_disposition_queue (id, application_id, candidate_id, category) "
+        "VALUES ('dq-1', 'app-1', 'cand-1', 'resume_file')"
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT policy_version, planned_action FROM data_disposition_queue WHERE id='dq-1'"
+    ).fetchone()
+    assert row == (None, "pending")
