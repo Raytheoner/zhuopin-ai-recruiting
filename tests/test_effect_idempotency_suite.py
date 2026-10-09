@@ -99,6 +99,8 @@ from app.graph.live_session_nodes import (
 )
 from app.graph.resume_nodes import effect_persist_parse
 from app.graph.screening_nodes import compute_screen, effect_persist_flags
+from app.intake.bundle import FileEntry
+from app.intake.ingest_bundle import effect_ingest_bundle
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
 from app.schemas.live_turn_event import LiveTurnEvent
@@ -135,6 +137,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_mark_needs_manual",
         "effect_deliver_manual_handoff",
         "effect_persist_parse",
+        "effect_ingest_bundle",
         "effect_persist_flags",
         "effect_persist_prep_draft",
         "effect_freeze_prep",
@@ -612,6 +615,17 @@ _RECORDING_CONTENT = b"hello-recording-4-4"
 _RECORDING_SHA256 = hashlib.sha256(_RECORDING_CONTENT).hexdigest()
 
 
+def _bundle_ingest_stub(*, job_id, sample_class, uploaded_by, upload,
+                        source=None, source_origin=None) -> dict:
+    """`effect_ingest_bundle` 崩溃-恢复配方注入的单文件接收替身：不写任何库。
+
+    真实调用方注入的是 `app/web/server.py` 的 `_ingest_one_resume`（M2 既有单
+    文件接收，内部自管事务），它的业务表行数不属于本节点的原子边界。配方换成
+    不落库的桩，恒等式里数的就只剩本节点自己那一行 `bundle_ingest_result`。
+    """
+    return {"file_name": upload.filename, "status": "accepted", "resume_id": "stub-4-4"}
+
+
 def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
     """节点名 → 崩溃-恢复配方。键集合必须与 EFFECT_NODE_MANIFEST 逐字相等。"""
 
@@ -1044,6 +1058,37 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             count_business_rows=lambda conn: conn.execute(
                 "SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = ?", (_RESUME,)
             ).fetchone()[0],
+        ),
+        "effect_ingest_bundle": Recipe(
+            thread_id=_JOB,
+            seed=_seed_job,
+            invoke=lambda conn: effect_ingest_bundle(
+                conn,
+                thread_id=_JOB,
+                business_key="bundle-sha-4-4",
+                job_id=_JOB,
+                sample_class="synthetic",
+                uploaded_by="alice",
+                entries=[
+                    FileEntry(name="a.pdf", filename="a.pdf", kind="ok", data=b"%PDF-4-4"),
+                ],
+                default_source=None,
+                # ⚠️ ingest_one 是注入的桩：本节点自己的原子业务写只有
+                # bundle_ingest_result 一行（逐文件简历写入委托给 M2 既有单文件
+                # 接收，其幂等由文件哈希去重 + effect_persist_parse 承担，见计划
+                # 「架构决策」第 2 条）。崩溃-恢复协议要隔离的正是这一行，注入一个
+                # 不写库的桩才不会把 M2 的业务表行数混进本节点的恒等式。
+                ingest_one=_bundle_ingest_stub,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM bundle_ingest_result WHERE job_id = ?", (_JOB,)
+            ).fetchone()[0],
+            note=(
+                "本节点自己的业务事实 = bundle_ingest_result 一行（唯一键 job_id + "
+                "bundle_sha256）。逐文件简历写入委托给注入的 ingest_one，不在本节点"
+                "的原子边界内，故配方用不写库的桩把它隔离掉——一行 = 一次生效；"
+                "重放时 effect_log 先短路，撞不到 idx_bundle_ingest_result_job_hash。"
+            ),
         ),
         "effect_persist_flags": Recipe(
             thread_id=_APPLICATION,

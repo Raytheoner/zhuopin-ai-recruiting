@@ -74,6 +74,9 @@ from app.graph.invite_nodes import (
 )
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
+from app.intake.bundle import BundleTooLarge, unpack_bundle
+from app.intake.ingest_bundle import effect_ingest_bundle
+from app.intake.source import SOURCE_VALUES
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
@@ -146,6 +149,10 @@ class JDEditRequest(BaseModel):
 
 class FieldReviewRequest(BaseModel):
     human_value: str
+
+
+class SourceCorrectionRequest(BaseModel):
+    source: str
 
 
 class AppealTransitionRequest(BaseModel):
@@ -1045,39 +1052,104 @@ def create_app(
         request: Request,
         job_id: str = Form(...),
         sample_class: str = Form(...),
+        default_source: str | None = Form(None),
         files: list[UploadFile] = File(...),
     ):
         if sample_class not in _VALID_SAMPLE_CLASSES:
             raise HTTPException(status_code=422, detail="sample_class 取值非法")
+        if default_source is not None and default_source not in SOURCE_VALUES:
+            raise HTTPException(status_code=422, detail="default_source 取值非法")
         job = conn.execute("SELECT id FROM job WHERE id = ?", (job_id,)).fetchone()
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
 
         uploader = reviewer_of(request)
-        results = []
+        results: list[dict] = []
+        for f in files:
+            if Path(f.filename or "").suffix.lower() == ".zip":
+                results.extend(_ingest_bundle(
+                    request=request, job_id=job_id, sample_class=sample_class,
+                    uploaded_by=uploader, upload=f, default_source=default_source,
+                ))
+            else:
+                results.append(_ingest_single_file(
+                    request=request, job_id=job_id, sample_class=sample_class,
+                    uploaded_by=uploader, upload=f,
+                ))
+        return {"results": results}
+
+    def _ingest_single_file(*, request: Request, job_id: str, sample_class: str,
+                            uploaded_by: str, upload: UploadFile) -> dict:
+        if sample_class == "live":
+            gate_open = is_live_resume_intake_enabled(auth=request.state.auth, conn=conn)
+            if not gate_open:
+                logger.warning(
+                    "闸关闭时的 live 上传尝试：uploader=%s job_id=%s file=%s",
+                    uploaded_by, job_id, upload.filename,
+                )
+                return {"file_name": upload.filename, "status": "rejected",
+                        "reason": "真实简历入库闸未开启"}
+        return _ingest_one_resume(job_id=job_id, sample_class=sample_class,
+                                  uploaded_by=uploaded_by, upload=upload)
+
+    def _ingest_bundle(*, request: Request, job_id: str, sample_class: str,
+                       uploaded_by: str, upload: UploadFile, default_source: str | None) -> list[dict]:
+        data = upload.file.read()
+        bundle_sha256 = hashlib.sha256(data).hexdigest()
+
+        existing = conn.execute(
+            "SELECT result_json FROM bundle_ingest_result WHERE job_id = ? AND bundle_sha256 = ?",
+            (job_id, bundle_sha256),
+        ).fetchone()
+        if existing is not None:
+            return json.loads(existing[0])["results"]
 
         if sample_class == "live":
             gate_open = is_live_resume_intake_enabled(auth=request.state.auth, conn=conn)
             if not gate_open:
-                for f in files:
-                    results.append({
-                        "file_name": f.filename,
-                        "status": "rejected",
-                        "reason": "真实简历入库闸未开启",
-                    })
-                logger.warning(
-                    "闸关闭时的 live 上传尝试：uploader=%s job_id=%s file_count=%d",
-                    uploader, job_id, len(files),
+                results = [{"file_name": upload.filename, "status": "rejected",
+                            "reason": "真实简历入库闸未开启"}]
+                conn.execute(
+                    "INSERT INTO bundle_ingest_result (id, job_id, bundle_sha256, status, result_json) "
+                    "VALUES (?, ?, ?, 'rejected_gate', ?)",
+                    (str(uuid.uuid4()), job_id, bundle_sha256,
+                     json.dumps({"results": results}, ensure_ascii=False)),
                 )
-                return {"results": results}
+                conn.commit()
+                logger.warning(
+                    "闸关闭时的 live 导出包上传尝试：uploader=%s job_id=%s",
+                    uploaded_by, job_id,
+                )
+                return results
 
-        for f in files:
-            results.append(_ingest_one_resume(job_id=job_id, sample_class=sample_class,
-                                               uploaded_by=uploader, upload=f))
-        return {"results": results}
+        try:
+            entries = unpack_bundle(data)
+        except BundleTooLarge as exc:
+            logger.warning("导出包超限拒收：job_id=%s reason=%s", job_id, exc)
+            return [{"file_name": upload.filename, "status": "rejected", "reason": str(exc)}]
+
+        result = effect_ingest_bundle(
+            conn,
+            thread_id=job_id,
+            business_key=bundle_sha256,
+            job_id=job_id,
+            sample_class=sample_class,
+            uploaded_by=uploaded_by,
+            entries=entries,
+            default_source=default_source,
+            ingest_one=_ingest_one_resume,
+        )
+        if result is None:
+            row = conn.execute(
+                "SELECT result_json FROM bundle_ingest_result WHERE job_id = ? AND bundle_sha256 = ?",
+                (job_id, bundle_sha256),
+            ).fetchone()
+            return json.loads(row[0])["results"] if row else []
+        return result["results"]
 
     def _ingest_one_resume(*, job_id: str, sample_class: str, uploaded_by: str,
-                            upload: UploadFile) -> dict:
+                            upload: UploadFile, source: str | None = None,
+                            source_origin: str | None = None) -> dict:
         suffix = Path(upload.filename or "").suffix.lower()
         content = upload.file.read()
         # 提前拒收，不读 ingest_resume_text 的 UnsupportedFileType 路径——避免为被拒文件建 DB 行/落盘再回滚
@@ -1100,8 +1172,9 @@ def create_app(
 
         conn.execute(
             "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, "
-            "uploaded_by) VALUES (?, ?, ?, ?, ?, ?)",
-            (resume_id, job_id, sample_class, upload.filename, content_hash, uploaded_by),
+            "uploaded_by, source, source_origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (resume_id, job_id, sample_class, upload.filename, content_hash, uploaded_by,
+             source, source_origin),
         )
         conn.commit()
 
