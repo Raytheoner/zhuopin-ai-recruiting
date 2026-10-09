@@ -90,11 +90,25 @@ CREATE TABLE IF NOT EXISTS interview_session (
 );
 """
 
+# M2 U1 建表的 hr_account，不含 role——该列由 interview-scheduling U1 task 6
+# 通过 _ADDED_COLUMNS 加入老库。
+_LEGACY_HR_ACCOUNT_DDL = """
+CREATE TABLE hr_account (
+    id TEXT PRIMARY KEY NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 # 漂移守卫覆盖的表：凡是"既可能来自 SCHEMA 的 CREATE TABLE（新库）、又可能
 # 早就存在于老库里"的表都要进这个名单，新加一张这样的表就往这里加一行，并在
 # _legacy_db 里补上它的历史 DDL。⛔ 不要只写当下出过事的那张表——本守卫防的是
 # "往 CREATE TABLE 加列却不登记 _ADDED_COLUMNS"这一整类错法，不是某一次事故。
-_DRIFT_GUARDED_TABLES = ("job_profile", "resume", "job_prep_config", "interview_session")
+_DRIFT_GUARDED_TABLES = (
+    "job_profile", "resume", "job_prep_config", "interview_session", "hr_account",
+)
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -109,6 +123,7 @@ def _legacy_db(tmp_path) -> sqlite3.Connection:
         + _LEGACY_JOB_PROFILE_DDL
         + _LEGACY_RESUME_DDL
         + _LEGACY_JOB_PREP_CONFIG_DDL
+        + _LEGACY_HR_ACCOUNT_DDL
     )
     # 为了测试 interview_session 迁移列，需要创建它的 FK 依赖（candidate、application、stage）
     # 这些表在实际 .51 上早就存在
@@ -390,9 +405,13 @@ def test_audit_tables_never_enter_the_add_column_path(tmp_path):
 
     U5 task 1 继续往 job_prep_config / interview_session 加列（低置信度阈值、
     低分阈值、post 评分状态机），两张表都已在这个集合里，assert 本身不变。
+
+    interview-scheduling U1 task 6 再把 hr_account 加进来（HR 角色授权，老表缺
+    role 列），护栏判定逻辑仍然不变。
     """
     assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {
-        "job_profile", "job", "resume", "job_prep_config", "interview_session"
+        "job_profile", "job", "resume", "job_prep_config", "interview_session",
+        "hr_account",
     }
 
 

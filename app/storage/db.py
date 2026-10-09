@@ -677,6 +677,7 @@ CREATE TABLE IF NOT EXISTS hr_account (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1396,6 +1397,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 由应用层约束（Source 枚举），source_origin 三态由 DB CHECK 兜底。
     ("resume", "source", "TEXT"),
     ("resume", "source_origin", "TEXT CHECK (source_origin IN ('detected', 'default', 'corrected'))"),
+    # interview-scheduling U1：HR 角色授权。hr_account 是 M2 已建老表，CREATE
+    # TABLE IF NOT EXISTS 对老库无效，必须走加列迁移；默认 'hr' 让 .51 现有
+    # 账号（全是 HR）行为与今天完全一致。
+    ("hr_account", "role", "TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer'))"),
 )
 
 
