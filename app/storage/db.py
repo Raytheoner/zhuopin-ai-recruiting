@@ -1445,6 +1445,30 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+# onboarding-flow U1 占位模板 v1（design.md 风险表：人事部#3 回件未到，先给一份
+# 通用部门级默认，回件到后 HR 在页面改）。due_offset_days 相对入职日（负=入职前）。
+# 六条负责方与期限均为常识占位，⛔ 非真值。
+_ONBOARDING_DEFAULT_TEMPLATE_ITEMS = [
+    {"name": "签劳动合同", "owner_party": "hr", "due_offset_days": -3, "required": True},
+    {"name": "交入职材料", "owner_party": "hr", "due_offset_days": -3, "required": True},
+    {"name": "体检报告", "owner_party": "hr", "due_offset_days": -5, "required": True},
+    {"name": "配置设备", "owner_party": "it", "due_offset_days": -2, "required": True},
+    {"name": "开通账号", "owner_party": "it", "due_offset_days": -1, "required": True},
+    {"name": "指定带教人", "owner_party": "dept", "due_offset_days": 0, "required": False},
+]
+
+
+def _seed_onboarding_default_template(conn: sqlite3.Connection) -> None:
+    """幂等种子：部门级默认模板，固定主键，重复调用不产生第二行。"""
+    items_json = json.dumps(_ONBOARDING_DEFAULT_TEMPLATE_ITEMS, ensure_ascii=False)
+    conn.execute(
+        "INSERT OR IGNORE INTO onboarding_template "
+        "(id, scope_type, scope_id, version, items, updated_by) "
+        "VALUES ('template-department-default-v1', 'department', 'default', 1, ?, 'system')",
+        (items_json,),
+    )
+
+
 def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -1709,4 +1733,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 新库 SCHEMA 本就是三值 ⇒ 空转。
     _rebuild_hr_account_role_check(conn)
     _migrate_stage_for_interview(conn)
+    _seed_onboarding_default_template(conn)
     conn.commit()
