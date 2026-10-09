@@ -284,3 +284,84 @@ def test_data_disposition_queue_defaults_pending_and_null_policy(conn):
         "SELECT policy_version, planned_action FROM data_disposition_queue WHERE id='dq-1'"
     ).fetchone()
     assert row == (None, "pending")
+
+
+# ── Task 4：hr_account.role/department + Settings.retention_policy_signed_version ──
+
+
+def test_hr_account_gains_role_and_department_columns(conn):
+    assert {"role", "department"} <= _columns(conn, "hr_account")
+
+
+def test_hr_account_role_defaults_to_hr_and_department_nullable(conn):
+    conn.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+        "VALUES ('acc-1', 'alice', 'h', 's')"
+    )
+    conn.commit()
+    assert conn.execute("SELECT role FROM hr_account WHERE id='acc-1'").fetchone()[0] == "hr"
+    assert (
+        conn.execute("SELECT department FROM hr_account WHERE id='acc-1'").fetchone()[0]
+        is None
+    )
+
+
+def test_hr_account_role_check(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO hr_account (id, username, password_hash, password_salt, role) "
+            "VALUES ('acc-bad', 'bob', 'h', 's', 'bogus')"
+        )
+
+
+def test_hr_account_role_accepts_all_three_values(conn):
+    """三值枚举是本 Task 的产出：'dept_manager'（base 的两值 CHECK 会拒）与两个
+    既有值都必须可写——只测 'bogus' 被拒的话，退回两值枚举也照样绿。"""
+    for i, role in enumerate(("hr", "interviewer", "dept_manager")):
+        conn.execute(
+            "INSERT INTO hr_account (id, username, password_hash, password_salt, role) "
+            "VALUES (?, ?, 'h', 's', ?)",
+            (f"acc-{i}", f"user-{i}", role),
+        )
+    conn.commit()
+
+
+def test_retention_policy_signed_version_defaults_none():
+    assert Settings().retention_policy_signed_version is None
+
+
+def test_legacy_two_value_role_check_is_widened_for_dept_manager(tmp_path):
+    """排期包建过的老库（role 两值 CHECK）升级后 dept_manager 必须可写、FK 复原。"""
+    import sqlite3
+
+    from app.storage.db import get_connection, init_schema
+
+    path = tmp_path / "legacy.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(
+        """
+        CREATE TABLE hr_account (
+            id TEXT PRIMARY KEY NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        """
+    )
+    raw.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+        "VALUES ('acc-old', 'alice', 'h', 's')"
+    )
+    raw.commit()
+    raw.close()
+
+    conn = get_connection(str(path))
+    init_schema(conn)
+
+    assert conn.execute("SELECT role FROM hr_account WHERE id='acc-old'").fetchone() == ("hr",)
+    conn.execute("UPDATE hr_account SET role='dept_manager' WHERE id='acc-old'")
+    conn.commit()
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

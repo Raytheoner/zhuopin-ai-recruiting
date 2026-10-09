@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # 不替代人工判断）。
     m3_compliance_signoff_path: str = "docs/compliance/m3-interview-signoff.md"
 
+    # 合规验收 #1 留存策略签认版本（onboarding-flow design D4）。默认空 = 未签认，
+    # U4 的 effect_execute_disposition 据此拒绝执行（登记与执行分离的"签认闸"）。
+    # 签认后由 Shao Peishen 在 .51 的 .env 配置 RETENTION_POLICY_SIGNED_VERSION。
+    retention_policy_signed_version: str | None = None
+
     # 上传文件落盘目录（U2 tasks 3.3/3.4）。相对路径按进程工作目录解析，
     # 与 db_path 同一约定。
     resume_storage_dir: str = "data/resumes"

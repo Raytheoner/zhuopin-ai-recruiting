@@ -680,12 +680,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_annotation_batch_sample
 -- PBKDF2-HMAC-SHA256 加盐哈希存储（app/storage/hr_account.py，Task 8），
 -- ⛔ 不存明文、不存可逆加密。username 唯一——每人一个账号（部署约束 5
 -- 「共享口令不满足」）。
+-- role 值域用 onboarding-flow U1（design D2）的三值：hr／面试官／部门经理，
+-- 默认 'hr'（.51 现有账号全是 HR）；department 用于「部门经理只读本部门」
+-- 过滤，历史账号可空。
 CREATE TABLE IF NOT EXISTS hr_account (
     id TEXT PRIMARY KEY NOT NULL,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer')),
+    role TEXT NOT NULL DEFAULT 'hr'
+        CHECK (role IN ('hr', 'interviewer', 'dept_manager')),
+    department TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1431,9 +1436,37 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("resume", "source_origin", "TEXT CHECK (source_origin IN ('detected', 'default', 'corrected'))"),
     # interview-scheduling U1：HR 角色授权。hr_account 是 M2 已建老表，CREATE
     # TABLE IF NOT EXISTS 对老库无效，必须走加列迁移；默认 'hr' 让 .51 现有
-    # 账号（全是 HR）行为与今天完全一致。
-    ("hr_account", "role", "TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer'))"),
+    # 账号（全是 HR）行为与今天完全一致。值域由 onboarding-flow U1 tasks 1.4
+    # 扩到三值（dept_manager），这里复用同一列、⛔ 不重复登记第二条 role。
+    ("hr_account", "role", "TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer', 'dept_manager'))"),
+    # onboarding-flow U1 tasks 1.4：hr_account 加 department（部门经理只读本部门
+    # 过滤用，历史账号无部门，故可空）。与 role 同属"老表缺列"，走加列路径。
+    ("hr_account", "department", "TEXT"),
 )
+
+
+# onboarding-flow U1 占位模板 v1（design.md 风险表：人事部#3 回件未到，先给一份
+# 通用部门级默认，回件到后 HR 在页面改）。due_offset_days 相对入职日（负=入职前）。
+# 六条负责方与期限均为常识占位，⛔ 非真值。
+_ONBOARDING_DEFAULT_TEMPLATE_ITEMS = [
+    {"name": "签劳动合同", "owner_party": "hr", "due_offset_days": -3, "required": True},
+    {"name": "交入职材料", "owner_party": "hr", "due_offset_days": -3, "required": True},
+    {"name": "体检报告", "owner_party": "hr", "due_offset_days": -5, "required": True},
+    {"name": "配置设备", "owner_party": "it", "due_offset_days": -2, "required": True},
+    {"name": "开通账号", "owner_party": "it", "due_offset_days": -1, "required": True},
+    {"name": "指定带教人", "owner_party": "dept", "due_offset_days": 0, "required": False},
+]
+
+
+def _seed_onboarding_default_template(conn: sqlite3.Connection) -> None:
+    """幂等种子：部门级默认模板，固定主键，重复调用不产生第二行。"""
+    items_json = json.dumps(_ONBOARDING_DEFAULT_TEMPLATE_ITEMS, ensure_ascii=False)
+    conn.execute(
+        "INSERT OR IGNORE INTO onboarding_template "
+        "(id, scope_type, scope_id, version, items, updated_by) "
+        "VALUES ('template-department-default-v1', 'department', 'default', 1, ?, 'system')",
+        (items_json,),
+    )
 
 
 def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -1632,6 +1665,59 @@ def _migrate_stage_offer_hired(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _role_check_allows_dept_manager(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'hr_account'"
+    ).fetchone()
+    return bool(row and row[0] and "'dept_manager'" in row[0])
+
+
+def _rebuild_hr_account_role_check(conn: sqlite3.Connection) -> None:
+    """把 hr_account.role 的 CHECK 从两值放宽到三值（+dept_manager）。
+
+    SQLite 无法改 CHECK（同 `_rebuild_stage_table` 结论）：仅「列已存在、CHECK 缺
+    dept_manager」的老库需要整表重建。hr_account 被 hr_session / interviewer 外键
+    引用，重建期间 PRAGMA foreign_keys=OFF，完成后 foreign_key_check 复验。
+    ⛔ PRAGMA 在事务内是 no-op（1001O seg2 的 FAIL 根因）：try 内 commit、except 里
+    rollback 之后，finally 再重开。
+    """
+    if _role_check_allows_dept_manager(conn):
+        return
+    conn.commit()  # 事务外才能切 PRAGMA
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            """
+            CREATE TABLE hr_account_new (
+                id TEXT PRIMARY KEY NOT NULL,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'hr'
+                    CHECK (role IN ('hr', 'interviewer', 'dept_manager')),
+                department TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO hr_account_new (id, username, password_hash, password_salt, role, department, created_at) "
+            "SELECT id, username, password_hash, password_salt, role, department, created_at FROM hr_account"
+        )
+        conn.execute("DROP TABLE hr_account")
+        conn.execute("ALTER TABLE hr_account_new RENAME TO hr_account")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(f"hr_account 重建后外键不一致: {violations}")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     # executescript 里的 INSERT OR IGNORE 种子行会打开一个隐式事务；PRAGMA
@@ -1642,5 +1728,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 靠这一步补列。两条路径的结果必须一致，由 tests/test_db_migration.py 的
     # test_fresh_and_migrated_schemas_have_identical_columns 守着。
     apply_column_migrations(conn)
+    # 先补列、再放宽 CHECK：排期包（1001R）给 role 落的是两值 CHECK，
+    # _ADDED_COLUMNS 因「列已存在」静默跳过，dept_manager 会被旧 CHECK 拒。
+    # 新库 SCHEMA 本就是三值 ⇒ 空转。
+    _rebuild_hr_account_role_check(conn)
     _migrate_stage_for_interview(conn)
+    _seed_onboarding_default_template(conn)
     conn.commit()

@@ -172,6 +172,17 @@ class VerifyCodeRequest(BaseModel):
     code: str
 
 
+class OnboardingTemplateItem(BaseModel):
+    name: str
+    owner_party: str
+    due_offset_days: int
+    required: bool
+
+
+class OnboardingTemplateUpdateRequest(BaseModel):
+    items: list[OnboardingTemplateItem]
+
+
 class TurnOutcome(NamedTuple):
     """一轮采集的结果：给通道的消息 + L3 判定的"这是不是用人需求"。
 
@@ -1650,6 +1661,98 @@ def create_app(
         auth = getattr(request.state, "auth", None)
         if not getattr(auth, "authenticated", False):
             raise HTTPException(status_code=401, detail="未登录")
+
+    _ALLOWED_OWNER_PARTIES = frozenset({"hr", "it", "admin", "finance", "dept"})
+
+    def _require_role(request: Request, required_role: str) -> str:
+        """校验登录态 + 角色，返回账号 username。非登录 401、登录但角色不符 403。"""
+        auth = getattr(request.state, "auth", None)
+        if not getattr(auth, "authenticated", False):
+            raise HTTPException(status_code=401, detail="未登录")
+        username = getattr(auth, "user_id", None)
+        row = conn.execute(
+            "SELECT role FROM hr_account WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None or row[0] != required_role:
+            raise HTTPException(status_code=403, detail="无权限")
+        return username
+
+    def _canonical_items(items: list[dict]) -> str:
+        normalized = [
+            {
+                "name": item["name"].strip(),
+                "owner_party": item["owner_party"].strip(),
+                "due_offset_days": int(item["due_offset_days"]),
+                "required": bool(item["required"]),
+            }
+            for item in items
+        ]
+        return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+
+    @router.get("/api/onboarding-templates/{scope_type}/{scope_id}")
+    def get_onboarding_template(scope_type: str, scope_id: str, request: Request):
+        _require_role(request, "hr")
+        if scope_type not in ("job", "department"):
+            raise HTTPException(status_code=422, detail="scope_type 必须是 job 或 department")
+        row = conn.execute(
+            "SELECT version, items, updated_by, updated_at FROM onboarding_template "
+            "WHERE scope_type = ? AND scope_id = ? ORDER BY version DESC LIMIT 1",
+            (scope_type, scope_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        return {
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "version": row[0],
+            "items": json.loads(row[1]),
+            "updated_by": row[2],
+            "updated_at": row[3],
+        }
+
+    @router.put("/api/onboarding-templates/{scope_type}/{scope_id}")
+    def put_onboarding_template(
+        scope_type: str, scope_id: str, req: OnboardingTemplateUpdateRequest, request: Request
+    ):
+        username = _require_role(request, "hr")
+        if scope_type not in ("job", "department"):
+            raise HTTPException(status_code=422, detail="scope_type 必须是 job 或 department")
+        for item in req.items:
+            if not item.name or not item.name.strip():
+                raise HTTPException(status_code=422, detail="条目名称不能为空")
+            if item.owner_party not in _ALLOWED_OWNER_PARTIES:
+                raise HTTPException(status_code=422, detail=f"非法负责方: {item.owner_party}")
+
+        new_items_json = _canonical_items([i.model_dump() for i in req.items])
+        latest = conn.execute(
+            "SELECT version, items FROM onboarding_template "
+            "WHERE scope_type = ? AND scope_id = ? ORDER BY version DESC LIMIT 1",
+            (scope_type, scope_id),
+        ).fetchone()
+        if latest is not None and _canonical_items(json.loads(latest[1])) == new_items_json:
+            return {
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "version": latest[0],
+                "items": json.loads(latest[1]),
+                "unchanged": True,
+            }
+
+        new_version = (latest[0] + 1) if latest else 1
+        conn.execute(
+            "INSERT INTO onboarding_template "
+            "(id, scope_type, scope_id, version, items, updated_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), scope_type, scope_id, new_version, new_items_json, username),
+        )
+        conn.commit()
+        return {
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "version": new_version,
+            "items": json.loads(new_items_json),
+            "unchanged": False,
+        }
 
     @router.post("/api/applications/{application_id}/interview-sessions")
     def create_interview_session(

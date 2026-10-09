@@ -630,7 +630,8 @@ def test_eval_annotation_keeps_history_across_different_batches(conn):
 def test_hr_account_table_exists_with_expected_columns(conn):
     assert _table_exists(conn, "hr_account")
     assert _columns(conn, "hr_account") == {
-        "id", "username", "password_hash", "password_salt", "role", "created_at",
+        "id", "username", "password_hash", "password_salt",
+        "role", "department", "created_at",
     }
 
 
