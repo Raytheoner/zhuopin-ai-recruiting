@@ -90,8 +90,9 @@ CREATE TABLE IF NOT EXISTS interview_session (
 );
 """
 
-# M2 U1 建表的 hr_account，不含 role——该列由 interview-scheduling U1 task 6
-# 通过 _ADDED_COLUMNS 加入老库。
+# M2 U1 建表的 hr_account，不含 role/department——role 由 interview-scheduling
+# U1 task 6、department 由 onboarding-flow U1 tasks 1.4 通过 _ADDED_COLUMNS
+# 加入老库。
 _LEGACY_HR_ACCOUNT_DDL = """
 CREATE TABLE hr_account (
     id TEXT PRIMARY KEY NOT NULL,
@@ -271,6 +272,24 @@ def test_legacy_resume_gets_raw_text_and_is_writable(tmp_path):
     conn.commit()
     row = conn.execute("SELECT raw_text FROM resume WHERE id = 'old-resume'").fetchone()
     assert row[0] == "张三 嵌入式工程师"
+
+
+def test_legacy_hr_account_gains_role_and_department_with_defaults(tmp_path):
+    """.51 老库的 hr_account 补列后：role 默认 hr、department 空，历史行不改。"""
+    conn = _legacy_db(tmp_path)
+    conn.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+        "VALUES ('acc-old', 'alice', 'h', 's')"
+    )
+    conn.commit()
+    assert "role" not in _columns(conn, "hr_account")
+
+    init_schema(conn)
+
+    assert "role" in _columns(conn, "hr_account")
+    assert "department" in _columns(conn, "hr_account")
+    row = conn.execute("SELECT role, department FROM hr_account WHERE id='acc-old'").fetchone()
+    assert row == ("hr", None)
 
 
 def test_every_added_column_is_nullable_or_has_constant_default(tmp_path):
