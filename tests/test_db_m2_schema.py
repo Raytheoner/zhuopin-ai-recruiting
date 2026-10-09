@@ -181,9 +181,14 @@ def _seed_job_candidate_resume(conn, job_id="j1", candidate_id="c1", resume_id="
     conn.commit()
 
 
-def test_stage_table_preloads_three_rows(conn):
+def test_stage_table_preloads_four_rows(conn):
     rows = dict(conn.execute("SELECT id, stage_type FROM stage").fetchall())
-    assert rows == {"initial": "initial", "screening": "screening", "rejected": "rejected"}
+    assert rows == {
+        "initial": "initial",
+        "screening": "screening",
+        "rejected": "rejected",
+        "interview": "interview",
+    }
 
 
 def test_stage_type_check_rejects_unknown_type(conn):

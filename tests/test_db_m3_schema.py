@@ -810,14 +810,21 @@ def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
     文档认可的加列机制，不是本测试要拦的"未声明改动"。resume 的新列集合由
     tests/test_resume_source_schema.py 与 tests/test_db_migration.py 的漂移守卫
     单独钉住，这里只把 resume 从"DDL 原文逐字不变"的老表未触碰判据里摘出去，
-    其余老表的保护力度不变（行数比对仍保留 resume，确认加列不改行）。"""
+    其余老表的保护力度不变（行数比对仍保留 resume，确认加列不改行）。
+
+    stage 同理是刻意的例外：interview-scheduling U1 合法把 stage.stage_type 的
+    CHECK 从三值放宽到四值（追加 interview），SQLite 改不了 CHECK、只能整表重建
+    （offer-generation U1 之后还会再放宽到五值），stage 的 sqlite_master.sql 因此
+    必然变化。放宽后的枚举、interview 预置行与老库原三行的保留由
+    tests/test_db_interview_schema.py 单独钉住；这里只把 stage 从"DDL 原文逐字
+    不变"里摘出去，其余老表（含被 stage 外键引用的 application）保护力度不变。"""
     conn = _legacy_pre_m3_db(tmp_path)
     known_names = {
         row[0]
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
-        if row[0] != "resume"
+        if row[0] not in ("resume", "stage")
     }
     before_sql = _legacy_sqlite_master_sql(conn, known_names)
     before_counts = {

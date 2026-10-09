@@ -1,7 +1,10 @@
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job (
@@ -396,18 +399,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_ingest_result_job_hash
     ON bundle_ingest_result (job_id, bundle_sha256);
 
 -- 阶段池：全局共享，stage_type 是语义标签（逻辑只认类型），name 是可自定义
--- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行，id 与 stage_type 同名——
--- 这三行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
+-- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行、interview-scheduling U1
+-- 再补第四行 `interview`（面试排期的唯一入口阶段），id 与 stage_type 同名——
+-- 这四行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
 -- INSERT 新行（相同 stage_type、不同 id/name），本表结构不必改。
 CREATE TABLE IF NOT EXISTS stage (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
-    stage_type TEXT NOT NULL CHECK (stage_type IN ('initial', 'screening', 'rejected'))
+    stage_type TEXT NOT NULL CHECK (stage_type IN ('initial', 'screening', 'rejected', 'interview'))
 );
 
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('initial', '初筛', 'initial');
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('screening', '评估中', 'screening');
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('rejected', '已淘汰', 'rejected');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('interview', '面试', 'interview');
 
 -- 投递：独立实体，状态挂在这里而不是 candidate（CLAUDE.md 数据模型要点，
 -- Horilla 的坑）。resume_id 唯一——一条简历对应一次投递意图，1:1（design D11）。
@@ -1414,6 +1419,75 @@ def apply_column_migrations(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+_INTERVIEW_STAGE_ROW = ("interview", "面试", "interview")
+
+
+def _stage_has_interview_row(conn: sqlite3.Connection) -> bool:
+    return (
+        conn.execute("SELECT 1 FROM stage WHERE id = 'interview'").fetchone()
+        is not None
+    )
+
+
+def _migrate_stage_for_interview(conn: sqlite3.Connection) -> None:
+    """把 interview 预置行加进 stage，必要时放宽 stage_type 的 CHECK。
+
+    新库：SCHEMA 的 CREATE TABLE 已把 CHECK 放宽为四值，第四条 INSERT OR IGNORE
+    一步到位，本函数 early return。
+
+    老库（.51 上 M2 已建的三值 stage）：CREATE TABLE IF NOT EXISTS 是彻底的
+    no-op，第四条 INSERT OR IGNORE 被旧 CHECK 静默拒掉（不报错、行不出现）。
+    SQLite 无法用 ALTER TABLE 改 CHECK 枚举，只能整表重建（本文件
+    interview_live_event 表注释同一结论）。
+    """
+    if _stage_has_interview_row(conn):
+        return
+
+    try:
+        conn.execute(
+            "INSERT INTO stage (id, name, stage_type) VALUES (?, ?, ?)",
+            _INTERVIEW_STAGE_ROW,
+        )
+        conn.commit()
+        return
+    except sqlite3.IntegrityError:
+        pass  # CHECK 仍为三值 → 整表重建
+
+    conn.commit()  # 关掉可能的未决事务后再切 foreign_keys（PRAGMA 在事务内是 no-op）
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            "CREATE TABLE stage_new ("
+            "id TEXT PRIMARY KEY NOT NULL, "
+            "name TEXT NOT NULL, "
+            "stage_type TEXT NOT NULL CHECK ("
+            "stage_type IN ('initial', 'screening', 'rejected', 'interview')))"
+        )
+        conn.execute(
+            "INSERT INTO stage_new (id, name, stage_type) "
+            "SELECT id, name, stage_type FROM stage"
+        )
+        conn.execute(
+            "INSERT INTO stage_new (id, name, stage_type) VALUES (?, ?, ?)",
+            _INTERVIEW_STAGE_ROW,
+        )
+        conn.execute("DROP TABLE stage")
+        conn.execute("ALTER TABLE stage_new RENAME TO stage")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "rollback failed while rebuilding stage for interview stage_type",
+                exc_info=rollback_exc,
+            )
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def sqlite_utc_now() -> str:
     """
     与 SQLite `datetime('now')` 完全一致的 UTC 时间串（秒级、无时区后缀）。
@@ -1454,4 +1528,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 靠这一步补列。两条路径的结果必须一致，由 tests/test_db_migration.py 的
     # test_fresh_and_migrated_schemas_have_identical_columns 守着。
     apply_column_migrations(conn)
+    _migrate_stage_for_interview(conn)
     conn.commit()
