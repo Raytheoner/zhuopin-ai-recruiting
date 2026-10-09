@@ -93,6 +93,13 @@ def test_offer_approval_table_exists_with_expected_columns(conn):
     }
 
 
+def test_letter_access_log_table_exists_with_expected_columns(conn):
+    assert _table_exists(conn, "letter_access_log")
+    assert _columns(conn, "letter_access_log") == {
+        "id", "accessor", "application_id", "letter_id", "access_type", "at",
+    }
+
+
 def test_offer_table_has_no_salary_columns(conn):
     """本包合规红线断言：offer 表列名不匹配薪资关键词。"""
     forbidden = ("salary", "pay", "compensation", "bonus", "薪")
@@ -122,10 +129,38 @@ def test_offer_approval_unique_on_offer_round_level(conn):
         )
 
 
+def test_letter_access_log_access_type_check(conn):
+    _seed_parents(conn)
+    conn.execute(
+        "INSERT INTO candidate_letter (id, application_id, kind, version, "
+        "template_version, body, ai_generated, created_by) "
+        "VALUES ('l1', 'app1', 'offer', 1, 1, 'b', 1, 'hr-1')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO letter_access_log (id, accessor, application_id, letter_id, access_type) "
+            "VALUES ('log1', 'alice', 'app1', 'l1', 'download')"
+        )
+
+
+def test_letter_access_log_accessor_must_not_be_blank(conn):
+    _seed_parents(conn)
+    conn.execute(
+        "INSERT INTO candidate_letter (id, application_id, kind, version, "
+        "template_version, body, ai_generated, created_by) "
+        "VALUES ('l1', 'app1', 'offer', 1, 1, 'b', 1, 'hr-1')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO letter_access_log (id, accessor, application_id, letter_id, access_type) "
+            "VALUES ('log1', '  ', 'app1', 'l1', 'view')"
+        )
+
+
 def test_offer_new_tables_never_enter_the_add_column_path():
     tables_touched = {table for table, _column, _ddl in _ADDED_COLUMNS}
     new_tables = {
         "letter_template", "candidate_letter", "offer",
-        "offer_approval_chain", "offer_approval",
+        "offer_approval_chain", "offer_approval", "letter_access_log",
     }
     assert not (new_tables & tables_touched)

@@ -1332,6 +1332,30 @@ CREATE TABLE IF NOT EXISTS offer_approval (
 
 CREATE INDEX IF NOT EXISTS idx_offer_approval_offer
     ON offer_approval (offer_id);
+
+CREATE TABLE IF NOT EXISTS letter_access_log (
+    -- 文书查看/导出留痕（candidate-letter-engine spec「导出 docx」与「文书草稿
+    -- 的查看留痕」）。⛔ 无正文列（spec「留痕 MUST NOT 包含文书内容本身」），
+    -- 只有访问者/投递/文书标识/类型/时刻。
+    --
+    -- accessor 的非空 CHECK 与 resume_access_log.accessor 同一手法：空访问者
+    -- 等于没有留痕。
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL CHECK (
+        accessor IS NOT NULL
+        AND trim(accessor, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    application_id TEXT NOT NULL REFERENCES application(id),
+    letter_id TEXT NOT NULL REFERENCES candidate_letter(id),
+    access_type TEXT NOT NULL CHECK (access_type IN ('view', 'export')),
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_letter_access_log_letter
+    ON letter_access_log (letter_id);
+
+CREATE INDEX IF NOT EXISTS idx_letter_access_log_application
+    ON letter_access_log (application_id);
 """
 
 
