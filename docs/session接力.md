@@ -174,6 +174,24 @@
   `.51` 现网表结构，开跑前需人核）／Offer Task 4–6（stage 五值＋`letter_access_log`＋审批链存储）／
   入职 Task 4–5（`hr_account.role/department` 加列＋占位模板种子）／渠道 Task 4–6；⑥ `任务台账.yaml`
   已按真身刷新（seg1 四条仍显示 ready——tasks.md 未回勾是 opener 约定，⛔ 不是漏做）。
+- **2026-10-09 10:0x（`1001G` 续跑）：四包 U1 的 seg2 全部落地**——① 全部走 run-sdd 通道＋**flash**（单段 20~40 分钟），
+  每段＝逐 Task 红→绿＋双只读 review＋Final Review，判据在 worktree 与 main 各跑一遍：排期 Task 4-6 **187 passed**
+  ＋老库实证；Offer Task 4-6 **205 passed**；入职 Task 4-5 **111 passed**＋两值 role 老库实测；渠道 Task 4-6 **73 passed**
+  （另渠道包全量 4068 passed）；② 合回 main：`e71c586`（排期）／`39151cd`（Offer）／`e30b917`（入职）／`8d9c3a3`（渠道）
+  ——均已推送；**main 全量 4070 passed / 10 skipped**；③ 本场三处**真缺陷**都由 review/实证抓住并按根因修（其中两处改的是计划文本本身）：
+  排期包 `stage` 四值重建迁移（老库三值路径亲手实证：原行保留／`interview` 可写／FK=1／幂等）；
+  Offer 计划 Task 5 的 `PRAGMA foreign_keys` 顺序坑（**事务内 PRAGMA 是 no-op** ⇒ 老库迁移后 FK 强制被留在 OFF）→ 计划修正
+  `a6cf562`＋泳道修正版落成**六值** CHECK（`initial/screening/rejected/interview/offer/hired`，不清退排期包的 `interview`）；
+  入职计划 Task 4 的**跨包 role CHECK 冲突**（排期两值 `('hr','interviewer')` vs 入职三值；列已存在时 ALTER 路径静默跳过 ⇒
+  `dept_manager` 恒被旧 CHECK 拒）→ 计划修正 `9046bd4`＋`hr_account` 整表重建迁移（两值老库实测：`dept_manager` 可写、
+  会话行不丢、FK=1）；④ 执行器两处加固：无头纪律⑤「计划里的裸 `python3` 一律换 `$SDD_PYTHON`」；`progress.md`
+  分段重跑补行（勾选不再静默丢失，`06d911e`）；⑤ 一次 review **输出截断假阴**（Offer Task 5 第二份 Spec review
+  未落 `VERDICT:` 行）→ 主会话做更强等价复核（真跑 pytest）后代提交 `dac66f9`，证据留档泳道进度目录
+  `主会话复核-任务5-截断假阴补证.md`；⑥ 遗留：排期包老库 `stage` 守卫的补偿断言在 Task 9（聚合
+  `tests/test_db_interview_schema.py`）落地前暂缺；⑦ 进度：**入职包 U1 已全部完成（Task 1-5）**；待续段＝排期 Task 7-10
+  （名单维护接口＋聚合 schema 测试）／Offer Task 7-9（审批链接口＋无薪资聚合断言）／渠道 Task 7（收口）；
+  ⑧ ⚠️ **`.51` 发版注意**：U1 合入后 `stage`（3/4→6 值）与 `hr_account`（role 2→3 值）都带**整表重建迁移**——
+  发版前按发版清单先做 DB 快照，G3 仍需 Shao Peishen 放行。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。
