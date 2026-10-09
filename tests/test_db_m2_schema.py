@@ -181,20 +181,26 @@ def _seed_job_candidate_resume(conn, job_id="j1", candidate_id="c1", resume_id="
     conn.commit()
 
 
-def test_stage_table_preloads_four_rows(conn):
+def test_stage_table_preloads_six_rows(conn):
+    """M2 三行 + interview-scheduling U1 的 interview + offer-generation U1 的
+    offer/hired（offer 审批通过后的阶段与入职阶段），六行即全部合法阶段。"""
     rows = dict(conn.execute("SELECT id, stage_type FROM stage").fetchall())
     assert rows == {
         "initial": "initial",
         "screening": "screening",
         "rejected": "rejected",
         "interview": "interview",
+        "offer": "offer",
+        "hired": "hired",
     }
 
 
 def test_stage_type_check_rejects_unknown_type(conn):
+    """CHECK 仍然只放行枚举内的类型——`offer` 已被 offer-generation U1 放宽为
+    合法值，本用例改用真正未知的取值。"""
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO stage (id, name, stage_type) VALUES ('offer', '发 offer', 'offer')"
+            "INSERT INTO stage (id, name, stage_type) VALUES ('bad', 'bad', 'bad')"
         )
 
 

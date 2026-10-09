@@ -400,19 +400,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_ingest_result_job_hash
 
 -- 阶段池：全局共享，stage_type 是语义标签（逻辑只认类型），name 是可自定义
 -- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行、interview-scheduling U1
--- 再补第四行 `interview`（面试排期的唯一入口阶段），id 与 stage_type 同名——
--- 这四行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
+-- 补第四行 `interview`（面试排期的唯一入口阶段）、offer-generation U1 再补
+-- `offer` / `hired`（offer 审批通过后的阶段与入职阶段），id 与 stage_type 同名
+-- ——这六行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
 -- INSERT 新行（相同 stage_type、不同 id/name），本表结构不必改。
+--
+-- ⚠️ SQLite 改不了 CHECK：老库（三值或四值）由 init_schema 里的
+-- _migrate_stage_offer_hired 整表重建补齐（见该函数）。
 CREATE TABLE IF NOT EXISTS stage (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
-    stage_type TEXT NOT NULL CHECK (stage_type IN ('initial', 'screening', 'rejected', 'interview'))
+    stage_type TEXT NOT NULL CHECK (
+        stage_type IN ('initial', 'screening', 'rejected', 'interview', 'offer', 'hired')
+    )
 );
 
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('initial', '初筛', 'initial');
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('screening', '评估中', 'screening');
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('rejected', '已淘汰', 'rejected');
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('interview', '面试', 'interview');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('offer', 'Offer', 'offer');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('hired', '已入职', 'hired');
 
 -- 投递：独立实体，状态挂在这里而不是 candidate（CLAUDE.md 数据模型要点，
 -- Horilla 的坑）。resume_id 唯一——一条简历对应一次投递意图，1:1（design D11）。
@@ -1551,8 +1559,85 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _stage_type_check_complete(conn: sqlite3.Connection) -> bool:
+    """stage_type 的 CHECK 是否已含 offer/hired。SQLite 改不了 CHECK，本判断
+    决定老库是否要整表重建（见 _rebuild_stage_table）。"""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'stage'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return False
+    return "'offer'" in row[0] and "'hired'" in row[0]
+
+
+def _rebuild_stage_table(conn: sqlite3.Connection) -> None:
+    """把 stage.stage_type 的 CHECK 从三值/四值扩到六值（追加 offer/hired）。
+
+    SQLite 无法用 ALTER TABLE 修改 CHECK（与 interview_live_event 建表注释同一
+    结论），追加 stage_type 只能整表重建。stage 是维度表且被 application /
+    application_stage_history 外键引用，重建期间必须 PRAGMA foreign_keys=OFF，
+    完成后 PRAGMA foreign_key_check 复验。行级数据（initial/screening/rejected/
+    interview 及可能已存在的 offer/hired）原样复制，一条不丢。
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            """
+            CREATE TABLE stage_new (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                stage_type TEXT NOT NULL CHECK (
+                    stage_type IN ('initial', 'screening', 'rejected', 'interview', 'offer', 'hired')
+                )
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO stage_new (id, name, stage_type) "
+            "SELECT id, name, stage_type FROM stage"
+        )
+        conn.execute("DROP TABLE stage")
+        conn.execute("ALTER TABLE stage_new RENAME TO stage")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        # ⛔ PRAGMA 在事务内是 no-op：必须等上面 commit/rollback 关掉事务后再重开，
+        # 否则连接的外键强制会被留在 OFF（1001O seg2 Spec review 实测 FAIL 的根因）。
+        conn.execute("PRAGMA foreign_keys = ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(f"stage 重建后外键不一致: {violations}")
+
+
+def _seed_offer_hired_stages(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO stage (id, name, stage_type) "
+        "VALUES ('offer', 'Offer', 'offer')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO stage (id, name, stage_type) "
+        "VALUES ('hired', '已入职', 'hired')"
+    )
+
+
+def _migrate_stage_offer_hired(conn: sqlite3.Connection) -> None:
+    """老库 stage.stage_type 缺 offer/hired 时整表重建并补种子行；新库已含则空转。"""
+    if _stage_type_check_complete(conn):
+        return
+    _rebuild_stage_table(conn)
+    _seed_offer_hired_stages(conn)
+    conn.commit()
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # executescript 里的 INSERT OR IGNORE 种子行会打开一个隐式事务；PRAGMA
+    # foreign_keys 只在事务外生效（_rebuild_stage_table 依赖它），先提交关掉。
+    conn.commit()
+    _migrate_stage_offer_hired(conn)
     # 新库走 CREATE TABLE 就已经带全新列，这里是空转；老库（.51 的 demo.db）
     # 靠这一步补列。两条路径的结果必须一致，由 tests/test_db_migration.py 的
     # test_fresh_and_migrated_schemas_have_identical_columns 守着。
