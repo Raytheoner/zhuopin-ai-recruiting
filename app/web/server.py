@@ -1263,6 +1263,32 @@ def create_app(
                 "resume_id": resume_id, "application_id": application_id,
                 "parse_status": "parsed", "screening_status": screening_status}
 
+    @router.post("/api/resumes/{resume_id}/source")
+    def correct_resume_source(request: Request, resume_id: str, req: SourceCorrectionRequest):
+        new_source = req.source
+        if new_source not in SOURCE_VALUES:
+            raise HTTPException(status_code=422, detail="source 取值非法")
+        row = conn.execute("SELECT source FROM resume WHERE id = ?", (resume_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="resume not found")
+
+        current = row[0]
+        if current == new_source:
+            return {"resume_id": resume_id, "source": new_source, "already_corrected": True}
+
+        corrected_by = reviewer_of(request)
+        conn.execute(
+            "INSERT INTO source_correction_log (id, resume_id, from_source, to_source, corrected_by) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), resume_id, current, new_source, corrected_by),
+        )
+        conn.execute(
+            "UPDATE resume SET source = ?, source_origin = 'corrected' WHERE id = ?",
+            (new_source, resume_id),
+        )
+        conn.commit()
+        return {"resume_id": resume_id, "source": new_source, "already_corrected": False}
+
     @router.post("/api/resumes/{resume_id}/reparse")
     def reparse_resume(resume_id: str):
         row = conn.execute(
