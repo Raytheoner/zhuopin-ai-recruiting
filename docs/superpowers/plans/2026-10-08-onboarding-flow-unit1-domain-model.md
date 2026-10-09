@@ -795,6 +795,109 @@ def test_legacy_hr_account_gains_role_and_department_with_defaults(tmp_path):
     conn.execute("CREATE TABLE hr_account (id TEXT PRIMARY KEY)")
 ```
 
+⑦ **修正（2026-10-09，`1001G`）：role 的 CHECK 放宽迁移（跨包冲突，`1001T` seg2 Spec review 实测 FAIL 根因）**。
+排期包（`1001R`，已并入 main）给 `hr_account.role` 落的两值 CHECK 是 `('hr','interviewer')`；本包要三值。
+**已带两值 role 的库**（.51 若先发排期包，或任何由排期代码建/迁过的库）：`_ADDED_COLUMNS` 因「列已存在」
+静默跳过 ⇒ `dept_manager` 恒被旧 CHECK 拒（复现：`CHECK constraint failed: role IN ('hr','interviewer')`），
+且现有测试只比列名、发现不了。SQLite 改不了 CHECK（同 stage 决策），必须整表重建。
+**在 `app/storage/db.py` 的 stage 迁移函数之后新增**：
+
+```python
+def _role_check_allows_dept_manager(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'hr_account'"
+    ).fetchone()
+    return bool(row and row[0] and "'dept_manager'" in row[0])
+
+
+def _rebuild_hr_account_role_check(conn: sqlite3.Connection) -> None:
+    """把 hr_account.role 的 CHECK 从两值放宽到三值（+dept_manager）。
+
+    SQLite 无法改 CHECK（同 `_rebuild_stage_table` 结论）：仅「列已存在、CHECK 缺
+    dept_manager」的老库需要整表重建。hr_account 被 hr_session / interviewer 外键
+    引用，重建期间 PRAGMA foreign_keys=OFF，完成后 foreign_key_check 复验。
+    ⛔ PRAGMA 在事务内是 no-op（1001O seg2 的 FAIL 根因）：try 内 commit、except 里
+    rollback 之后，finally 再重开。
+    """
+    if _role_check_allows_dept_manager(conn):
+        return
+    conn.commit()  # 事务外才能切 PRAGMA
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            """
+            CREATE TABLE hr_account_new (
+                id TEXT PRIMARY KEY NOT NULL,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'hr'
+                    CHECK (role IN ('hr', 'interviewer', 'dept_manager')),
+                department TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO hr_account_new (id, username, password_hash, password_salt, role, department, created_at) "
+            "SELECT id, username, password_hash, password_salt, role, department, created_at FROM hr_account"
+        )
+        conn.execute("DROP TABLE hr_account")
+        conn.execute("ALTER TABLE hr_account_new RENAME TO hr_account")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(f"hr_account 重建后外键不一致: {violations}")
+```
+
+`init_schema` 里在 `apply_column_migrations(conn)` 之后调用 `_rebuild_hr_account_role_check(conn)`
+（先补列、再放宽 CHECK；新库 SCHEMA 本为三值 ⇒ 空转），随后照旧 `conn.commit()`。
+并在 `tests/test_db_onboarding_schema.py` 追加老库回归：
+
+```python
+def test_legacy_two_value_role_check_is_widened_for_dept_manager(tmp_path):
+    """排期包建过的老库（role 两值 CHECK）升级后 dept_manager 必须可写、FK 复原。"""
+    import sqlite3
+
+    from app.storage.db import get_connection, init_schema
+
+    path = tmp_path / "legacy.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(
+        """
+        CREATE TABLE hr_account (
+            id TEXT PRIMARY KEY NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        """
+    )
+    raw.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+        "VALUES ('acc-old', 'alice', 'h', 's')"
+    )
+    raw.commit()
+    raw.close()
+
+    conn = get_connection(str(path))
+    init_schema(conn)
+
+    assert conn.execute("SELECT role FROM hr_account WHERE id='acc-old'").fetchone() == ("hr",)
+    conn.execute("UPDATE hr_account SET role='dept_manager' WHERE id='acc-old'")
+    conn.commit()
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run:
