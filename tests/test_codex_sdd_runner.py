@@ -85,6 +85,29 @@ def test_parse_plan_ends_constraints_at_bare_task_heading():
     assert [n for n, _ in parsed.tasks] == [1]
 
 
+def test_progress_entries_appended_for_resumed_segments(tmp_path):
+    """1001O seg2 实录：分段重跑时台账缺 Task 4-6 行 ⇒ 勾选静默落空，须补行。"""
+    from scripts.codex_sdd_runner import _ensure_progress_entries
+
+    p = tmp_path / "progress.md"
+    _ensure_progress_entries(p, [(1, "a"), (2, "b"), (3, "c")])
+    assert p.read_text(encoding="utf-8") == (
+        "# 进度台账\n\n- [ ] Task 1\n- [ ] Task 2\n- [ ] Task 3\n\n"
+    )
+    # 模拟 Task 1 已勾选后再以 4-6 段重跑
+    p.write_text(
+        p.read_text(encoding="utf-8").replace("- [ ] Task 1", "- [x] Task 1"),
+        encoding="utf-8",
+    )
+    _ensure_progress_entries(p, [(4, "d"), (5, "e"), (6, "f")])
+    text = p.read_text(encoding="utf-8")
+    assert "- [x] Task 1" in text
+    assert "- [ ] Task 4" in text and "- [ ] Task 5" in text and "- [ ] Task 6" in text
+    # 再跑一次不重复追加
+    _ensure_progress_entries(p, [(4, "d"), (5, "e"), (6, "f")])
+    assert p.read_text(encoding="utf-8").count("- [ ] Task 4") == 1
+
+
 def test_build_codex_argv_shapes():
     run = build_codex_argv(model="deepseek-v4-pro", reason="high")
     assert run[0:4] == ["codex", "exec", "--json", "--sandbox"]

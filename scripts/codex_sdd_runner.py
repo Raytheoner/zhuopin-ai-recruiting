@@ -210,6 +210,33 @@ def _git_commit(cwd: Path, *, message: str) -> bool:
     return True
 
 
+def _ensure_progress_entries(progress: Path, tasks: list[tuple[int, str]]) -> None:
+    """确保台账存在且覆盖本次任务范围（分段重跑时补行）。
+
+    2026-10-09 `1001O` seg2 实录：台账只在首次派发时建行，`--tasks 4-6` 重跑时
+    `- [ ] Task N` 替换全部落空 ⇒ 勾选静默丢失、台账停在旧范围。补行后替换才有效。
+    """
+    if not progress.exists():
+        progress.write_text(
+            "# 进度台账\n\n"
+            + "".join(f"- [ ] Task {n}\n" for n, _ in tasks)
+            + "\n",
+            encoding="utf-8",
+        )
+        return
+    text = progress.read_text(encoding="utf-8")
+    missing = [
+        n
+        for n, _ in tasks
+        if f"- [ ] Task {n}" not in text and f"- [x] Task {n}" not in text
+    ]
+    if missing:
+        if not text.endswith("\n"):
+            text += "\n"
+        text += "".join(f"- [ ] Task {n}\n" for n in missing)
+        progress.write_text(text, encoding="utf-8")
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", required=True)
@@ -267,10 +294,7 @@ def main(argv: list[str]) -> int:
     progress_dir = cwd / ".superpowers" / "sdd" / plan_name
     progress_dir.mkdir(parents=True, exist_ok=True)
     progress = progress_dir / "progress.md"
-    if not progress.exists():
-        progress.write_text(
-            "# 进度台账\n\n" + "".join(f"- [ ] Task {n}\n" for n, _ in tasks) + "\n", encoding="utf-8"
-        )
+    _ensure_progress_entries(progress, tasks)
 
     failed = 0
     for n, body in tasks:
