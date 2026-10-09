@@ -287,6 +287,12 @@ CREATE INDEX IF NOT EXISTS idx_letter_access_log_application
 
 ### Task 5: `stage.stage_type` 扩五值并预置 `offer`/`hired`
 
+> ⚠️ 修正（2026-10-09，`1001G`）：5b 的 `_rebuild_stage_table` 原本把 `PRAGMA foreign_keys = ON`
+> 写在 `finally`、且重建 DML 未提交——**PRAGMA 在事务内是 no-op** ⇒ 老库迁移后连接的外键强制被留在
+> OFF（`1001O` seg2 Spec review 实测 FAIL 的根因）。下方已改为「try 内 `conn.commit()`／except 里
+> `rollback`＋re-raise，`finally` 再重开 PRAGMA」，并把「老库迁移后 `PRAGMA foreign_keys` = 1」
+> 列入预期与测试断言。
+
 **文件**：`app/storage/db.py`
 
 **5a. 改 SCHEMA 里的 `stage` 段**（原文在 `SCHEMA` 中段，约 `stage` 建表处）：
@@ -348,6 +354,7 @@ def _rebuild_stage_table(conn: sqlite3.Connection) -> None:
     """
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
+        conn.execute("BEGIN")
         conn.execute(
             """
             CREATE TABLE stage_new (
@@ -365,7 +372,13 @@ def _rebuild_stage_table(conn: sqlite3.Connection) -> None:
         )
         conn.execute("DROP TABLE stage")
         conn.execute("ALTER TABLE stage_new RENAME TO stage")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
+        # ⛔ PRAGMA 在事务内是 no-op：必须等上面 commit/rollback 关掉事务后再重开，
+        # 否则连接的外键强制会被留在 OFF（1001O seg2 Spec review 实测 FAIL 的根因）。
         conn.execute("PRAGMA foreign_keys = ON")
     violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
@@ -421,6 +434,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
 - 老库（`zp51_demo_db_schema_pre_m3.sql`，旧 CHECK）：`init_schema` 后既有
   `initial/screening/rejected` 三行保留，新增 `offer`/`hired` 两行。
 - `PRAGMA integrity_check` = `ok`，`PRAGMA foreign_key_check` 为空。
+- 老库迁移后**连接级** `PRAGMA foreign_keys` = 1（测试须断言；对齐排期包
+  `_migrate_stage_for_interview` 的「先 commit 再重开 PRAGMA」写法）。
 
 ---
 
