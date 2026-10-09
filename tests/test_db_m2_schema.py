@@ -181,9 +181,14 @@ def _seed_job_candidate_resume(conn, job_id="j1", candidate_id="c1", resume_id="
     conn.commit()
 
 
-def test_stage_table_preloads_three_rows(conn):
+def test_stage_table_preloads_four_rows(conn):
     rows = dict(conn.execute("SELECT id, stage_type FROM stage").fetchall())
-    assert rows == {"initial": "initial", "screening": "screening", "rejected": "rejected"}
+    assert rows == {
+        "initial": "initial",
+        "screening": "screening",
+        "rejected": "rejected",
+        "interview": "interview",
+    }
 
 
 def test_stage_type_check_rejects_unknown_type(conn):
@@ -619,7 +624,7 @@ def test_eval_annotation_keeps_history_across_different_batches(conn):
 def test_hr_account_table_exists_with_expected_columns(conn):
     assert _table_exists(conn, "hr_account")
     assert _columns(conn, "hr_account") == {
-        "id", "username", "password_hash", "password_salt", "created_at",
+        "id", "username", "password_hash", "password_salt", "role", "created_at",
     }
 
 
@@ -771,6 +776,7 @@ def test_added_columns_tuple_still_only_touches_job_profile():
         "resume",
         "job_prep_config",
         "interview_session",
+        "hr_account",
     }
 
 

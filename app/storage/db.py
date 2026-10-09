@@ -1,7 +1,10 @@
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job (
@@ -396,18 +399,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_ingest_result_job_hash
     ON bundle_ingest_result (job_id, bundle_sha256);
 
 -- 阶段池：全局共享，stage_type 是语义标签（逻辑只认类型），name 是可自定义
--- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行，id 与 stage_type 同名——
--- 这三行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
+-- 显示名（CLAUDE.md 数据模型要点）。M2 预置三行、interview-scheduling U1
+-- 再补第四行 `interview`（面试排期的唯一入口阶段），id 与 stage_type 同名——
+-- 这四行现在就是全部合法阶段，日后要加自定义显示名的同类型阶段，走应用层
 -- INSERT 新行（相同 stage_type、不同 id/name），本表结构不必改。
 CREATE TABLE IF NOT EXISTS stage (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
-    stage_type TEXT NOT NULL CHECK (stage_type IN ('initial', 'screening', 'rejected'))
+    stage_type TEXT NOT NULL CHECK (stage_type IN ('initial', 'screening', 'rejected', 'interview'))
 );
 
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('initial', '初筛', 'initial');
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('screening', '评估中', 'screening');
 INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('rejected', '已淘汰', 'rejected');
+INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('interview', '面试', 'interview');
 
 -- 投递：独立实体，状态挂在这里而不是 candidate（CLAUDE.md 数据模型要点，
 -- Horilla 的坑）。resume_id 唯一——一条简历对应一次投递意图，1:1（design D11）。
@@ -672,6 +677,7 @@ CREATE TABLE IF NOT EXISTS hr_account (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -912,6 +918,37 @@ CREATE TABLE IF NOT EXISTS invitation_template (
     updated_by TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 候选人面试阶段联系方式（candidate-contact-vault spec；design D6）。
+-- application_id 唯一：一份投递只有一条联系方式记录，登记覆盖＝更新同一行。
+-- phone_enc/email_enc 存 AES-GCM 密文 BLOB，⛔ 无任何明文列。
+-- source 的 CHECK 是 spec「来源 HR 手填/候选人口头确认」枚举的存储层落点。
+CREATE TABLE IF NOT EXISTS candidate_contact (
+    application_id TEXT PRIMARY KEY NOT NULL REFERENCES application(id),
+    phone_enc BLOB,
+    email_enc BLOB,
+    registered_by TEXT NOT NULL,
+    registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source TEXT NOT NULL CHECK (source IN ('hr_manual', 'candidate_confirmed')),
+    purged_at TEXT,
+    purge_reason TEXT
+);
+
+-- 联系方式访问留痕（candidate-contact-vault spec「每次读取留痕，留痕失败则
+-- 读取失败」；design D6）。⛔ 不建 application_id 外键——与 resume_access_log
+-- 同一形态：留痕表按事件记事实，把可写性绑在业务表上会让「留痕写不进去」变成
+-- 「读取整个失败」，而「先留痕后返回内容」应由应用层写入顺序保证。
+-- 无内容列（spec「留痕本身 MUST NOT 含明文」）。
+CREATE TABLE IF NOT EXISTS candidate_contact_access_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    accessor TEXT NOT NULL,
+    application_id TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidate_contact_access_log_application
+    ON candidate_contact_access_log (application_id);
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 以下 8 张表属变更包 voice-structured-interview（交付单元 U1）。全部新表，
@@ -1360,6 +1397,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 由应用层约束（Source 枚举），source_origin 三态由 DB CHECK 兜底。
     ("resume", "source", "TEXT"),
     ("resume", "source_origin", "TEXT CHECK (source_origin IN ('detected', 'default', 'corrected'))"),
+    # interview-scheduling U1：HR 角色授权。hr_account 是 M2 已建老表，CREATE
+    # TABLE IF NOT EXISTS 对老库无效，必须走加列迁移；默认 'hr' 让 .51 现有
+    # 账号（全是 HR）行为与今天完全一致。
+    ("hr_account", "role", "TEXT NOT NULL DEFAULT 'hr' CHECK (role IN ('hr', 'interviewer'))"),
 )
 
 
@@ -1381,6 +1422,75 @@ def apply_column_migrations(conn: sqlite3.Connection) -> list[str]:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
         added.append(f"{table}.{column}")
     return added
+
+
+_INTERVIEW_STAGE_ROW = ("interview", "面试", "interview")
+
+
+def _stage_has_interview_row(conn: sqlite3.Connection) -> bool:
+    return (
+        conn.execute("SELECT 1 FROM stage WHERE id = 'interview'").fetchone()
+        is not None
+    )
+
+
+def _migrate_stage_for_interview(conn: sqlite3.Connection) -> None:
+    """把 interview 预置行加进 stage，必要时放宽 stage_type 的 CHECK。
+
+    新库：SCHEMA 的 CREATE TABLE 已把 CHECK 放宽为四值，第四条 INSERT OR IGNORE
+    一步到位，本函数 early return。
+
+    老库（.51 上 M2 已建的三值 stage）：CREATE TABLE IF NOT EXISTS 是彻底的
+    no-op，第四条 INSERT OR IGNORE 被旧 CHECK 静默拒掉（不报错、行不出现）。
+    SQLite 无法用 ALTER TABLE 改 CHECK 枚举，只能整表重建（本文件
+    interview_live_event 表注释同一结论）。
+    """
+    if _stage_has_interview_row(conn):
+        return
+
+    try:
+        conn.execute(
+            "INSERT INTO stage (id, name, stage_type) VALUES (?, ?, ?)",
+            _INTERVIEW_STAGE_ROW,
+        )
+        conn.commit()
+        return
+    except sqlite3.IntegrityError:
+        pass  # CHECK 仍为三值 → 整表重建
+
+    conn.commit()  # 关掉可能的未决事务后再切 foreign_keys（PRAGMA 在事务内是 no-op）
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            "CREATE TABLE stage_new ("
+            "id TEXT PRIMARY KEY NOT NULL, "
+            "name TEXT NOT NULL, "
+            "stage_type TEXT NOT NULL CHECK ("
+            "stage_type IN ('initial', 'screening', 'rejected', 'interview')))"
+        )
+        conn.execute(
+            "INSERT INTO stage_new (id, name, stage_type) "
+            "SELECT id, name, stage_type FROM stage"
+        )
+        conn.execute(
+            "INSERT INTO stage_new (id, name, stage_type) VALUES (?, ?, ?)",
+            _INTERVIEW_STAGE_ROW,
+        )
+        conn.execute("DROP TABLE stage")
+        conn.execute("ALTER TABLE stage_new RENAME TO stage")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "rollback failed while rebuilding stage for interview stage_type",
+                exc_info=rollback_exc,
+            )
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def sqlite_utc_now() -> str:
@@ -1423,4 +1533,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 靠这一步补列。两条路径的结果必须一致，由 tests/test_db_migration.py 的
     # test_fresh_and_migrated_schemas_have_identical_columns 守着。
     apply_column_migrations(conn)
+    _migrate_stage_for_interview(conn)
     conn.commit()
