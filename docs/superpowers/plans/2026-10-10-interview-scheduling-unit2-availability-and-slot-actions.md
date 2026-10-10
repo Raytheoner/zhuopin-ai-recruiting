@@ -1566,6 +1566,15 @@ python3 -m pytest tests/test_interview_views.py -q
 
 ### Task 7: HR 排期页 + 四个动作路由（含 `/api/interview-slots` 鉴权前缀）
 
+> **修正（2026-10-11，`1001G`，Spec review 实测）**：① blocker——`application_schedule.html`
+> 的 `appId` ⛔ 不能取 URL 末段（字面量 `"schedule"`），改为与 letters 页同款正则取中段；
+> ② 页面补非 401 失败的就地提示（404＝投递不存在）；③ POST 排期路线的
+> `except SlotNotFoundError` 必须排在宽 `ValueError` 分支**之前**（子类捕获顺序，
+> 否则死分支、404 退化成 422）；④ `_require_hr_role` 的 403 文案由「仅 HR 角色可维护
+> 面试官名单」改为通用措辞（被排期场景复用时属文案串岗）。回归钉（已随本次落地在
+> `tests/test_interview_views.py`）：取法断言／非 401 分支断言／POST-404 用例／
+> HR 排期页子路径渲染用例。
+
 **文件**：`app/web/server.py`（修改）、`app/middleware/auth.py`（修改）、
 `app/web/static/application_schedule.html`（新增）
 
@@ -1689,10 +1698,12 @@ class CompleteSlotRequest(BaseModel):
                     "details": [c.detail for c in exc.conflicts],
                 },
             ) from exc
+        except SlotNotFoundError as exc:
+            # 2026-10-11 修正（Spec review）：SlotNotFoundError 是 ValueError 子类，
+            # ⛔ 必须排在下面的宽 ValueError 分支之前，否则是死分支、404 退化成 422。
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (NotInterviewStageError, SlotStateError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except SlotNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return slot_for(conn, slot_id)
 
     @router.post("/api/interview-slots/{slot_id}/reschedule")
@@ -1793,11 +1804,22 @@ class CompleteSlotRequest(BaseModel):
 </form>
 <ul id="slots"></ul>
 <script>
-const appId = location.pathname.split("/").filter(Boolean).pop();
+// 2026-10-11 修正（1001G，Spec review 实测 blocker）：⛔ 不能取 URL 末段
+// （那是字面量 "schedule"），否则本页首个数据请求恒 404。用与 letters.html
+// 同款正则从路径中段取。
+const appId = location.pathname.match(/\/applications\/([^/]+)\/schedule\/?$/)[1];
 const api = `api/applications/${appId}/schedule`;
 async function refresh() {
   const r = await fetch(api);
   if (r.status === 401) { location.href = "login"; return; }
+  if (!r.ok) {
+    // 非 401 的失败也是一等状态：就地显示原因，⛔ 不留白也不静默。
+    const err = document.getElementById("info");
+    err.textContent = r.status === 404
+      ? "投递不存在（链接可能已失效）"
+      : `读取排期失败（HTTP ${r.status}），请稍后重试`;
+    return;
+  }
   const d = await r.json();
   document.getElementById("info").textContent = `${d.candidate_name} · ${d.job_title} · ${d.stage_type}`;
   document.getElementById("interviewers").innerHTML = d.interviewers.map(i =>
