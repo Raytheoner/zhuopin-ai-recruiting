@@ -34,6 +34,10 @@
    `tmp_path` 初始化必失败）——测试是否全绿改以任务提交记录与执行器 `## 机器判据` 为准。
 3. 第二批四条泳道（`1001Q/R/S/T`）按 PARTIAL 留痕；**渠道 seg1 已由过渡路径跑通并合回 main**
    （`bb99fc8`，判据 20 passed）；其余三包 seg1 由 `run-sdd` 通道逐段冒烟推进。
+4. ⏸ **新缺口（2026-10-11）**：SDD Task 会话**整体禁网**（同类第 7 项缺口）——`build_codex_argv`
+   缺 `-c sandbox_workspace_write.network_access=true`（`run-lanes.sh` L815 已有），凡「需 `.51`／
+   需真实出网」的计划条目在 SDD 会话里必留步（U2 Task 8 首例）。证据、影响面与修法见
+   `docs/findings/2026-10-11-SDD-Task会话禁网与51冒烟留步.md`；修法待 Shao Peishen 拍板，⛔ 本场未改。
 
 ## 四、验证记录（本场）
 

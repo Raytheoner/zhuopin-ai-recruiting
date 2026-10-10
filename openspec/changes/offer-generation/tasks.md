@@ -27,7 +27,7 @@
 - [ ] 2.5 docx 导出 `GET /letters/{id}/export.docx`：`python-docx` 渲染；未标记人工撰写 ⇒ 页眉含 AI 标识文字；Offer 薪资处留空段落；写 `letter_access_log(export)`；`candidate_letter.sent_status=exported`；测试：docx 解析回读含标识、薪资段为空
 - [ ] 2.6 查看留痕：`GET /letters/{id}` 先写 `letter_access_log(view)` 再返回正文，留痕失败 ⇒ 不返回正文；测试
 - [ ] 2.7 文书页 `GET /applications/{id}/letters`：生成、各版本、编辑、标记人工、导出／复制、AI 标识可见；相对路径，子路径前缀测试
-- [ ] 2.8 在 `.51` 同款 Windows 环境冒烟导出一份 docx 并用 Word 打开确认（记录到 tasks 本条）
+- [ ] 2.8 在 `.51` 同款 Windows 环境冒烟导出一份 docx 并用 Word 打开确认（记录到 tasks 本条）——⏸ **留步（2026-10-11，U2 Task 8 场）**：本 SDD 会话（codex 引擎）**整体被沙箱禁网**（`route`/`ssh`/`nc` 全报 `Operation not permitted`、DNS 解析失败），`.51` 不可达 ⇒ 冒烟未执行；根因＝`codex_sdd_runner.py::build_codex_argv` 缺 `-c sandbox_workspace_write.network_access=true`（`run-lanes.sh` 已有），证据与修法见 `docs/findings/2026-10-11-SDD-Task会话禁网与51冒烟留步.md`。等效证据（本机，只证明代码路径）：同一调用产出 docx，页眉含 AI 标识、run 的 `w:eastAsia` 仅 `微软雅黑`、薪资标签后紧跟空段，`-k "letter or docx or offer"` 142 passed。余下仅「Windows/Word 视觉确认」一项需人在 `.51` 上做，⛔ 本条不勾
 
 ## 3. U3 内部审批流
 
