@@ -25,9 +25,10 @@ STAGE_HISTORY_ACTIONS: tuple[str, ...] = (
     "no_show",
     # channel-resume-intake U2 tasks 2.5：合并时关闭被合并方在同岗位的非保留投递
     # （阶段不变；是否「当前关闭」由 candidate_merge_log.unmerged_at IS NULL 派生）。
-    # U3 的 action=source_corrected 落地时按同法在此加值——⛔ 只改 SCHEMA 不够，
-    # 老库走的是加列/重建两条路径。
     "closed_by_merge",
+    # channel-resume-intake U3 tasks 3.2：HR 事后改正来源时**追加**一条事实
+    # （source 记新值），⛔ 绝不更新初始记录（design D5：本表是只追加的事实表）。
+    "source_corrected",
 )
 
 
@@ -35,6 +36,27 @@ def _stage_history_action_ddl() -> str:
     """action 列在「老库加列」与「老库重建」两条路径上的同一份列定义。"""
     values = ", ".join(f"'{value}'" for value in STAGE_HISTORY_ACTIONS)
     return f"TEXT CHECK (action IS NULL OR action IN ({values}))"
+
+
+# 本表的列集合（SCHEMA 的 CREATE TABLE 是硬编码的同一份清单）。重建迁移按它生成
+# INSERT … SELECT，并按它判「形状是不是本表的正常形态」——列集合不齐的表（测试
+# 里的空壳表）不能走重建，否则 INSERT … SELECT 会撞 no such column。
+_STAGE_HISTORY_COLUMNS: tuple[str, ...] = (
+    "id",
+    "application_id",
+    "from_stage_id",
+    "to_stage_id",
+    "actor_type",
+    "actor",
+    "action",
+    "detail_json",
+    "source",
+    "occurred_at",
+)
+
+# action 列上"有没有 CHECK"的判据。手法与 _APPLICATION_STATUS_CHECK_RE 一致：看
+# sqlite_master 的 DDL 原文。\baction\b 不会误命中 actor_type。
+_ACTION_CHECK_RE = re.compile(r"\baction\b[^,]*?\bCHECK\b", re.IGNORECASE)
 
 
 SCHEMA = """
@@ -523,12 +545,21 @@ CREATE INDEX IF NOT EXISTS idx_application_candidate ON application (candidate_i
 -- effect_* 节点把「安排/改期/取消/完成/未出席」作为流转事实写进本表时，阶段
 -- 不变（from_stage_id = to_stage_id = 'interview'），靠 action 区分动作、
 -- detail_json 存改期的原/新时刻与取消原因。既有 stage 流转行没有动作语义，
--- 故 action 可空。本表是 M2 已建老表，两列必须同时登记 SCHEMA 与
--- _ADDED_COLUMNS（与 hr_account.role 同一先例）。
+-- 故 action 可空。本表是 M2 已建老表，三列（action/detail_json/source）必须
+-- 同时登记 SCHEMA 与 _ADDED_COLUMNS（与 hr_account.role 同一先例）。
+--
+-- source（channel-resume-intake U3 tasks 3.1/3.2）：投递创建时那条初始事实
+-- 带上该简历的来源（resume.source）；HR 事后改正来源时**追加**一条
+-- action='source_corrected' 的事实（source 记新值），⛔ 绝不更新初始记录
+-- （design D5：本表是只追加的事实表，改写会破坏"所有报表的基础"这个前提）。
+-- 可空、无默认值：既有历史行与排期事实一律 NULL，读取方按 unknown 解释
+-- （与 resume.source / candidate_source() 同一口径）。
 --
 -- action 的取值域真源是模块顶部的 STAGE_HISTORY_ACTIONS，这里是硬编码的同一份
--- 清单（⛔ 改一处必须同步改另外两处，见该常量的说明）。'closed_by_merge' 是
--- channel-resume-intake U2 Task 4 加的：Task 5 的 _write_closed_by_merge 写它。
+-- 清单（⛔ 改一处必须同步改另外两处，见该常量的说明）。七值并集：五值是
+-- interview-scheduling U2（1001R）的排期动作，'closed_by_merge' 是
+-- channel-resume-intake U2 Task 4 加的（Task 5 的 _write_closed_by_merge 写它），
+-- 'source_corrected' 是 U3 加的（见上段）。
 CREATE TABLE IF NOT EXISTS application_stage_history (
     id TEXT PRIMARY KEY NOT NULL,
     application_id TEXT NOT NULL REFERENCES application(id),
@@ -538,10 +569,12 @@ CREATE TABLE IF NOT EXISTS application_stage_history (
     actor TEXT,
     action TEXT CHECK (
         action IS NULL OR action IN (
-            'scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show', 'closed_by_merge'
+            'scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show',
+            'closed_by_merge', 'source_corrected'
         )
     ),
     detail_json TEXT,
+    source TEXT,
     occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1537,13 +1570,17 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # interview-scheduling U2：四个排期 effect_* 节点的流转事实动作与详情。
     # application_stage_history 是 M2 已建老表，CREATE TABLE IF NOT EXISTS 对老库
     # 无效，必须走加列迁移；可空是刻意的——既有 stage 流转行没有动作语义。
-    # ⚠️ channel-resume-intake U2 Task 4：取值清单从 STAGE_HISTORY_ACTIONS 生成，
-    # 因此本行与 SCHEMA 一起多出 'closed_by_merge'（该值由 Task 5 写）。这是对
-    # 1001R 已落地的五值 CHECK 的**放宽**，不是去掉 CHECK——去掉会一起废掉排期包
-    # 钉住的取值域。⚠️ 本行改动对「列表已存在」的老库是 no-op（apply_column_migrations
-    # 逐列判重），那批库由 _rebuild_application_stage_history_action_check 整表重建。
+    # ⚠️ channel-resume-intake U2/U3：取值清单从 STAGE_HISTORY_ACTIONS 生成，因此
+    # 本行与 SCHEMA 一起给出七值并集（'closed_by_merge' 由 U2 Task 5 写、
+    # 'source_corrected' 由 U3 tasks 3.2 写）。这是对 1001R 已落地的五值 CHECK 的
+    # **放宽**，不是去掉 CHECK——去掉会一起废掉排期包钉住的取值域。⚠️ 本行改动对
+    # 「列表已存在」的老库是 no-op（apply_column_migrations 逐列判重），那批库由
+    # _rebuild_application_stage_history_action_check 整表重建。
     ("application_stage_history", "action", _stage_history_action_ddl()),
     ("application_stage_history", "detail_json", "TEXT"),
+    # channel-resume-intake U3 tasks 3.1：流转事实带上来源（可空，无默认值——
+    # "没有来源信息"与"来源是 unknown"在数据层必须可区分）。
+    ("application_stage_history", "source", "TEXT"),
 )
 
 
@@ -1946,13 +1983,21 @@ def _stage_history_action_check_is_current(conn: sqlite3.Connection) -> bool:
     """application_stage_history.action 上的 CHECK 是否已放行 STAGE_HISTORY_ACTIONS
     全部取值——即无需整表重建。
 
+    （channel-resume-intake U3 计划字面把它写作 `_stage_history_action_check_width_ok`
+    ——同一概念，⛔ 不造第二个名字；本函数由 U2 落地并被既有测试引用。）
+
     SQLite 改不了 CHECK，本判断看 sqlite_master.sql 原文，手法与
     _stage_type_check_complete / _role_check_allows_dept_manager 一致。除「清单已
-    齐」外，下面两种形态同样不需要重建，必须一并放行：
+    齐」外，下面三种形态同样不需要重建，必须一并放行（否则重建会当场炸或白改
+    DDL）：
 
     - 表不存在：没有可放宽的约束（调用点在 SCHEMA 之后，新库这里恒不成立）；
-    - 表里没有 action 列（M2 U1 / 1001R 之前形态的老库）：_ADDED_COLUMNS 加列时
-      带的就是完整清单，重建是空转。
+    - 表的列集合不含 _STAGE_HISTORY_COLUMNS 全集：形状不是本表的正常形态
+      （tests/test_db_m2_u2_schema.py 之类用例会造只有 id 的空壳表），重建的
+      `INSERT … SELECT` 会撞 `no such column: from_stage_id`。M2 U1 / 1001R 之前
+      形态的老库同样命中这一支——_ADDED_COLUMNS 加列时带的就是完整清单，重建是
+      空转；
+    - action 列上没有 CHECK：没有任何取值被拒，重建只会白改 DDL。
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='application_stage_history'"
@@ -1960,11 +2005,11 @@ def _stage_history_action_check_is_current(conn: sqlite3.Connection) -> bool:
     if row is None or not row[0]:
         return True
     ddl = row[0]
-    has_action_column = any(
-        info[1] == "action"
-        for info in conn.execute("PRAGMA table_info(application_stage_history)")
-    )
-    if not has_action_column:
+    if not set(_STAGE_HISTORY_COLUMNS) <= _existing_columns(
+        conn, "application_stage_history"
+    ):
+        return True
+    if not _ACTION_CHECK_RE.search(ddl):
         return True
     return all(f"'{value}'" in ddl for value in STAGE_HISTORY_ACTIONS)
 
@@ -1974,8 +2019,9 @@ def _rebuild_application_stage_history_action_check(conn: sqlite3.Connection) ->
 
     先跑过 interview-scheduling U2（1001R）的库：action 列在、CHECK 只放行五值，
     而 _ADDED_COLUMNS 逐列判重会静默跳过这一列。channel-resume-intake U2 Task 5 的
-    _write_closed_by_merge 要写第六个值——不重建的话合并动作在服务器上当场
-    IntegrityError（与 hr_account.role 缺 dept_manager 同一故障形态，同样是
+    _write_closed_by_merge 要写第六个值、U3 tasks 3.2 的来源改正要写第七个值
+    （source_corrected）——不重建的话两条写入在服务器上当场 IntegrityError（与
+    hr_account.role 缺 dept_manager 同一故障形态，同样是
     _rebuild_hr_account_role_check 的先例）。
 
     SQLite 无法用 ALTER TABLE 修改 CHECK（同 _rebuild_stage_table 结论）。本表被
@@ -1983,23 +2029,24 @@ def _rebuild_application_stage_history_action_check(conn: sqlite3.Connection) ->
     完成后 PRAGMA foreign_key_check 复验；idx_application_stage_history_application
     随 DROP TABLE 一起消失，必须原样重建。PRAGMA 在事务内是 no-op：try 内 commit、
     except 里 rollback 之后 finally 再重开（同 _rebuild_hr_account_role_check）。
+
+    行级数据原样搬（含 detail_json / source），一条不丢；列清单的真源是
+    _STAGE_HISTORY_COLUMNS（与 SCHEMA 逐字同源），出现的清单外的列会被拦下。
     """
     if _stage_history_action_check_is_current(conn):
         return
-    # 重建的列清单是硬编码的（与 _rebuild_application_status_check 同一形态）：
     # 出现清单外的列就说明有后续单元往本表加了列而没同步到这里——那会**静默丢列
     # 数据**，所以宁可在切 foreign_keys 之前当场炸掉。
-    known_columns = {
-        "id", "application_id", "from_stage_id", "to_stage_id",
-        "actor_type", "actor", "action", "detail_json", "occurred_at",
-    }
-    unexpected_columns = _existing_columns(conn, "application_stage_history") - known_columns
+    unexpected_columns = _existing_columns(conn, "application_stage_history") - set(
+        _STAGE_HISTORY_COLUMNS
+    )
     if unexpected_columns:
         raise sqlite3.IntegrityError(
             "application_stage_history 出现重建 DDL 未覆盖的列 "
             f"{sorted(unexpected_columns)}：本函数会丢这些列的数据，"
             "请先把它们补进下面的 CREATE TABLE 与 INSERT ... SELECT"
         )
+    columns_sql = ", ".join(_STAGE_HISTORY_COLUMNS)
     conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
@@ -2015,16 +2062,14 @@ def _rebuild_application_stage_history_action_check(conn: sqlite3.Connection) ->
                 actor TEXT,
                 action {_stage_history_action_ddl()},
                 detail_json TEXT,
+                source TEXT,
                 occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
             """
         )
         conn.execute(
-            "INSERT INTO application_stage_history_new "
-            "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, "
-            "detail_json, occurred_at) "
-            "SELECT id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, "
-            "detail_json, occurred_at FROM application_stage_history"
+            f"INSERT INTO application_stage_history_new ({columns_sql}) "
+            f"SELECT {columns_sql} FROM application_stage_history"
         )
         conn.execute("DROP TABLE application_stage_history")
         conn.execute(
@@ -2062,8 +2107,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 新库 SCHEMA 本就是三值 ⇒ 空转。
     _rebuild_hr_account_role_check(conn)
     _rebuild_application_status_check(conn)
-    # 同类放宽，第三步：action 的五值 CHECK（1001R）要能承载本包的 closed_by_merge。
-    # 新库 SCHEMA 本就是六值 ⇒ 空转；没跑过 1001R 的老库由加列路径一步到位 ⇒ 空转。
+    # 同类放宽，第三步：action 的五值 CHECK（1001R）要能承载本包的 closed_by_merge
+    # 与 channel-resume-intake U3 的 source_corrected。⚠️ 必须排在
+    # apply_column_migrations 之后——老库里 action/source 列可能是刚刚才 ALTER
+    # 出来的，重建要连它们一起搬。新库 SCHEMA 本就是七值 ⇒ 空转；没跑过 1001R 的老库
+    # 由加列路径一步到位 ⇒ 空转。
     _rebuild_application_stage_history_action_check(conn)
     _migrate_stage_for_interview(conn)
     _seed_onboarding_default_template(conn)

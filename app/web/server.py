@@ -105,6 +105,7 @@ from app.intake.merge import (
 )
 from app.intake.phone_hash import extract_phone_hash
 from app.intake.source import SOURCE_VALUES
+from app.intake.stage_history import append_source_correction
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
 from app.observability.middleware import (
@@ -1774,6 +1775,18 @@ def create_app(
         conn.execute(
             "UPDATE resume SET source = ?, source_origin = 'corrected' WHERE id = ?",
             (new_source, resume_id),
+        )
+        # channel-resume-intake U3 task 3.2：来源改正**追加**一条流转事实，
+        # ⛔ 不改写投递创建时那条初始记录。三句话共用一个 conn、一段未提交事务，
+        # 由下面这次 commit 一起提交（铁律 1 的"同事务"）。
+        # 幂等由上面的"同值早退"承担：同值重复提交根本走不到这里，所以不会追加
+        # 第二条（与 source_correction_log 完全同一口径）。
+        append_source_correction(
+            conn,
+            resume_id=resume_id,
+            from_source=current,
+            to_source=new_source,
+            actor=corrected_by,
         )
         conn.commit()
         return {"resume_id": resume_id, "source": new_source, "already_corrected": False}

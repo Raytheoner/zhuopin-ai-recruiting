@@ -602,6 +602,42 @@ python -m pytest tests/test_stage_history_source_schema.py tests/test_db_m2_sche
 预期输出：全部 passed（新增 6 条 + 既有钉列/迁移守卫），exit code 0。
 ⚠️ 本步骤最容易假绿：`tests/test_db_migration.py` 的漂移守卫（`_DRIFT_GUARDED_TABLES` 已含 `application_stage_history`）、`tests/test_db_m2_schema.py` 的 `_M2_U1_NEW_TABLES` 与钉列断言、`tests/test_db_m3_schema.py` 的 legacy 升级断言三者必须同时绿——它们分别盯"老库补列""新老列集合一致""重建不丢行"。
 
+> **落地说明 D-U3-1a（与计划字面的三处偏差，均以磁盘真身为准；⛔ 无需返工）。**
+>
+> ① **净增比计划字面窄**：计划成文时 U2 尚未合入（磁盘是"五值、无重建函数"），
+> 落地时 U2 已合入 main——`closed_by_merge` 与 `_rebuild_application_stage_history_
+> action_check` 早就位。所以本 Task 的实际净增只有两样：`STAGE_HISTORY_ACTIONS`
+> 追加 `source_corrected`（六值 → 七值）、`source` 列（SCHEMA ＋ `_ADDED_COLUMNS`
+> ＋ 重建 DDL/`INSERT … SELECT`）。计划 Step 1/2/3/4 的其余内容在磁盘上已存在，
+> 不重复落地。
+>
+> ② **命名沿用磁盘真身，⛔ 不造第二套名字**：计划 Interfaces 段写的
+> `_STAGE_HISTORY_ACTIONS` / `_stage_history_action_check_width_ok` /
+> `_rebuild_stage_history_action_check` 在磁盘上分别是公开常量
+> `STAGE_HISTORY_ACTIONS`（已被 `tests/test_candidate_merge_schema.py`、
+> `tests/test_db_migration.py` 引用）与 `_stage_history_action_check_is_current` /
+> `_rebuild_application_stage_history_action_check`（U2 落地）。同一概念两套名字会
+> 破坏"取值清单只有一处真源"，故新测试文件 `tests/test_stage_history_source_schema.py`
+> 直接引用磁盘真身名，并在其模块 docstring 里写清这条偏差。新增的
+> `_STAGE_HISTORY_COLUMNS` / `_ACTION_CHECK_RE` 两个符号按计划字面名落地。
+>
+> ③ **判据函数顺带补齐计划架构决策 3 的另两支早退**（原函数只有"表不存在"与
+> "action 列不存在"两支）：现在是「表不存在 ／ 列集合不含 `_STAGE_HISTORY_COLUMNS`
+> 全集（空壳表，重建会撞 `no such column`）／ action 列上没有 CHECK（无值被拒，
+> 重建是白改 DDL）」三支早退 ＋ 值清单齐全判定。重建的列清单与 `INSERT … SELECT`
+> 改为从 `_STAGE_HISTORY_COLUMNS` 生成（此前是硬编码 set ＋ 手写列名）。
+>
+> **验证证据**：`tests/test_stage_history_source_schema.py tests/test_db_m2_schema.py
+> tests/test_db_m3_schema.py tests/test_db_migration.py -q` ⇒ **174 passed**（新增 7
+> 条：计划 6 条 + 一条 M2 U1 形态老库的交叉守护）；全量 `pytest -q` ⇒
+> **4343 passed, 12 skipped, 1 failed**，唯一失败是同源环境观察项
+> `tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit`
+> （泳道 worktree 无 venv ⇒ 体积闸被跳过；已在 HEAD 净土副本复现，与 D-U2-11a
+> 同一观察项，⛔ 不在本任务里修）。另用 `tests/fixtures/zp51_demo_db_schema_pre_m3.sql`
+> 做端到端复刻：迁移后 `source` 列在、CHECK 含 `source_corrected`、既有事实行数与
+> `detail_json` 原样保留、索引补回、`PRAGMA foreign_key_check` 空且
+> `foreign_keys` 已重开、重复 `init_schema` 行数不变。
+
 ---
 
 ### Task 2: 投递的初始流转事实带上 `resume.source`
