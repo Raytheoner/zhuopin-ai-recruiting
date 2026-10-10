@@ -97,11 +97,16 @@
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body: body.value })
-      }).then(r => r.json()).then(openLetter);
+      // 2026-10-11 修正（Spec review 实测）：⛔ 不能把响应体当 letter_id 传给
+      // openLetter（那会请求 api/letters/[object Object]，成功路径必报假错）；
+      // 保存后按当前 letter_id 重开即可。
+      }).then(r => { if (!r.ok) return r.json().then(x => { throw new Error(x.detail); }); })
+        .then(() => openLetter(currentId));
     };
     document.getElementById("mark-human").onclick = () => {
       fetch(`api/letters/${currentId}/mark-human`, { method: "POST" })
-        .then(r => r.json()).then(openLetter);
+        .then(r => { if (!r.ok) return r.json().then(x => { throw new Error(x.detail); }); })
+        .then(() => openLetter(currentId));
     };
     document.getElementById("copy-text").onclick = () => {
       navigator.clipboard.writeText(body.value).then(() => alert("已复制"));

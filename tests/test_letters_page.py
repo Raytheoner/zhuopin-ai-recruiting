@@ -49,3 +49,11 @@ def test_letters_page_has_no_absolute_path_strings():
     ]
     absolute = [lit for lit in literals if lit.split("${", 1)[0].startswith("/")]
     assert not absolute, f"发现硬编码的绝对路径字符串字面量: {absolute!r}"
+
+
+def test_letters_page_edit_and_mark_human_reopen_current_letter():
+    """2026-10-11 修正（Spec review 实测）：⛔ 不能把响应体当 letter_id 传给
+    openLetter（`api/letters/[object Object]`，成功路径必报假错）。"""
+    html = Path("app/web/static/letters.html").read_text(encoding="utf-8")
+    assert ".then(openLetter)" not in html
+    assert html.count("openLetter(currentId)") >= 2
