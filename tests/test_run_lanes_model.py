@@ -1,9 +1,10 @@
 """`docs/openers/run-lanes.sh` 模型分级的行为断言（Token 治理 Phase 2，0916C）。
 
 P0 账本：无头泳道 95% 调用跑在 Opus——原脚本 MODEL="" 时不传 --model，沿用本机默认。
-改后取值优先级：命令行 --model ＞ opener【设置】行「模型: X」＞ 默认 sonnet；子代理经
-CLAUDE_CODE_SUBAGENT_MODEL 固定为 sonnet。这里钉死四件事：
-  ① 没写模型的条目实跑时传 --model sonnet，且子代理环境变量到位
+改后取值优先级：命令行 --model ＞ opener【设置】行「模型: X」＞ 默认 haiku（2026-10-10 起，
+原 sonnet——Shao Peishen 指令「所有子 session 一律 Flash」）；子代理经
+CLAUDE_CODE_SUBAGENT_MODEL 固定为 haiku。这里钉死四件事：
+  ① 没写模型的条目实跑时传 --model haiku，且子代理环境变量到位
   ② 【设置】写「模型: Opus」的条目传 --model opus
   ③ 命令行 --model 整批覆盖
   ④ 【设置】写了不认识的模型名 → dry-run 预检拒跑（exit 13），⛔ 不许静默回落到默认
@@ -109,7 +110,7 @@ def calls_for(sb):
 def test_dry_run_shows_resolved_models(sandbox):
     r = run(sandbox, "--dry-run")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "模型 sonnet（默认）" in r.stdout
+    assert "模型 haiku（默认）" in r.stdout
     assert "模型 opus（opener设置行）" in r.stdout
     assert not sandbox["calls"].exists()
 
@@ -124,13 +125,13 @@ def test_real_run_passes_models_and_subagent_env(sandbox):
     r = run(sandbox, "--yes", "--full-auto")
     assert r.returncode == 0, r.stdout + r.stderr
     c = calls_for(sandbox)
-    assert "--model sonnet" in c["0101A"] and "SUB=sonnet" in c["0101A"]
-    assert "--model opus" in c["0101B"] and "SUB=sonnet" in c["0101B"]
+    assert "--model haiku" in c["0101A"] and "SUB=haiku" in c["0101A"]
+    assert "--model opus" in c["0101B"] and "SUB=haiku" in c["0101B"]
     assert "--strict-mcp-config" in c["0101A"] and "--strict-mcp-config" in c["0101B"]
     assert "LANE=1" in c["0101A"]   # 0916K：context-guard 据此不在无头泳道里提醒   # Phase 5：无头默认不载 MCP
     results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
     rows = {l.split("\t")[1]: l.split("\t") for l in results.read_text(encoding="utf-8").splitlines()}
-    assert rows["0101A"][2] == "OK" and rows["0101A"][5] == "sonnet"
+    assert rows["0101A"][2] == "OK" and rows["0101A"][5] == "haiku"
     assert rows["0101B"][5] == "opus"
 
 

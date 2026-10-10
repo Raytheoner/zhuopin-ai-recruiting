@@ -28,7 +28,7 @@
 #                      claude 引擎＝--dangerously-skip-permissions（默认 --permission-mode acceptEdits）
 #   --only  A,B,C      只跑这几条
 #   --model NAME       整批强制模型（覆盖 opener【设置】里的「模型:」与默认值）
-#   --subagent-model N 泳道内子代理模型（默认 sonnet；claude 经 CLAUDE_CODE_SUBAGENT_MODEL 传入，
+#   --subagent-model N 泳道内子代理模型（默认 haiku；claude 经 CLAUDE_CODE_SUBAGENT_MODEL 传入，
 #                      codex 经 -c agents.default_subagent_model 传入）
 #   --max-parallel N   同时最多几条泳道（默认 3）
 #   --stagger N        泳道错峰启动间隔秒（默认 90，降编辑锁碰撞）
@@ -130,9 +130,10 @@ BUDGET="25.00"
 # P0 账本（docs/token治理/P0-对账.md）：无头泳道 95% 调用跑在 Opus 上——原先 MODEL="" 不传 --model，
 # 于是沿用本机默认模型。Opus 5 单价是 Sonnet 5 的 2.5 倍，而泳道＋子代理占基线成本 92%。
 # 取值优先级：命令行 --model（整批）＞ opener【设置】行的「模型: Opus|Sonnet|Haiku」＞ DEFAULT_MODEL。
-# 需要 Opus 的（openspec design、疑难状态机调试）在 opener【设置】行显式写「模型: Opus」，⛔ 不改这里的默认值。
-DEFAULT_MODEL="sonnet"
-SUBAGENT_MODEL="sonnet"
+# 2026-10-10 `1001G`（Shao Peishen 指令：**所有子 session 一律 Flash**）：默认档 sonnet → **haiku**、
+# 子代理同步 → haiku；要更高档的在 opener【设置】行显式写「模型: Sonnet/Opus」单独抬，或整批 `--model`。
+DEFAULT_MODEL="haiku"
+SUBAGENT_MODEL="haiku"
 # 上下文续棒上限（2026-09-20 0920H）：泳道越 150k 转场线时由 hook 注入哨兵、留步，脚本在同泳道队尾
 # 自动排 `<原id>续<n>` 接着干；续到第 RELAY_MAX 棒仍越线 ⇒ RELAY-EXHAUSTED 停本泳道，⛔ 不无限续。
 RELAY_MAX="${HR_LANE_RELAY_MAX:-3}"
