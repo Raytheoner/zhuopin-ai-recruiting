@@ -882,6 +882,18 @@ python3 -c "import app.storage.interview_scheduling"
 
 ### Task 4: 四个排期 `effect_*` 节点 `app/graph/scheduling_nodes.py`
 
+> **修正（2026-10-11，`1001G`，Spec review 实测两处缺口）**
+> ① 节点层入参校验：`effect_schedule_slot` 必须拒绝 **0 面试官**（spec「指定面试官
+> 一至多位」）与 **start_at ≥ end_at**；`effect_reschedule_slot` 同样拒绝反向时刻。
+> 落地＝新增 `ScheduleInputError(ValueError)`＋在两节点对应位置断言（见下方代码）。
+> ② **四个新节点必须登记进仓库级铁律 1 守卫 `tests/test_effect_idempotency_suite.py`**
+> （`EFFECT_NODE_MANIFEST` ＋ `build_recipes()` 四条崩溃-恢复配方；⚠️ 该文件不在
+> 本 Task 文件清单里但**必改**——`test_every_effect_node_has_a_recovery_recipe`
+> 漏登记必红）。配方口径：schedule（种子＝`interview` 阶段投递＋面试官名下可用时段；
+> 事实＝`interview_slot` 行数）；reschedule（种子＝手插 `scheduled` 场次、⛔ 不调节点；
+> 事实＝`action='rescheduled'` 留痕数）；cancel（事实＝`action='cancelled'` 留痕数）；
+> complete（种子场次开始时刻已过；事实＝`action='completed'` 留痕数）。
+
 **文件**：`app/graph/scheduling_nodes.py`（新增，整文件）
 
 ```python
@@ -927,6 +939,10 @@ HISTORY_ACTION_RESCHEDULED = "rescheduled"
 HISTORY_ACTION_CANCELLED = "cancelled"
 
 _SCHEDULABLE_STATUSES = ("scheduled", "rescheduled")
+
+
+class ScheduleInputError(ValueError):
+    """排期节点入参校验失败（0 面试官 / 反向时刻）。"""
 
 
 def _assert_interview_stage(conn: sqlite3.Connection, application_id: str) -> None:
@@ -1005,6 +1021,10 @@ def effect_schedule_slot(
     actor: str,
 ) -> str:
     _assert_interview_stage(conn, application_id)
+    if not interviewer_ids:
+        raise ScheduleInputError("至少指定一位面试官（spec「指定面试官一至多位」）")
+    if not start_at < end_at:
+        raise ScheduleInputError(f"开始时刻必须早于结束时刻：{start_at} → {end_at}")
     if active_slot_for_round(conn, application_id, round_) is not None:
         raise SlotStateError(
             f"该投递第 {round_} 轮已存在未取消场次，请先改期或取消既有场次"
@@ -1059,6 +1079,8 @@ def effect_reschedule_slot(
         raise SlotNotFoundError(f"slot_id={slot_id} 不存在")
     if slot["status"] not in _SCHEDULABLE_STATUSES:
         raise SlotStateError("仅已安排（scheduled/rescheduled）的场次可改期")
+    if not start_at < end_at:
+        raise ScheduleInputError(f"开始时刻必须早于结束时刻：{start_at} → {end_at}")
     _assert_no_conflicts(
         conn,
         application_id=slot["application_id"],
