@@ -1639,10 +1639,12 @@ def effect_backfill_invitation_outcome(
 ) -> dict:
     """effect_* 节点：HR 回填外发结果（spec「HR 复制发送与结果回填」）。
 
-    business_key = target_status ⇒ 幂等键 {application_id}:effect_backfill_invitation_
-    outcome:{status}，**同状态重复提交被 effect_log 短路、一条痕都不新增**；再加
-    `invitation_outcome_log` 的 UNIQUE(slot_id, status) 与"插入前先查已有行"作为
-    第二、第三道保险（键与约束分属两层，任一层失效另一层仍挡得住）。
+    business_key = f"{slot_id}:{status}" ⇒ 幂等键 {application_id}:effect_backfill_
+    invitation_outcome:{slot_id}:{status}——**同一场次**同状态重复提交被 effect_log
+    短路、一条痕都不新增；⚠️ 键里必须带 slot_id（2026-10-11 修正）：只带 {status}
+    会把同一投递**第二轮场次**的同状态回填也短路掉（无痕、场次状态不更新，接口却
+    返回成功形状）。再加 `invitation_outcome_log` 的 UNIQUE(slot_id, status) 与
+    "插入前先查已有行"作为第二、第三道保险（键与约束分属两层，任一层失效另一层仍挡得住）。
 
     ⛔ 本节点**不碰** `rejection_record`、⛔ 不碰 `application.current_stage_id`、⛔ 不写
     `application_stage_history`（后者会破坏 U2 `tests/test_interview_history_invariant.py`
@@ -2018,8 +2020,10 @@ class InvitationOutcomeRequest(BaseModel):
         try:
             validate_outcome(status=req.status, channel=req.channel, reason=req.reason)
             application_id = slot_application_id(conn, slot_id)
+            # 2026-10-11 修正（Spec review）：键必须带 slot_id——只带 status 会把
+            # 同一投递第二轮场次的同状态回填静默短路（与 U2 既有键约定相抵）。
             outcome = effect_backfill_invitation_outcome(
-                conn, thread_id=application_id, business_key=req.status,
+                conn, thread_id=application_id, business_key=f"{slot_id}:{req.status}",
                 slot_id=slot_id, status=req.status, actor=reviewer_of(request),
                 channel=req.channel, reason=req.reason,
             )
@@ -2597,6 +2601,29 @@ def test_backfill_same_status_twice_writes_one_row_and_one_effect_log(conn):
     ).fetchone()[0]
     assert count == 1
     assert _effect_count(conn, "effect_backfill_invitation_outcome") == 1
+
+
+def test_backfill_same_status_across_slots_is_not_short_circuited(conn):
+    """2026-10-11 修正（Spec review）：幂等键必须带 slot_id——同一投递第二轮
+    场次的同状态回填不能被 {status} 相同的 effect_log 键静默短路。"""
+    conn.execute(
+        "INSERT INTO interview_slot (id, application_id, round, start_at, end_at, mode) "
+        "VALUES ('s2', 'app1', 2, '2026-10-20 06:00', '2026-10-20 07:00', 'onsite')"
+    )
+    conn.commit()
+    first = effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s1:confirmed", slot_id="s1",
+        status="confirmed", actor="hr-1",
+    )
+    second = effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s2:confirmed", slot_id="s2",
+        status="confirmed", actor="hr-1",
+    )
+    assert first is not None and second is not None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM invitation_outcome_log WHERE slot_id = 's2'"
+    ).fetchone()[0] == 1
+    assert _effect_count(conn, "effect_backfill_invitation_outcome") == 2
 
 
 def test_backfill_confirmed_after_sent_keeps_channel(conn):
