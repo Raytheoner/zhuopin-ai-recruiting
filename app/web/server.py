@@ -88,8 +88,14 @@ from app.graph.onboarding_nodes import (
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.intake.bundle import BundleTooLarge, unpack_bundle
+from app.intake.duplicates import CandidateRef, detect_suspected_duplicates
 from app.intake.ingest_bundle import effect_ingest_bundle
-from app.intake.merge import effect_attach_resume_to_candidate
+from app.intake.merge import (
+    MergeValidationError,
+    effect_attach_resume_to_candidate,
+    effect_merge_candidates,
+    effect_unmerge_candidates,
+)
 from app.intake.phone_hash import extract_phone_hash
 from app.intake.source import SOURCE_VALUES
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
@@ -136,6 +142,7 @@ from app.storage.offer_approval_chain import (
     get_approval_chain,
     put_approval_chain,
 )
+from app.storage.source import candidate_source
 from app.graph.letter_nodes import (
     LetterTemplateMissingError,
     OfferNotFoundError,
@@ -171,6 +178,14 @@ class LoginRequest(BaseModel):
     # 字段返回 422，而不是按预期校验请求体。
     username: str
     password: str
+
+
+class MergeCandidatesRequest(BaseModel):
+    primary_id: str
+    secondary_id: str
+    reason: str
+    request_id: str
+    keep_application_per_job: dict[str, str] = {}
 
 
 class CreateJobRequest(BaseModel):
@@ -1577,6 +1592,132 @@ def create_app(
         )
         conn.commit()
         return {"resume_id": resume_id, "source": new_source, "already_corrected": False}
+
+    def _require_candidate(candidate_id: str) -> tuple:
+        row = conn.execute(
+            "SELECT id, name, phone_hash, merged_into FROM candidate WHERE id = ?",
+            (candidate_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="candidate not found")
+        return row
+
+    def _same_job_candidate_refs(candidate_id: str) -> list[CandidateRef]:
+        rows = conn.execute(
+            "SELECT DISTINCT c.id, c.name FROM application a "
+            "JOIN application b ON b.job_id = a.job_id "
+            "JOIN candidate c ON c.id = b.candidate_id "
+            "WHERE a.candidate_id = ? AND b.candidate_id != ? AND c.merged_into IS NULL",
+            (candidate_id, candidate_id),
+        ).fetchall()
+        return [CandidateRef(id=r[0], name=r[1]) for r in rows]
+
+    def _conflict_jobs(candidate_id: str, other_id: str) -> list[dict]:
+        rows = conn.execute(
+            "SELECT a.job_id, a.id, b.id FROM application a "
+            "JOIN application b ON b.job_id = a.job_id "
+            "WHERE a.candidate_id = ? AND b.candidate_id = ?",
+            (candidate_id, other_id),
+        ).fetchall()
+        return [{"job_id": r[0], "applications": [r[1], r[2]]} for r in rows]
+
+    @router.get("/candidates")
+    def candidate_list_page():
+        return _render_static_page("candidate_list.html", root_path)
+
+    @router.get("/api/candidates")
+    def list_candidates(request: Request) -> dict:
+        rows = conn.execute(
+            "SELECT id, name, merged_into FROM candidate ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+        items = []
+        for cid, name, merged_into in rows:
+            suspected = detect_suspected_duplicates(
+                CandidateRef(cid, name), _same_job_candidate_refs(cid)
+            )
+            resume_count = conn.execute(
+                "SELECT COUNT(*) FROM application WHERE candidate_id = ?", (cid,)
+            ).fetchone()[0]
+            items.append({
+                "candidate_id": cid,
+                "name": name,
+                "source": candidate_source(conn, cid),
+                "resume_count": resume_count,
+                "merged_into": merged_into,
+                "suspected_duplicate_ids": [s.id for s in suspected],
+            })
+        return {"candidates": items}
+
+    @router.get("/candidates/{candidate_id}/merge")
+    def candidate_merge_page(candidate_id: str):
+        return _render_static_page("candidate_merge.html", root_path)
+
+    @router.get("/api/candidates/{candidate_id}/merge")
+    def candidate_merge_data(request: Request, candidate_id: str) -> dict:
+        cand = _require_candidate(candidate_id)
+        suspected = detect_suspected_duplicates(
+            CandidateRef(candidate_id, cand[1]), _same_job_candidate_refs(candidate_id)
+        )
+        suspects = []
+        for s in suspected:
+            suspects.append({
+                "candidate_id": s.id,
+                "name": s.name,
+                "source": candidate_source(conn, s.id),
+                "conflict_jobs": _conflict_jobs(candidate_id, s.id),
+            })
+        history = conn.execute(
+            "SELECT id, primary_id, secondary_id, reason, merged_at, unmerged_at "
+            "FROM candidate_merge_log WHERE primary_id = ? OR secondary_id = ? "
+            "ORDER BY merged_at DESC",
+            (candidate_id, candidate_id),
+        ).fetchall()
+        return {
+            "candidate": {
+                "candidate_id": cand[0], "name": cand[1],
+                "source": candidate_source(conn, cand[0]), "merged_into": cand[3],
+            },
+            "suspected_duplicates": suspects,
+            "merge_history": [
+                {"merge_log_id": h[0], "primary_id": h[1], "secondary_id": h[2],
+                 "reason": h[3], "merged_at": h[4], "unmerged_at": h[5]}
+                for h in history
+            ],
+        }
+
+    @router.post("/api/candidates/merge")
+    def merge_candidates(request: Request, req: MergeCandidatesRequest):
+        if not req.reason or not req.reason.strip():
+            raise HTTPException(status_code=422, detail="合并依据不能为空")
+        merged_by = reviewer_of(request)
+        try:
+            result = effect_merge_candidates(
+                conn,
+                thread_id=req.primary_id,
+                business_key=f"{req.secondary_id}:{req.request_id}",
+                primary_id=req.primary_id,
+                secondary_id=req.secondary_id,
+                reason=req.reason,
+                keep_application_per_job=req.keep_application_per_job,
+                merged_by=merged_by,
+            )
+        except MergeValidationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return result
+
+    @router.post("/api/candidates/merge/{merge_log_id}/unmerge")
+    def unmerge_candidates(request: Request, merge_log_id: str):
+        try:
+            result = effect_unmerge_candidates(
+                conn,
+                thread_id=merge_log_id,
+                business_key="undo",
+                merge_log_id=merge_log_id,
+                unmerged_by=reviewer_of(request),
+            )
+        except MergeValidationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return result
 
     @router.post("/api/resumes/{resume_id}/reparse")
     def reparse_resume(resume_id: str):

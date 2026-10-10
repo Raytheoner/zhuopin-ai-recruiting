@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css?v=20261010">
+  <title>合并候选人 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 合并候选人</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">合并候选人</h1>
+    <div class="card"><h2 id="candidate-title"></h2></div>
+    <div class="card">
+      <h2>疑似重复</h2>
+      <div id="suspects"></div>
+    </div>
+    <div class="card">
+      <h2>合并历史</h2>
+      <div id="history"></div>
+    </div>
+    <p id="error" style="color:red"></p>
+  </main>
+
+  <script>
+    const SOURCE_LABELS = {
+      boss: "Boss直聘", liepin: "猎聘", "51job": "前程无忧",
+      zhaopin: "智联", referral: "内推", other: "其他", unknown: "未知",
+    };
+
+    function candidateIdFromPath() {
+      const m = window.location.pathname.match(/\/candidates\/([^/]+)\/merge\/?$/);
+      return m ? m[1] : null;
+    }
+
+    function renderSuspects(candidate, suspects) {
+      const box = document.getElementById("suspects");
+      box.innerHTML = "";
+      if (suspects.length === 0) {
+        box.textContent = "该候选人没有疑似重复。";
+        return;
+      }
+      for (const s of suspects) {
+        const row = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = `${s.name}（${SOURCE_LABELS[s.source] || s.source}）`;
+        row.appendChild(title);
+
+        const reason = document.createElement("input");
+        reason.placeholder = "合并依据（必填）";
+        row.appendChild(reason);
+
+        const keepSelects = document.createElement("div");
+        for (const conflict of s.conflict_jobs) {
+          const label = document.createElement("label");
+          label.textContent = `岗位 ${conflict.job_id} 双投递，保留哪份：`;
+          const select = document.createElement("select");
+          for (const appId of conflict.applications) {
+            const opt = document.createElement("option");
+            opt.value = appId;
+            opt.textContent = appId;
+            select.appendChild(opt);
+          }
+          select.dataset.jobId = conflict.job_id;
+          label.appendChild(select);
+          keepSelects.appendChild(label);
+          keepSelects.appendChild(document.createElement("br"));
+        }
+        row.appendChild(keepSelects);
+
+        const submit = document.createElement("button");
+        submit.textContent = `并入当前候选人（${candidate.name} 为主）`;
+        submit.onclick = () => {
+          const keep = {};
+          for (const select of keepSelects.querySelectorAll("select")) {
+            keep[select.dataset.jobId] = select.value;
+          }
+          doMerge(candidate.candidate_id, s.candidate_id, reason.value, keep);
+        };
+        row.appendChild(submit);
+        box.appendChild(row);
+        box.appendChild(document.createElement("hr"));
+      }
+    }
+
+    function renderHistory(history) {
+      const box = document.getElementById("history");
+      box.innerHTML = "";
+      if (history.length === 0) { box.textContent = "暂无合并记录。"; return; }
+      for (const h of history) {
+        const row = document.createElement("div");
+        row.textContent = `${h.merged_at}：${h.secondary_id} 并入 ${h.primary_id}（${h.reason}）`;
+        if (!h.unmerged_at) {
+          const undo = document.createElement("button");
+          undo.textContent = "撤销";
+          undo.onclick = () => doUnmerge(h.merge_log_id);
+          row.appendChild(undo);
+        } else {
+          row.textContent += `（已于 ${h.unmerged_at} 撤销）`;
+        }
+        box.appendChild(row);
+      }
+    }
+
+    async function doMerge(primaryId, secondaryId, reason, keep) {
+      const resp = await fetch("api/candidates/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          primary_id: primaryId, secondary_id: secondaryId, reason,
+          request_id: crypto.randomUUID(), keep_application_per_job: keep,
+        }),
+      });
+      if (!resp.ok) {
+        document.getElementById("error").textContent = "合并失败：" + (await resp.json()).detail;
+        return;
+      }
+      load();
+    }
+
+    async function doUnmerge(mergeLogId) {
+      const resp = await fetch(`api/candidates/merge/${mergeLogId}/unmerge`, { method: "POST" });
+      if (!resp.ok) {
+        document.getElementById("error").textContent = "撤销失败：" + (await resp.json()).detail;
+        return;
+      }
+      load();
+    }
+
+    async function load() {
+      const candidateId = candidateIdFromPath();
+      if (!candidateId) { document.getElementById("error").textContent = "无法识别候选人标识"; return; }
+      const resp = await fetch(`api/candidates/${candidateId}/merge`);
+      if (resp.status === 401) { window.location.href = "login"; return; }
+      if (!resp.ok) { document.getElementById("error").textContent = "加载失败"; return; }
+      const body = await resp.json();
+      document.getElementById("candidate-title").textContent =
+        `${body.candidate.name}（${SOURCE_LABELS[body.candidate.source] || body.candidate.source}）`;
+      renderSuspects(body.candidate, body.suspected_duplicates);
+      renderHistory(body.merge_history);
+    }
+
+    load();
+  </script>
+</body>
+</html>
