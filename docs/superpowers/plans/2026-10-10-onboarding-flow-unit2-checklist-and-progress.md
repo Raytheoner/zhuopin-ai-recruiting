@@ -1009,10 +1009,28 @@ Expected: 全绿（progress 五个用例）。
 """onboarding-flow U2 页面与 JSON 端点（tasks 2.4/2.5/2.6）。"""
 from pathlib import Path
 
+from app.llm.gateway import LLMGateway
 from app.storage.auth_session import create_session
 from app.storage.hr_account import upsert_account
+from app.web.server import create_app
+from fastapi.testclient import TestClient
 
 STATIC = Path("app/web/static")
+
+
+def _make(root_path: str, tmp_path):
+    """子路径前缀用例的 app 工厂（与 tests/test_letters_page.py 同款）。"""
+
+    def gateway_factory():
+        return LLMGateway(
+            api_key="k", base_url="https://example.invalid", model="deepseek-chat",
+            supports_json_schema=False, client=object(),
+        )
+
+    app = create_app(
+        db_path=str(tmp_path / "p.db"), gateway_factory=gateway_factory, root_path=root_path
+    )
+    return TestClient(app)
 
 
 def _login(client, conn, username, role, department=None):
@@ -1068,6 +1086,15 @@ def test_checklist_page_extracts_application_id_from_middle_segment():
     html = (STATIC / "onboarding_checklist.html").read_text(encoding="utf-8")
     assert "match(/\\/applications\\/([^/]+)\\/onboarding\\/?$/)" in html
     assert 'split("/").filter(Boolean).pop()' not in html
+
+
+def test_checklist_page_works_under_subpath_prefix(tmp_path):
+    """2026-10-11 修正（Spec review 实测缺口）：Global Constraints 部署约束要求
+    「任意挂载前缀下页面路由 + 相对路径可用」——补与 letters 页同款的子路径用例。"""
+    client = _make("/hr/recruit-agent", tmp_path)
+    resp = client.get("/hr/recruit-agent/applications/app-1/onboarding")
+    assert resp.status_code == 200
+    assert '<base href="/hr/recruit-agent/">' in resp.text
 
 
 def test_checklist_page_is_served(make_test_client):
