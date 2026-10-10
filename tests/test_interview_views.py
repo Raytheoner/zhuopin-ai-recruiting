@@ -112,3 +112,47 @@ def test_pages_render_under_root_path_prefix(tmp_path):
         resp = client.get(f"{ROOT_PATH}/{page}")
         assert resp.status_code == 200
         assert f'<base href="{ROOT_PATH}/">' in resp.text
+    # 2026-10-11 修正（Spec review）：HR 排期页一并纳入子路径渲染核验。
+    resp = client.get(f"{ROOT_PATH}/applications/app1/schedule")
+    assert resp.status_code == 200
+    assert f'<base href="{ROOT_PATH}/">' in resp.text
+
+
+def test_application_schedule_page_extracts_application_id_from_middle_segment():
+    """2026-10-11 修正（Spec review 实测 blocker）：⛔ 不能取 URL 末段
+    （那是字面量 "schedule"），否则排期页首个数据请求恒 404。"""
+    from pathlib import Path
+
+    html = Path("app/web/static/application_schedule.html").read_text(encoding="utf-8")
+    assert "match(/\\/applications\\/([^/]+)\\/schedule\\/?$/)" in html
+    assert 'split("/").filter(Boolean).pop()' not in html
+    assert "if (!r.ok)" in html  # 非 401 失败也有就地提示（F4）
+
+
+def test_schedule_post_returns_404_for_unknown_application(tmp_path):
+    """2026-10-11 修正（Spec review）：POST 排期路线上 SlotNotFoundError 是
+    ValueError 子类，曾因 except 顺序被宽分支吃掉、404 退化成 422——钉死语义。
+
+    ⚠️ 非空转（2026-10-11 实测补钉）：本文件 `_make()` 带 `root_path=ROOT_PATH`，
+    请求路径必须带该前缀，否则命中的是 Starlette 的「路由未匹配」404
+    （`{"detail":"Not Found"}`），本用例就退化成恒真的空转——既测不到 except 顺序，
+    也测不到路由本身。故：① URL 带 ROOT_PATH 前缀；② 断言 detail 是 store 层
+    抛出的「不存在」文案，与路由未匹配的 "Not Found" 区分开。
+    """
+    client, conn = _make(tmp_path)
+    seed = _seed(conn)
+    _login(client, conn, seed["hr_id"])
+    resp = client.post(
+        f"{ROOT_PATH}/api/applications/nope/schedule",
+        json={
+            "request_id": "req-x",
+            "interviewer_ids": [seed["interviewer_id"]],
+            "round": 1,
+            "start_at": "2999-01-02 00:00",
+            "end_at": "2999-01-02 01:00",
+            "mode": "onsite",
+            "location_or_link": None,
+        },
+    )
+    assert resp.status_code == 404
+    assert "不存在" in resp.json()["detail"]

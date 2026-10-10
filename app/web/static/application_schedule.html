@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>HR 排期</title><!--BASE_HREF--></head>
+<body>
+<h1>HR 排期</h1>
+<div id="info"></div>
+<form id="f">
+  <label>轮次 <input name="round" type="number" min="1" required></label>
+  <label>开始 <input name="start_at" placeholder="YYYY-MM-DD HH:MM:SS" required></label>
+  <label>结束 <input name="end_at" placeholder="YYYY-MM-DD HH:MM:SS" required></label>
+  <label>形式
+    <select name="mode">
+      <option value="onsite">现场</option>
+      <option value="phone">电话</option>
+      <option value="online">线上</option>
+    </select>
+  </label>
+  <label>地点/链接 <input name="location_or_link"></label>
+  <div id="interviewers"></div>
+  <button type="submit">安排</button>
+</form>
+<ul id="slots"></ul>
+<script>
+// 2026-10-11 修正（1001G，Spec review 实测 blocker）：⛔ 不能取 URL 末段
+// （那是字面量 "schedule"），否则本页首个数据请求恒 404。用与 letters.html
+// 同款正则从路径中段取（部署约束 1：正则不含前导 "/"、不硬编码前缀）。
+const appId = location.pathname.match(/\/applications\/([^/]+)\/schedule\/?$/)[1];
+const api = `api/applications/${appId}/schedule`;
+async function refresh() {
+  const r = await fetch(api);
+  if (r.status === 401) { location.href = "login"; return; }
+  if (!r.ok) {
+    // 非 401 的失败也是一等状态：就地显示原因，⛔ 不留白也不静默。
+    const err = document.getElementById("info");
+    err.textContent = r.status === 404
+      ? "投递不存在（链接可能已失效）"
+      : `读取排期失败（HTTP ${r.status}），请稍后重试`;
+    return;
+  }
+  const d = await r.json();
+  document.getElementById("info").textContent = `${d.candidate_name} · ${d.job_title} · ${d.stage_type}`;
+  document.getElementById("interviewers").innerHTML = d.interviewers.map(i =>
+    `<label><input type="checkbox" name="iv" value="${i.id}">${i.name}</label>`).join("");
+  document.getElementById("slots").innerHTML = d.slots.map(s =>
+    `<li>第${s.round}轮 ${s.start_at}–${s.end_at} ${s.mode} ${s.status}` +
+    `${s.needs_invitation_followup ? " ⚠未回填邀约" : ""}</li>`).join("");
+}
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const ivs = [...document.querySelectorAll('input[name="iv"]:checked')].map(i => i.value);
+  const body = {
+    request_id: crypto.randomUUID(), interviewer_ids: ivs, round: Number(fd.get("round")),
+    start_at: fd.get("start_at"), end_at: fd.get("end_at"), mode: fd.get("mode"),
+    location_or_link: fd.get("location_or_link") || null,
+  };
+  const r = await fetch(api, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) { alert(JSON.stringify(await r.json())); }
+  refresh();
+});
+refresh();
+</script>
+</body>
+</html>
