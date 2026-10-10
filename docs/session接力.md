@@ -244,6 +244,13 @@
   ③ 计划侧同步：本轮所有 review 缺口都做了「计划文本＋实现」双修（`56c9395`/`ef384c3`/`8e478a2`/`e5420a2`/`15a5efb`/`a0a88f8`）；
   ④ main 全量（seg2 后）：**4280 passed／0 失败**；⑤ 待续：Offer seg3 → 入职 seg3（7-8）→ **U2 全完** → U3 构建
   （四包 worktree `lane-u3-*-build` 已预建）→ 视进度开 `.51` 发版（人侧）。
+- **2026-10-11 05:1x（`1001G` 夜班续二）：四包 U2 全部完成，U3 构建开跑**——① 收官顺序：渠道（`5f6957e`）→
+  排期（`7170d8c`，11 Task 全完）→ Offer（`ee079a2`，含文书页假错修复版）→ 入职（`e36475a`）；四包 U2 各含
+  2-3 处 review 缺口修复（均计划＋实现双修）；② main 全量 **4339 passed／10 skipped／0 失败**；③ **U3 构建已发车**：
+  渠道 U3 seg1（Task 1-3）在跑，worktree `lane-u3-{channel,sched,offer,onboard}-build`；④ ⚠️ **两条人侧项**：
+  （a）SDD Task 会话禁网（runner 缺 `network_access`）——开网属安全控制变更，已登记 findings `2026-10-11-SDD-Task会话禁网与51冒烟留步.md`，
+  ⛔ 未擅自改，待 Shao Peishen 拍板（保持禁网或照 run-lanes 开网）；（b）Offer U2 2.8「.51 docx 冒烟」按 (a) 留步，
+  需人在 `.51` 上做 Windows/Word 目检。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。
