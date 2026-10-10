@@ -2880,6 +2880,83 @@ def create_app(
     def onboarding_overview_page():
         return _render_static_page("onboarding_overview.html", root_path)
 
+    # ── onboarding-flow U2：部门经理只读页（tasks 2.6）──
+
+    def _record_department_access(username: str, application_ids) -> None:
+        """写访问留痕；任一条失败抛异常并回滚（调用方转 503，不返回内容）。"""
+        try:
+            for aid in application_ids:
+                conn.execute(
+                    "INSERT INTO onboarding_access_log (id, accessor, application_id) "
+                    "VALUES (?, ?, ?)",
+                    (str(uuid.uuid4()), username, aid),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    @router.get("/api/onboarding/department")
+    def onboarding_department_list(request: Request):
+        username, role, department = _require_hr_or_dept_manager(request)
+        if role != "dept_manager":
+            raise HTTPException(status_code=403, detail="仅部门经理可访问部门进度页")
+        if not department:
+            raise HTTPException(status_code=403, detail="账号未分配部门")
+        rows = _onboarding_overview_rows(department=department)
+        try:
+            _record_department_access(username, [r[1] for r in rows])
+        except Exception:
+            raise HTTPException(status_code=503, detail="访问留痕失败") from None
+        checklists = []
+        for r in rows:
+            summary = _checklist_summary(r[1])
+            checklists.append(
+                {
+                    "candidate_name": r[0],
+                    "application_id": r[1],
+                    "department": r[2],
+                    "start_date": r[3],
+                    "progress_percent": summary["progress_percent"],
+                    "overdue_count": summary["overdue_count"],
+                }
+            )
+        return {"checklists": checklists}
+
+    @router.get("/api/onboarding/department/{application_id}")
+    def onboarding_department_detail(application_id: str, request: Request):
+        username, role, department = _require_hr_or_dept_manager(request)
+        if role != "dept_manager":
+            raise HTTPException(status_code=403, detail="仅部门经理可访问部门进度页")
+        if not department:
+            raise HTTPException(status_code=403, detail="账号未分配部门")
+        row = conn.execute(
+            "SELECT j.department FROM application a JOIN job j ON j.id = a.job_id "
+            "WHERE a.id = ?",
+            (application_id,),
+        ).fetchone()
+        if row is None or row[0] != department:
+            raise HTTPException(status_code=403, detail="跨部门查看被拒")
+        try:
+            _record_department_access(username, [application_id])
+        except Exception:
+            raise HTTPException(status_code=503, detail="访问留痕失败") from None
+        payload = _checklist_payload(application_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="该投递尚无入职清单")
+        cand = conn.execute(
+            "SELECT c.name FROM application a JOIN candidate c ON c.id = a.candidate_id "
+            "WHERE a.id = ?",
+            (application_id,),
+        ).fetchone()
+        payload["candidate_name"] = cand[0] if cand else ""
+        payload["department"] = row[0]
+        return payload
+
+    @router.get("/onboarding/department")
+    def onboarding_department_page():
+        return _render_static_page("onboarding_department.html", root_path)
+
     @router.post("/api/applications/{application_id}/interview-sessions")
     def create_interview_session(
         application_id: str, req: InterviewSessionCreateRequest, request: Request
