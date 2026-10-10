@@ -33,7 +33,8 @@ from typing import Callable
 
 import pytest
 
-from app.agents.jd_agent import AI_LABEL_TEMPLATE
+from app.agents.jd_agent import AI_LABEL_TEMPLATE, enforce_ai_label
+from app.agents.letter_drafter import LetterDraft
 from app.audit.events import OUTBOUND_BLOCKED, DecisionEvent
 from app.audit.recorder import AuditRecorder
 from app.audit.sinks import JsonlChainSink, SqliteSink
@@ -45,6 +46,12 @@ from app.graph.jd_nodes import (
     effect_mark_jd_human_written,
     effect_update_jd_text,
     jd_edit_business_key,
+)
+from app.graph.letter_nodes import (
+    effect_edit_letter,
+    effect_mark_letter_human_written,
+    effect_persist_letter,
+    letter_edit_business_key,
 )
 from app.graph.manual_handoff import (
     REASON_PROVIDER_UNAVAILABLE,
@@ -135,6 +142,9 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_record_outbound_audit",
         "effect_update_jd_text",
         "effect_mark_jd_human_written",
+        "effect_persist_letter",
+        "effect_edit_letter",
+        "effect_mark_letter_human_written",
         "effect_mark_needs_manual",
         "effect_deliver_manual_handoff",
         "effect_persist_parse",
@@ -408,6 +418,14 @@ _TS = "2026-09-08T02:00:00+00:00"
 _FAR_FUTURE = "2099-01-01T00:00:00+00:00"
 _LABEL = AI_LABEL_TEMPLATE.format(generated_at=_TS)
 _AI_BODY = f"【AI 生成】本文案由系统基于岗位画像自动生成，生成时间 {_TS}。很遗憾……"
+_LETTER_ID = "letter-4-4"
+_LETTER_RUN = "letter-run-4-4"
+_LETTER_BODY_TEXT = "张三：\n\n拟录用您担任嵌入式软件工程师。"
+# 种子里那份文书的正文 = 已经由 L3 生成过、带 AI 标识的一版（生成时间 _TS）。
+# ⛔ 不手写标识串：标识的唯一真源是 app/agents/jd_agent.enforce_ai_label，
+# 抄一份迟早与真源漂移，而 effect_edit_letter 的「回读原生成时间」会当场摔。
+_LETTER_AI_BODY = enforce_ai_label(_LETTER_BODY_TEXT, generated_at=_TS)
+_EDITED_LETTER_BODY = "张三：\n\n拟录用您担任嵌入式软件工程师（HR 手改版）。"
 
 
 class _CrashBeforeDurableCommit(sqlite3.Connection):
@@ -832,6 +850,59 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
         )
         conn.commit()
 
+    # ── U2 文书引擎（app/graph/letter_nodes.py）3 个节点的种子 ────────────
+    def _seed_letter_application(conn):
+        """`effect_persist_letter` 的前置：投递闭环（复用
+        `_seed_application_base`）+ 一条 'approved' 的 offer（节点内
+        `_assert_offer_approved` 的前置）+ 一条 analysis_run（草稿的 run_id
+        会落进 candidate_letter.analysis_run_id，外键指向它）。"""
+        _seed_application_base(conn)
+        conn.execute(
+            "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+            "report_to, status, created_by) VALUES ('offer-4-4', ?, ?, '研发部', "
+            "'2026-10-20', '李四', 'approved', 'hr:tester')",
+            (_APPLICATION, _JOB),
+        )
+        conn.execute(
+            "INSERT INTO analysis_run (id, configured_model, prompt_version, temperature, "
+            "input_hash, raw_response) VALUES (?, 'deepseek-chat', 'letter-offer-v1', 0, "
+            "'letter-hash-4-4', '{}')",
+            (_LETTER_RUN,),
+        )
+        conn.commit()
+
+    def _seed_letter_row(conn):
+        """`effect_edit_letter` / `effect_mark_letter_human_written` 的前置：
+        一条已生成的 Offer 文书（带 AI 标识，生成时间 _TS——编辑节点要按它
+        回读原生成时间）。"""
+        _seed_application_base(conn)
+        conn.execute(
+            "INSERT INTO candidate_letter (id, application_id, kind, version, "
+            "template_version, body, ai_generated, sent_status, created_by) "
+            "VALUES (?, ?, 'offer', 1, 1, ?, 1, 'none', 'hr:tester')",
+            (_LETTER_ID, _APPLICATION, _LETTER_AI_BODY),
+        )
+        conn.commit()
+
+    def _letter_body(conn):
+        return conn.execute(
+            "SELECT body FROM candidate_letter WHERE id = ?", (_LETTER_ID,)
+        ).fetchone()[0]
+
+    def _letter_still_ai_generated(conn):
+        return conn.execute(
+            "SELECT COUNT(*) FROM candidate_letter WHERE id = ? AND ai_generated = 1",
+            (_LETTER_ID,),
+        ).fetchone()[0]
+
+    _letter_draft = LetterDraft(
+        kind="offer",
+        body=_LETTER_AI_BODY,
+        run_id=_LETTER_RUN,
+        response_model="deepseek-chat",
+        prompt_version="letter-offer-v1",
+    )
+
     return {
         "effect_persist_draft": Recipe(
             thread_id=_JOB,
@@ -990,6 +1061,81 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "**value-idempotent**：标记「人工撰写」是把 profile_json 里的一个"
                 "作者标记位设成同一个值，重复标记与只标记一次在这一列上的取值"
                 "完全相同——双发保护同样完全靠 effect_log 的 COUNT(*) == 1 断言。"
+            ),
+        ),
+        "effect_persist_letter": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_letter_application,
+            invoke=lambda conn: effect_persist_letter(
+                conn,
+                thread_id=_APPLICATION,
+                business_key=f"offer:{_LETTER_RUN}",
+                application_id=_APPLICATION,
+                kind="offer",
+                version=1,
+                template_version=1,
+                draft=_letter_draft,
+                created_by="hr:tester",
+            ),
+            # 业务事实 = 这版草稿在 candidate_letter 里的那一行（一次真实 LLM
+            # 调用落一版）。行数选「该投递的文书行数」而非全表：本节点按
+            # application_id 写，口径与 thread_id 对齐。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM candidate_letter WHERE application_id = ?",
+                (_APPLICATION,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 candidate_letter；同一 business_key"
+                "（kind:run_id）重放会先命中 effect_log 短路，撞不到"
+                "UNIQUE(application_id, kind, version)。"
+            ),
+        ),
+        "effect_edit_letter": Recipe(
+            thread_id=_LETTER_ID,
+            seed=_seed_letter_row,
+            invoke=lambda conn: effect_edit_letter(
+                conn,
+                thread_id=_LETTER_ID,
+                business_key=letter_edit_business_key(_LETTER_ID, _EDITED_LETTER_BODY),
+                letter_id=_LETTER_ID,
+                edited_body=_EDITED_LETTER_BODY,
+            ),
+            # ⚠️ value-idempotent：编辑是 UPDATE 同一行（body 整段替换），
+            # 行数不变，口径改用「该行正文是否等于编辑后的目标值」这个 0/1
+            # 谓词，与 effect_update_jd_text 同一手法。目标值由
+            # enforce_ai_label 以**原标识里的生成时间**（_TS）重贴——正是节点
+            # 内部走的那条路（「编辑不去标识」）。
+            count_business_rows=lambda conn: int(
+                _letter_body(conn)
+                == enforce_ai_label(_EDITED_LETTER_BODY, generated_at=_TS)
+            ),
+            note=(
+                "**value-idempotent**：编辑把正文整段替换成同一段目标文本，"
+                "无论放行一次还是被短路，这一列的取值完全相同——双发保护完全"
+                "靠 effect_log 的 COUNT(*) == 1 断言。"
+            ),
+        ),
+        "effect_mark_letter_human_written": Recipe(
+            thread_id=_LETTER_ID,
+            seed=_seed_letter_row,
+            invoke=lambda conn: effect_mark_letter_human_written(
+                conn,
+                thread_id=_LETTER_ID,
+                business_key="mark-human-4-4",
+                letter_id=_LETTER_ID,
+                reviewer="HR 乙",
+                marked_at=_TS,
+            ),
+            # ⚠️ value-idempotent：去标识 + 留痕是同一次 UPDATE，行数不变，
+            # 口径改用「该行是否已处于目标状态（ai_generated=0）」的 0/1 谓词。
+            count_business_rows=_letter_still_ai_generated,
+            rows_per_effect=-1,
+            note=(
+                "**value-idempotent + 负 rows_per_effect**：种子先放一行"
+                " ai_generated=1（rows_before=1），生效一次后这一行变成 0"
+                "（0 行），`rows_before + rows_per_effect == 0` 要求 -1。"
+                "双发保护同样完全靠 effect_log 的 COUNT(*) == 1：第二次调用"
+                "命中短路，不会在已经是 0 的谓词上再改一次。"
             ),
         ),
         "effect_mark_needs_manual": Recipe(
