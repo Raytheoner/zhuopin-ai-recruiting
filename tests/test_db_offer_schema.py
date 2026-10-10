@@ -3,9 +3,6 @@ stage 预置 offer/hired 与老库重建迁移。
 
 写法对齐 tests/test_db_m3_schema.py：schema 反证全部直接 INSERT 绕过应用层，
 由数据库 CHECK 强制拒绝。
-
-⚠️ 本文件随交付单元 U1 的任务逐条长大：Task 1 先落 `letter_template` /
-`candidate_letter` 两张表的用例，其余表与 stage 迁移的用例在对应任务落地时补。
 """
 import sqlite3
 from pathlib import Path
@@ -112,6 +109,52 @@ def test_offer_table_has_no_salary_columns(conn):
     assert offending == []
 
 
+# ── 唯一约束反证 ────────────────────────────────────────────────
+
+
+def test_letter_template_unique_on_kind_and_version(conn):
+    conn.execute(
+        "INSERT INTO letter_template (kind, version, body, updated_by) "
+        "VALUES ('offer', 1, 'b', 'hr-1')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO letter_template (kind, version, body, updated_by) "
+            "VALUES ('offer', 1, 'b2', 'hr-1')"
+        )
+
+
+def test_candidate_letter_unique_on_application_kind_version(conn):
+    _seed_parents(conn)
+    conn.execute(
+        "INSERT INTO candidate_letter (id, application_id, kind, version, "
+        "template_version, body, ai_generated, created_by) "
+        "VALUES ('l1', 'app1', 'offer', 1, 1, 'b', 1, 'hr-1')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO candidate_letter (id, application_id, kind, version, "
+            "template_version, body, ai_generated, created_by) "
+            "VALUES ('l2', 'app1', 'offer', 1, 1, 'b2', 1, 'hr-1')"
+        )
+
+
+def test_offer_application_id_unique(conn):
+    _seed_parents(conn)
+    conn.execute(
+        "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+        "report_to, created_by) VALUES ('o1', 'app1', 'j1', 'd', '2026-10-08', 'r', 'hr-1')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+            "report_to, created_by) VALUES ('o2', 'app1', 'j1', 'd', '2026-10-08', 'r', 'hr-1')"
+        )
+
+
 def test_offer_approval_unique_on_offer_round_level(conn):
     _seed_parents(conn)
     conn.execute(
@@ -127,6 +170,83 @@ def test_offer_approval_unique_on_offer_round_level(conn):
         conn.execute(
             "INSERT INTO offer_approval (id, offer_id, round, level, approver, decision) "
             "VALUES ('oa2', 'o1', 1, 1, 'bob', 'approved')"
+        )
+
+
+# ── CHECK 反证（直接 INSERT，绕过应用层）────────────────────────
+
+
+def test_letter_template_kind_check(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO letter_template (kind, version, body, updated_by) "
+            "VALUES ('bad', 1, 'b', 'hr-1')"
+        )
+
+
+def test_candidate_letter_kind_check(conn):
+    _seed_parents(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO candidate_letter (id, application_id, kind, version, "
+            "template_version, body, ai_generated, created_by) "
+            "VALUES ('l1', 'app1', 'bad', 1, 1, 'b', 1, 'hr-1')"
+        )
+
+
+def test_candidate_letter_ai_generated_check(conn):
+    _seed_parents(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO candidate_letter (id, application_id, kind, version, "
+            "template_version, body, ai_generated, created_by) "
+            "VALUES ('l1', 'app1', 'offer', 1, 1, 'b', 2, 'hr-1')"
+        )
+
+
+def test_candidate_letter_sent_status_check(conn):
+    _seed_parents(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO candidate_letter (id, application_id, kind, version, "
+            "template_version, body, ai_generated, sent_status, created_by) "
+            "VALUES ('l1', 'app1', 'offer', 1, 1, 'b', 1, 'sent_twice', 'hr-1')"
+        )
+
+
+def test_offer_status_check(conn):
+    _seed_parents(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+            "report_to, status, created_by) "
+            "VALUES ('o1', 'app1', 'j1', 'd', '2026-10-08', 'r', 'auto_sent', 'hr-1')"
+        )
+
+
+def test_offer_approval_decision_check(conn):
+    _seed_parents(conn)
+    conn.execute(
+        "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+        "report_to, created_by) VALUES ('o1', 'app1', 'j1', 'd', '2026-10-08', 'r', 'hr-1')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO offer_approval (id, offer_id, round, level, approver, decision) "
+            "VALUES ('oa1', 'o1', 1, 1, 'alice', 'auto_approved')"
+        )
+
+
+def test_offer_approval_approver_must_not_be_blank(conn):
+    _seed_parents(conn)
+    conn.execute(
+        "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+        "report_to, created_by) VALUES ('o1', 'app1', 'j1', 'd', '2026-10-08', 'r', 'hr-1')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO offer_approval (id, offer_id, round, level, approver, decision) "
+            "VALUES ('oa1', 'o1', 1, 1, '   ', 'approved')"
         )
 
 
@@ -156,15 +276,6 @@ def test_letter_access_log_accessor_must_not_be_blank(conn):
             "INSERT INTO letter_access_log (id, accessor, application_id, letter_id, access_type) "
             "VALUES ('log1', '  ', 'app1', 'l1', 'view')"
         )
-
-
-def test_offer_new_tables_never_enter_the_add_column_path():
-    tables_touched = {table for table, _column, _ddl in _ADDED_COLUMNS}
-    new_tables = {
-        "letter_template", "candidate_letter", "offer",
-        "offer_approval_chain", "offer_approval", "letter_access_log",
-    }
-    assert not (new_tables & tables_touched)
 
 
 # ── stage 预置 offer/hired 与老库重建迁移（Task 5）──────────────────
@@ -200,6 +311,15 @@ def test_stage_check_rejects_unknown_stage_type(conn):
         conn.execute(
             "INSERT INTO stage (id, name, stage_type) VALUES ('bad', 'bad', 'bad')"
         )
+
+
+def test_offer_new_tables_never_enter_the_add_column_path():
+    tables_touched = {table for table, _column, _ddl in _ADDED_COLUMNS}
+    new_tables = {
+        "letter_template", "candidate_letter", "offer",
+        "offer_approval_chain", "offer_approval", "letter_access_log",
+    }
+    assert not (new_tables & tables_touched)
 
 
 _LEGACY_FIXTURE_PATH = (
