@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,6 +14,7 @@ from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Resp
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
+from starlette.background import BackgroundTask
 
 from app.agents.intake_agent import derive_unspecified_fields
 from app.agents.intake_question import normalize_question_payload
@@ -122,6 +125,25 @@ from app.storage.offer_approval_chain import (
     UnknownApproverError,
     get_approval_chain,
     put_approval_chain,
+)
+from app.graph.letter_nodes import (
+    LetterTemplateMissingError,
+    OfferNotFoundError,
+    OfferNotApprovedError,
+    RejectionRecordMissingError,
+    compute_letter_draft_for_application,
+    effect_edit_letter,
+    effect_mark_letter_human_written,
+    effect_persist_letter,
+    letter_edit_business_key,
+    next_letter_version,
+    record_letter_access,
+)
+from app.letter_docx import render_letter_to_docx
+from app.storage.letter_template import (
+    ForbiddenPlaceholderError,
+    get_letter_template,
+    put_letter_template,
 )
 
 logger = logging.getLogger(__name__)
@@ -245,6 +267,18 @@ class OnboardingTemplateItem(BaseModel):
 
 class OnboardingTemplateUpdateRequest(BaseModel):
     items: list[OnboardingTemplateItem]
+
+
+class LetterTemplateUpdateRequest(BaseModel):
+    body: str
+
+
+class LetterGenerateRequest(BaseModel):
+    kind: str
+
+
+class LetterEditRequest(BaseModel):
+    body: str
 
 
 class TurnOutcome(NamedTuple):
@@ -2060,6 +2094,185 @@ def create_app(
         if row is None or row[0] != required_role:
             raise HTTPException(status_code=403, detail="无权限")
         return username
+
+    # ── offer-generation U2：文书模板与文书引擎（tasks 2.1/2.4/2.5/2.6/2.7）──
+
+    def _letter_row(letter_id: str):
+        return conn.execute(
+            "SELECT id, application_id, kind, version, template_version, body, "
+            "ai_generated, authorship_marked_by, authorship_marked_at, "
+            "authorship_from_version, sent_status, sent_channel, created_by, created_at "
+            "FROM candidate_letter WHERE id = ?",
+            (letter_id,),
+        ).fetchone()
+
+    def _letter_payload(letter_id: str):
+        row = _letter_row(letter_id)
+        if row is None:
+            return None
+        return {
+            "id": row[0], "application_id": row[1], "kind": row[2], "version": row[3],
+            "template_version": row[4], "body": row[5], "ai_generated": bool(row[6]),
+            "authorship_marked_by": row[7], "authorship_marked_at": row[8],
+            "authorship_from_version": row[9], "sent_status": row[10],
+            "sent_channel": row[11], "created_by": row[12], "created_at": row[13],
+        }
+
+    def _letter_meta_payload(letter_id: str):
+        payload = _letter_payload(letter_id)
+        if payload is None:
+            return None
+        # 列表不返回正文：查看正文唯一入口是 GET /api/letters/{id}，它先写 view 留痕。
+        payload.pop("body")
+        return payload
+
+    def _load_letter_or_404(letter_id: str) -> dict:
+        payload = _letter_payload(letter_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="文书不存在")
+        return payload
+
+    @router.get("/api/letter-templates/{kind}")
+    def get_letter_template_endpoint(kind: str, request: Request):
+        _require_role(request, "hr")
+        template = get_letter_template(conn, kind)
+        if template is None:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        return template
+
+    @router.put("/api/letter-templates/{kind}")
+    def put_letter_template_endpoint(
+        kind: str, req: LetterTemplateUpdateRequest, request: Request
+    ):
+        username = _require_role(request, "hr")
+        try:
+            return put_letter_template(conn, kind=kind, body=req.body, updated_by=username)
+        except ForbiddenPlaceholderError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/api/applications/{application_id}/letters")
+    def list_letters(application_id: str, request: Request):
+        _require_role(request, "hr")
+        rows = conn.execute(
+            "SELECT id FROM candidate_letter WHERE application_id = ? "
+            "ORDER BY kind, version DESC",
+            (application_id,),
+        ).fetchall()
+        return {"letters": [_letter_meta_payload(r[0]) for r in rows]}
+
+    @router.post("/api/applications/{application_id}/letters", status_code=201)
+    def generate_letter(
+        application_id: str, req: LetterGenerateRequest, request: Request
+    ):
+        username = _require_role(request, "hr")
+        if req.kind not in ("offer", "rejection"):
+            raise HTTPException(status_code=422, detail="kind 只能是 offer 或 rejection")
+        try:
+            draft, template_version = compute_letter_draft_for_application(
+                conn, application_id=application_id, kind=req.kind, gateway=gateway
+            )
+        except (OfferNotFoundError, OfferNotApprovedError, RejectionRecordMissingError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except LetterTemplateMissingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        version = next_letter_version(conn, application_id, req.kind)
+        effect_persist_letter(
+            conn,
+            thread_id=application_id,
+            business_key=f"{req.kind}:{draft.run_id}",
+            application_id=application_id,
+            kind=req.kind,
+            version=version,
+            template_version=template_version,
+            draft=draft,
+            created_by=username,
+        )
+        # 重复调用（同一 run_id）被 idempotent_effect 短路，version 预算号不会真落库——
+        # 用 analysis_run_id 反查实际落库的版本，不信任调用前算出来的那个数（同 prep 的 fix 1a）。
+        actual = conn.execute(
+            "SELECT id FROM candidate_letter WHERE application_id = ? AND kind = ? "
+            "AND analysis_run_id = ?",
+            (application_id, req.kind, draft.run_id),
+        ).fetchone()[0]
+        return _letter_payload(actual)
+
+    @router.get("/api/letters/{letter_id}")
+    def view_letter(letter_id: str, request: Request):
+        username = _require_role(request, "hr")
+        letter = _load_letter_or_404(letter_id)
+        # 先留痕再返回正文；留痕失败 ⇒ 未捕获异常 ⇒ 500，不返回正文（spec「留痕失败 MUST NOT 返回正文」）。
+        record_letter_access(
+            conn, accessor=username, application_id=letter["application_id"],
+            letter_id=letter_id, access_type="view",
+        )
+        return letter
+
+    @router.patch("/api/letters/{letter_id}")
+    def edit_letter(letter_id: str, req: LetterEditRequest, request: Request):
+        _require_role(request, "hr")
+        letter = _load_letter_or_404(letter_id)
+        if not req.body or not req.body.strip():
+            raise HTTPException(status_code=422, detail="文书正文不能为空")
+        effect_edit_letter(
+            conn,
+            thread_id=letter["application_id"],
+            business_key=letter_edit_business_key(letter_id, req.body),
+            letter_id=letter_id,
+            edited_body=req.body,
+        )
+        return _letter_payload(letter_id)
+
+    @router.post("/api/letters/{letter_id}/mark-human")
+    def mark_letter_human(letter_id: str, request: Request):
+        username = _require_role(request, "hr")
+        letter = _load_letter_or_404(letter_id)
+        effect_mark_letter_human_written(
+            conn,
+            thread_id=letter["application_id"],
+            business_key=f"{letter_id}:mark-human",
+            letter_id=letter_id,
+            reviewer=username,
+            marked_at=sqlite_utc_now(),
+        )
+        return _letter_payload(letter_id)
+
+    @router.get("/api/letters/{letter_id}/export.docx")
+    def export_letter(letter_id: str, request: Request):
+        username = _require_role(request, "hr")
+        letter = _load_letter_or_404(letter_id)
+        # 导出也写留痕（access_type=export），先留痕再产文件（spec「导出 MUST 写访问留痕」）。
+        record_letter_access(
+            conn, accessor=username, application_id=letter["application_id"],
+            letter_id=letter_id, access_type="export",
+        )
+        fd, tmp_path = tempfile.mkstemp(suffix=".docx")
+        os.close(fd)
+        try:
+            render_letter_to_docx(
+                body=letter["body"],
+                kind=letter["kind"],
+                ai_generated=letter["ai_generated"],
+                out_path=tmp_path,
+            )
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+        # 首次导出把 sent_status 推进到 exported；已 copied/sent/system_queued 的不降级。
+        conn.execute(
+            "UPDATE candidate_letter SET sent_status = 'exported' "
+            "WHERE id = ? AND sent_status = 'none'",
+            (letter_id,),
+        )
+        conn.commit()
+        return FileResponse(
+            tmp_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=f"letter-{letter_id}.docx",
+            background=BackgroundTask(os.unlink, tmp_path),
+        )
 
     def _canonical_items(items: list[dict]) -> str:
         normalized = [
