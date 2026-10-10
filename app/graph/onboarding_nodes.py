@@ -99,3 +99,88 @@ def effect_instantiate_checklist(
             ),
         )
     return checklist_id
+
+
+class ItemUpdateRejected(Exception):
+    """条目状态流转非法（状态机不合法 / 豁免缺原因）。"""
+
+
+class ItemOperatorForbidden(Exception):
+    """操作人无权修改该条目（非 HR、非对应部门经理）。"""
+
+
+_ALLOWED_ITEM_TRANSITIONS = {
+    ("pending", "done"),
+    ("pending", "waived"),
+    ("done", "pending"),
+    ("waived", "pending"),
+}
+
+
+@idempotent_effect("effect_update_item")
+def effect_update_item(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    to_status: str,
+    reason: str | None,
+    operator_username: str,
+) -> None:
+    """effect_* 节点：写 onboarding_item + onboarding_item_history，同事务。
+
+    操作人限 HR 或"该条目对应部门经理"：HR 无条件；dept_manager 仅当
+    owner_party='dept' 且 manager.department == job.department（design D2）。
+    幂等键 = {item_id}:effect_update_item:{to_status}:{request_id}（business_key
+    由调用方拼 {to_status}:{request_id}）。
+    """
+    item_id = thread_id
+    item = conn.execute(
+        "SELECT i.id, i.checklist_id, i.owner_party, i.status, c.application_id "
+        "FROM onboarding_item i JOIN onboarding_checklist c ON c.id = i.checklist_id "
+        "WHERE i.id = ?",
+        (item_id,),
+    ).fetchone()
+    if item is None:
+        raise ItemUpdateRejected("条目不存在")
+    checklist_id, owner_party, from_status, application_id = item[1], item[2], item[3], item[4]
+
+    if to_status not in ("done", "waived", "pending"):
+        raise ItemUpdateRejected("非法目标状态")
+    if (from_status, to_status) not in _ALLOWED_ITEM_TRANSITIONS:
+        raise ItemUpdateRejected(f"非法状态流转: {from_status} -> {to_status}")
+    if to_status == "waived" and (not reason or not reason.strip()):
+        raise ItemUpdateRejected("豁免必须填写原因")
+
+    operator = conn.execute(
+        "SELECT role, department FROM hr_account WHERE username = ?", (operator_username,)
+    ).fetchone()
+    if operator is None:
+        raise ItemOperatorForbidden("操作人不存在")
+    role, operator_department = operator[0], operator[1]
+    if role == "hr":
+        pass
+    elif role == "dept_manager":
+        if owner_party != "dept":
+            raise ItemOperatorForbidden("部门经理只能修改本部门负责的条目")
+        job_department = conn.execute(
+            "SELECT j.department FROM application a JOIN job j ON j.id = a.job_id "
+            "WHERE a.id = ?",
+            (application_id,),
+        ).fetchone()
+        if job_department is None or job_department[0] != operator_department:
+            raise ItemOperatorForbidden("跨部门条目不可修改")
+    else:
+        raise ItemOperatorForbidden("仅 HR 或部门经理可修改条目")
+
+    conn.execute(
+        "UPDATE onboarding_item SET status=?, reason=?, acted_by=?, acted_at=datetime('now') "
+        "WHERE id=?",
+        (to_status, reason, operator_username, item_id),
+    )
+    conn.execute(
+        "INSERT INTO onboarding_item_history "
+        "(id, item_id, from_status, to_status, reason, acted_by, at) "
+        "VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+        (str(uuid.uuid4()), item_id, from_status, to_status, reason, operator_username),
+    )

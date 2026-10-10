@@ -6,7 +6,10 @@ import pytest
 from app.graph.onboarding_nodes import (
     ChecklistInstantiateRejected,
     ChecklistTemplateMissing,
+    ItemOperatorForbidden,
+    ItemUpdateRejected,
     effect_instantiate_checklist,
+    effect_update_item,
 )
 from app.storage.db import get_connection, init_schema
 from app.storage.hr_account import upsert_account
@@ -146,3 +149,131 @@ def test_instantiate_missing_template_rejected(conn):
         effect_instantiate_checklist(
             conn, thread_id="app-1", business_key="instantiate", created_by="hr-user"
         )
+
+
+# ── Task 3：effect_update_item ─────────────────────────────────────────
+
+
+def _instantiate(conn, application_id="app-1"):
+    return effect_instantiate_checklist(
+        conn, thread_id=application_id, business_key="instantiate", created_by="hr-user"
+    )
+
+
+def _item(conn, checklist_id, owner_party):
+    row = conn.execute(
+        "SELECT id FROM onboarding_item WHERE checklist_id=? AND owner_party=? LIMIT 1",
+        (checklist_id, owner_party),
+    ).fetchone()
+    return row[0]
+
+
+def test_update_item_done_writes_history(conn):
+    _seed_hired_application(conn)
+    _seed_account(conn, "hr-user", "hr")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "hr")
+    effect_update_item(
+        conn, thread_id=item_id, business_key="done:r1",
+        to_status="done", reason=None, operator_username="hr-user",
+    )
+    assert conn.execute("SELECT status FROM onboarding_item WHERE id=?", (item_id,)).fetchone()[0] == "done"
+    hist = conn.execute(
+        "SELECT from_status, to_status, acted_by FROM onboarding_item_history WHERE item_id=?",
+        (item_id,),
+    ).fetchall()
+    assert hist == [("pending", "done", "hr-user")]
+
+
+def test_update_item_waived_requires_reason(conn):
+    _seed_hired_application(conn)
+    _seed_account(conn, "hr-user", "hr")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "hr")
+    with pytest.raises(ItemUpdateRejected):
+        effect_update_item(
+            conn, thread_id=item_id, business_key="waived:r1",
+            to_status="waived", reason=None, operator_username="hr-user",
+        )
+    assert conn.execute("SELECT status FROM onboarding_item WHERE id=?", (item_id,)).fetchone()[0] == "pending"
+
+
+def test_update_item_waived_with_reason(conn):
+    _seed_hired_application(conn)
+    _seed_account(conn, "hr-user", "hr")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "hr")
+    effect_update_item(
+        conn, thread_id=item_id, business_key="waived:r1",
+        to_status="waived", reason="体检报告无需提交", operator_username="hr-user",
+    )
+    assert conn.execute("SELECT status, reason FROM onboarding_item WHERE id=?", (item_id,)).fetchone() == ("waived", "体检报告无需提交")
+
+
+def test_update_item_pending_withdraw(conn):
+    _seed_hired_application(conn)
+    _seed_account(conn, "hr-user", "hr")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "hr")
+    effect_update_item(
+        conn, thread_id=item_id, business_key="done:r1",
+        to_status="done", reason=None, operator_username="hr-user",
+    )
+    effect_update_item(
+        conn, thread_id=item_id, business_key="pending:r2",
+        to_status="pending", reason=None, operator_username="hr-user",
+    )
+    assert conn.execute("SELECT status FROM onboarding_item WHERE id=?", (item_id,)).fetchone()[0] == "pending"
+
+
+def test_update_item_dept_manager_can_operate_own_dept_item(conn):
+    _seed_hired_application(conn, department="研发部")
+    _seed_account(conn, "mgr-rd", "dept_manager", department="研发部")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "dept")
+    effect_update_item(
+        conn, thread_id=item_id, business_key="done:r1",
+        to_status="done", reason=None, operator_username="mgr-rd",
+    )
+    assert conn.execute("SELECT status FROM onboarding_item WHERE id=?", (item_id,)).fetchone()[0] == "done"
+
+
+def test_update_item_dept_manager_cannot_operate_other_party_item(conn):
+    _seed_hired_application(conn, department="研发部")
+    _seed_account(conn, "mgr-rd", "dept_manager", department="研发部")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "hr")
+    with pytest.raises(ItemOperatorForbidden):
+        effect_update_item(
+            conn, thread_id=item_id, business_key="done:r1",
+            to_status="done", reason=None, operator_username="mgr-rd",
+        )
+
+
+def test_update_item_cross_department_manager_rejected(conn):
+    _seed_hired_application(conn, department="研发部")
+    _seed_account(conn, "mgr-proc", "dept_manager", department="采购部")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "dept")
+    with pytest.raises(ItemOperatorForbidden):
+        effect_update_item(
+            conn, thread_id=item_id, business_key="done:r1",
+            to_status="done", reason=None, operator_username="mgr-proc",
+        )
+
+
+def test_update_item_rerun_no_second_history(conn):
+    _seed_hired_application(conn)
+    _seed_account(conn, "hr-user", "hr")
+    checklist_id = _instantiate(conn)
+    item_id = _item(conn, checklist_id, "hr")
+    effect_update_item(
+        conn, thread_id=item_id, business_key="done:r1",
+        to_status="done", reason=None, operator_username="hr-user",
+    )
+    second = effect_update_item(
+        conn, thread_id=item_id, business_key="done:r1",
+        to_status="done", reason=None, operator_username="hr-user",
+    )
+    assert second is None
+    assert conn.execute("SELECT COUNT(*) FROM onboarding_item_history WHERE item_id=?", (item_id,)).fetchone()[0] == 1

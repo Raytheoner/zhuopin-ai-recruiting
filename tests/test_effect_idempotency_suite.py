@@ -58,7 +58,7 @@ from app.graph.manual_handoff import (
     effect_deliver_manual_handoff,
     effect_mark_needs_manual,
 )
-from app.graph.onboarding_nodes import effect_instantiate_checklist
+from app.graph.onboarding_nodes import effect_instantiate_checklist, effect_update_item
 from app.graph.nodes import (
     effect_abandon_profile,
     effect_confirm_profile,
@@ -177,6 +177,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_mark_scoring_failed",
         "effect_send_verification_code",
         "effect_instantiate_checklist",
+        "effect_update_item",
     }
 )
 
@@ -412,6 +413,8 @@ _JOB = "job-4-4"
 _RESUME = "resume-4-4"
 _CANDIDATE = "candidate-4-4"
 _APPLICATION = "application-4-4"
+_ONBOARDING_CHECKLIST = "checklist-4-4"
+_ONBOARDING_ITEM = "item-4-4"
 _PREP_RUN = "prep-run-4-4"
 _SESSION = "session-4-4"
 _TURN = "turn-4-4"
@@ -674,6 +677,35 @@ def _seed_hired_application_for_checklist(conn: sqlite3.Connection) -> None:
         "status, approval_round, created_by) "
         "VALUES (?, ?, ?, '研发部', '2026-10-20', 'manager-1', 'accepted', 1, 'alice')",
         (f"offer-{_APPLICATION}", _APPLICATION, _JOB),
+    )
+    conn.commit()
+
+
+def _seed_pending_hr_item_for_update(conn: sqlite3.Connection) -> None:
+    """`effect_update_item` 的种子：一份 `hired` 投递（复用清单种子的
+    job/candidate/resume/application/offer 五件套，让 `application → job`
+    的部门联结真实可查）＋ 一份清单 ＋ 一条 `hr` 名下 `pending` 条目
+    ＋ 一个 `role='hr'` 的操作人账号。
+
+    清单与条目都按固定 id 手插（⛔ 不调 `effect_instantiate_checklist`）：
+    本节点的 `thread_id` 就是 item_id，配方要求它在建配方时已知，而实例化
+    节点生成的是 uuid。手插换来确定性的 thread_id——正是幂等协议要认的键。"""
+    _seed_hired_application_for_checklist(conn)
+    conn.execute(
+        "INSERT INTO onboarding_checklist "
+        "(id, application_id, template_version, start_date, created_by) "
+        "VALUES (?, ?, 1, '2026-10-20', 'alice')",
+        (_ONBOARDING_CHECKLIST, _APPLICATION),
+    )
+    conn.execute(
+        "INSERT INTO onboarding_item "
+        "(id, checklist_id, name, owner_party, due_offset_days, required, status) "
+        "VALUES (?, ?, '劳动合同签署', 'hr', 0, 1, 'pending')",
+        (_ONBOARDING_ITEM, _ONBOARDING_CHECKLIST),
+    )
+    conn.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt, role) "
+        "VALUES ('account-4-4', 'alice', 'pbkdf2_sha256$1$deadbeef', 'aabbccdd', 'hr')"
     )
     conn.commit()
 
@@ -1788,6 +1820,34 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "之外的结构性第二道防线——重放若真漏过了 effect_log 短路，会撞 UNIQUE "
                 "而不是静默写下第二份清单（同一投递只有一份清单是 spec「按投递实例化"
                 "清单」的硬要求）。"
+            ),
+        ),
+        "effect_update_item": Recipe(
+            thread_id=_ONBOARDING_ITEM,
+            seed=_seed_pending_hr_item_for_update,
+            invoke=lambda conn: effect_update_item(
+                conn,
+                thread_id=_ONBOARDING_ITEM,
+                business_key="done:request-4-4",
+                to_status="done",
+                reason=None,
+                operator_username="alice",
+            ),
+            # 业务事实＝这条条目唯一那一行留痕。同一事务里还有一次
+            # `UPDATE onboarding_item SET status='done'`，但那条 UPDATE **重复
+            # 执行是幂等的**（done→done 行数不变），拿它当口径测不出"副作用被
+            # 应用了两次"；留痕是 INSERT，重放若真漏过 effect_log 短路，必然多出
+            # 第二行——这才是会变红的口径（铁律 1 的 reviewer 判据按 thread 数
+            # 行数，thread_id 就是 item_id）。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM onboarding_item_history WHERE item_id = ?",
+                (_ONBOARDING_ITEM,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 onboarding_item_history（条目状态变更留痕）；"
+                "同事务里的 onboarding_item.status UPDATE 与它同生共死，"
+                "`tests/test_onboarding_nodes.py::test_update_item_rerun_no_second_history` "
+                "另有一条用例锁死「重跑不产生第二条留痕」。"
             ),
         ),
     }
