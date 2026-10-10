@@ -261,9 +261,12 @@ def test_application_kanban_state_defaults_null_and_accepts_pending_reject(conn)
 
 def test_application_stage_history_table_exists_with_expected_columns(conn):
     assert _table_exists(conn, "application_stage_history")
+    # action/detail_json 由 interview-scheduling U2 task 1 加入（排期流转事实的
+    # 动作与详情，见偏离登记 D-U2-1）：新库走 CREATE TABLE、老库走
+    # _ADDED_COLUMNS，两条路径的列集合必须一致。
     assert _columns(conn, "application_stage_history") == {
         "id", "application_id", "from_stage_id", "to_stage_id",
-        "actor_type", "actor", "occurred_at",
+        "actor_type", "actor", "action", "detail_json", "occurred_at",
     }
 
 
@@ -279,6 +282,32 @@ def test_application_stage_history_actor_type_check(conn):
             "INSERT INTO application_stage_history "
             "(id, application_id, to_stage_id, actor_type) "
             "VALUES ('h-1', 'app-1', 'screening', 'system')"
+        )
+
+
+def test_application_stage_history_action_check(conn):
+    """action 的值域由 CHECK 钉死（interview-scheduling U2 task 1，偏离登记
+    D-U2-1）：只有四个排期动作 + no_show，NULL 放行（既有 stage 流转行没有动作
+    语义），别的一律拒——多一个取值就说明有别的东西在往流转事实表里写。
+    """
+    _seed_job_candidate_resume(conn)
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
+    )
+    for action in ("scheduled", "rescheduled", "cancelled", "completed", "no_show", None):
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, to_stage_id, actor_type, actor, action) "
+            "VALUES (?, 'app-1', 'interview', 'human', 'hr-1', ?)",
+            (f"h-{action}", action),
+        )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, to_stage_id, actor_type, actor, action) "
+            "VALUES ('h-bad', 'app-1', 'interview', 'human', 'hr-1', 'rescheduled_by_ai')"
         )
 
 
@@ -782,6 +811,10 @@ def test_added_columns_tuple_still_only_touches_job_profile():
     channel-resume-intake U2 task 2 再把 candidate 加进来：candidate 是 M2 U1
     建的老表，新增 merged_into 列（本列由 Task 2 提前落地，理由见
     app/storage/db.py 的 candidate 表定义注释）。护栏本意不变。
+
+    interview-scheduling U2 task 1 再把 application_stage_history 加进来：
+    M2 U1 建的老表，新增 action/detail_json 两列（排期流转事实的动作与详情，
+    见偏离登记 D-U2-1）。护栏本意不变。
     """
     from app.storage.db import _ADDED_COLUMNS
 
@@ -794,6 +827,7 @@ def test_added_columns_tuple_still_only_touches_job_profile():
         "interview_session",
         "hr_account",
         "candidate",
+        "application_stage_history",
     }
 
 

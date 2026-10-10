@@ -55,6 +55,10 @@ def test_old_job_table_gains_parse_confidence_threshold_via_migration():
     # 排在 job 的条目之后，不存在会在遍历到它时炸 "no such table"。空壳即可，本
     # 测试只验 job 的迁移。
     conn.execute("CREATE TABLE candidate (id TEXT PRIMARY KEY)")
+    # 同理：application_stage_history 的新条目（interview-scheduling U2 task 1 落地
+    # 的 action/detail_json）排在 job 的条目之后，不存在会在遍历到它时炸
+    # "no such table"。空壳即可，本测试只验 job 的迁移。
+    conn.execute("CREATE TABLE application_stage_history (id TEXT PRIMARY KEY)")
     conn.execute("INSERT INTO job (id, title) VALUES ('j1', 't')")
     added = apply_column_migrations(conn)
     assert "job.parse_confidence_threshold" in added
