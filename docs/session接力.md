@@ -211,7 +211,7 @@
   各一泳道（1001V 渠道去重合并／1001W 排期时段登记与排期动作／1001X Offer 文书引擎／1001Y 入职清单页与进度），
   无头块进 `OP-0820-全量编排.md`、引用式 opener 落 `docs/openers/1001V–Y-*.md`、号池已登记；
   四者触碰区零重叠 ⇒ `--max-parallel 4 --stagger 30` 并行；② 结果：**4/4 OK**（V 18′／W 17′／X 20′／Y 17′），
-  机器判据 4 条过 0 条不过，stage2 自动合合并并推送（`0186efa`/`4b793bb`/`bc31beb`/`d9e0950`）；
+  机器判据 4 条过 0 条不过，stage2 自动合并并推送（`0186efa`/`4b793bb`/`bc31beb`/`d9e0950`）；
   产物＝四份 U2 计划：`docs/superpowers/plans/2026-10-10-channel-resume-intake-unit2-dedup-merge.md`（8 Task/1913 行）／
   `…interview-scheduling-unit2-availability-and-slot-actions.md`（11/2529）／`…offer-generation-unit2-letter-engine.md`（8/2049）／
   `…onboarding-flow-unit2-checklist-and-progress.md`（8/2133）——均含 Global Constraints 段与单元标志词；
