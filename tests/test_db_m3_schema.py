@@ -817,7 +817,13 @@ def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
     offer/hired）——SQLite 改不了 CHECK、只能整表重建，stage 的 sqlite_master.sql
     因此必然变化。放宽后的枚举与预置行由 tests/test_db_interview_schema.py、
     tests/test_db_offer_schema.py 分别单独钉住；这里只把 stage 从"DDL 原文逐字
-    不变"里摘出去，其余老表（含被 stage 外键引用的 application）保护力度不变。
+    不变"里摘出去，其余老表的保护力度不变（application 见下一段）。
+
+    application 同理：onboarding-flow U2 Task 1 把 application.status 的 CHECK 从
+    三值放宽到四值（追加 hired）——同样只能整表重建，sqlite_master.sql 必然变化。
+    放宽后的枚举由 tests/test_db_application_status_hired.py 单独钉住（新库接受
+    hired、拒 bogus、老库升级后行/索引/外键复验），这里只把它从"DDL 原文逐字不变"
+    里摘出去，行数比对仍然保留 application。
 
     hr_account 同理是刻意的例外：interview-scheduling U1 task 6 经 _ADDED_COLUMNS
     给 hr_account 合法新增 role 列（HR 角色授权，默认 'hr'），SQLite 的
@@ -844,7 +850,17 @@ def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
-        if row[0] not in ("resume", "stage", "hr_account", "candidate", "application_stage_history")
+        if row[0]
+        not in (
+            "resume",
+            "stage",
+            "hr_account",
+            "candidate",
+            "application_stage_history",
+            # onboarding-flow U2 Task 1：status 的 CHECK 三值→四值（+hired），
+            # 只能整表重建，DDL 原文必然变化（见本测试 docstring）。
+            "application",
+        )
     }
     before_sql = _legacy_sqlite_master_sql(conn, known_names)
     before_counts = {

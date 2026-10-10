@@ -58,6 +58,7 @@ from app.graph.manual_handoff import (
     effect_deliver_manual_handoff,
     effect_mark_needs_manual,
 )
+from app.graph.onboarding_nodes import effect_instantiate_checklist, effect_update_item
 from app.graph.nodes import (
     effect_abandon_profile,
     effect_confirm_profile,
@@ -175,6 +176,8 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_persist_scorecard",
         "effect_mark_scoring_failed",
         "effect_send_verification_code",
+        "effect_instantiate_checklist",
+        "effect_update_item",
     }
 )
 
@@ -410,6 +413,8 @@ _JOB = "job-4-4"
 _RESUME = "resume-4-4"
 _CANDIDATE = "candidate-4-4"
 _APPLICATION = "application-4-4"
+_ONBOARDING_CHECKLIST = "checklist-4-4"
+_ONBOARDING_ITEM = "item-4-4"
 _PREP_RUN = "prep-run-4-4"
 _SESSION = "session-4-4"
 _TURN = "turn-4-4"
@@ -644,6 +649,65 @@ def _bundle_ingest_stub(*, job_id, sample_class, uploaded_by, upload,
     不落库的桩，恒等式里数的就只剩本节点自己那一行 `bundle_ingest_result`。
     """
     return {"file_name": upload.filename, "status": "accepted", "resume_id": "stub-4-4"}
+
+
+def _seed_hired_application_for_checklist(conn: sqlite3.Connection) -> None:
+    """`effect_instantiate_checklist` 的种子：一份 `hired` 投递 + 一条已接受的
+    Offer。入职清单模板 ⛔ 不必手插——`init_schema` 的
+    `_seed_onboarding_default_template` 已落好部门级 `default` 兜底模板（六条，
+    `app/storage/db.py`），本节点的模板解析兜底正好走到它。"""
+    conn.execute(
+        "INSERT INTO job (id, title, department, status) "
+        "VALUES (?, '嵌入式工程师', '研发部', 'approved')",
+        (_JOB,),
+    )
+    conn.execute("INSERT INTO candidate (id, name) VALUES (?, '张三')", (_CANDIDATE,))
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES (?, ?, 'synthetic', 'a.docx', 'hash-onboard-4-4', 'alice')",
+        (_RESUME, _JOB),
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id, status) "
+        "VALUES (?, ?, ?, ?, 'hired', 'hired')",
+        (_APPLICATION, _CANDIDATE, _JOB, _RESUME),
+    )
+    conn.execute(
+        "INSERT INTO offer (id, application_id, job_id, department, start_date, report_to, "
+        "status, approval_round, created_by) "
+        "VALUES (?, ?, ?, '研发部', '2026-10-20', 'manager-1', 'accepted', 1, 'alice')",
+        (f"offer-{_APPLICATION}", _APPLICATION, _JOB),
+    )
+    conn.commit()
+
+
+def _seed_pending_hr_item_for_update(conn: sqlite3.Connection) -> None:
+    """`effect_update_item` 的种子：一份 `hired` 投递（复用清单种子的
+    job/candidate/resume/application/offer 五件套，让 `application → job`
+    的部门联结真实可查）＋ 一份清单 ＋ 一条 `hr` 名下 `pending` 条目
+    ＋ 一个 `role='hr'` 的操作人账号。
+
+    清单与条目都按固定 id 手插（⛔ 不调 `effect_instantiate_checklist`）：
+    本节点的 `thread_id` 就是 item_id，配方要求它在建配方时已知，而实例化
+    节点生成的是 uuid。手插换来确定性的 thread_id——正是幂等协议要认的键。"""
+    _seed_hired_application_for_checklist(conn)
+    conn.execute(
+        "INSERT INTO onboarding_checklist "
+        "(id, application_id, template_version, start_date, created_by) "
+        "VALUES (?, ?, 1, '2026-10-20', 'alice')",
+        (_ONBOARDING_CHECKLIST, _APPLICATION),
+    )
+    conn.execute(
+        "INSERT INTO onboarding_item "
+        "(id, checklist_id, name, owner_party, due_offset_days, required, status) "
+        "VALUES (?, ?, '劳动合同签署', 'hr', 0, 1, 'pending')",
+        (_ONBOARDING_ITEM, _ONBOARDING_CHECKLIST),
+    )
+    conn.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt, role) "
+        "VALUES ('account-4-4', 'alice', 'pbkdf2_sha256$1$deadbeef', 'aabbccdd', 'hr')"
+    )
+    conn.commit()
 
 
 def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
@@ -1730,6 +1794,60 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "test_every_effect_node_has_a_recovery_recipe 的清单-配方对齐检查，"
                 "真正的行为断言在"
                 "test_effect_send_verification_code_stub_always_raises_and_writes_nothing。"
+            ),
+        ),
+        "effect_instantiate_checklist": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_hired_application_for_checklist,
+            invoke=lambda conn: effect_instantiate_checklist(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="instantiate",
+                created_by="hr:tester",
+            ),
+            # 业务事实＝这份投递唯一那一行 onboarding_checklist。同一事务里还
+            # 展开出六行 onboarding_item，但"一次生效"的可分辨口径取清单行数：
+            # 条目条数由模板决定（本配方走 default 模板＝6 条），
+            # `tests/test_onboarding_nodes.py` 已单独锁死条目条数与内容，这里数
+            # 它只会把"模板有几条"混进幂等判据里。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM onboarding_checklist WHERE application_id = ?",
+                (_APPLICATION,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 onboarding_checklist；"
+                "onboarding_checklist.application_id 带 UNIQUE 约束，是幂等键（第一道）"
+                "之外的结构性第二道防线——重放若真漏过了 effect_log 短路，会撞 UNIQUE "
+                "而不是静默写下第二份清单（同一投递只有一份清单是 spec「按投递实例化"
+                "清单」的硬要求）。"
+            ),
+        ),
+        "effect_update_item": Recipe(
+            thread_id=_ONBOARDING_ITEM,
+            seed=_seed_pending_hr_item_for_update,
+            invoke=lambda conn: effect_update_item(
+                conn,
+                thread_id=_ONBOARDING_ITEM,
+                business_key="done:request-4-4",
+                to_status="done",
+                reason=None,
+                operator_username="alice",
+            ),
+            # 业务事实＝这条条目唯一那一行留痕。同一事务里还有一次
+            # `UPDATE onboarding_item SET status='done'`，但那条 UPDATE **重复
+            # 执行是幂等的**（done→done 行数不变），拿它当口径测不出"副作用被
+            # 应用了两次"；留痕是 INSERT，重放若真漏过 effect_log 短路，必然多出
+            # 第二行——这才是会变红的口径（铁律 1 的 reviewer 判据按 thread 数
+            # 行数，thread_id 就是 item_id）。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM onboarding_item_history WHERE item_id = ?",
+                (_ONBOARDING_ITEM,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 onboarding_item_history（条目状态变更留痕）；"
+                "同事务里的 onboarding_item.status UPDATE 与它同生共死，"
+                "`tests/test_onboarding_nodes.py::test_update_item_rerun_no_second_history` "
+                "另有一条用例锁死「重跑不产生第二条留痕」。"
             ),
         ),
     }

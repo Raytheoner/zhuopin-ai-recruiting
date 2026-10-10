@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -444,7 +445,7 @@ CREATE TABLE IF NOT EXISTS application (
     resume_id TEXT NOT NULL REFERENCES resume(id),
     current_stage_id TEXT NOT NULL REFERENCES stage(id),
     status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'rejected', 'withdrawn')),
+        CHECK (status IN ('active', 'rejected', 'withdrawn', 'hired')),
     kanban_state TEXT CHECK (kanban_state IS NULL OR kanban_state IN ('pending_reject')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1779,6 +1780,96 @@ def _rebuild_hr_account_role_check(conn: sqlite3.Connection) -> None:
         raise sqlite3.IntegrityError(f"hr_account 重建后外键不一致: {violations}")
 
 
+_APPLICATION_STATUS_CHECK_RE = re.compile(r"\bstatus\b[^,]*?\bCHECK\b", re.IGNORECASE)
+
+
+def _application_status_check_allows_hired(conn: sqlite3.Connection) -> bool:
+    """application.status 上是否「没有会拒掉 'hired' 的 CHECK」——即无需整表重建。
+
+    SQLite 改不了 CHECK，本判断看 sqlite_master.sql 原文，手法与
+    _stage_type_check_complete / _role_check_allows_dept_manager 一致。除
+    「CHECK 已含 'hired'」外，下面几种形态同样不需要重建，必须一并放行，否则
+    重建会当场炸（tests/test_db_migration.py 的 _legacy_db 夹具实测踩到过）：
+
+    - application 表不存在：没有可放宽的约束（调用点在 SCHEMA 之后，新库这里
+      恒不成立）；
+    - 表里没有 status 列：M2 U1 之前形态的老库就是这样，重建的
+      `INSERT ... SELECT ... status ...` 会撞 `no such column: status`；
+    - status 列上没有 CHECK：没有任何枚举被拒，重建是空转。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='application'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return True
+    ddl = row[0]
+    if "'hired'" in ddl:
+        return True
+    has_status_column = any(
+        info[1] == "status" for info in conn.execute("PRAGMA table_info(application)")
+    )
+    if not has_status_column:
+        return True
+    return not _APPLICATION_STATUS_CHECK_RE.search(ddl)
+
+
+def _rebuild_application_status_check(conn: sqlite3.Connection) -> None:
+    """把 application.status 的 CHECK 从三值放宽到四值（+hired）。
+
+    只放宽到含 'hired'——U2 实例化前置需要它，且 design.md 风险表明写「U2 用夹具
+    直接置 application.status=hired」。⛔ 不加 ongoing/refused：那两值连同三值语义
+    迁移一起，归 offer-generation U5（effect_apply_offer_outcome）。
+
+    application 被 application_stage_history / rejection_record / offer /
+    onboarding_checklist / onboarding_access_log / data_disposition_queue 外键引用，
+    重建期间 PRAGMA foreign_keys=OFF，完成后 foreign_key_check 复验；三个索引
+    （idx_application_resume / idx_application_job / idx_application_candidate）
+    随 DROP TABLE 一起消失，必须原样重建。PRAGMA 在事务内是 no-op，try 内 commit、
+    except 里 rollback 之后，finally 再重开（同 _rebuild_hr_account_role_check）。
+    """
+    if _application_status_check_allows_hired(conn):
+        return
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            """
+            CREATE TABLE application_new (
+                id TEXT PRIMARY KEY NOT NULL,
+                candidate_id TEXT NOT NULL REFERENCES candidate(id),
+                job_id TEXT NOT NULL REFERENCES job(id),
+                resume_id TEXT NOT NULL REFERENCES resume(id),
+                current_stage_id TEXT NOT NULL REFERENCES stage(id),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'rejected', 'withdrawn', 'hired')),
+                kanban_state TEXT CHECK (kanban_state IS NULL OR kanban_state IN ('pending_reject')),
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO application_new "
+            "(id, candidate_id, job_id, resume_id, current_stage_id, status, kanban_state, created_at) "
+            "SELECT id, candidate_id, job_id, resume_id, current_stage_id, status, kanban_state, created_at "
+            "FROM application"
+        )
+        conn.execute("DROP TABLE application")
+        conn.execute("ALTER TABLE application_new RENAME TO application")
+        conn.execute("CREATE UNIQUE INDEX idx_application_resume ON application (resume_id)")
+        conn.execute("CREATE INDEX idx_application_job ON application (job_id)")
+        conn.execute("CREATE INDEX idx_application_candidate ON application (candidate_id)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(f"application 重建后外键不一致: {violations}")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     # executescript 里的 INSERT OR IGNORE 种子行会打开一个隐式事务；PRAGMA
@@ -1793,6 +1884,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # _ADDED_COLUMNS 因「列已存在」静默跳过，dept_manager 会被旧 CHECK 拒。
     # 新库 SCHEMA 本就是三值 ⇒ 空转。
     _rebuild_hr_account_role_check(conn)
+    _rebuild_application_status_check(conn)
     _migrate_stage_for_interview(conn)
     _seed_onboarding_default_template(conn)
     _seed_letter_templates(conn)
