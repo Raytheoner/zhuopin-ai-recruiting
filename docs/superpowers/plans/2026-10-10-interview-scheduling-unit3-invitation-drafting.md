@@ -845,6 +845,20 @@ class InvitationNotAllowedError(ValueError):
     """场次状态不允许当前动作（已取消的场次不可生成邀约／回填）。"""
 
 
+class InvitationOutcomeAlreadyRecordedError(ValueError):
+    """该 (slot_id, status) 已有回填记录（用**不同**幂等键重复提交）。
+
+    2026-10-11 修正（Spec review F1）：回填节点命中「已有行」时必须抛本异常——
+    ⛔ 不能返回成功形状：那是零业务写，而 `@idempotent_effect` 仍会写一行
+    effect_log 并提交，「effect_log 条数 ↔ 业务表行数按 thread 恒等」当场被破坏。
+    调用方（路由）捕获后把 `outcome` 原样返回即可（幂等成功响应）。
+    """
+
+    def __init__(self, message: str, *, outcome: dict):
+        super().__init__(message)
+        self.outcome = outcome
+
+
 class InvitationTemplateMissingError(ValueError):
     """还没有任何邀约模板。"""
 
@@ -1363,8 +1377,9 @@ thread_id 约定＝该场次所属 application_id（与 U2 `app/graph/scheduling
 - persist = draft.run_id（同一次真实 LLM 调用只落一版草稿；再次生成是新 run_id ⇒ 版本递增）
 - edit    = f"{draft_id}:{正文 sha256 前 16 位}"（同一次编辑重放短路，改了正文算新编辑）
 - mark    = draft_id（一份草稿的「标记为人工撰写」是终态，至多一次）
-- backfill= target_status（**同状态重复提交无第二条留痕**由这条键与
-  `invitation_outcome_log` 的 UNIQUE(slot_id, status) 双保险）
+- backfill= f"{slot_id}:{status}"（**同一场次**同状态重复提交无第二条留痕由这条键与
+  `invitation_outcome_log` 的 UNIQUE(slot_id, status) 双保险；⚠️ 键必须带 slot_id，
+  否则同一投递第二轮场次的同状态回填会被静默短路——2026-10-11 修正）
 - send    = f"{draft_id}:{正文 sha256 前 16 位}"（同一份文案至多尝试外发一次；
   改了正文重走门禁。⛔ 真正防重复投递的是内容哈希键
   `effect_deliver_message` / `effect_record_outbound_audit` 各自的 business_key，
@@ -1664,23 +1679,35 @@ def effect_backfill_invitation_outcome(
         "FROM invitation_outcome_log WHERE slot_id = ? AND status = ?",
         (slot_id, status),
     ).fetchone()
-    if existing is None:
-        conn.execute(
-            "INSERT INTO invitation_outcome_log "
-            "(id, slot_id, status, channel, reason, actor) VALUES (?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), slot_id, status, channel, reason, actor),
+    if existing is not None:
+        # 2026-10-11 修正（Spec review F1）：命中已有行 = 零业务写；⛔ 不能返回
+        # 成功形状——`@idempotent_effect` 会照写一行 effect_log 并提交，
+        # 「effect_log 条数 ↔ 业务表行数按 thread 恒等」当场被破坏。抛领域异常，
+        # 路由捕获后把 outcome 原样返回（幂等成功响应，无第二条留痕）。
+        raise InvitationOutcomeAlreadyRecordedError(
+            f"该场次该状态已回填：slot_id={slot_id} status={status}",
+            outcome={
+                "id": existing[0], "slot_id": existing[1], "status": existing[2],
+                "channel": existing[3], "reason": existing[4], "actor": existing[5],
+                "at": existing[6],
+            },
         )
-        conn.execute(
-            "UPDATE interview_slot SET invitation_status = ?, "
-            "sent_channel = COALESCE(?, sent_channel), updated_by = ?, "
-            "updated_at = datetime('now') WHERE id = ?",
-            (status, channel if status == "sent" else None, actor, slot_id),
-        )
-        existing = conn.execute(
-            "SELECT id, slot_id, status, channel, reason, actor, at "
-            "FROM invitation_outcome_log WHERE slot_id = ? AND status = ?",
-            (slot_id, status),
-        ).fetchone()
+    conn.execute(
+        "INSERT INTO invitation_outcome_log "
+        "(id, slot_id, status, channel, reason, actor) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), slot_id, status, channel, reason, actor),
+    )
+    conn.execute(
+        "UPDATE interview_slot SET invitation_status = ?, "
+        "sent_channel = COALESCE(?, sent_channel), updated_by = ?, "
+        "updated_at = datetime('now') WHERE id = ?",
+        (status, channel if status == "sent" else None, actor, slot_id),
+    )
+    existing = conn.execute(
+        "SELECT id, slot_id, status, channel, reason, actor, at "
+        "FROM invitation_outcome_log WHERE slot_id = ? AND status = ?",
+        (slot_id, status),
+    ).fetchone()
     return {
         "id": existing[0], "slot_id": existing[1], "status": existing[2],
         "channel": existing[3], "reason": existing[4], "actor": existing[5],
@@ -2037,12 +2064,16 @@ class InvitationOutcomeRequest(BaseModel):
                     ),
                     None,
                 )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except InvitationOutcomeAlreadyRecordedError as exc:
+            # 2026-10-11 修正（Spec review F1 配套）：不同幂等键的重复回填 ⇒
+            # 幂等成功（既有行原样返回）；⛔ 不能落进下面的宽 ValueError ⇒ 422。
+            outcome = exc.outcome
         except InvitationSlotNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except InvitationNotAllowedError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"outcome": outcome, **_invitation_payload(slot_id)}
 
     @router.post("/api/interview-slots/{slot_id}/invitation/send")
@@ -2587,11 +2618,11 @@ def test_backfill_declined_keeps_stage_and_writes_no_rejection_record(conn):
 
 def test_backfill_same_status_twice_writes_one_row_and_one_effect_log(conn):
     first = effect_backfill_invitation_outcome(
-        conn, thread_id="app1", business_key="sent", slot_id="s1", status="sent",
+        conn, thread_id="app1", business_key="s1:sent", slot_id="s1", status="sent",
         actor="hr-1", channel="wechat",
     )
     second = effect_backfill_invitation_outcome(
-        conn, thread_id="app1", business_key="sent", slot_id="s1", status="sent",
+        conn, thread_id="app1", business_key="s1:sent", slot_id="s1", status="sent",
         actor="hr-1", channel="wechat",
     )
     assert first["id"]
@@ -2600,6 +2631,23 @@ def test_backfill_same_status_twice_writes_one_row_and_one_effect_log(conn):
         "SELECT COUNT(*) FROM invitation_outcome_log WHERE slot_id = 's1'"
     ).fetchone()[0]
     assert count == 1
+    assert _effect_count(conn, "effect_backfill_invitation_outcome") == 1
+
+
+def test_backfill_duplicate_with_new_request_key_raises_without_orphan_effect_log(conn):
+    """2026-10-11 修正（Spec review F1）：用不同幂等键重复回填同一 (slot,status)
+    ⇒ 抛领域异常（⛔ 不是成功形状），且**不写孤儿 effect_log**（恒等式守恒）。"""
+    first = effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s1:sent", slot_id="s1", status="sent",
+        actor="hr-1", channel="wechat",
+    )
+    assert first["id"]
+    with pytest.raises(InvitationOutcomeAlreadyRecordedError) as excinfo:
+        effect_backfill_invitation_outcome(
+            conn, thread_id="app1", business_key="s1:sent:req-2", slot_id="s1",
+            status="sent", actor="hr-1", channel="wechat",
+        )
+    assert excinfo.value.outcome["id"] == first["id"]
     assert _effect_count(conn, "effect_backfill_invitation_outcome") == 1
 
 
