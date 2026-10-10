@@ -19,6 +19,7 @@ PROTECTED_PATH_PREFIXES: tuple[str, ...] = (
     "/api/resumes",
     "/api/applications",
     "/api/rejections",
+    "/api/interviewers",
 )
 
 

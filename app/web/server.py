@@ -96,6 +96,13 @@ from app.storage.consent_terms import load_consent_term, latest_consent_version
 from app.storage.contact_source import resolve_live_candidate_phone
 from app.storage.db import get_connection, init_schema, sqlite_utc_now
 from app.storage.hr_account import verify_password
+from app.storage.interviewer import (
+    InterviewerAccountMissing,
+    InterviewerNotFound,
+    create_interviewer,
+    list_interviewers,
+    update_interviewer,
+)
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
 from app.storage.live_resume_gate import is_live_resume_intake_enabled
 
@@ -177,6 +184,21 @@ class ConsentSubmitRequest(BaseModel):
 
 class VerifyCodeRequest(BaseModel):
     code: str
+
+
+class InterviewerCreateRequest(BaseModel):
+    account_id: str
+    name: str
+    department: str | None = None
+    interviewable_jobs: list[str] = []
+    enabled: bool = True
+
+
+class InterviewerPatchRequest(BaseModel):
+    name: str | None = None
+    department: str | None = None
+    interviewable_jobs: list[str] | None = None
+    enabled: bool | None = None
 
 
 class OnboardingTemplateItem(BaseModel):
@@ -309,6 +331,59 @@ def create_app(
             delete_session(conn, token)
         response.delete_cookie("hr_session", path=root_path or "/")
         return {"ok": True}
+
+    def _require_hr_role(request: Request) -> None:
+        """面试官名单维护的 HR 角色闸。
+
+        与 _require_hr_login 的区别：登录只证明「你是谁」，这里是「你是不是 HR」。
+        现阶段只给 HR 开放名单维护；面试官账号（role='interviewer'）登录后仍然 403。
+        """
+        auth = getattr(request.state, "auth", None)
+        if not getattr(auth, "authenticated", False):
+            raise HTTPException(status_code=401, detail="未登录")
+        username = getattr(auth, "user_id", None)
+        row = conn.execute(
+            "SELECT role FROM hr_account WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None or row[0] != "hr":
+            raise HTTPException(status_code=403, detail="仅 HR 角色可维护面试官名单")
+
+    @router.get("/api/interviewers")
+    def interviewers_list(request: Request):
+        _require_hr_role(request)
+        return list_interviewers(conn)
+
+    @router.post("/api/interviewers", status_code=201)
+    def interviewers_create(req: InterviewerCreateRequest, request: Request):
+        _require_hr_role(request)
+        try:
+            return create_interviewer(
+                conn,
+                account_id=req.account_id,
+                name=req.name,
+                department=req.department,
+                interviewable_jobs=req.interviewable_jobs,
+                enabled=req.enabled,
+            )
+        except InterviewerAccountMissing as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.patch("/api/interviewers/{interviewer_id}")
+    def interviewers_update(
+        interviewer_id: str, req: InterviewerPatchRequest, request: Request
+    ):
+        _require_hr_role(request)
+        updates = req.model_dump(exclude_unset=True)
+        try:
+            return update_interviewer(
+                conn, interviewer_id=interviewer_id, updates=updates
+            )
+        except InterviewerNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/login")
     def login_page():
