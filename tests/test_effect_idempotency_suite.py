@@ -109,7 +109,7 @@ from app.graph.resume_nodes import effect_persist_parse
 from app.graph.screening_nodes import compute_screen, effect_persist_flags
 from app.intake.bundle import FileEntry
 from app.intake.ingest_bundle import effect_ingest_bundle
-from app.intake.merge import effect_attach_resume_to_candidate
+from app.intake.merge import effect_attach_resume_to_candidate, effect_merge_candidates
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
 from app.schemas.live_turn_event import LiveTurnEvent
@@ -151,6 +151,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_persist_parse",
         "effect_ingest_bundle",
         "effect_attach_resume_to_candidate",
+        "effect_merge_candidates",
         "effect_persist_flags",
         "effect_persist_prep_draft",
         "effect_freeze_prep",
@@ -413,6 +414,10 @@ _JOB = "job-4-4"
 _RESUME = "resume-4-4"
 _CANDIDATE = "candidate-4-4"
 _APPLICATION = "application-4-4"
+# channel-resume-intake U2 Task 5：合并配方的两个候选人。主候选人 id 同时是
+# thread_id（幂等键 = {primary_id}:effect_merge_candidates:{secondary_id}:{request_id}）。
+_MERGE_PRIMARY = "candidate-4-4-merge-primary"
+_MERGE_SECONDARY = "candidate-4-4-merge-secondary"
 _ONBOARDING_CHECKLIST = "checklist-4-4"
 _ONBOARDING_ITEM = "item-4-4"
 _PREP_RUN = "prep-run-4-4"
@@ -518,6 +523,32 @@ def _seed_resume(conn: sqlite3.Connection) -> None:
         "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
         "VALUES (?, ?, 'synthetic', 'a.pdf', 'hash1', 'alice')",
         (_RESUME, _JOB),
+    )
+    conn.commit()
+
+
+def _seed_merge_pair(conn: sqlite3.Connection) -> None:
+    """`effect_merge_candidates` 的种子：两个未合并候选人 + 被合并方名下一条投递。
+
+    ⛔ 刻意不给**主**候选人在同一岗位建投递：那就成了 spec 的「同岗位双投递」，
+    节点会要求 HR 指定保留哪份并抛 `MergeValidationError`——本配方走的是合并的
+    常规路径，双投递分支由 `tests/test_merge_unmerge.py` 单独覆盖。
+    """
+    conn.execute(
+        "INSERT INTO job (id, title, status) VALUES (?, '嵌入式工程师', 'drafting')",
+        (_JOB,),
+    )
+    conn.execute("INSERT INTO candidate (id, name) VALUES (?, '张三')", (_MERGE_PRIMARY,))
+    conn.execute("INSERT INTO candidate (id, name) VALUES (?, '李四')", (_MERGE_SECONDARY,))
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES (?, ?, 'synthetic', 'a.pdf', 'hash1', 'alice')",
+        (_RESUME, _JOB),
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES (?, ?, ?, ?, 'initial')",
+        (_APPLICATION, _MERGE_SECONDARY, _JOB, _RESUME),
     )
     conn.commit()
 
@@ -1291,6 +1322,35 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             count_business_rows=lambda conn: conn.execute(
                 "SELECT COUNT(*) FROM application WHERE resume_id = ?", (_RESUME,)
             ).fetchone()[0],
+        ),
+        "effect_merge_candidates": Recipe(
+            thread_id=_MERGE_PRIMARY,
+            seed=_seed_merge_pair,
+            invoke=lambda conn: effect_merge_candidates(
+                conn,
+                thread_id=_MERGE_PRIMARY,
+                # 幂等键 = {primary_id}:effect_merge_candidates:{secondary_id}:{request_id}
+                business_key=f"{_MERGE_SECONDARY}:req-4-4",
+                primary_id=_MERGE_PRIMARY,
+                secondary_id=_MERGE_SECONDARY,
+                reason="电话确认同一人",
+                keep_application_per_job={},
+                merged_by="alice",
+            ),
+            # 业务事实 = 一次合并留痕一行（idx_candidate_merge_log_active_secondary
+            # 把"同一个被合并方撤销前只能有一行"钉死）。⛔ 不数 application：
+            # 合并只把 candidate_id 改到 primary，**行数不变**，分不出生效与否；
+            # 也不数 candidate：primary 行本来就存在（同理）。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM candidate_merge_log WHERE secondary_id = ?",
+                (_MERGE_SECONDARY,),
+            ).fetchone()[0],
+            note=(
+                "本节点自己的业务事实 = candidate_merge_log 一行。崩溃点落在 "
+                "effect_log INSERT 之后的那次 commit 上，此时留痕、application 改挂、"
+                "secondary.merged_into 三处业务写都还在同一个事务里，随连接一起丢弃；"
+                "重放时 effect_log 先短路，撞不到 idx_candidate_merge_log_active_secondary。"
+            ),
         ),
         "effect_ingest_bundle": Recipe(
             thread_id=_JOB,

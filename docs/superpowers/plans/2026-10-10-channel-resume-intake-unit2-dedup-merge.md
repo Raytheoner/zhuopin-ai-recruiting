@@ -939,6 +939,61 @@ python -m pytest tests/test_candidate_merge_schema.py tests/test_db_migration.py
 - Produces: `effect_merge_candidates(conn, *, thread_id, business_key, primary_id, secondary_id, reason, keep_application_per_job, merged_by) -> dict | None`
 - 幂等键：`{primary_id}:effect_merge_candidates:{secondary_id}:{request_id}`
 
+> **偏离登记 D-CU2-3 / D-CU2-3b / D-CU2-4 / D-CU2-5 / D-CU2-6（执行期实测，
+> 2026-10-10～11 Task 5 落地时登记）**
+>
+> **D-CU2-3（测试夹具，不可代）——Step 2 的用例形参 `conn` 没有对应的夹具。**
+> 同一份文本只定义了辅助函数 `_conn()`，`tests/conftest.py` 与全仓都没有名为 `conn`
+> 的夹具；逐字照抄时 pytest 在**收集期**报 `fixture 'conn' not found`，计划自己写的
+> 「预期 3 passed」不可达。落地：把 `_conn()` 原样改成同名夹具
+> `@pytest.fixture def conn()`（内存库 + `init_schema` + 两个岗位），**四个用例体逐字
+> 不动**。手法与 `tests/test_appeal_state_machine.py` 一致。
+>
+> **D-CU2-3b（连带，不可代）——夹具与 seed 辅助必须显式 `commit()`。**
+> `app/storage/idempotency.py::idempotent_effect` 的既有语义是「被装饰函数抛异常 ⇒
+> 回滚**本连接**」。夹具 seed 的行若留在未提交事务里，会被同一用例里**合法**的那次
+> `pytest.raises(MergeValidationError)` 的回滚一并抹掉，紧接着的第二次 `_merge()`
+> 报「候选人不存在」——那是夹具造成的假象，不是被测逻辑的问题（生产连接上，seed 行
+> 的等价物早已由各自的 effect 提交）。落地：夹具与两个 seed 辅助各加 `conn.commit()`
+> （同 `tests/test_appeal_state_machine.py` 的 `c.commit()`）。
+>
+> **D-CU2-4（顺序依赖，不可代）——Step 2 的 import 行引入了 Task 6 的符号。**
+> 计划文本在文件头一行同时 import `effect_merge_candidates` 与
+> `effect_unmerge_candidates`，但后者是**Task 6** 才落地的节点。照抄时本文件在
+> import 期即 `ImportError`，而 `-k 'not unmerge'` 拦不住——那是收集中断，不是用例
+> 失败，Step 3 拿不到「3 passed」。落地：Task 5 只 import 本任务真正产出的两个名字
+> （`MergeValidationError`、`effect_merge_candidates`），文件头留待办注释；Task 6
+> 追加撤销用例时把第三个名字补回同一行。
+>
+> **D-CU2-5（闸命令空转，不可代）——`-k 'not unmerge'` 会把本文件三个用例全部反选
+> 掉。** pytest 的 `-k` 匹配的是**完整 node id（含文件名）**，而本文件名为
+> `test_merge_unmerge.py`，含 `unmerge` 字样 ⇒ 实测输出 `3 deselected`、exit 0。
+> 那是**空转的绿**：一条用例都没跑也会通过，比失败更危险。
+> 落地：Task 5 的闸改用 `"$SDD_PYTHON" -m pytest tests/test_merge_unmerge.py -q`
+> （此时文件里只有合并用例 ⇒ `4 passed`）；Task 6 落地后同一文件自然变成
+> `6 passed`，无需再挑选用例。
+>
+> **D-CU2-6（漏列文件，不可代）——Task 5 的 Files 段漏了
+> `tests/test_effect_idempotency_suite.py`，漏掉它仓级守卫当场变红。**
+> 该文件用 AST 扫 `app/` 下全部 `@idempotent_effect` 字面量，要求**每个**新节点
+> 同时进 `EFFECT_NODE_MANIFEST` 与 `build_recipes()`（各一条崩溃-恢复配方）。
+> 只加节点不改这份清单时，实测
+> `test_manifest_matches_the_source_tree` 直接失败：
+> 「源码里新增了 effect 节点但没进本文件的清单：['effect_merge_candidates']」。
+> 落地：在清单加 `effect_merge_candidates`，并加配方
+> `_seed_merge_pair`（主候选人无同岗位投递 ⇒ 走合并常规路径，双投递分支留给
+> Task 5 自己的用例）＋ `Recipe(thread_id=主候选人, business_key=f"{secondary}:req-4-4",
+> count_business_rows=candidate_merge_log 行数)`。
+> ⚠️ 业务事实口径为什么是 `candidate_merge_log` 而不是 `application`：合并只把
+> `application.candidate_id` 改挂，**行数不变**，用它分不出"生效 / 未生效"。
+> 这条配方顺带把 Global Constraints 第 1 条要求的「`effect_log` 条数与业务表行数
+> 按 thread 恒等」变成了对**本节点**的可执行断言（两条通用协议 × 新节点 = 2 条新用例，
+> 实测该文件 97 → 99 passed）。Task 6 的撤销节点落地时同样要在此处补一条。
+>
+> 注：Step 1 的节点代码逐字落地，⛔ 无偏离（含 seg2 Spec review F1 的「改挂前冻结主方投递
+> 快照」——该修正已由 main `56c9395` 写入计划文本，并补第 4 条回归用例，故 D-CU2-5 的闸
+> 实测 `4 passed`）。
+
 - [ ] **Step 1: 在 `app/intake/merge.py` 追加合并逻辑**
 
 ```python
@@ -1009,32 +1064,36 @@ def effect_merge_candidates(
         (secondary_id,),
     ).fetchall()
 
+    # 2026-10-11 修正（1001O seg2 Spec review F1）：**改挂前**冻结主方既有投递快照，
+    # 校验与写关闭共用同一份——⛔ 不在改挂循环里现查：那会读到自己刚改挂的行，被合并方
+    # 同岗位多份、主方没有时会凭空写 closed_by_merge（HR 未被提示、产生错误审计事实）。
+    primary_apps_by_job: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT id, job_id FROM application WHERE candidate_id = ? ORDER BY created_at, id",
+        (primary_id,),
+    ).fetchall():
+        primary_apps_by_job.setdefault(row[1], row[0])
+
     # 同岗位双投递：合并前必须由 HR 选保留哪份（spec「同岗位双投递」）。
     for application_id, job_id in secondary_apps:
-        primary_open = conn.execute(
-            "SELECT id FROM application WHERE candidate_id = ? AND job_id = ? AND id != ?",
-            (primary_id, job_id, application_id),
-        ).fetchone()
+        primary_open = primary_apps_by_job.get(job_id)
         if primary_open is None:
             continue
         keep_id = keep_application_per_job.get(job_id)
-        if keep_id not in (application_id, primary_open[0]):
+        if keep_id not in (application_id, primary_open):
             raise MergeValidationError(f"岗位 {job_id} 存在双投递，必须指定保留哪份投递")
 
     snapshot = _snapshot_secondary(conn, secondary_id)
     merge_log_id = str(uuid.uuid4())
 
     for application_id, job_id in secondary_apps:
-        primary_open = conn.execute(
-            "SELECT id FROM application WHERE candidate_id = ? AND job_id = ? AND id != ?",
-            (primary_id, job_id, application_id),
-        ).fetchone()
+        primary_open = primary_apps_by_job.get(job_id)
         conn.execute(
             "UPDATE application SET candidate_id = ? WHERE id = ?", (primary_id, application_id)
         )
         if primary_open is not None:
             keep_id = keep_application_per_job.get(job_id)
-            loser_id = primary_open[0] if keep_id == application_id else application_id
+            loser_id = primary_open if keep_id == application_id else application_id
             _write_closed_by_merge(conn, loser_id, merged_by)
 
     conn.execute(
@@ -1139,6 +1198,29 @@ def test_same_job_double_application_requires_keep_choice(conn):
         "AND action = 'closed_by_merge'"
     ).fetchone()
     assert closed is not None
+    assert result["merge_log_id"]
+
+
+def test_secondary_multi_same_job_without_primary_open_stays_open(conn):
+    """主方同岗位没有投递、被合并方同岗位两份：两份都改挂，⛔ 不产生 closed_by_merge。
+
+    2026-10-11 修正（1001O seg2 Spec review F1）：旧实现改挂后重查主方投递会读到
+    自己刚改挂的行，凭空写 closed_by_merge（HR 未被提示）。"""
+    _seed_candidate(conn, "p1", "张三")
+    _seed_candidate(conn, "s1", "李四")
+    _seed_resume_application(conn, resume_id="r1", candidate_id="s1", job_id="j1")
+    _seed_resume_application(conn, resume_id="r2", candidate_id="s1", job_id="j1")
+
+    result = _merge(conn, primary_id="p1", secondary_id="s1", keep={})
+
+    rows = conn.execute(
+        "SELECT id, candidate_id FROM application WHERE job_id = 'j1' ORDER BY id"
+    ).fetchall()
+    assert rows == [("app-r1", "p1"), ("app-r2", "p1")]
+    closed = conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE action = 'closed_by_merge'"
+    ).fetchone()[0]
+    assert closed == 0
     assert result["merge_log_id"]
 
 
