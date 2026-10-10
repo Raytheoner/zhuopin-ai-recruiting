@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--BASE_HREF-->
+  <title>文书页 · 卓品智能招聘助手</title>
+  <link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+  <main class="container">
+    <h1>Offer / 拒信文书</h1>
+    <p id="app-id" hidden></p>
+    <section>
+      <h2>生成</h2>
+      <button id="gen-offer">生成 Offer 文书</button>
+      <button id="gen-rejection">生成拒信</button>
+      <p id="gen-error" class="error" hidden></p>
+    </section>
+    <section>
+      <h2>各版本</h2>
+      <ul id="letter-list"></ul>
+    </section>
+    <section id="editor" hidden>
+      <h2 id="editor-title">草稿</h2>
+      <p id="ai-badge">【AI 生成】本版本由系统生成，带 AI 生成标识。</p>
+      <textarea id="letter-body" rows="16"></textarea>
+      <button id="save-edit">保存编辑</button>
+      <button id="mark-human">标记为人工撰写</button>
+      <button id="copy-text">复制文案</button>
+      <a id="export-link" href="#">导出 docx</a>
+    </section>
+  </main>
+  <script>
+    // 本页路由是 `<任意前缀>/applications/{application_id}/letters`：末段本身是
+    // 字面量 "letters"，直接取 pathname 最后一段会取错，须从路径里显式抠出
+    // application_id。用正则而不是 split("/")，是因为部署约束 1 要求本文件
+    // 不得出现以 "/" 开头的字符串字面量（tests/test_letters_page.py 逐字扫）。
+    const appId = location.pathname.match(/\/applications\/([^/]+)\/letters\/?$/)[1];
+    document.getElementById("app-id").textContent = appId;
+    const list = document.getElementById("letter-list");
+    const editor = document.getElementById("editor");
+    const body = document.getElementById("letter-body");
+    const aiBadge = document.getElementById("ai-badge");
+    const exportLink = document.getElementById("export-link");
+    let currentId = null;
+
+    function refreshList() {
+      fetch(`api/applications/${appId}/letters`)
+        .then(r => r.json())
+        .then(data => {
+          list.innerHTML = "";
+          (data.letters || []).forEach(l => {
+            const li = document.createElement("li");
+            const a = document.createElement("a");
+            a.textContent = `${l.kind} v${l.version} · ${l.ai_generated ? "AI 生成" : "人工撰写"}`;
+            a.href = "#";
+            a.onclick = () => openLetter(l.id);
+            li.appendChild(a);
+            list.appendChild(li);
+          });
+        });
+    }
+
+    function openLetter(id) {
+      fetch(`api/letters/${id}`)
+        .then(r => { if (!r.ok) return r.json().then(x => { throw new Error(x.detail); }); return r.json(); })
+        .then(l => {
+          currentId = l.id;
+          editor.hidden = false;
+          body.value = l.body;
+          aiBadge.hidden = !l.ai_generated;
+          exportLink.href = `api/letters/${l.id}/export.docx`;
+        })
+        .catch(e => alert(e.message));
+    }
+
+    function generate(kind) {
+      fetch(`api/applications/${appId}/letters`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind })
+      })
+        .then(r => { if (!r.ok) return r.json().then(x => { throw new Error(x.detail); }); return r.json(); })
+        .then(() => refreshList())
+        .catch(e => {
+          const el = document.getElementById("gen-error");
+          el.hidden = false;
+          el.textContent = e.message;
+        });
+    }
+
+    document.getElementById("gen-offer").onclick = () => generate("offer");
+    document.getElementById("gen-rejection").onclick = () => generate("rejection");
+    document.getElementById("save-edit").onclick = () => {
+      fetch(`api/letters/${currentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: body.value })
+      }).then(r => r.json()).then(openLetter);
+    };
+    document.getElementById("mark-human").onclick = () => {
+      fetch(`api/letters/${currentId}/mark-human`, { method: "POST" })
+        .then(r => r.json()).then(openLetter);
+    };
+    document.getElementById("copy-text").onclick = () => {
+      navigator.clipboard.writeText(body.value).then(() => alert("已复制"));
+    };
+
+    refreshList();
+  </script>
+</body>
+</html>

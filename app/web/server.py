@@ -2274,6 +2274,10 @@ def create_app(
             background=BackgroundTask(os.unlink, tmp_path),
         )
 
+    @router.get("/applications/{application_id}/letters")
+    def letters_page(application_id: str):
+        return _render_static_page("letters.html", root_path)
+
     def _canonical_items(items: list[dict]) -> str:
         normalized = [
             {
