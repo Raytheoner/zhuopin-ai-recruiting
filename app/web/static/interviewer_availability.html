@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>我的可用时段</title><!--BASE_HREF--></head>
+<body>
+<h1>我的可用时段（周视图）</h1>
+<form id="f">
+  <label>开始 <input name="start_at" placeholder="YYYY-MM-DD HH:MM:SS" required></label>
+  <label>结束 <input name="end_at" placeholder="YYYY-MM-DD HH:MM:SS" required></label>
+  <label>备注 <input name="note"></label>
+  <button type="submit">登记</button>
+</form>
+<ul id="list"></ul>
+<script>
+const api = "api/interviewers/me/availability";
+async function refresh() {
+  const r = await fetch(api);
+  if (r.status === 401) { location.href = "login"; return; }
+  const d = await r.json();
+  document.getElementById("list").innerHTML = d.availability.map(a =>
+    `<li>${a.start_at}–${a.end_at} ${a.note || ""}${a.on_behalf ? "（代登记）" : ""} ` +
+    `<button data-id="${a.id}" class="del">撤销</button></li>`).join("");
+}
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = {start_at: fd.get("start_at"), end_at: fd.get("end_at"), note: fd.get("note") || null};
+  const r = await fetch(api, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) { alert((await r.json()).detail || JSON.stringify(await r.json())); }
+  refresh();
+});
+document.getElementById("list").addEventListener("click", async (e) => {
+  if (!e.target.classList.contains("del")) return;
+  const r = await fetch(api + "/" + e.target.dataset.id, {method: "DELETE"});
+  if (!r.ok) { alert((await r.json()).detail); }
+  refresh();
+});
+refresh();
+</script>
+</body>
+</html>
