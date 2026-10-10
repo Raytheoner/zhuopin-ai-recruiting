@@ -1052,6 +1052,36 @@ CREATE TABLE IF NOT EXISTS invitation_template (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 邀约回填留痕（interview-invitation-drafting spec「HR 复制发送与结果回填」；
+-- interview-scheduling U3 Task 3）。回填 MUST 记录操作人与时刻——本表就是这两件事
+-- 的载体，同时把「同状态重复提交无第二条留痕」变成**结构性**保证：UNIQUE
+-- (slot_id, status) 之下，同一场次同一状态在库里只可能有一行。
+-- ⛔ 本表不写 rejection_record、不含应用阶段列：候选人拒绝邀约不是淘汰（design D9），
+-- 「投递阶段不动」由"这里根本没有阶段列"保证，不靠代码自觉。
+-- channel 只在 sent 行非空（微信/邮件/电话）；declined 行必须带非空 reason。
+-- 新表，走 CREATE TABLE IF NOT EXISTS，⛔ 不进 _ADDED_COLUMNS、不进
+-- _DRIFT_GUARDED_TABLES（老库上不存在本表）。
+CREATE TABLE IF NOT EXISTS invitation_outcome_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    slot_id TEXT NOT NULL REFERENCES interview_slot(id),
+    status TEXT NOT NULL CHECK (
+        status IN ('sent', 'confirmed', 'declined', 'reschedule_requested')
+    ),
+    channel TEXT CHECK (channel IS NULL OR channel IN ('wechat', 'email', 'phone')),
+    reason TEXT,
+    actor TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (
+        (status = 'sent' AND channel IS NOT NULL)
+        OR (status != 'sent' AND channel IS NULL)
+    ),
+    CHECK (status != 'declined' OR (reason IS NOT NULL AND trim(reason) != '')),
+    UNIQUE (slot_id, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_invitation_outcome_slot
+    ON invitation_outcome_log (slot_id);
+
 -- 候选人面试阶段联系方式（candidate-contact-vault spec；design D6）。
 -- application_id 唯一：一份投递只有一条联系方式记录，登记覆盖＝更新同一行。
 -- phone_enc/email_enc 存 AES-GCM 密文 BLOB，⛔ 无任何明文列。
