@@ -1052,6 +1052,36 @@ CREATE TABLE IF NOT EXISTS invitation_template (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 邀约回填留痕（interview-invitation-drafting spec「HR 复制发送与结果回填」；
+-- interview-scheduling U3 Task 3）。回填 MUST 记录操作人与时刻——本表就是这两件事
+-- 的载体，同时把「同状态重复提交无第二条留痕」变成**结构性**保证：UNIQUE
+-- (slot_id, status) 之下，同一场次同一状态在库里只可能有一行。
+-- ⛔ 本表不写 rejection_record、不含应用阶段列：候选人拒绝邀约不是淘汰（design D9），
+-- 「投递阶段不动」由"这里根本没有阶段列"保证，不靠代码自觉。
+-- channel 只在 sent 行非空（微信/邮件/电话）；declined 行必须带非空 reason。
+-- 新表，走 CREATE TABLE IF NOT EXISTS，⛔ 不进 _ADDED_COLUMNS、不进
+-- _DRIFT_GUARDED_TABLES（老库上不存在本表）。
+CREATE TABLE IF NOT EXISTS invitation_outcome_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    slot_id TEXT NOT NULL REFERENCES interview_slot(id),
+    status TEXT NOT NULL CHECK (
+        status IN ('sent', 'confirmed', 'declined', 'reschedule_requested')
+    ),
+    channel TEXT CHECK (channel IS NULL OR channel IN ('wechat', 'email', 'phone')),
+    reason TEXT,
+    actor TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (
+        (status = 'sent' AND channel IS NOT NULL)
+        OR (status != 'sent' AND channel IS NULL)
+    ),
+    CHECK (status != 'declined' OR (reason IS NOT NULL AND trim(reason) != '')),
+    UNIQUE (slot_id, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_invitation_outcome_slot
+    ON invitation_outcome_log (slot_id);
+
 -- 候选人面试阶段联系方式（candidate-contact-vault spec；design D6）。
 -- application_id 唯一：一份投递只有一条联系方式记录，登记覆盖＝更新同一行。
 -- phone_enc/email_enc 存 AES-GCM 密文 BLOB，⛔ 无任何明文列。
@@ -1640,6 +1670,31 @@ def _seed_letter_templates(conn: sqlite3.Connection) -> None:
     )
 
 
+_INVITATION_TEMPLATE_V1 = (
+    "{candidate_name} 您好：\n\n"
+    "诚邀您参加我司 {job_title} 岗位第 {round} 轮面试。\n"
+    "时间：{start_at} — {end_at}\n"
+    "形式：{mode}（{location_or_link}）\n"
+    "面试官：{interviewer_names}\n"
+    "联系人：{contact}\n\n"
+    "如时间不便，请直接回复本消息，我们会与您另约。\n\n"
+    "卓品智能人力资源部"
+)
+
+
+def _seed_invitation_template(conn: sqlite3.Connection) -> None:
+    """幂等种子：邀约模板 v1 占位版（interview-scheduling U3 tasks 3.1；
+    tasks 0.4「人事部#3 邀约话术样例」回件到后只换内容不改代码）。
+    固定 version='v1' 天然键，重复调用不产生第二行。
+    ⛔ 正文 MUST NOT 含评分／排名／淘汰理由占位符——本串只有九个白名单占位符，
+    tests/test_invitation_template.py 逐条反证。"""
+    conn.execute(
+        "INSERT OR IGNORE INTO invitation_template (version, body, updated_by) "
+        "VALUES ('v1', ?, 'system')",
+        (_INVITATION_TEMPLATE_V1,),
+    )
+
+
 def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -2116,4 +2171,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_stage_for_interview(conn)
     _seed_onboarding_default_template(conn)
     _seed_letter_templates(conn)
+    _seed_invitation_template(conn)
     conn.commit()

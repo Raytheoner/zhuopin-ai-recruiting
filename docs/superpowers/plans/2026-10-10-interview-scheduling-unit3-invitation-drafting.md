@@ -3289,6 +3289,28 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
    `test_invitation_template_updated_at_defaults_to_now` 的插入改 `'v2'`）。
    ⛔ 不去掉种子——种子是 tasks 3.1 的交付物。
 
+> **落地说明 D-U3-7（Task 1 实现时发现的测试基线偏差，两处；以磁盘真身为准，⛔ 无需返工）。**
+> 计划 1c / 1d 里有两处断言漏算了**本 Task 自己引入的 v1 占位种子**（种子是同一份
+> 交付物，两条断言互斥——`test_seed_v1_exists_after_init_schema` 要求种子在，
+> 而这两条断言按字面要求种子的那一行不在）。按「保种子、改断言」处置：
+>
+> ① `tests/test_invitation_template.py::test_put_creates_next_version_and_keeps_old`：
+> 计划字面 `result["version"] == "v2"` / `versions == ["v1", "v2"]`。种子 v1 在场时，
+> 两次 PUT 依次产出 v2、v3——改为断言第二次 PUT 为 `"v3"`、`versions == ["v1","v2","v3"]`
+> （测试意图「升版不覆盖旧版」不变，且 v1 仍在）。同文件另两条
+> （`test_put_same_body_is_unchanged_noop` 的 `count == 2`、
+> `test_put_accepts_all_whitelisted_placeholders` 的 `"v2"`）本就按种子在场写，
+> 未改。
+> ② `tests/test_db_interview_invitation_draft_schema.py::test_invitation_template_keeps_multiple_versions`：
+> 计划字面把插入改 `'v2'`/`'v3'` 并断言 `rows == ["v2","v3"]`，但 `SELECT version` 是全表——
+> 种子 v1 也在。改为断言 `["v1","v2","v3"]`（「一版一行、不覆盖」在带种子的真身上同样成立）。
+> 计划 1d 其余三处（`..._is_primary_key` / `..._requires_updated_by` / `..._updated_at_
+> defaults_to_now`）按字面落地，逐字未改。
+>
+> **验证证据**：`tests/test_invitation_template.py tests/test_db_interview_invitation_draft_schema.py -q`
+> ⇒ **31 passed**（计划预期「30 passed」是条数笔误：新增文件实为 15 条用例——10 条普通
+> ＋ `test_put_rejects_forbidden_placeholders` 的 5 个参数化实例；U1 schema 文件 16 条＝15＋1）。
+
 ## 5. 提取验证记录（`spec-to-plan` 第 6 步，本计划写作时已做的最小核验）
 
 - 已在仓库磁盘上核对：U1 的 `interview_invitation_draft` / `invitation_template`
