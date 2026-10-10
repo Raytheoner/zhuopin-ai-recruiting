@@ -21,6 +21,7 @@ import sqlite3
 import pytest
 
 from app.storage import interviewer as interviewer_module
+from app.storage.auth_session import create_session
 from app.storage.db import get_connection, init_schema
 from app.storage.hr_account import upsert_account
 from app.storage.interviewer import (
@@ -330,3 +331,121 @@ def test_module_has_no_ai_generation_path():
     assert "gateway" not in lowered
     assert "prompt" not in lowered
     assert "temperature" not in lowered
+
+
+# ── Task 8 接线后的接口契约（计划 Task 10 的正文，先落入本文件让 Task 8 的 TDD 能跑）──
+# 鉴权三层：未登录 → 401；已登录但 role != 'hr' → 403；role = 'hr' → 放行。
+# ⚠️ Task 10 若整文件重写本文件，必须同时保留上面 Task 7 的存储层用例与本节。
+
+
+def _account(conn, username: str, role: str = "hr") -> str:
+    account_id = upsert_account(conn, username=username, password="testpass123")
+    if role != "hr":
+        conn.execute(
+            "UPDATE hr_account SET role = ? WHERE username = ?", (role, username)
+        )
+        conn.commit()
+    return account_id
+
+
+def _login(client, conn, account_id: str) -> None:
+    token = create_session(conn, hr_account_id=account_id)
+    client.cookies.set("hr_session", token)
+
+
+def test_interviewers_requires_login(make_test_client):
+    client, conn = make_test_client()
+    assert client.get("/api/interviewers").status_code == 401
+
+
+def test_interviewers_rejects_non_hr_role(make_test_client):
+    client, conn = make_test_client()
+    interviewer_id = _account(conn, "interviewer-1", role="interviewer")
+    _login(client, conn, interviewer_id)
+
+    assert client.get("/api/interviewers").status_code == 403
+    assert client.post(
+        "/api/interviewers", json={"account_id": "any", "name": "张三"}
+    ).status_code == 403
+
+
+def test_hr_can_create_and_list_interviewer(make_test_client):
+    client, conn = make_test_client()
+    hr_id = _account(conn, "hr-1")
+    target_id = _account(conn, "interviewee-1", role="interviewer")
+    _login(client, conn, hr_id)
+
+    created = client.post("/api/interviewers", json={
+        "account_id": target_id,
+        "name": "汤丽萍",
+        "department": "人事部",
+        "interviewable_jobs": ["嵌入式软件工程师"],
+        "enabled": True,
+    })
+    assert created.status_code == 201
+    body = created.json()
+    assert body["account_id"] == target_id
+    assert body["name"] == "汤丽萍"
+    assert body["department"] == "人事部"
+    assert body["interviewable_jobs"] == ["嵌入式软件工程师"]
+    assert body["enabled"] is True
+
+    listing = client.get("/api/interviewers")
+    assert listing.status_code == 200
+    assert [row["account_id"] for row in listing.json()] == [target_id]
+
+
+def test_create_interviewer_is_idempotent_by_account_id(make_test_client):
+    client, conn = make_test_client()
+    hr_id = _account(conn, "hr-1")
+    target_id = _account(conn, "interviewee-1", role="interviewer")
+    _login(client, conn, hr_id)
+
+    payload = {"account_id": target_id, "name": "汤丽萍", "interviewable_jobs": ["嵌入式"]}
+    first = client.post("/api/interviewers", json=payload)
+    second = client.post("/api/interviewers", json={**payload, "name": "改名不应生效"})
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+    assert second.json()["name"] == "汤丽萍"
+
+
+def test_create_interviewer_missing_account_returns_404(make_test_client):
+    client, conn = make_test_client()
+    _login(client, conn, _account(conn, "hr-1"))
+    resp = client.post("/api/interviewers", json={
+        "account_id": "no-such-account", "name": "张三"
+    })
+    assert resp.status_code == 404
+
+
+def test_patch_updates_only_provided_fields(make_test_client):
+    client, conn = make_test_client()
+    hr_id = _account(conn, "hr-1")
+    target_id = _account(conn, "interviewee-1", role="interviewer")
+    _login(client, conn, hr_id)
+
+    created = client.post("/api/interviewers", json={
+        "account_id": target_id,
+        "name": "汤丽萍",
+        "department": "人事部",
+        "interviewable_jobs": ["嵌入式"],
+        "enabled": True,
+    }).json()
+
+    resp = client.patch(
+        f"/api/interviewers/{created['id']}", json={"department": "行政部"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["department"] == "行政部"
+    assert body["name"] == "汤丽萍"
+    assert body["interviewable_jobs"] == ["嵌入式"]
+
+
+def test_patch_missing_interviewer_returns_404(make_test_client):
+    client, conn = make_test_client()
+    _login(client, conn, _account(conn, "hr-1"))
+    resp = client.patch("/api/interviewers/no-such-id", json={"name": "张三"})
+    assert resp.status_code == 404
