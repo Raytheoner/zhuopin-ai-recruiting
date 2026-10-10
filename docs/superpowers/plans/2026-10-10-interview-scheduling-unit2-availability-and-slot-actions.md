@@ -2556,6 +2556,24 @@ python3 -m pytest tests/test_interview_scheduling_e2e.py -q
 
 预期输出：`1 passed`。
 
+> **观察项 D-U2-11a（环境，非本任务红灯，不需返工）——泳道 worktree 里
+> `tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit` 必红。**
+> Task 11 落地后全量 `pytest -q` 实测 `1 failed, 4326 passed, 12 skipped`，唯一失败项就是它
+> （本任务验收的三组命令全绿：U2 六文件 37 passed、`test_db_migration.py`＋`test_db_m2_schema.py`
+> 82 passed、`test_interview_scheduling_e2e.py` 1 passed）。
+> 成因（读源码定位，非猜测）：`docs/openers/commit-launcher.sh` 的 python 解析顺序是
+> `$REPO/venv` → `$REPO/.venv`（单测里 `$REPO` 是 tmp 仓，二者必无）→
+> `$SELF_DIR/../../venv`（= **本泳道 worktree 的** venv，本 worktree 无 venv）→
+> `command -v python3`（本机 3.9、无 pytest）；而 `scripts/commit_request.py`
+> `run_doc_size_test()` 的判据是「没有 venv 且当前解释器没有 pytest ⇒ 跳过、算通过」。
+> 于是体积闸被跳过 ⇒ 该用例期望的 `rejected` 变成 `done`。
+> 🧪 反证：同一用例在**主工作区**（有 `venv/`）跑 ⇒ `1 passed in 0.63s`。
+> ⇒ 与本任务改动无关（本任务只新增 `tests/test_interview_scheduling_e2e.py`，没碰
+> launcher／`commit_request.py`／该用例），是「泳道 worktree 无 venv」这一既有环境差异的
+> 必然结果（与计划的 D-CU2-7c／入职 U2 计划同一观察项同源）。
+> ⛔ 不在本任务里修（改 launcher 的 venv 回退属于工具链变更，越出 Task 11 的 Files 段）；
+> 留作观察项，供收口批次按需处置。
+
 ---
 
 ## 2. 交付前自查
