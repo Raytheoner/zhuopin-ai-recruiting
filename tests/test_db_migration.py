@@ -3,7 +3,13 @@ import sqlite3
 
 import pytest
 
-from app.storage.db import _ADDED_COLUMNS, apply_column_migrations, get_connection, init_schema
+from app.storage.db import (
+    STAGE_HISTORY_ACTIONS,
+    _ADDED_COLUMNS,
+    apply_column_migrations,
+    get_connection,
+    init_schema,
+)
 
 # 2026-08-18 及之前 .51 现网 data/demo.db 里 job / job_profile 的真实形态。
 # 刻意硬编码而不是从 SCHEMA 裁剪：这两条 DDL 代表"服务器上已经存在的那个库长
@@ -123,6 +129,30 @@ CREATE INDEX idx_application_stage_history_application
     ON application_stage_history (application_id);
 """
 
+# 已跑过 interview-scheduling U2（1001R）的库：action/detail_json 已在，且 action
+# 带的是**五值** CHECK。channel-resume-intake U2 Task 5 要写第六个值
+# （closed_by_merge），而 _ADDED_COLUMNS 对"列已存在"的库静默跳过——这批库只能靠
+# init_schema 末尾的整表重建放宽 CHECK，否则合并动作在服务器上会当场
+# IntegrityError（与 hr_account.role 缺 dept_manager 同一故障形态）。
+# ⛔ 这条 DDL 同样是历史事实：它钉住"重建前长什么样"，不随 SCHEMA 演进。
+_SCHEDULING_ERA_APPLICATION_STAGE_HISTORY_DDL = """
+CREATE TABLE application_stage_history (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    from_stage_id TEXT REFERENCES stage(id),
+    to_stage_id TEXT NOT NULL REFERENCES stage(id),
+    actor_type TEXT NOT NULL CHECK (actor_type IN ('human', 'agent')),
+    actor TEXT,
+    action TEXT CHECK (
+        action IS NULL OR action IN ('scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show')
+    ),
+    detail_json TEXT,
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_application_stage_history_application
+    ON application_stage_history (application_id);
+"""
+
 # 漂移守卫覆盖的表：凡是"既可能来自 SCHEMA 的 CREATE TABLE（新库）、又可能
 # 早就存在于老库里"的表都要进这个名单，新加一张这样的表就往这里加一行，并在
 # _legacy_db 里补上它的历史 DDL。⛔ 不要只写当下出过事的那张表——本守卫防的是
@@ -145,8 +175,14 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def _legacy_db(tmp_path) -> sqlite3.Connection:
-    """建一个"老 schema + 已有数据"的库，模拟 .51 上的 data/demo.db。"""
+def _legacy_db(
+    tmp_path, *, stage_history_ddl: str = _LEGACY_APPLICATION_STAGE_HISTORY_DDL
+) -> sqlite3.Connection:
+    """建一个"老 schema + 已有数据"的库，模拟 .51 上的 data/demo.db。
+
+    `stage_history_ddl` 默认是 M2 U1 形态（无 action/detail_json）；传
+    `_SCHEDULING_ERA_APPLICATION_STAGE_HISTORY_DDL` 可模拟"已跑过 1001R"的库。
+    """
     conn = get_connection(str(tmp_path / "legacy.db"))
     conn.executescript(
         _LEGACY_JOB_DDL
@@ -175,7 +211,7 @@ def _legacy_db(tmp_path) -> sqlite3.Connection:
         "job_id TEXT NOT NULL REFERENCES job(id), resume_id TEXT NOT NULL REFERENCES resume(id), "
         "current_stage_id TEXT NOT NULL REFERENCES stage(id))"
     )
-    conn.executescript(_LEGACY_APPLICATION_STAGE_HISTORY_DDL)
+    conn.executescript(stage_history_ddl)
     conn.executescript(_LEGACY_INTERVIEW_SESSION_DDL)
 
     conn.execute(
@@ -353,6 +389,83 @@ def test_legacy_application_stage_history_action_check_survives_migration(tmp_pa
             "(id, application_id, to_stage_id, actor_type, action) "
             "VALUES ('h-bad', 'old-app', 'initial', 'human', 'promoted')"
         )
+
+
+def test_scheduling_era_action_check_is_widened_for_closed_by_merge(tmp_path):
+    """已经跑过 1001R 的库：action 列在、但 CHECK 只放行五值。
+    `_ADDED_COLUMNS` 逐列判重会静默跳过这一列 ⇒ 只有整表重建能放宽它。
+
+    channel-resume-intake U2 Task 5 的 `_write_closed_by_merge` 写第六个值，不重建
+    的话合并动作在服务器上当场 IntegrityError（与 hr_account.role 缺 dept_manager
+    同一故障形态，`_rebuild_hr_account_role_check` 同一先例）。
+    """
+    conn = _legacy_db(tmp_path, stage_history_ddl=_SCHEDULING_ERA_APPLICATION_STAGE_HISTORY_DDL)
+    conn.execute(
+        "INSERT INTO application_stage_history "
+        "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, detail_json) "
+        "VALUES ('sched-row', 'old-app', 'initial', 'initial', 'human', 'alice', "
+        "'rescheduled', '{\"from\": \"2026-10-11T09:00\"}')"
+    )
+    conn.commit()
+    before = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='application_stage_history'"
+    ).fetchone()[0]
+    assert "'closed_by_merge'" not in before
+
+    init_schema(conn)
+
+    # 重建不丢行：既有排期流转事实（含 detail_json）原样还在。
+    row = conn.execute(
+        "SELECT action, detail_json, actor FROM application_stage_history WHERE id = 'sched-row'"
+    ).fetchone()
+    assert row == ("rescheduled", '{"from": "2026-10-11T09:00"}', "alice")
+    # 索引随 DROP TABLE 一起消失，重建后必须仍在（否则按 application 的查询全表扫）。
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' "
+        "AND name='idx_application_stage_history_application'"
+    ).fetchone() is not None
+
+    for index, value in enumerate(STAGE_HISTORY_ACTIONS):
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action) "
+            "VALUES (?, 'old-app', 'initial', 'initial', 'human', 'alice', ?)",
+            (f"legacy-h-{index}", value),
+        )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, to_stage_id, actor_type, action) "
+            "VALUES ('legacy-h-bad', 'old-app', 'initial', 'human', 'promoted')"
+        )
+
+
+def test_scheduling_era_migration_is_idempotent(tmp_path):
+    """重建是幂等的：重复 init_schema 不重建第二次、不报错、行数不变。"""
+    conn = _legacy_db(tmp_path, stage_history_ddl=_SCHEDULING_ERA_APPLICATION_STAGE_HISTORY_DDL)
+    conn.execute(
+        "INSERT INTO application_stage_history (id, application_id, to_stage_id, actor_type) "
+        "VALUES ('row-1', 'old-app', 'initial', 'agent')"
+    )
+    conn.commit()
+
+    init_schema(conn)
+    init_schema(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM application_stage_history").fetchone()[0] == 1
+
+
+def test_rebuild_refuses_unknown_columns_instead_of_dropping_them(tmp_path):
+    """重建的列清单是硬编码的：将来有单元往本表加列而漏改重建 DDL 时，宁可在迁移
+    当场炸掉，也不要静默丢掉那一列的数据（1001O seg2 的 PRAGMA/事务坑同一类教训：
+    重建类迁移的失败必须响亮）。"""
+    conn = _legacy_db(tmp_path, stage_history_ddl=_SCHEDULING_ERA_APPLICATION_STAGE_HISTORY_DDL)
+    conn.execute("ALTER TABLE application_stage_history ADD COLUMN future_col TEXT")
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="future_col"):
+        init_schema(conn)
 
 
 def test_every_added_column_is_nullable_or_has_constant_default(tmp_path):

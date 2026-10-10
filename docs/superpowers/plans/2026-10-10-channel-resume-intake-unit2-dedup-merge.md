@@ -734,6 +734,32 @@ python -m pytest tests/test_duplicates.py -q
 
 - Schema: `candidate.merged_into TEXT REFERENCES candidate(id)`（可空，走 `_ADDED_COLUMNS`）；`application_stage_history.action TEXT`（可空，走 `_ADDED_COLUMNS`）；新表 `candidate_merge_log`
 
+> **偏离登记 D-CU2-1 / D-CU2-2（执行期实测，2026-10-10 Task 4 落地时登记）**
+>
+> **D-CU2-1（技术方案决策，可代）——`action` 不是本包首建，改为「放宽 CHECK」而非「裸 TEXT」。**
+> 本计划写 Task 4 时（1001W/1001V 计划批）磁盘真身里该表还没有 `action`；但
+> **interview-scheduling U2（1001R，2026-10-10 合并）已先落地**`action` + `detail_json`，
+> 且 `action` 带**五值 CHECK**（`scheduled/rescheduled/cancelled/completed/no_show`）。
+> Step 2 字面照抄会连那个 CHECK 与 `detail_json` 一起删掉——那是别的单元的已交付产物。
+> 落地形态：`action` 的取值域以 `app/storage/db.py::STAGE_HISTORY_ACTIONS` 为真源，
+> **追加** `closed_by_merge`（本包 Task 5 写它），SCHEMA / `_ADDED_COLUMNS` /
+> `_rebuild_application_stage_history_action_check` 三处同源。⚠️ Step 4 要求的
+> `("application_stage_history", "action", "TEXT")` 同样按此落地——⛔ 不是裸 `TEXT`。
+> 老库两条路径：没跑过 1001R 的走加列一步到位；跑过 1001R 的（列已在、CHECK 五值）
+> 由 `_rebuild_application_stage_history_action_check` 整表重建放宽（SQLite 改不了
+> CHECK，同 `_rebuild_hr_account_role_check` 先例）。不重建的话 Task 5 的
+> `closed_by_merge` 在服务器上当场 `IntegrityError`。U3 的 `source_corrected` 落地时
+> 按同法在 `STAGE_HISTORY_ACTIONS` 加值（本次不加：不留无写入方的取值）。
+>
+> **D-CU2-2（实现细节）——Step 6 的测试代码有一处不可执行。**
+> 计划文本里的 `with sqlite3.IntegrityError():` 在 Python 3 不是断言——异常类不支持
+> 上下文管理器协议，会直接 `TypeError`。落地改写为 `pytest.raises(sqlite3.IntegrityError)`，
+> 断言语义与计划意图一致。
+>
+> 另：Step 1（`candidate.merged_into`）与 Step 5 的漂移守卫登记已由 Task 2 随
+> `candidate` 建表一并落地（见 `db.py` 的 `_ADDED_COLUMNS` 注释：⛔ 不重复追一行），
+> 本任务不再重复改动。
+
 - [ ] **Step 1: `candidate` 表加 `merged_into` 列**
 
 在 `app/storage/db.py` 的 `candidate` 表定义里，把 `phone_hash TEXT,` 之后加一行：
