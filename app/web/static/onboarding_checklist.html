@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css?v=20261010">
+  <title>入职清单 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 入职清单</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">入职清单</h1>
+    <div class="card" id="checklist-card">
+      <p id="progress-line"></p>
+      <p><button id="instantiate-btn">生成入职清单</button></p>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>条目</th><th>负责方</th><th>期限（相对入职日）</th><th>状态</th><th>原因</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="item-body"></tbody>
+      </table>
+      <p id="empty-hint" class="empty-hint" style="display:none">该投递尚未生成入职清单。</p>
+    </div>
+  </main>
+  <script>
+    // 2026-10-11 修正（1001G，Spec review 实测 blocker）：⛔ 不能用
+    // split("/").pop()——本页 URL 末段是字面量 "onboarding"，取到的是它而不是
+    // application_id（清单页会永远去拉一个不存在的投递）。用与 letters.html
+    // 同款正则从路径中段取（部署约束 1：不硬编码前缀，正则不含前导 "/"）。
+    const applicationId =
+      location.pathname.match(/\/applications\/([^/]+)\/onboarding\/?$/)[1];
+    const detailUrl = `api/applications/${applicationId}/onboarding`;
+    const instantiateUrl = `api/applications/${applicationId}/onboarding/instantiate`;
+    const itemUrl = "api/onboarding/items";
+
+    function render(payload) {
+      document.getElementById("empty-hint").style.display = payload ? "none" : "block";
+      if (!payload) return;
+      document.getElementById("progress-line").textContent =
+        `进度：${payload.progress_percent}% · 逾期 ${payload.overdue_count} 条`;
+      const body = document.getElementById("item-body");
+      body.innerHTML = "";
+      for (const it of payload.items) {
+        const tr = document.createElement("tr");
+        const overdue = it.overdue ? " ⚠️逾期" : "";
+        const actions = ["pending", "done", "waived"].map((target) => {
+          if (target === it.status) return "";
+          return `<button data-item="${it.item_id}" data-target="${target}">` +
+            (target === "done" ? "完成" : target === "waived" ? "豁免" : "撤回") +
+            `</button>`;
+        }).join("");
+        tr.innerHTML = `<td>${it.name}${overdue}</td><td>${it.owner_party}</td>` +
+          `<td>${it.due_offset_days}</td><td>${it.status}</td>` +
+          `<td>${it.reason || ""}</td><td>${actions}</td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    async function load() {
+      const resp = await fetch(detailUrl);
+      if (resp.status === 404) { render(null); return; }
+      if (!resp.ok) throw new Error("加载失败");
+      render(await resp.json());
+    }
+
+    async function updateItem(itemId, toStatus) {
+      const reason = toStatus === "waived" ? prompt("豁免原因（必填）：") : "";
+      if (toStatus === "waived" && !reason) return;
+      const resp = await fetch(`${itemUrl}/${itemId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to_status: toStatus, reason, request_id: crypto.randomUUID() }),
+      });
+      if (!resp.ok) { alert("操作失败"); return; }
+      load();
+    }
+
+    document.getElementById("instantiate-btn").addEventListener("click", async () => {
+      const resp = await fetch(instantiateUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: crypto.randomUUID() }),
+      });
+      if (!resp.ok) { alert("生成失败"); return; }
+      load();
+    });
+    document.getElementById("item-body").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-item]");
+      if (btn) updateItem(btn.dataset.item, btn.dataset.target);
+    });
+    load();
+  </script>
+</body>
+</html>

@@ -7,6 +7,7 @@ import os
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -74,6 +75,15 @@ from app.graph.invite_nodes import (
     open_invite,
     open_resume,
     verify_phone_code,
+)
+from app.agents.onboarding_progress import progress
+from app.graph.onboarding_nodes import (
+    ChecklistInstantiateRejected,
+    ChecklistTemplateMissing,
+    ItemOperatorForbidden,
+    ItemUpdateRejected,
+    effect_instantiate_checklist,
+    effect_update_item,
 )
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
@@ -267,6 +277,16 @@ class OnboardingTemplateItem(BaseModel):
 
 class OnboardingTemplateUpdateRequest(BaseModel):
     items: list[OnboardingTemplateItem]
+
+
+class OnboardingInstantiateRequest(BaseModel):
+    request_id: str
+
+
+class OnboardingItemUpdateRequest(BaseModel):
+    to_status: str
+    reason: str | None = None
+    request_id: str
 
 
 class LetterTemplateUpdateRequest(BaseModel):
@@ -2354,6 +2374,185 @@ def create_app(
             "items": json.loads(new_items_json),
             "unchanged": False,
         }
+
+    # ── onboarding-flow U2：HR 清单页（tasks 2.4）──
+
+    def _require_hr_or_dept_manager(request: Request) -> tuple[str, str, str | None]:
+        """登录态 + 角色校验，返回 (username, role, department)。非登录 401、角色不符 403。"""
+        auth = getattr(request.state, "auth", None)
+        if not getattr(auth, "authenticated", False):
+            raise HTTPException(status_code=401, detail="未登录")
+        username = getattr(auth, "user_id", None)
+        row = conn.execute(
+            "SELECT role, department FROM hr_account WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None or row[0] not in ("hr", "dept_manager"):
+            raise HTTPException(status_code=403, detail="无权限")
+        return username, row[0], row[1]
+
+    def _checklist_payload(application_id: str) -> dict | None:
+        cl = conn.execute(
+            "SELECT id, template_version, start_date, status, closed_reason, created_at "
+            "FROM onboarding_checklist WHERE application_id = ?",
+            (application_id,),
+        ).fetchone()
+        if cl is None:
+            return None
+        rows = conn.execute(
+            "SELECT id, name, owner_party, due_offset_days, required, status, reason, acted_by, acted_at "
+            "FROM onboarding_item WHERE checklist_id = ? ORDER BY rowid",
+            (cl[0],),
+        ).fetchall()
+        items = [
+            {
+                "item_id": r[0], "name": r[1], "owner_party": r[2],
+                "due_offset_days": r[3], "required": bool(r[4]), "status": r[5],
+                "reason": r[6], "acted_by": r[7], "acted_at": r[8],
+            }
+            for r in rows
+        ]
+        prog = progress(
+            [
+                {"id": it["item_id"], "status": it["status"],
+                 "due_offset_days": it["due_offset_days"], "required": it["required"]}
+                for it in items
+            ],
+            start_date=cl[2],
+            today=date.today().isoformat(),
+        )
+        overdue = set(prog["overdue_item_ids"])
+        for it in items:
+            it["overdue"] = it["item_id"] in overdue
+        return {
+            "application_id": application_id,
+            "template_version": cl[1],
+            "start_date": cl[2],
+            "status": cl[3],
+            "closed_reason": cl[4],
+            "progress_percent": prog["progress_percent"],
+            "overdue_count": len(overdue),
+            "items": items,
+        }
+
+    @router.get("/api/applications/{application_id}/onboarding")
+    def onboarding_checklist_detail(application_id: str, request: Request):
+        _require_role(request, "hr")
+        payload = _checklist_payload(application_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="该投递尚无入职清单")
+        return payload
+
+    @router.post("/api/applications/{application_id}/onboarding/instantiate")
+    def onboarding_instantiate(
+        application_id: str, req: OnboardingInstantiateRequest, request: Request
+    ):
+        username = _require_role(request, "hr")
+        try:
+            effect_instantiate_checklist(
+                conn, thread_id=application_id,
+                business_key="instantiate", created_by=username,
+            )
+        except ChecklistInstantiateRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ChecklistTemplateMissing as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        payload = _checklist_payload(application_id)
+        if payload is None:
+            raise HTTPException(status_code=500, detail="清单缺失")
+        return payload
+
+    @router.post("/api/onboarding/items/{item_id}")
+    def onboarding_item_update(
+        item_id: str, req: OnboardingItemUpdateRequest, request: Request
+    ):
+        username, _, _ = _require_hr_or_dept_manager(request)
+        try:
+            effect_update_item(
+                conn, thread_id=item_id,
+                business_key=f"{req.to_status}:{req.request_id}",
+                to_status=req.to_status, reason=req.reason, operator_username=username,
+            )
+        except ItemUpdateRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ItemOperatorForbidden as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        row = conn.execute(
+            "SELECT id, status, reason, acted_by, acted_at FROM onboarding_item WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="条目不存在")
+        return {
+            "item_id": row[0], "status": row[1], "reason": row[2],
+            "acted_by": row[3], "acted_at": row[4],
+        }
+
+    @router.get("/applications/{application_id}/onboarding")
+    def onboarding_checklist_page(application_id: str):
+        return _render_static_page("onboarding_checklist.html", root_path)
+
+    # ── onboarding-flow U2：HR 总览页（tasks 2.5）──
+
+    def _checklist_summary(application_id: str) -> dict:
+        cl = conn.execute(
+            "SELECT id, start_date FROM onboarding_checklist WHERE application_id = ?",
+            (application_id,),
+        ).fetchone()
+        if cl is None:
+            return {"progress_percent": 0, "overdue_count": 0}
+        rows = conn.execute(
+            "SELECT id, status, due_offset_days, required FROM onboarding_item "
+            "WHERE checklist_id = ?",
+            (cl[0],),
+        ).fetchall()
+        prog = progress(
+            [
+                {"id": r[0], "status": r[1], "due_offset_days": r[2], "required": bool(r[3])}
+                for r in rows
+            ],
+            start_date=cl[1],
+            today=date.today().isoformat(),
+        )
+        return {"progress_percent": prog["progress_percent"], "overdue_count": len(prog["overdue_item_ids"])}
+
+    def _onboarding_overview_rows(department: str | None = None):
+        sql = (
+            "SELECT c.name, a.id, j.department, cl.start_date "
+            "FROM onboarding_checklist cl "
+            "JOIN application a ON a.id = cl.application_id "
+            "JOIN candidate c ON c.id = a.candidate_id "
+            "JOIN job j ON j.id = a.job_id "
+            "WHERE cl.status = 'open'"
+        )
+        params: list = []
+        if department is not None:
+            sql += " AND j.department = ?"
+            params.append(department)
+        sql += " ORDER BY cl.start_date ASC, a.id ASC"
+        return conn.execute(sql, params).fetchall()
+
+    @router.get("/api/onboarding")
+    def onboarding_overview(request: Request):
+        _require_role(request, "hr")
+        rows = _onboarding_overview_rows()
+        checklists = []
+        for r in rows:
+            summary = _checklist_summary(r[1])
+            checklists.append(
+                {
+                    "candidate_name": r[0],
+                    "application_id": r[1],
+                    "department": r[2],
+                    "start_date": r[3],
+                    "progress_percent": summary["progress_percent"],
+                    "overdue_count": summary["overdue_count"],
+                }
+            )
+        return {"checklists": checklists}
+
+    @router.get("/onboarding")
+    def onboarding_overview_page():
+        return _render_static_page("onboarding_overview.html", root_path)
 
     @router.post("/api/applications/{application_id}/interview-sessions")
     def create_interview_session(
