@@ -254,11 +254,11 @@ def test_events_arriving_during_a_session_are_consumed_in_the_same_invocation(re
     assert sorted(p.name for p in (events_dir(repo) / "processed").iterdir()) == ["lanes-done-1", "lanes-done-2"]
 
 
-def test_session_is_started_with_sonnet_budget_and_headless_flags(repo: Path) -> None:
+def test_session_is_started_with_haiku_budget_and_headless_flags(repo: Path) -> None:
     (events_dir(repo) / "lanes-done-1").touch()
     run_shell(repo, fake_claude(repo))
     args_line = calls(repo)[0].splitlines()[0]
-    assert "--model sonnet" in args_line
+    assert "--model haiku" in args_line
     assert "--max-budget-usd 10" in args_line
     assert "-p " in args_line and "--dangerously-skip-permissions" in args_line
     assert "--strict-mcp-config" in args_line
@@ -289,7 +289,7 @@ def test_session_is_started_with_codex_engine_flags(repo: Path) -> None:
     assert "--json" in args_line and "--sandbox workspace-write" in args_line
     assert "-c approval_policy=never" in args_line
     assert "-c forced_login_method=chatgpt" in args_line
-    assert "-m deepseek-v4-pro" in args_line and "-c model_reasoning_effort=high" in args_line
+    assert "-m deepseek-flash" in args_line and "-c model_reasoning_effort=low" in args_line
     assert "--max-budget-usd" not in args_line and "--dangerously-skip-permissions" not in args_line
 
 

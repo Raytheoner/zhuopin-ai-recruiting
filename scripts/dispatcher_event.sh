@@ -42,11 +42,13 @@ case "$ENGINE" in
 esac
 CLAUDE_BIN="${DISPATCHER_CLAUDE:-claude}"
 CODEX_BIN="${DISPATCHER_CODEX:-codex}"
-MODEL="${DISPATCHER_MODEL:-sonnet}"
+# 2026-10-10 `1001G`（Shao Peishen 指令：所有子 session 一律 Flash）：默认档 sonnet → haiku。
+# 要单独抬档仍可用环境变量 DISPATCHER_MODEL=sonnet|opus 覆盖。
+MODEL="${DISPATCHER_MODEL:-haiku}"
 BUDGET="${DISPATCHER_BUDGET:-10}"
 MAX_ROUNDS="${DISPATCHER_MAX_ROUNDS:-3}"
 BACKOFF_MIN="${DISPATCHER_BACKOFF_MIN:-30}"
-# codex 引擎模型映射（与 run-lanes.sh 同档位）：DISPATCHER_MODEL 默认 sonnet 档。
+# codex 引擎模型映射（与 run-lanes.sh 同档位）：DISPATCHER_MODEL 默认 haiku 档。
 CODEX_MODEL_OPUS="${HR_CODEX_MODEL_OPUS:-deepseek-v4-pro}"; CODEX_REASON_OPUS="${HR_CODEX_REASON_OPUS:-max}"
 CODEX_MODEL_SONNET="${HR_CODEX_MODEL_SONNET:-deepseek-v4-pro}"; CODEX_REASON_SONNET="${HR_CODEX_REASON_SONNET:-high}"
 CODEX_MODEL_HAIKU="${HR_CODEX_MODEL_HAIKU:-deepseek-flash}"; CODEX_REASON_HAIKU="${HR_CODEX_REASON_HAIKU:-low}"
