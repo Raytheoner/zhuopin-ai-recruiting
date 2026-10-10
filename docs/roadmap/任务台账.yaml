@@ -6257,7 +6257,7 @@ tasks:
   状态: 待开
   阻塞类型: 无
   产出判据: '`docs/跟进信/README-跟进信清单.md` 中 `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出'
-  来源: docs/session接力.md:210
+  来源: docs/session接力.md:222
   可见: false
 - id: relay:tag#79545404
   场景: M0
@@ -6271,7 +6271,7 @@ tasks:
   阻塞类型: 决策
   产出判据: ①在有 `.git` 写权限的会话里对三个白名单路径 `git add`＋`git commit`（⛔ 不 push）——`docs/跟进信/回件/人事部#3-2026-10-08.md`、`docs/跟进信/README-跟进信清单.md`、`docs/session接力.md`；②随后按 §一.5 清信号：`PYTHONPATH=.
     tools/liaison/.venv/bin/python
-  来源: docs/session接力.md:215
+  来源: docs/session接力.md:227
   可见: false
 - id: relay:tag#d0fcf214
   场景: M0
@@ -6282,7 +6282,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: 明确「`3.3-2`／`3.3-3` 无需补」或指定补问路径（催补／补充信）——回件未写此两条，信件正文允许「没讨论到的编号可以不写」，`7-3` 写「同上」指向未写的 `3.3-3`
-  来源: docs/session接力.md:216
+  来源: docs/session接力.md:228
   可见: false
 - id: relay:tag#1c658510
   场景: M0
@@ -6293,7 +6293,7 @@ tasks:
   状态: 阻塞
   阻塞类型: 决策
   产出判据: 决定根因修法并派 opener——codex 拆件会话的提交链路（候选：照 0930D「执行器/值守侧代提交」先例扩到拆件链路；或调整 dispatch 的 codex 沙箱参数放开 `.git` 写）——属改 `tools/`/`scripts/` 的建造动作，本会话按红线②不做、未修
-  来源: docs/session接力.md:217
+  来源: docs/session接力.md:229
   可见: false
 - id: answer:Q-02
   场景: M2

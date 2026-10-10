@@ -219,6 +219,16 @@
   `/usr/bin/python3`＝3.9.6）⇒ `tools.liaison` 导不进、**入队必失败**——全 OK 批次按口径不私信（CLI rc=2，
   run-lanes 还会把它当失败打一条多余警告），但**有失败的批次恰恰发不出私信**（最需要它的场景）；服务用
   `/opt/homebrew/bin/python3.14` 可正常跑同命令（已实证）。改执行器属红线③，待 Shao Peishen 点头派专门修复＋冒烟。
+- **2026-10-10 23:45（`1001G` 收官）：四包 U2 seg1 全部落地＋「所有子 session 一律 Flash」全入口对齐**——
+  ① U2 构建 seg1×4（run-sdd＋flash 串行，各 Task 1-3）：渠道 **266 passed**（phone_hash／挂接节点／疑似重复，
+  `57f082f`）／排期 **222 passed**（conflict_check 纯函数／时段登记存储层，`0650ae1`）／Offer **181 passed**
+  （模板存储层／compute_letter_draft／文书幂等节点，`03a72a3`）／入职 **242 passed**（清单/条目幂等节点＋
+  `application.status=hired` 接线，`d6c635f`）；main 全量 **4228 passed / 10 skipped**；四包 worktree＝
+  `lane-u2-{channel,sched,offer,onboard}-build`（已各自 merge、保留待 seg2）；② **Flash 全入口对齐**（Shao Peishen
+  指令）：泳道默认档 sonnet→haiku（含子代理，`bd10987`）＋调度器默认档→haiku（`8f22106`）；run-sdd 早已 flash；
+  拆件会话走 codex CLI 默认＝`deepseek-flash`（模型已是 Flash，effort=max 未动）；③ 上一条登记的 run-lanes
+  私信入队缺口**已修复**（`2737ddf`：解释器三级解析 venv→brew→兜底＋rc∈{0,2} 不再误报，67 tests 绿）——
+  失败批次私信通道恢复；④ 遗留：渠道 U2 Task 7 Spec review 的一条跟进建议（路由级超限场景测试＝F1）待后续顺手补。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。
