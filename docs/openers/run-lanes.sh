@@ -1089,9 +1089,25 @@ echo "日志目录：$LOGDIR"
 # 入队失败 ⛔ 不影响泳道结果与退出码；dry-run 不入队。
 # ---------------------------------------------------------------------------
 if [[ $DRY_RUN -eq 0 ]]; then
-  ( trap - EXIT; cd "$REPO" && python3 -m tools.liaison owner-notify \
-      --dedupe-key "lanes-$STAMP" --lane-logdir "$LOGDIR" ) \
-    || echo "  ⚠️ 本人通知入队失败（不影响泳道结果；查 data/liaison/logs 与 owner_notify_outbox）"
+  # 2026-10-10 `1001G` 两处修复（Shao Peishen 答 2a「派专门修复」）：
+  # ① 解释器：原来写死 `python3`，launchd 环境下解析到 /usr/bin/python3（3.9）——
+  #    `tools.liaison` 导不进去 ⇒ 入队必失败；**有失败批次最需要的那条私信永远发不出**。
+  #    改三级解析：HR_LANE_NOTIFY_PY → 仓库 venv → Homebrew 3.14 → python3（兜底）。
+  # ② 口径：全 OK 批次按 Shao Peishen 2026-09-17 定「不私信」，owner-notify 对这种情况
+  #    返回 rc=2（EXIT_BAD_ARGS 复用），原来被当失败打了条假警告；改为 rc∈{0,2} 均视为正常。
+  NOTIFY_PY="${HR_LANE_NOTIFY_PY:-}"
+  if [[ -z "$NOTIFY_PY" ]]; then
+    for cand in "$REPO/venv/bin/python" /opt/homebrew/bin/python3.14; do
+      [[ -x "$cand" ]] && { NOTIFY_PY="$cand"; break; }
+    done
+    [[ -n "$NOTIFY_PY" ]] || NOTIFY_PY="python3"
+  fi
+  notify_rc=0
+  ( trap - EXIT; cd "$REPO" && "$NOTIFY_PY" -m tools.liaison owner-notify \
+      --dedupe-key "lanes-$STAMP" --lane-logdir "$LOGDIR" ) || notify_rc=$?
+  if [[ $notify_rc -ne 0 && $notify_rc -ne 2 ]]; then
+    echo "  ⚠️ 本人通知入队失败（rc=$notify_rc；不影响泳道结果；查 data/liaison/logs 与 owner_notify_outbox）"
+  fi
   mkdir -p "$REPO/.claude/handoff/events" && : > "$REPO/.claude/handoff/events/lanes-done-$STAMP"
 fi
 
