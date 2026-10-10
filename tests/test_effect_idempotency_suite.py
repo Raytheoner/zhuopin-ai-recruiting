@@ -85,6 +85,7 @@ from app.graph.interview_prep_nodes import (
 from app.agents.invitation_drafter import InvitationDraft
 from app.graph.invitation_nodes import (
     draft_edit_business_key,
+    effect_backfill_invitation_outcome,
     effect_edit_draft,
     effect_mark_draft_human_written,
     effect_persist_invitation_draft,
@@ -204,6 +205,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_persist_invitation_draft",
         "effect_edit_draft",
         "effect_mark_draft_human_written",
+        "effect_backfill_invitation_outcome",
     }
 )
 
@@ -2318,6 +2320,30 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "`rows_before + rows_per_effect == 0` 要求 -1。双发保护同样完全靠 "
                 "effect_log 的 COUNT(*) == 1：第二次调用命中短路，不会在已经是 0 的"
                 "谓词上再改一次。"
+            ),
+        ),
+        "effect_backfill_invitation_outcome": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_slot,
+            invoke=lambda conn: effect_backfill_invitation_outcome(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=f"{_INV_SLOT}:sent",
+                slot_id=_INV_SLOT,
+                status="sent",
+                actor="HR 乙",
+                channel="wechat",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM invitation_outcome_log WHERE slot_id = ?",
+                (_INV_SLOT,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 invitation_outcome_log（回填留痕主记录）；"
+                "同一事务里还有把 interview_slot 的 invitation_status/sent_channel/"
+                "updated_by UPDATE 过去的一步，但那一步是状态幂等、拿它当口径测不出"
+                "双写。本节点的第二道保险是表的 UNIQUE(slot_id, status)——即使 "
+                "effect_log 短路失效，重复 INSERT 也会撞唯一键而不是多留一条痕。"
             ),
         ),
     }

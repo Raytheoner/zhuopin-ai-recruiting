@@ -35,6 +35,20 @@ class InvitationNotAllowedError(ValueError):
     """场次状态不允许当前动作（已取消的场次不可生成邀约／回填）。"""
 
 
+class InvitationOutcomeAlreadyRecordedError(ValueError):
+    """该 (slot_id, status) 已有回填记录（用**不同**幂等键重复提交）。
+
+    2026-10-11 修正（Spec review F1）：回填节点命中「已有行」时必须抛本异常——
+    ⛔ 不能返回成功形状：那是零业务写，而 `@idempotent_effect` 仍会写一行
+    effect_log 并提交，「effect_log 条数 ↔ 业务表行数按 thread 恒等」当场被破坏。
+    调用方（路由）捕获后把 `outcome` 原样返回即可（幂等成功响应）。
+    """
+
+    def __init__(self, message: str, *, outcome: dict):
+        super().__init__(message)
+        self.outcome = outcome
+
+
 class InvitationTemplateMissingError(ValueError):
     """还没有任何邀约模板。"""
 

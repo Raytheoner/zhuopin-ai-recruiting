@@ -32,14 +32,17 @@ from app.agents.jd_agent import (
 from app.graph.invitation_nodes import (
     compute_invitation_draft_for_slot,
     draft_edit_business_key,
+    effect_backfill_invitation_outcome,
     effect_edit_draft,
     effect_mark_draft_human_written,
     effect_persist_invitation_draft,
+    validate_outcome,
 )
 from app.llm.gateway import LLMGateway
 from app.storage.db import get_connection, init_schema
 from app.storage.interview_invitation import (
     InvitationNotAllowedError,
+    InvitationOutcomeAlreadyRecordedError,
     InvitationSlotNotFoundError,
     InvitationTemplateMissingError,
 )
@@ -455,3 +458,179 @@ def test_effect_log_matches_business_rows_for_edit_and_mark(conn):
     assert _effect_count(conn, _EDIT_NODE) == 1
     assert _effect_count(conn, _MARK_NODE) == 1
     assert _draft_row(conn, draft_id)[:4] == (1, 0, "hr-1", "2026-10-10 09:00:00")
+
+
+# ── validate_outcome / effect_backfill_invitation_outcome ─────────────────
+
+
+_BACKFILL_NODE = "effect_backfill_invitation_outcome"
+
+
+def _backfill(conn, *, status: str, actor: str = "hr-1",
+              channel: str | None = None, reason: str | None = None,
+              business_key: str | None = None, thread_id: str = "app1"):
+    return effect_backfill_invitation_outcome(
+        # 2026-10-11 修正（Spec review）：键口径统一为 {slot_id}:{status}
+        # （只带 status 会把第二轮场次的同状态回填静默短路）。
+        conn, thread_id=thread_id, business_key=business_key or f"s1:{status}",
+        slot_id="s1", status=status, actor=actor, channel=channel, reason=reason,
+    )
+
+
+def _outcome_count(conn, slot_id: str = "s1") -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM invitation_outcome_log WHERE slot_id = ?", (slot_id,)
+    ).fetchone()[0]
+
+
+def test_backfill_sent_sets_status_channel_actor_time(conn):
+    outcome = _backfill(conn, status="sent", channel="wechat")
+    assert outcome["status"] == "sent"
+    assert outcome["channel"] == "wechat"
+    assert outcome["actor"] == "hr-1"
+    assert outcome["at"]
+    assert _slot(conn) == ("sent", "wechat", "hr-1")
+    assert _effect_count(conn, _BACKFILL_NODE) == 1
+
+
+def test_backfill_declined_keeps_stage_and_writes_no_rejection_record(conn):
+    """design D9：候选人拒绝邀约**不是**淘汰——⛔ 不写 rejection_record、
+    ⛔ 不动 current_stage_id、⛔ 不写 application_stage_history。"""
+    before_stage = conn.execute(
+        "SELECT current_stage_id FROM application WHERE id = 'app1'"
+    ).fetchone()[0]
+    _backfill(conn, status="declined", reason="已接受其他 offer")
+    after_stage = conn.execute(
+        "SELECT current_stage_id FROM application WHERE id = 'app1'"
+    ).fetchone()[0]
+    rejections = conn.execute("SELECT COUNT(*) FROM rejection_record").fetchone()[0]
+    assert before_stage == after_stage == "interview"
+    assert rejections == 0
+    assert _slot(conn)[0] == "declined"
+    history = conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE application_id = 'app1'"
+    ).fetchone()[0]
+    assert history == 0  # ⛔ 回填不写流转事实（U2 的条数守恒不变式不能被破坏）
+
+
+def test_backfill_same_status_twice_writes_one_row_and_one_effect_log(conn):
+    """同状态重复提交被 effect_log 短路：`invitation_outcome_log` 只一行、
+    幂等键也只一行（键与 UNIQUE(slot_id, status) 两层保险）。"""
+    first = _backfill(conn, status="sent", channel="wechat")
+    second = _backfill(conn, status="sent", channel="wechat")
+    assert first["id"]
+    assert second is None
+    assert _outcome_count(conn) == 1
+    assert _effect_count(conn, _BACKFILL_NODE) == 1
+
+
+def test_backfill_duplicate_with_new_request_key_raises_without_orphan_effect_log(conn):
+    """2026-10-11 修正（Spec review F1）：用不同幂等键重复回填同一 (slot,status)
+    ⇒ 抛领域异常（⛔ 不是成功形状），且**不写孤儿 effect_log**（恒等式守恒）。"""
+    _backfill(conn, status="sent", channel="wechat")
+    with pytest.raises(InvitationOutcomeAlreadyRecordedError) as excinfo:
+        _backfill(conn, status="sent", channel="wechat", business_key="s1:sent:req-2")
+    assert excinfo.value.outcome["id"]
+    assert _outcome_count(conn) == 1
+    assert _effect_count(conn, _BACKFILL_NODE) == 1
+
+
+def test_backfill_same_status_across_slots_is_not_short_circuited(conn):
+    """2026-10-11 修正（Spec review）：幂等键必须带 slot_id——同一投递**第二轮
+    场次**的同状态回填不能被 {status} 相同的 effect_log 键静默短路（无痕、场次
+    状态不更新、接口却返回成功形状）。"""
+    conn.execute(
+        "INSERT INTO interview_slot (id, application_id, round, start_at, end_at, mode) "
+        "VALUES ('s2', 'app1', 2, '2026-10-20 06:00', '2026-10-20 07:00', 'onsite')"
+    )
+    conn.commit()
+    first = effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s1:confirmed", slot_id="s1",
+        status="confirmed", actor="hr-1",
+    )
+    second = effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s2:confirmed", slot_id="s2",
+        status="confirmed", actor="hr-1",
+    )
+    assert first is not None and second is not None
+    assert _outcome_count(conn, "s1") == 1
+    assert _outcome_count(conn, "s2") == 1
+    assert _slot(conn, "s2")[0] == "confirmed"
+    assert _effect_count(conn, _BACKFILL_NODE) == 2
+
+
+def test_backfill_confirmed_after_sent_keeps_channel(conn):
+    """同场次**不同状态**是两次回填：各留一条痕，且非 sent 行不带渠道、
+    场次上的 sent_channel 保留先前那次的外发渠道。"""
+    _backfill(conn, status="sent", channel="email")
+    _backfill(conn, status="confirmed")
+    assert _slot(conn)[:2] == ("confirmed", "email")
+    assert _outcome_count(conn) == 2
+    assert _effect_count(conn, _BACKFILL_NODE) == 2
+
+
+def test_backfill_sent_requires_channel(conn):
+    with pytest.raises(ValueError):
+        _backfill(conn, status="sent")
+    assert _outcome_count(conn) == 0
+    assert _effect_count(conn, _BACKFILL_NODE) == 0
+
+
+def test_backfill_declined_requires_reason(conn):
+    with pytest.raises(ValueError):
+        _backfill(conn, status="declined")
+    assert _outcome_count(conn) == 0
+
+
+def test_backfill_rejects_unknown_status(conn):
+    with pytest.raises(ValueError):
+        _backfill(conn, status="rejected")
+    assert _outcome_count(conn) == 0
+
+
+def test_backfill_requires_actor(conn):
+    """回填 MUST 记下操作人（spec「回填 MUST 记录操作人与时刻」）。"""
+    with pytest.raises(ValueError):
+        _backfill(conn, status="sent", channel="wechat", actor="   ")
+    assert _outcome_count(conn) == 0
+    assert _effect_count(conn, _BACKFILL_NODE) == 0
+
+
+def test_backfill_rejects_cancelled_slot(conn):
+    conn.execute("UPDATE interview_slot SET status = 'cancelled' WHERE id = 's1'")
+    conn.commit()
+    with pytest.raises(InvitationNotAllowedError):
+        _backfill(conn, status="sent", channel="wechat")
+    assert _outcome_count(conn) == 0
+
+
+def test_validate_outcome_rejects_channel_on_non_sent_status(conn):
+    """只有「已发出」可以带渠道——'confirmed' 带 channel 即拒（接口层与节点层
+    共用这一份判据，⛔ 不各写一套）。"""
+    with pytest.raises(ValueError):
+        validate_outcome(status="confirmed", channel="wechat", reason=None)
+    with pytest.raises(ValueError):
+        validate_outcome(status="declined", channel="wechat", reason="已接受其他 offer")
+
+
+def test_validate_outcome_does_not_normalize(conn):
+    """⛔ 不做归一化：未知取值即拒绝，不 strip 渠道、不大写化状态。
+    归一化会让「微信」与「wechat」变成两种渠道、报表当场分叉。"""
+    for status, channel in (
+        ("SENT", "wechat"),      # 状态大小写不归一
+        ("sent", "WECHAT"),      # 渠道大小写不归一
+        ("sent", "微信"),         # 中文渠道不折算成 wechat
+        ("sent", " wechat "),    # 渠道两侧空白不 strip
+    ):
+        with pytest.raises(ValueError):
+            validate_outcome(status=status, channel=channel, reason=None)
+    with pytest.raises(ValueError):
+        validate_outcome(status="declined", channel=None, reason="   ")
+
+
+def test_backfill_confirmed_needs_no_reason(conn):
+    """只有 declined 必填原因；confirmed 无原因、无渠道照样放行。"""
+    outcome = _backfill(conn, status="confirmed")
+    assert outcome["status"] == "confirmed"
+    assert outcome["channel"] is None
+    assert _slot(conn)[:2] == ("confirmed", None)

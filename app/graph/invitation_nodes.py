@@ -11,8 +11,9 @@ thread_id 约定＝该场次所属 application_id（与 U2 `app/graph/scheduling
 - persist = draft.run_id（同一次真实 LLM 调用只落一版草稿；再次生成是新 run_id ⇒ 版本递增）
 - edit    = f"{draft_id}:{正文 sha256 前 16 位}"（同一次编辑重放短路，改了正文算新编辑）
 - mark    = draft_id（一份草稿的「标记为人工撰写」是终态，至多一次）
-- backfill= target_status（**同状态重复提交无第二条留痕**由这条键与
-  `invitation_outcome_log` 的 UNIQUE(slot_id, status) 双保险）
+- backfill= f"{slot_id}:{status}"（**同一场次**同状态重复提交无第二条留痕由这条键与
+  `invitation_outcome_log` 的 UNIQUE(slot_id, status) 双保险；⚠️ 键必须带 slot_id，
+  否则同一投递第二轮场次的同状态回填会被静默短路——2026-10-11 修正）
 - send    = f"{draft_id}:{正文 sha256 前 16 位}"（同一份文案至多尝试外发一次；
   改了正文重走门禁。⛔ 真正防重复投递的是内容哈希键
   `effect_deliver_message` / `effect_record_outbound_audit` 各自的 business_key，
@@ -47,8 +48,11 @@ from app.agents.jd_agent import (
 from app.storage.idempotency import idempotent_effect
 from app.storage.interview_invitation import (
     InvitationNotAllowedError,
+    InvitationOutcomeAlreadyRecordedError,
     InvitationSlotNotFoundError,
     InvitationTemplateMissingError,
+    OUTCOME_STATUSES,
+    SENT_CHANNELS,
     load_draft,
     next_draft_version,
     slot_application_id,
@@ -223,3 +227,93 @@ def effect_mark_draft_human_written(
         (final_body, reviewer, marked_at, draft_id),
     )
     return final_body
+
+
+def validate_outcome(*, status: str, channel: str | None, reason: str | None) -> None:
+    """回填入参校验（接口层与节点层共用同一份判据，⛔ 不各写一套）。
+    ⛔ 不做归一化（不 strip 渠道、不大写化状态）：未知取值即拒绝，猜作者的意图会让
+    "微信" 与 "wechat" 变成两种渠道、报表当场分叉。"""
+    if status not in OUTCOME_STATUSES:
+        raise ValueError(f"未知的邀约回填状态: {status!r}")
+    if status == "sent" and channel not in SENT_CHANNELS:
+        raise ValueError(f"回填「已发出」必须带渠道，渠道取值限 {SENT_CHANNELS}")
+    if status != "sent" and channel is not None:
+        raise ValueError("只有「已发出」可以带渠道")
+    if status == "declined" and not (reason or "").strip():
+        raise ValueError("回填「候选人拒绝」必须填原因")
+
+
+@idempotent_effect("effect_backfill_invitation_outcome")
+def effect_backfill_invitation_outcome(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    slot_id: str,
+    status: str,
+    actor: str,
+    channel: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    """effect_* 节点：HR 回填外发结果（spec「HR 复制发送与结果回填」）。
+
+    business_key = f"{slot_id}:{status}" ⇒ 幂等键 {application_id}:effect_backfill_
+    invitation_outcome:{slot_id}:{status}——**同一场次**同状态重复提交被 effect_log
+    短路、一条痕都不新增；⚠️ 键里必须带 slot_id（2026-10-11 修正）：只带 {status}
+    会把同一投递**第二轮场次**的同状态回填也短路掉（无痕、场次状态不更新，接口却
+    返回成功形状），与 U2 `effect_complete_slot` 的既有键约定相抵。再加
+    `invitation_outcome_log` 的 UNIQUE(slot_id, status) 与"插入前先查已有行"作为
+    第二、第三道保险（键与约束分属两层，任一层失效另一层仍挡得住）。
+
+    ⛔ 本节点**不碰** `rejection_record`、⛔ 不碰 `application.current_stage_id`、⛔ 不写
+    `application_stage_history`（后者会破坏 U2 `tests/test_interview_history_invariant.py`
+    的「history 条数 = 排期动作次数」不变式）。候选人拒绝邀约不是淘汰（design D9）：
+    投递停在哪一阶段由 HR 另行在 M2 复核工作台决定。
+
+    操作人与时刻落在 `invitation_outcome_log.actor/at`（回填主记录）与
+    `interview_slot.updated_by/updated_at`（场次当前值）两处。
+    """
+    if not str(actor).strip():
+        raise ValueError("回填必须记下操作人")
+    validate_outcome(status=status, channel=channel, reason=reason)
+    _assert_slot_invitable(conn, slot_id)
+
+    existing = conn.execute(
+        "SELECT id, slot_id, status, channel, reason, actor, at "
+        "FROM invitation_outcome_log WHERE slot_id = ? AND status = ?",
+        (slot_id, status),
+    ).fetchone()
+    if existing is not None:
+        # 2026-10-11 修正（Spec review F1）：命中已有行 = 零业务写；⛔ 不能返回
+        # 成功形状——`@idempotent_effect` 会照写一行 effect_log 并提交，
+        # 「effect_log 条数 ↔ 业务表行数按 thread 恒等」当场被破坏。抛领域异常，
+        # 路由捕获后把 outcome 原样返回（幂等成功响应，无第二条留痕）。
+        raise InvitationOutcomeAlreadyRecordedError(
+            f"该场次该状态已回填：slot_id={slot_id} status={status}",
+            outcome={
+                "id": existing[0], "slot_id": existing[1], "status": existing[2],
+                "channel": existing[3], "reason": existing[4], "actor": existing[5],
+                "at": existing[6],
+            },
+        )
+    conn.execute(
+        "INSERT INTO invitation_outcome_log "
+        "(id, slot_id, status, channel, reason, actor) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), slot_id, status, channel, reason, actor),
+    )
+    conn.execute(
+        "UPDATE interview_slot SET invitation_status = ?, "
+        "sent_channel = COALESCE(?, sent_channel), updated_by = ?, "
+        "updated_at = datetime('now') WHERE id = ?",
+        (status, channel if status == "sent" else None, actor, slot_id),
+    )
+    existing = conn.execute(
+        "SELECT id, slot_id, status, channel, reason, actor, at "
+        "FROM invitation_outcome_log WHERE slot_id = ? AND status = ?",
+        (slot_id, status),
+    ).fetchone()
+    return {
+        "id": existing[0], "slot_id": existing[1], "status": existing[2],
+        "channel": existing[3], "reason": existing[4], "actor": existing[5],
+        "at": existing[6],
+    }
