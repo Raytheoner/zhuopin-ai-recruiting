@@ -1,6 +1,8 @@
 import json
 import sqlite3
 
+import pytest
+
 from app.storage.db import _ADDED_COLUMNS, apply_column_migrations, get_connection, init_schema
 
 # 2026-08-18 及之前 .51 现网 data/demo.db 里 job / job_profile 的真实形态。
@@ -103,6 +105,24 @@ CREATE TABLE hr_account (
 );
 """
 
+# M2 U1 建表的 application_stage_history，不含 action/detail_json——这两列由
+# interview-scheduling U2 通过 _ADDED_COLUMNS 加入老库（偏离登记 D-U2-1）。
+# 与上面几条 DDL 同一理由硬编码：它代表"已经存在的那个库长什么样"这个历史
+# 事实，不能随 SCHEMA 一起演进。
+_LEGACY_APPLICATION_STAGE_HISTORY_DDL = """
+CREATE TABLE application_stage_history (
+    id TEXT PRIMARY KEY NOT NULL,
+    application_id TEXT NOT NULL REFERENCES application(id),
+    from_stage_id TEXT REFERENCES stage(id),
+    to_stage_id TEXT NOT NULL REFERENCES stage(id),
+    actor_type TEXT NOT NULL CHECK (actor_type IN ('human', 'agent')),
+    actor TEXT,
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_application_stage_history_application
+    ON application_stage_history (application_id);
+"""
+
 # 漂移守卫覆盖的表：凡是"既可能来自 SCHEMA 的 CREATE TABLE（新库）、又可能
 # 早就存在于老库里"的表都要进这个名单，新加一张这样的表就往这里加一行，并在
 # _legacy_db 里补上它的历史 DDL。⛔ 不要只写当下出过事的那张表——本守卫防的是
@@ -113,6 +133,11 @@ _DRIFT_GUARDED_TABLES = (
     # _find_candidate 就要用 `merged_into IS NULL`，见候选计划 Task 2/4 的说明）。
     # _legacy_db 里 candidate 的历史 DDL 不含本列，正是这条守卫要盯的形态。
     "candidate",
+    # interview-scheduling U2：application_stage_history 是 M2 建的老表，U2 给它
+    # 加 action/detail_json（排期流转事实的动作与详情）。两列登记在
+    # _ADDED_COLUMNS 里，_legacy_db 的历史 DDL 刻意不含它们，正是这条守卫要盯
+    # 的形态。
+    "application_stage_history",
 )
 
 
@@ -150,6 +175,7 @@ def _legacy_db(tmp_path) -> sqlite3.Connection:
         "job_id TEXT NOT NULL REFERENCES job(id), resume_id TEXT NOT NULL REFERENCES resume(id), "
         "current_stage_id TEXT NOT NULL REFERENCES stage(id))"
     )
+    conn.executescript(_LEGACY_APPLICATION_STAGE_HISTORY_DDL)
     conn.executescript(_LEGACY_INTERVIEW_SESSION_DDL)
 
     conn.execute(
@@ -296,6 +322,39 @@ def test_legacy_hr_account_gains_role_and_department_with_defaults(tmp_path):
     assert row == ("hr", None)
 
 
+def test_legacy_application_stage_history_action_check_survives_migration(tmp_path):
+    """老库走 ALTER TABLE ADD COLUMN 补出来的 action 也必须带 CHECK：列集合相同
+    不代表约束相同，而"老库上这条约束还在不在"只有真写一次才知道。
+
+    interview-scheduling U2 task 1（偏离登记 D-U2-1）：合法值 5 个 + NULL 放行，
+    其余拒。老行（本夹具里没有）不需要回填。
+    """
+    conn = _legacy_db(tmp_path)
+    assert "action" not in _columns(conn, "application_stage_history")
+
+    init_schema(conn)
+
+    assert {"action", "detail_json"} <= _columns(conn, "application_stage_history")
+    conn.execute(
+        "INSERT INTO application_stage_history "
+        "(id, application_id, to_stage_id, actor_type, action, detail_json) "
+        "VALUES ('h-ok', 'old-app', 'initial', 'human', 'rescheduled', "
+        "'{\"from\": \"2026-10-11T09:00\", \"to\": \"2026-10-12T09:00\"}')"
+    )
+    conn.execute(
+        "INSERT INTO application_stage_history "
+        "(id, application_id, to_stage_id, actor_type) "
+        "VALUES ('h-null', 'old-app', 'initial', 'agent')"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, to_stage_id, actor_type, action) "
+            "VALUES ('h-bad', 'old-app', 'initial', 'human', 'promoted')"
+        )
+
+
 def test_every_added_column_is_nullable_or_has_constant_default(tmp_path):
     """
     "既有行不需要回填"这个承诺的机器判据：notnull=1 的列必须带默认值。
@@ -435,10 +494,14 @@ def test_audit_tables_never_enter_the_add_column_path(tmp_path):
     channel-resume-intake U2 task 2 再把 candidate 加进来（candidate 是 M2 U1
     建的老表，新增 merged_into 列；本列由 Task 2 提前落地，理由见
     app/storage/db.py 的 candidate 表定义注释），护栏判定逻辑仍然不变。
+
+    interview-scheduling U2 task 1 再把 application_stage_history 加进来
+    （M2 U1 建的老表缺 action/detail_json 两列，排期流转事实的动作与详情；
+    见偏离登记 D-U2-1），护栏判定逻辑仍然不变。
     """
     assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {
         "job_profile", "job", "resume", "job_prep_config", "interview_session",
-        "hr_account", "candidate",
+        "hr_account", "candidate", "application_stage_history",
     }
 
 

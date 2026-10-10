@@ -830,14 +830,21 @@ def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
     合法新增 merged_into 列（合并标记，可空），ALTER TABLE 同样重写它的
     sqlite_master.sql。新列集合由 tests/test_db_migration.py 的漂移守卫与
     tests/test_db_m2_schema.py 单独钉住；这里只把它从"DDL 原文逐字不变"里摘出去，
-    行数比对仍然保留 candidate。"""
+    行数比对仍然保留 candidate。
+
+    application_stage_history 同理：interview-scheduling U2 task 1 经
+    _ADDED_COLUMNS 给它合法新增 action/detail_json 两列（排期流转事实的动作与
+    详情，见偏离登记 D-U2-1），ALTER TABLE 同样重写它的 sqlite_master.sql。新列
+    集合由 tests/test_db_migration.py 的漂移守卫（_DRIFT_GUARDED_TABLES 含
+    application_stage_history）与 tests/test_db_m2_schema.py 单独钉住；这里只把
+    它从"DDL 原文逐字不变"里摘出去。"""
     conn = _legacy_pre_m3_db(tmp_path)
     known_names = {
         row[0]
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
-        if row[0] not in ("resume", "stage", "hr_account", "candidate")
+        if row[0] not in ("resume", "stage", "hr_account", "candidate", "application_stage_history")
     }
     before_sql = _legacy_sqlite_master_sql(conn, known_names)
     before_counts = {

@@ -456,6 +456,12 @@ CREATE INDEX IF NOT EXISTS idx_application_candidate ON application (candidate_i
 -- 流转事实表：所有报表的基础（CLAUDE.md 数据模型要点）。actor_type 区分
 -- 人工流转与系统流转（申诉 overturned 恢复阶段、批量确认淘汰流转都会写这里）。
 -- from_stage_id 允许 NULL：投递创建时的第一条"进入 initial"没有"从哪来"。
+-- action / detail_json（interview-scheduling U2，偏离登记 D-U2-1）：四个排期
+-- effect_* 节点把「安排/改期/取消/完成/未出席」作为流转事实写进本表时，阶段
+-- 不变（from_stage_id = to_stage_id = 'interview'），靠 action 区分动作、
+-- detail_json 存改期的原/新时刻与取消原因。既有 stage 流转行没有动作语义，
+-- 故 action 可空。本表是 M2 已建老表，两列必须同时登记 SCHEMA 与
+-- _ADDED_COLUMNS（与 hr_account.role 同一先例）。
 CREATE TABLE IF NOT EXISTS application_stage_history (
     id TEXT PRIMARY KEY NOT NULL,
     application_id TEXT NOT NULL REFERENCES application(id),
@@ -463,6 +469,10 @@ CREATE TABLE IF NOT EXISTS application_stage_history (
     to_stage_id TEXT NOT NULL REFERENCES stage(id),
     actor_type TEXT NOT NULL CHECK (actor_type IN ('human', 'agent')),
     actor TEXT,
+    action TEXT CHECK (
+        action IS NULL OR action IN ('scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show')
+    ),
+    detail_json TEXT,
     occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1455,6 +1465,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # onboarding-flow U1 tasks 1.4：hr_account 加 department（部门经理只读本部门
     # 过滤用，历史账号无部门，故可空）。与 role 同属"老表缺列"，走加列路径。
     ("hr_account", "department", "TEXT"),
+    # interview-scheduling U2：四个排期 effect_* 节点的流转事实动作与详情。
+    # application_stage_history 是 M2 已建老表，CREATE TABLE IF NOT EXISTS 对老库
+    # 无效，必须走加列迁移；可空是刻意的——既有 stage 流转行没有动作语义。
+    ("application_stage_history", "action",
+     "TEXT CHECK (action IS NULL OR action IN ('scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show'))"),
+    ("application_stage_history", "detail_json", "TEXT"),
 )
 
 
