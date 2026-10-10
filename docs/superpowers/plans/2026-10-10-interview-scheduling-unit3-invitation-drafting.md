@@ -3386,6 +3386,107 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 > ⇒ **31 passed**（计划预期「30 passed」是条数笔误：新增文件实为 15 条用例——10 条普通
 > ＋ `test_put_rejects_forbidden_placeholders` 的 5 个参数化实例；U1 schema 文件 16 条＝15＋1）。
 
+> **落地说明 D-U3-8（Task 4 实现时发现的节点名重名；以磁盘真身为准，⛔ 不弱化任何既有守卫）。**
+> 计划 Task 4 把持久化节点的字面量写成 `effect_persist_draft`，但**这个名字在 main 上
+> 早已被 M1 画像泳道占用**（`app/graph/nodes.py::effect_persist_draft`，落 job_profile
+> 草案）。仓库级铁律 1 守卫当场判红两处：
+> `tests/test_effect_idempotency_suite.py::test_no_duplicate_effect_node_name_literals`
+> （同一 `@idempotent_effect(...)` 字面量不得出现在两处）与
+> `::test_collector_reports_where_each_node_lives`（该名字的位置仍须指向 nodes.py）。
+> 重名不只是两条断言：两个节点共享 node_name 时，只要 thread_id + business_key 也相同，
+> 幂等键 `{thread_id}:{node_name}:{business_key}` 就会撞车、后一个节点被 `idempotent_effect`
+> 静默短路；更隐蔽的是 `test_manifest_matches_the_source_tree` 会因名字已在清单里而
+> **误判「清单已覆盖」**，新节点从此躲过全部崩溃-恢复用例。
+>
+> **处置**：
+> ① 节点改名 `effect_persist_invitation_draft`（函数名同步），业务语义、幂等键口径、
+> 落库内容一字不变。名字取域前缀，与 `effect_persist_letter`、
+> `effect_persist_prep_draft` 同一先例（后者正是为绕开同一个 `effect_persist_draft`
+> 而加的前缀）。其余四个节点（`effect_edit_draft` / `effect_mark_draft_human_written` /
+> `effect_backfill_invitation_outcome` / `effect_send_invitation`）在 main 上无重名，
+> **逐字不动**。⇒ 后续 Task 5 / Task 7 的 AST 名单与 Task 10 的 import、`node_name`
+> 断言里出现的 `effect_persist_draft`，一律以 `effect_persist_invitation_draft` 为准。
+> ② Task 4 的 AST 判据预期输出相应变为 `['_assert_slot_invitable',
+> 'compute_invitation_draft_for_slot', 'effect_persist_invitation_draft']`
+> （函数名口径，与计划原预期只差这一个词）。
+> ③ **`tests/test_effect_idempotency_suite.py` 必改**（⚠️ 该文件不在 §1 文件清单里、
+> 但漏登记必红，与 U2 计划 Task 4 的「修正」同款）：`EFFECT_NODE_MANIFEST` 加一行
+> ＋ `build_recipes()` 加一条崩溃-恢复配方（种子＝投递闭环＋一场 `scheduled` 场次；
+> 业务事实＝`interview_invitation_draft` 行数）。本节点的 `analysis_run_id` **无外键**，
+> 配方用打桩 run_id 即可，不需要造 `analysis_run` 行（`effect_persist_letter` 的配方
+> 则必须造——那里有外键）。
+>
+> **验证证据**：`tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py -q`
+> ⇒ **125 passed**；全量 `-q` ⇒ 除已知红项外全绿（另见 §4 之外的红灯登记）。
+
+> **落地说明 D-U3-9（Task 5 实现；无偏离，只登记落地证据与一处环境红灯）。**
+> `draft_edit_business_key` / `effect_edit_draft` / `effect_mark_draft_human_written`
+> 三个符号**逐字**按计划 Task 5 正文落地（`app/graph/invitation_nodes.py`），
+> AST 名单与计划预期逐字一致（`effect_persist_draft` 一项按 D-U3-8 改名口径读）。
+> 两处不在 §1 文件清单里的测试文件同步更新（与 D-U3-8 ③ 同款，漏登记必红）：
+> ① `tests/test_invitation_effect.py` 续写编辑／「标记为人工撰写」用例（Task 10 的
+> 对应段落）；② `tests/test_effect_idempotency_suite.py` 的 `EFFECT_NODE_MANIFEST`
+> ＋ `build_recipes()` 各加两条（`effect_edit_draft` 走 value-idempotent 的 0/1 谓词、
+> `effect_mark_draft_human_written` 走 `rows_per_effect=-1` 的负口径，与
+> `effect_edit_letter` / `effect_mark_letter_human_written` 同款），否则
+> `test_manifest_matches_the_source_tree` 与 `test_every_effect_node_has_a_recovery_recipe`
+> 当场判红。
+>
+> **验证证据**：`tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py -q`
+> ⇒ **139 passed**（本 Task 逐 Task 复跑）；相关 8 个文件合并跑 ⇒ **219 passed**；
+> 全量 `-q` ⇒ **4448 passed, 12 skipped, 1 failed**，唯一红项
+> `tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit` 是
+> **本 worktree 的环境性红项、与 Task 5 无关**：`docs/openers/commit-launcher.sh`
+> 按脚本自身主仓库找 `venv/bin/python`，worktree 里没有 `venv/` ⇒ 回退到系统
+> `python3`（无 pytest）⇒ 体积闸被显式跳过（脚本第 36 行注释即为此场景）⇒ 临时仓库
+> 里那条「红测试应被拒」断言失败。单跑该用例同样红（其 fixture 自建临时仓库，
+> 不读本改动的任何文件）。
+
+> **落地说明 D-U3-10（Task 6 实现；登记落地证据、两处测试口径，与一处经 Spec review
+> 修正的幂等键口径）。**
+> `validate_outcome` / `effect_backfill_invitation_outcome` 两个符号按计划
+> Task 6 正文落地（`app/graph/invitation_nodes.py` 续写；`business_key` 一处按下方 ③
+> 修正），AST 判据输出与计划预期
+> **逐字一致**：`['validate_outcome', 'effect_backfill_invitation_outcome']`
+> （`OUTCOME_STATUSES` / `SENT_CHANNELS` 从 `app.storage.interview_invitation` import，
+> 该模块是这两个枚举的唯一真源，⛔ 不在节点文件里复制一份）。
+> 两处不在 §1 文件清单里的测试文件同步更新（与 D-U3-8 ③ / D-U3-9 同款，漏登记必红）：
+> ① `tests/test_invitation_effect.py` 续写回填段（Task 10 对应段落，8 条逐字套路）
+> 再加 3 条加固用例：`test_backfill_requires_actor`（操作人空白即拒、零写）、
+> `test_validate_outcome_rejects_channel_on_non_sent_status`、
+> `test_validate_outcome_does_not_normalize`（把 docstring 里「⛔ 不做归一化」变成断言：
+> `SENT` / `WECHAT` / `微信` / 两侧带空白的 ` wechat ` 四种写法逐一被拒）；
+> ② `tests/test_effect_idempotency_suite.py` 的 `EFFECT_NODE_MANIFEST`
+> 加一行、`build_recipes()` 加一条（种子＝投递闭环＋一场 `scheduled` 场次，业务事实＝
+> `invitation_outcome_log` 行数、`rows_per_effect=1`，与其他 INSERT 型节点同口径），
+> 否则 `test_manifest_matches_the_source_tree` 与
+> `test_every_effect_node_has_a_recovery_recipe` 当场判红。
+>
+> ③ **2026-10-11 Spec review 修正（幂等键必须带 `slot_id`）**：计划 Task 6 正文、§1
+> 模块 docstring、Task 8 路由片段三处写的键都是 `business_key = target_status`
+> （即 `{status}` 单段）。这会把**同一投递第二轮场次**的同状态回填也短路掉——无痕、
+> 场次状态不更新，接口却返回成功形状（与 U2 `effect_complete_slot`「键带场次」的既有
+> 约定相抵）。落地改为 `business_key = f"{slot_id}:{status}"`，并由
+> `tests/test_invitation_effect.py::test_backfill_same_status_across_slots_is_not_short_circuited`
+> 把该约定变成断言（两个场次各自 `confirmed` ⇒ 两条 `invitation_outcome_log` 留痕、
+> 两条 `effect_log`）。
+> ⚠️ 计划正文那三处字面**未逐字改写**（沿用 D-U3-8「实现偏离、正文不动，只在本登记
+> 段说明」的口径）⇒ **Task 8 落地路由时必须传 `f"{slot_id}:{status}"`，⛔ 不得照抄正文
+> 的 `business_key=req.status`，否则这条 bug 会原样经接口复现**。
+>
+> **验证证据**：`tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py -q`
+> ⇒ **154 passed**（2026-10-11 修正后复跑）；相关 8 个文件合并跑
+> （`test_invitation_effect` / `test_effect_idempotency_suite` /
+> `test_interview_history_invariant` / `test_db_migration` / `test_db_u3_schema` /
+> `test_interview_invitation_storage` / `test_invitation_template` /
+> `test_invitation_drafter`）⇒ **223 passed**，U2 的 `test_interview_history_invariant`
+> 与 `test_db_migration` 逐字不变仍全绿（回填⛔ 不写 `application_stage_history`、
+> 新表⛔ 不进 `_ADDED_COLUMNS`）；全量 `-q` ⇒ **4463 passed, 12 skipped, 1 failed**
+> （三个数较初稿各 +1，正是 ③ 新增的那条跨场次用例），
+> 唯一红项与 D-U3-9 记录的是同一条本 worktree 的环境性红项
+> （`tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit`，
+> worktree 无 `venv/` ⇒ 体积闸被跳过），与 Task 6 无关。
+
 ## 5. 提取验证记录（`spec-to-plan` 第 6 步，本计划写作时已做的最小核验）
 
 - 已在仓库磁盘上核对：U1 的 `interview_invitation_draft` / `invitation_template`

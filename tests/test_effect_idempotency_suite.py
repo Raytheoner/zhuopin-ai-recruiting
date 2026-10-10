@@ -82,6 +82,14 @@ from app.graph.interview_prep_nodes import (
     effect_persist_prep_draft,
     effect_regenerate_prep_question,
 )
+from app.agents.invitation_drafter import InvitationDraft
+from app.graph.invitation_nodes import (
+    draft_edit_business_key,
+    effect_backfill_invitation_outcome,
+    effect_edit_draft,
+    effect_mark_draft_human_written,
+    effect_persist_invitation_draft,
+)
 from app.agents.interview_prep import PrepDraft, PrepQuestionDraft
 from app.graph.interview_scoring_nodes import (
     AlignedTurn,
@@ -194,6 +202,10 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_reschedule_slot",
         "effect_cancel_slot",
         "effect_complete_slot",
+        "effect_persist_invitation_draft",
+        "effect_edit_draft",
+        "effect_mark_draft_human_written",
+        "effect_backfill_invitation_outcome",
     }
 )
 
@@ -454,6 +466,22 @@ _LETTER_BODY_TEXT = "张三：\n\n拟录用您担任嵌入式软件工程师。"
 # 抄一份迟早与真源漂移，而 effect_edit_letter 的「回读原生成时间」会当场摔。
 _LETTER_AI_BODY = enforce_ai_label(_LETTER_BODY_TEXT, generated_at=_TS)
 _EDITED_LETTER_BODY = "张三：\n\n拟录用您担任嵌入式软件工程师（HR 手改版）。"
+
+# interview-scheduling U3 Task 4：邀约草稿持久化配方的种子 id 与正文。
+# 正文走 enforce_ai_label（唯一真源），与 L3 生成物同形——节点本身不校验标识
+# （那是外发门禁的职责），但配方喂进来的东西要与真实链路一致才有意义。
+_INV_SLOT = "inv-slot-4-4"
+_INV_APPLICATION = "inv-application-4-4"
+_INV_THREAD = _INV_APPLICATION
+_INV_RUN = "invitation-run-4-4"
+_INV_BODY = enforce_ai_label(
+    "张三您好：\n\n邀请您参加嵌入式软件工程师岗位的一面。", generated_at=_TS
+)
+# interview-scheduling U3 Task 5：编辑／「标记为人工撰写」配方的前置与目标值。
+# 种子草稿正文＝已由 L3 生成过、带 AI 标识的一版（生成时间 _TS）——编辑节点要按
+# 它回读原生成时间；目标值同样走 enforce_ai_label（唯一真源），⛔ 不手写标识串。
+_INV_DRAFT = "inv-draft-4-4"
+_INV_EDITED_BODY_TEXT = "张三您好：\n\n邀请您参加嵌入式软件工程师岗位的一面（HR 手改版）。"
 
 
 class _CrashBeforeDurableCommit(sqlite3.Connection):
@@ -1136,6 +1164,72 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
         response_model="deepseek-chat",
         prompt_version="letter-offer-v1",
     )
+
+    # ── interview-scheduling U3（app/graph/invitation_nodes.py）持久化节点的种子 ──
+    def _seed_invitation_slot(conn):
+        """`effect_persist_invitation_draft` 的前置：job→candidate→resume→
+        application→interview_slot 最小闭环，`invitation_status` 取默认 'none'
+        （节点生效后会推到 'drafted'，崩溃点之前必须仍是 'none'）。
+
+        ⛔ 不需要 analysis_run：`interview_invitation_draft.analysis_run_id` **无外键**
+        （U3 计划 §5 已在磁盘上核对过），草稿的 run_id 用打桩值即可——这与
+        `effect_persist_letter` 的配方不同，后者的 analysis_run_id 是有外键的。"""
+        conn.execute(
+            "INSERT INTO job (id, title, status) "
+            "VALUES ('inv-job-4-4', '嵌入式软件工程师', 'approved')"
+        )
+        conn.execute("INSERT INTO candidate (id, name) VALUES ('inv-cand-4-4', '张三')")
+        conn.execute(
+            "INSERT INTO resume "
+            "(id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+            "VALUES ('inv-resume-4-4', 'inv-job-4-4', 'synthetic', 'a.pdf', "
+            "'inv-hash-4-4', 'tester')"
+        )
+        conn.execute(
+            "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+            "VALUES (?, 'inv-cand-4-4', 'inv-job-4-4', 'inv-resume-4-4', 'interview')",
+            (_INV_APPLICATION,),
+        )
+        conn.execute(
+            "INSERT INTO interview_slot (id, application_id, round, start_at, end_at, mode) "
+            "VALUES (?, ?, 1, '2026-10-12 14:00', '2026-10-12 15:00', 'onsite')",
+            (_INV_SLOT, _INV_APPLICATION),
+        )
+        conn.commit()
+
+    _invitation_draft = InvitationDraft(
+        body=_INV_BODY,
+        run_id=_INV_RUN,
+        response_model="deepseek-chat-actual-v1",
+        prompt_version="invite-v1",
+    )
+
+    def _seed_invitation_draft(conn):
+        """`effect_edit_draft` / `effect_mark_draft_human_written` 的前置：场次闭环
+        再落一版**已生成、带 AI 标识**的草稿（生成时间 _TS——编辑节点要按它回读
+        原生成时间，⛔ 不是"现在"）。"""
+        _seed_invitation_slot(conn)
+        conn.execute(
+            "INSERT INTO interview_invitation_draft "
+            "(id, slot_id, version, template_version, body, ai_generated, analysis_run_id) "
+            "VALUES (?, ?, 1, 'v1', ?, 1, ?)",
+            (_INV_DRAFT, _INV_SLOT, _INV_BODY, _INV_RUN),
+        )
+        conn.commit()
+
+    def _invitation_body_state(conn):
+        """0/1 谓词：草稿正文是否已等于「编辑后的目标值」（带原生成时间的标识）。"""
+        body = conn.execute(
+            "SELECT body FROM interview_invitation_draft WHERE id = ?", (_INV_DRAFT,)
+        ).fetchone()[0]
+        return int(body == enforce_ai_label(_INV_EDITED_BODY_TEXT, generated_at=_TS))
+
+    def _invitation_still_ai_generated(conn):
+        return conn.execute(
+            "SELECT COUNT(*) FROM interview_invitation_draft "
+            "WHERE id = ? AND ai_generated = 1",
+            (_INV_DRAFT,),
+        ).fetchone()[0]
 
     return {
         "effect_persist_draft": Recipe(
@@ -2156,6 +2250,101 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "WHERE application_id = 'sched-app1' AND action = 'completed'"
             ).fetchone()[0],
             note="业务事实是 INSERT 的一行 completed 留痕；种子场次开始时刻已过。",
+        ),
+        # ⚠️ 节点名字面量与 interview-scheduling U3 计划原文不同：计划写的是
+        # `effect_persist_draft`，那个字面量已被 M1 画像泳道占用（app/graph/nodes.py），
+        # 重名会被本文件的 `test_no_duplicate_effect_node_name_literals` 判红，更隐蔽的是
+        # `test_manifest_matches_the_source_tree` 会因重名误判"清单已覆盖"、让新节点
+        # 躲过全部崩溃-恢复用例。⇒ 加域前缀，与 `effect_persist_letter` /
+        # `effect_persist_prep_draft` 同一先例（见偏离登记 D-U3-8）。
+        "effect_persist_invitation_draft": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_slot,
+            invoke=lambda conn: effect_persist_invitation_draft(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=_INV_RUN,
+                slot_id=_INV_SLOT,
+                template_version="v1",
+                draft=_invitation_draft,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_invitation_draft WHERE slot_id = ?",
+                (_INV_SLOT,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 interview_invitation_draft；同一事务里还有"
+                "把 invitation_status 从 'none' UPDATE 成 'drafted' 的一步，但那一步"
+                "是状态幂等、拿它当口径测不出双写。"
+            ),
+        ),
+        "effect_edit_draft": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_draft,
+            invoke=lambda conn: effect_edit_draft(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=draft_edit_business_key(_INV_DRAFT, _INV_EDITED_BODY_TEXT),
+                draft_id=_INV_DRAFT,
+                edited_body=_INV_EDITED_BODY_TEXT,
+            ),
+            # ⚠️ value-idempotent：编辑是 UPDATE 同一行（body 整段替换），行数不变，
+            # 口径改用「该行正文是否等于编辑后的目标值」这个 0/1 谓词，与
+            # effect_edit_letter 同一手法。目标值由 enforce_ai_label 以**原标识里的
+            # 生成时间**（_TS）重贴——正是节点内部走的那条路（「编辑不去标识」）。
+            count_business_rows=_invitation_body_state,
+            note=(
+                "**value-idempotent**：编辑把正文整段替换成同一段目标文本，无论放行"
+                "一次还是被短路，这一列的取值完全相同——双发保护完全靠 effect_log "
+                "的 COUNT(*) == 1 断言。"
+            ),
+        ),
+        "effect_mark_draft_human_written": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_draft,
+            invoke=lambda conn: effect_mark_draft_human_written(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=_INV_DRAFT,
+                draft_id=_INV_DRAFT,
+                reviewer="HR 乙",
+                marked_at=_TS,
+            ),
+            # ⚠️ value-idempotent：去标识 + 留痕是同一次 UPDATE，行数不变，口径改用
+            # 「该行是否仍处于 ai_generated=1」的 0/1 谓词（生效后为 0）。
+            count_business_rows=_invitation_still_ai_generated,
+            rows_per_effect=-1,
+            note=(
+                "**value-idempotent + 负 rows_per_effect**：种子先放一行 ai_generated=1"
+                "（rows_before=1），生效一次后这一行变成 0（0 行），"
+                "`rows_before + rows_per_effect == 0` 要求 -1。双发保护同样完全靠 "
+                "effect_log 的 COUNT(*) == 1：第二次调用命中短路，不会在已经是 0 的"
+                "谓词上再改一次。"
+            ),
+        ),
+        "effect_backfill_invitation_outcome": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_slot,
+            invoke=lambda conn: effect_backfill_invitation_outcome(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=f"{_INV_SLOT}:sent",
+                slot_id=_INV_SLOT,
+                status="sent",
+                actor="HR 乙",
+                channel="wechat",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM invitation_outcome_log WHERE slot_id = ?",
+                (_INV_SLOT,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 invitation_outcome_log（回填留痕主记录）；"
+                "同一事务里还有把 interview_slot 的 invitation_status/sent_channel/"
+                "updated_by UPDATE 过去的一步，但那一步是状态幂等、拿它当口径测不出"
+                "双写。本节点的第二道保险是表的 UNIQUE(slot_id, status)——即使 "
+                "effect_log 短路失效，重复 INSERT 也会撞唯一键而不是多留一条痕。"
+            ),
         ),
     }
 
