@@ -9,12 +9,12 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Callable, Literal, NamedTuple
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from app.agents.intake_agent import derive_unspecified_fields
@@ -299,10 +299,12 @@ class AvailabilityRegisterRequest(BaseModel):
 class ScheduleSlotRequest(BaseModel):
     request_id: str
     interviewer_ids: list[str]
-    round: int
+    # 2026-10-11 修正（Spec review 实测）：round≥1、mode 白名单——⛔ 不能让非法值
+    # 漏到 DB CHECK（IntegrityError 未处理 ⇒ 500）；Pydantic 层直接 422。
+    round: int = Field(ge=1)
     start_at: str
     end_at: str
-    mode: str
+    mode: Literal["onsite", "phone", "online"]
     location_or_link: str | None = None
 
 
@@ -698,7 +700,7 @@ def create_app(
             ) from exc
         except SlotNotFoundError as exc:
             # 2026-10-11 修正（Spec review）：SlotNotFoundError 是 ValueError 子类，
-            # ⛔ 这条必须排在下面的宽 ValueError 分支之前，否则是死分支、404 退化成 422。
+            # ⛔ 必须排在下面的宽 ValueError 分支之前，否则是死分支、404 退化成 422。
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (NotInterviewStageError, SlotStateError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -729,7 +731,11 @@ def create_app(
                     "details": [c.detail for c in exc.conflicts],
                 },
             ) from exc
-        except (SlotStateError, SlotNotFoundError, ValueError) as exc:
+        except SlotNotFoundError as exc:
+            # 2026-10-11 修正（Spec review）：SlotNotFoundError 是 ValueError 子类，
+            # ⛔ 必须单独前置——否则"场次中途消失"的 404 语义被宽分支吞成 422。
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return slot_for(conn, slot_id)
 
@@ -749,7 +755,9 @@ def create_app(
                 cancel_reason=req.cancel_reason,
                 actor=actor,
             )
-        except (SlotStateError, SlotNotFoundError, ValueError) as exc:
+        except SlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return slot_for(conn, slot_id)
 
@@ -771,7 +779,9 @@ def create_app(
                 target_status=req.target_status,
                 actor=reviewer_of(request),
             )
-        except (SlotStateError, CompletionBeforeStartError, SlotNotFoundError, ValueError) as exc:
+        except SlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, CompletionBeforeStartError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return slot_for(conn, slot_id)
 
