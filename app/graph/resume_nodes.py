@@ -31,41 +31,6 @@ def _lowest_field_confidence(fields: ResumeFields) -> float:
     return min(values) if values else 1.0
 
 
-def _find_or_create_candidate(conn: sqlite3.Connection, *, name: str) -> str:
-    """按姓名去重（design D11 简化版：本单元不采集手机号，phone_hash 恒为
-    NULL，见本计划「架构决策」第 4 条——同名不同人会被误判为同一候选人，
-    这是已登记的已知限制，M3 采集手机号后按 (name, phone_hash) 重新收紧）。
-    """
-    row = conn.execute(
-        "SELECT id FROM candidate WHERE name = ? AND phone_hash IS NULL", (name,)
-    ).fetchone()
-    if row is not None:
-        return row[0]
-    candidate_id = str(uuid.uuid4())
-    conn.execute(
-        "INSERT INTO candidate (id, name) VALUES (?, ?)", (candidate_id, name)
-    )
-    return candidate_id
-
-
-def _create_application(
-    conn: sqlite3.Connection, *, candidate_id: str, job_id: str, resume_id: str
-) -> str:
-    application_id = str(uuid.uuid4())
-    conn.execute(
-        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
-        "VALUES (?, ?, ?, ?, 'initial')",
-        (application_id, candidate_id, job_id, resume_id),
-    )
-    conn.execute(
-        "INSERT INTO application_stage_history "
-        "(id, application_id, from_stage_id, to_stage_id, actor_type) "
-        "VALUES (?, ?, NULL, 'initial', 'agent')",
-        (str(uuid.uuid4()), application_id),
-    )
-    return application_id
-
-
 def _upsert_review_queue_rows(
     conn: sqlite3.Connection,
     *,
@@ -103,11 +68,13 @@ def effect_persist_parse(
     model_response: str | None,
     prompt_version: str,
     confidence_threshold: float,
-) -> str:
+) -> None:
     """写 resume_parse_version（历史）+ resume 三列（最新版缓存）+
-    field_review_queue（低置信度字段）；首次解析额外创建 candidate/application/
-    application_stage_history。返回 application_id。
+    field_review_queue（低置信度字段）。
 
+    ⛔ 不再创建 candidate/application：候选人归属由
+    app/intake/merge.py::effect_attach_resume_to_candidate 在解析之后承担
+    （channel-resume-intake U2 design D3）。
     ⛔ 不在这里 conn.commit()——由 idempotent_effect 装饰器统一提交（工程铁律 1）。
     """
     fields_json = fields.model_dump_json()
@@ -126,25 +93,9 @@ def effect_persist_parse(
         (fields_json, confidence, parser_version, resume_id),
     )
 
-    existing = conn.execute(
-        "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
-    ).fetchone()
-    if existing is None:
-        candidate_name = (
-            fields.name.value if not fields.name.not_mentioned else "姓名待校对"
-        )
-        candidate_id = _find_or_create_candidate(conn, name=candidate_name)
-        application_id = _create_application(
-            conn, candidate_id=candidate_id, job_id=job_id, resume_id=resume_id
-        )
-    else:
-        application_id = existing[0]
-
     _upsert_review_queue_rows(
         conn, resume_id=resume_id, fields=fields, confidence_threshold=confidence_threshold
     )
-
-    return application_id
 
 
 def record_resume_access(

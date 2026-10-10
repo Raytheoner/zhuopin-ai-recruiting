@@ -101,6 +101,7 @@ from app.graph.resume_nodes import effect_persist_parse
 from app.graph.screening_nodes import compute_screen, effect_persist_flags
 from app.intake.bundle import FileEntry
 from app.intake.ingest_bundle import effect_ingest_bundle
+from app.intake.merge import effect_attach_resume_to_candidate
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
 from app.schemas.live_turn_event import LiveTurnEvent
@@ -138,6 +139,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_deliver_manual_handoff",
         "effect_persist_parse",
         "effect_ingest_bundle",
+        "effect_attach_resume_to_candidate",
         "effect_persist_flags",
         "effect_persist_prep_draft",
         "effect_freeze_prep",
@@ -1057,6 +1059,27 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             # 版本时它会真的增长，重复生效也会真的撞主键。
             count_business_rows=lambda conn: conn.execute(
                 "SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = ?", (_RESUME,)
+            ).fetchone()[0],
+        ),
+        "effect_attach_resume_to_candidate": Recipe(
+            thread_id=_RESUME,
+            seed=_seed_resume,
+            invoke=lambda conn: effect_attach_resume_to_candidate(
+                conn,
+                thread_id=_RESUME,
+                business_key="once",
+                resume_id=_RESUME,
+                job_id=_JOB,
+                name="张三",
+                # ⚠️ 故意给 None（无手机号 ⇒ 恒新建候选人）：这条配方不依赖种子里的
+                # phone_hash 取值，与 Task 1 的哈希口径解耦。
+                phone_hash=None,
+            ),
+            # 业务事实 = 这个 resume 名下的 application 一行（idx_application_resume
+            # 把"每份简历至多一条投递"钉死）。candidate 行数不能用：命中复用分支
+            # 下它不增长，分不出生效与否。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM application WHERE resume_id = ?", (_RESUME,)
             ).fetchone()[0],
         ),
         "effect_ingest_bundle": Recipe(

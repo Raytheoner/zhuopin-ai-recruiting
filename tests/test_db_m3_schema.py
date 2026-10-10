@@ -824,14 +824,20 @@ def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
     ALTER TABLE ADD COLUMN 会重写它的 sqlite_master.sql，因此必然变化。新列集合
     由 tests/test_db_migration.py 的漂移守卫（_DRIFT_GUARDED_TABLES 含 hr_account）
     与 tests/test_db_m2_schema.py 单独钉住；这里只把 hr_account 从"DDL 原文逐字
-    不变"里摘出去。"""
+    不变"里摘出去。
+
+    candidate 同理：channel-resume-intake U2 task 2 经 _ADDED_COLUMNS 给 candidate
+    合法新增 merged_into 列（合并标记，可空），ALTER TABLE 同样重写它的
+    sqlite_master.sql。新列集合由 tests/test_db_migration.py 的漂移守卫与
+    tests/test_db_m2_schema.py 单独钉住；这里只把它从"DDL 原文逐字不变"里摘出去，
+    行数比对仍然保留 candidate。"""
     conn = _legacy_pre_m3_db(tmp_path)
     known_names = {
         row[0]
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
-        if row[0] not in ("resume", "stage", "hr_account")
+        if row[0] not in ("resume", "stage", "hr_account", "candidate")
     }
     before_sql = _legacy_sqlite_master_sql(conn, known_names)
     before_counts = {

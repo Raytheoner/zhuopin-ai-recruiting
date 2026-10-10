@@ -109,6 +109,10 @@ CREATE TABLE hr_account (
 # "往 CREATE TABLE 加列却不登记 _ADDED_COLUMNS"这一整类错法，不是某一次事故。
 _DRIFT_GUARDED_TABLES = (
     "job_profile", "resume", "job_prep_config", "interview_session", "hr_account",
+    # channel-resume-intake U2：candidate.merged_into 由 Task 2 落地（Task 2 的
+    # _find_candidate 就要用 `merged_into IS NULL`，见候选计划 Task 2/4 的说明）。
+    # _legacy_db 里 candidate 的历史 DDL 不含本列，正是这条守卫要盯的形态。
+    "candidate",
 )
 
 
@@ -427,10 +431,14 @@ def test_audit_tables_never_enter_the_add_column_path(tmp_path):
 
     interview-scheduling U1 task 6 再把 hr_account 加进来（HR 角色授权，老表缺
     role 列），护栏判定逻辑仍然不变。
+
+    channel-resume-intake U2 task 2 再把 candidate 加进来（candidate 是 M2 U1
+    建的老表，新增 merged_into 列；本列由 Task 2 提前落地，理由见
+    app/storage/db.py 的 candidate 表定义注释），护栏判定逻辑仍然不变。
     """
     assert {table for table, _column, _ddl in _ADDED_COLUMNS} == {
         "job_profile", "job", "resume", "job_prep_config", "interview_session",
-        "hr_account",
+        "hr_account", "candidate",
     }
 
 

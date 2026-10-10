@@ -275,10 +275,18 @@ CREATE TABLE IF NOT EXISTS hard_requirement (
 -- 去重，以哈希存储，明文不落库；phone_hash 允许 NULL（解析没能拿到手机号时），
 -- SQLite 的 UNIQUE 索引把多个 NULL 视为互不相等，多个"没手机号的李四"不会
 -- 被误合并成一个人——这是刻意的保守选择，宁可留重复候选人，也不错误合并。
+--
+-- merged_into（channel-resume-intake U2 tasks 2.4）：被合并候选人指向保留方，
+-- 未合并为 NULL。⚠️ 本列按 U2 计划由 Task 4 引入，但 Task 2 的
+-- app/intake/merge.py::_find_candidate 已经用 `merged_into IS NULL` 过滤未合并
+-- 候选人、Task 2 的测试也在同一批里跑——先落地本列（同 Task 4 Step 1/Step 4）
+-- 才能让 Task 2 自身可验收；Task 4 只剩 application_stage_history.action 与
+-- candidate_merge_log 新表。
 CREATE TABLE IF NOT EXISTS candidate (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     phone_hash TEXT,
+    merged_into TEXT REFERENCES candidate(id),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1405,6 +1413,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 的表彻底无效，不在这里登记的话老库上每一次上传都会在
     # "UPDATE resume SET raw_text = ?" 上 500（final review 发现）。
     ("resume", "raw_text", "TEXT"),
+    # channel-resume-intake U2 tasks 2.4：合并标记（可空；未合并为 NULL）。
+    # ⚠️ 本次（Task 2）已随 CREATE TABLE 一并落地，理由见 candidate 表定义处的
+    # 注释：Task 2 的 _find_candidate 就要这一列。Task 4 执行时本行已存在，
+    # ⛔ 不要再追一行（apply_column_migrations 逐列判重，重复行虽无害但属噪音）。
+    ("candidate", "merged_into", "TEXT REFERENCES candidate(id)"),
     # voice-structured-interview U3 tasks 4.1：邀约有效期是岗位级配置，
     # 默认 7 天。job_prep_config 在 U2 已建表并可能已存在于任何一个 U2 之后
     # 建的库里，CREATE TABLE IF NOT EXISTS 对已存在的表无效，必须走加列迁移。

@@ -76,6 +76,8 @@ from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_scr
 from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.intake.bundle import BundleTooLarge, unpack_bundle
 from app.intake.ingest_bundle import effect_ingest_bundle
+from app.intake.merge import effect_attach_resume_to_candidate
+from app.intake.phone_hash import extract_phone_hash
 from app.intake.source import SOURCE_VALUES
 from app.middleware.auth import AuthMiddleware, UNKNOWN_REVIEWER, reviewer_of
 from app.observability.logging_config import logging_status
@@ -1305,7 +1307,7 @@ def create_app(
                     "resume_id": resume_id, "parse_status": "parse_failed"}
 
         parser_version = "v1"
-        application_id = effect_persist_parse(
+        effect_persist_parse(
             conn,
             thread_id=resume_id,
             business_key=parser_version,
@@ -1322,7 +1324,21 @@ def create_app(
             prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
-        resolved_application_id = application_id
+        candidate_name = (
+            fields.name.value if (not fields.name.not_mentioned and fields.name.value)
+            else "姓名待校对"
+        )
+        phone_hash = extract_phone_hash(ingest_result.spans)
+        attached = effect_attach_resume_to_candidate(
+            conn,
+            thread_id=resume_id,
+            business_key="once",
+            resume_id=resume_id,
+            job_id=job_id,
+            name=candidate_name,
+            phone_hash=phone_hash,
+        )
+        resolved_application_id = attached["application_id"] if attached else None
         if resolved_application_id is None:
             existing_app = conn.execute(
                 "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
@@ -1349,7 +1365,7 @@ def create_app(
                         job_id, resume_id,
                     )
         return {"file_name": upload.filename, "status": "accepted",
-                "resume_id": resume_id, "application_id": application_id,
+                "resume_id": resume_id, "application_id": resolved_application_id,
                 "parse_status": "parsed", "screening_status": screening_status}
 
     @router.post("/api/resumes/{resume_id}/source")
@@ -1425,7 +1441,7 @@ def create_app(
             spans=spans,
             audit_context={"thread_id": resume_id, "node": "compute_parse", "job_id": job_id},
         )
-        application_id = effect_persist_parse(
+        effect_persist_parse(
             conn,
             thread_id=resume_id,
             business_key=parser_version,
@@ -1440,7 +1456,21 @@ def create_app(
             prompt_version=PARSE_PROMPT_VERSION,
             confidence_threshold=confidence_threshold,
         )
-        resolved_application_id = application_id
+        candidate_name = (
+            fields.name.value if (not fields.name.not_mentioned and fields.name.value)
+            else "姓名待校对"
+        )
+        phone_hash = extract_phone_hash(spans)
+        attached = effect_attach_resume_to_candidate(
+            conn,
+            thread_id=resume_id,
+            business_key="once",
+            resume_id=resume_id,
+            job_id=job_id,
+            name=candidate_name,
+            phone_hash=phone_hash,
+        )
+        resolved_application_id = attached["application_id"] if attached else None
         if resolved_application_id is None:
             existing_app = conn.execute(
                 "SELECT id FROM application WHERE resume_id = ?", (resume_id,)
@@ -1466,7 +1496,7 @@ def create_app(
                         "重新解析入库，留待人工/后续触发重判",
                         job_id, resume_id,
                     )
-        return {"resume_id": resume_id, "application_id": application_id,
+        return {"resume_id": resume_id, "application_id": resolved_application_id,
                 "parser_version": parser_version, "screening_status": screening_status}
 
     def _require_resume(resume_id: str) -> tuple:
