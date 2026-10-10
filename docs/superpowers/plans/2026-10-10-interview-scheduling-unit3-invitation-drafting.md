@@ -3344,6 +3344,29 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 > **验证证据**：`tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py -q`
 > ⇒ **125 passed**；全量 `-q` ⇒ 除已知红项外全绿（另见 §4 之外的红灯登记）。
 
+> **落地说明 D-U3-9（Task 5 实现；无偏离，只登记落地证据与一处环境红灯）。**
+> `draft_edit_business_key` / `effect_edit_draft` / `effect_mark_draft_human_written`
+> 三个符号**逐字**按计划 Task 5 正文落地（`app/graph/invitation_nodes.py`），
+> AST 名单与计划预期逐字一致（`effect_persist_draft` 一项按 D-U3-8 改名口径读）。
+> 两处不在 §1 文件清单里的测试文件同步更新（与 D-U3-8 ③ 同款，漏登记必红）：
+> ① `tests/test_invitation_effect.py` 续写编辑／「标记为人工撰写」用例（Task 10 的
+> 对应段落）；② `tests/test_effect_idempotency_suite.py` 的 `EFFECT_NODE_MANIFEST`
+> ＋ `build_recipes()` 各加两条（`effect_edit_draft` 走 value-idempotent 的 0/1 谓词、
+> `effect_mark_draft_human_written` 走 `rows_per_effect=-1` 的负口径，与
+> `effect_edit_letter` / `effect_mark_letter_human_written` 同款），否则
+> `test_manifest_matches_the_source_tree` 与 `test_every_effect_node_has_a_recovery_recipe`
+> 当场判红。
+>
+> **验证证据**：`tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py -q`
+> ⇒ **139 passed**（本 Task 逐 Task 复跑）；相关 8 个文件合并跑 ⇒ **219 passed**；
+> 全量 `-q` ⇒ **4448 passed, 12 skipped, 1 failed**，唯一红项
+> `tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit` 是
+> **本 worktree 的环境性红项、与 Task 5 无关**：`docs/openers/commit-launcher.sh`
+> 按脚本自身主仓库找 `venv/bin/python`，worktree 里没有 `venv/` ⇒ 回退到系统
+> `python3`（无 pytest）⇒ 体积闸被显式跳过（脚本第 36 行注释即为此场景）⇒ 临时仓库
+> 里那条「红测试应被拒」断言失败。单跑该用例同样红（其 fixture 自建临时仓库，
+> 不读本改动的任何文件）。
+
 ## 5. 提取验证记录（`spec-to-plan` 第 6 步，本计划写作时已做的最小核验）
 
 - 已在仓库磁盘上核对：U1 的 `interview_invitation_draft` / `invitation_template`

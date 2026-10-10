@@ -83,7 +83,12 @@ from app.graph.interview_prep_nodes import (
     effect_regenerate_prep_question,
 )
 from app.agents.invitation_drafter import InvitationDraft
-from app.graph.invitation_nodes import effect_persist_invitation_draft
+from app.graph.invitation_nodes import (
+    draft_edit_business_key,
+    effect_edit_draft,
+    effect_mark_draft_human_written,
+    effect_persist_invitation_draft,
+)
 from app.agents.interview_prep import PrepDraft, PrepQuestionDraft
 from app.graph.interview_scoring_nodes import (
     AlignedTurn,
@@ -197,6 +202,8 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_cancel_slot",
         "effect_complete_slot",
         "effect_persist_invitation_draft",
+        "effect_edit_draft",
+        "effect_mark_draft_human_written",
     }
 )
 
@@ -468,6 +475,11 @@ _INV_RUN = "invitation-run-4-4"
 _INV_BODY = enforce_ai_label(
     "张三您好：\n\n邀请您参加嵌入式软件工程师岗位的一面。", generated_at=_TS
 )
+# interview-scheduling U3 Task 5：编辑／「标记为人工撰写」配方的前置与目标值。
+# 种子草稿正文＝已由 L3 生成过、带 AI 标识的一版（生成时间 _TS）——编辑节点要按
+# 它回读原生成时间；目标值同样走 enforce_ai_label（唯一真源），⛔ 不手写标识串。
+_INV_DRAFT = "inv-draft-4-4"
+_INV_EDITED_BODY_TEXT = "张三您好：\n\n邀请您参加嵌入式软件工程师岗位的一面（HR 手改版）。"
 
 
 class _CrashBeforeDurableCommit(sqlite3.Connection):
@@ -1189,6 +1201,33 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
         response_model="deepseek-chat-actual-v1",
         prompt_version="invite-v1",
     )
+
+    def _seed_invitation_draft(conn):
+        """`effect_edit_draft` / `effect_mark_draft_human_written` 的前置：场次闭环
+        再落一版**已生成、带 AI 标识**的草稿（生成时间 _TS——编辑节点要按它回读
+        原生成时间，⛔ 不是"现在"）。"""
+        _seed_invitation_slot(conn)
+        conn.execute(
+            "INSERT INTO interview_invitation_draft "
+            "(id, slot_id, version, template_version, body, ai_generated, analysis_run_id) "
+            "VALUES (?, ?, 1, 'v1', ?, 1, ?)",
+            (_INV_DRAFT, _INV_SLOT, _INV_BODY, _INV_RUN),
+        )
+        conn.commit()
+
+    def _invitation_body_state(conn):
+        """0/1 谓词：草稿正文是否已等于「编辑后的目标值」（带原生成时间的标识）。"""
+        body = conn.execute(
+            "SELECT body FROM interview_invitation_draft WHERE id = ?", (_INV_DRAFT,)
+        ).fetchone()[0]
+        return int(body == enforce_ai_label(_INV_EDITED_BODY_TEXT, generated_at=_TS))
+
+    def _invitation_still_ai_generated(conn):
+        return conn.execute(
+            "SELECT COUNT(*) FROM interview_invitation_draft "
+            "WHERE id = ? AND ai_generated = 1",
+            (_INV_DRAFT,),
+        ).fetchone()[0]
 
     return {
         "effect_persist_draft": Recipe(
@@ -2235,6 +2274,50 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "业务事实是 INSERT 的一行 interview_invitation_draft；同一事务里还有"
                 "把 invitation_status 从 'none' UPDATE 成 'drafted' 的一步，但那一步"
                 "是状态幂等、拿它当口径测不出双写。"
+            ),
+        ),
+        "effect_edit_draft": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_draft,
+            invoke=lambda conn: effect_edit_draft(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=draft_edit_business_key(_INV_DRAFT, _INV_EDITED_BODY_TEXT),
+                draft_id=_INV_DRAFT,
+                edited_body=_INV_EDITED_BODY_TEXT,
+            ),
+            # ⚠️ value-idempotent：编辑是 UPDATE 同一行（body 整段替换），行数不变，
+            # 口径改用「该行正文是否等于编辑后的目标值」这个 0/1 谓词，与
+            # effect_edit_letter 同一手法。目标值由 enforce_ai_label 以**原标识里的
+            # 生成时间**（_TS）重贴——正是节点内部走的那条路（「编辑不去标识」）。
+            count_business_rows=_invitation_body_state,
+            note=(
+                "**value-idempotent**：编辑把正文整段替换成同一段目标文本，无论放行"
+                "一次还是被短路，这一列的取值完全相同——双发保护完全靠 effect_log "
+                "的 COUNT(*) == 1 断言。"
+            ),
+        ),
+        "effect_mark_draft_human_written": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_draft,
+            invoke=lambda conn: effect_mark_draft_human_written(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=_INV_DRAFT,
+                draft_id=_INV_DRAFT,
+                reviewer="HR 乙",
+                marked_at=_TS,
+            ),
+            # ⚠️ value-idempotent：去标识 + 留痕是同一次 UPDATE，行数不变，口径改用
+            # 「该行是否仍处于 ai_generated=1」的 0/1 谓词（生效后为 0）。
+            count_business_rows=_invitation_still_ai_generated,
+            rows_per_effect=-1,
+            note=(
+                "**value-idempotent + 负 rows_per_effect**：种子先放一行 ai_generated=1"
+                "（rows_before=1），生效一次后这一行变成 0（0 行），"
+                "`rows_before + rows_per_effect == 0` 要求 -1。双发保护同样完全靠 "
+                "effect_log 的 COUNT(*) == 1：第二次调用命中短路，不会在已经是 0 的"
+                "谓词上再改一次。"
             ),
         ),
     }

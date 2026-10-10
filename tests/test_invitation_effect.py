@@ -24,9 +24,16 @@ from dataclasses import dataclass
 import pytest
 
 from app.agents.invitation_drafter import InvitationDraft
-from app.agents.jd_agent import AI_LABEL_PREFIX, enforce_ai_label
+from app.agents.jd_agent import (
+    AI_LABEL_PREFIX,
+    enforce_ai_label,
+    extract_label_generated_at,
+)
 from app.graph.invitation_nodes import (
     compute_invitation_draft_for_slot,
+    draft_edit_business_key,
+    effect_edit_draft,
+    effect_mark_draft_human_written,
     effect_persist_invitation_draft,
 )
 from app.llm.gateway import LLMGateway
@@ -313,3 +320,138 @@ def test_compute_then_persist_twice_yields_two_versions(conn):
     ]
     assert len(bodies) == 2
     assert all("AI 生成" in b for b in bodies)
+
+
+# ── effect_edit_draft / effect_mark_draft_human_written ───────────────────
+
+
+_EDIT_NODE = "effect_edit_draft"
+_MARK_NODE = "effect_mark_draft_human_written"
+
+
+def _edit(conn, draft_id: str, text: str, *, thread_id: str = "app1"):
+    return effect_edit_draft(
+        conn, thread_id=thread_id,
+        business_key=draft_edit_business_key(draft_id, text),
+        draft_id=draft_id, edited_body=text,
+    )
+
+
+def _mark(conn, draft_id: str, *, reviewer: str = "hr-1", thread_id: str = "app1"):
+    return effect_mark_draft_human_written(
+        conn, thread_id=thread_id, business_key=draft_id, draft_id=draft_id,
+        reviewer=reviewer, marked_at="2026-10-10 09:00:00",
+    )
+
+
+def _draft_row(conn, draft_id: str) -> tuple:
+    return conn.execute(
+        "SELECT version, ai_generated, authorship_marked_by, authorship_marked_at, body "
+        "FROM interview_invitation_draft WHERE id = ?",
+        (draft_id,),
+    ).fetchone()
+
+
+def test_edit_keeps_ai_label_and_original_generated_at(conn):
+    """编辑不去标，且重贴的是**回读出来的原生成时间**（⛔ 不是"现在"）。"""
+    draft_id = _persist(conn)
+    body = _edit(conn, draft_id, "改了两句话")
+    assert AI_LABEL_PREFIX in body
+    assert extract_label_generated_at(body) == GENERATED_AT
+    stored = conn.execute(
+        "SELECT body FROM interview_invitation_draft WHERE id = ?", (draft_id,)
+    ).fetchone()[0]
+    assert stored == body
+
+
+def test_edit_reattaches_label_even_if_hr_stripped_it(conn):
+    """HR 提交的正文里没有标识也照样只有一行标识——⛔ 服务端不信任客户端提交的标识。"""
+    draft_id = _persist(conn)
+    body = _edit(conn, draft_id, "无标识正文")
+    assert body.count(AI_LABEL_PREFIX) == 1
+
+
+def test_edit_business_key_is_stable_per_text(conn):
+    """同一份草稿 + 同一段正文 = 同一次编辑：重放短路，effect_log 只一行（铁律 1）。"""
+    draft_id = _persist(conn)
+    key = draft_edit_business_key(draft_id, "同一段正文")
+    effect_edit_draft(
+        conn, thread_id="app1", business_key=key, draft_id=draft_id,
+        edited_body="同一段正文",
+    )
+    assert (
+        effect_edit_draft(
+            conn, thread_id="app1", business_key=key, draft_id=draft_id,
+            edited_body="同一段正文",
+        )
+        is None
+    )
+    assert _effect_count(conn, _EDIT_NODE) == 1
+
+
+def test_edit_does_not_create_a_new_version(conn):
+    """编辑是就地改这一版正文，⛔ 不产生新版本、不覆盖版本递增语义。"""
+    draft_id = _persist(conn)
+    _edit(conn, draft_id, "改一句")
+    assert _draft_count(conn) == 1
+    assert _draft_row(conn, draft_id)[0] == 1
+
+
+def test_edit_different_text_is_a_second_edit(conn):
+    """改了正文算新编辑（business_key 里带正文哈希），两行 effect_log。"""
+    draft_id = _persist(conn)
+    _edit(conn, draft_id, "第一版")
+    _edit(conn, draft_id, "第二版")
+    assert _effect_count(conn, _EDIT_NODE) == 2
+    stored = _draft_row(conn, draft_id)[4]
+    assert AI_LABEL_PREFIX in stored
+    assert "第二版" in stored
+    assert "第一版" not in stored
+
+
+def test_mark_human_written_strips_label_and_records_who_and_when(conn):
+    """唯一去标路径：去标 + 留痕（谁、何时）在同一次 UPDATE 落地，原 AI 版本＝本行 version。"""
+    draft_id = _persist(conn)
+    body = _mark(conn, draft_id)
+    assert AI_LABEL_PREFIX not in body
+    assert _draft_row(conn, draft_id)[:4] == (1, 0, "hr-1", "2026-10-10 09:00:00")
+    assert _effect_count(conn, _MARK_NODE) == 1
+
+
+def test_mark_requires_reviewer(conn):
+    """决策人只能是人：空白 reviewer 直接拒（铁律外的合规红线），且不落任何写。"""
+    draft_id = _persist(conn)
+    with pytest.raises(ValueError):
+        _mark(conn, draft_id, reviewer="   ")
+    assert _draft_row(conn, draft_id)[:2] == (1, 1)
+    assert _effect_count(conn, _MARK_NODE) == 0
+
+
+def test_mark_is_terminal_and_keeps_first_reviewer(conn):
+    """一份草稿的「标记为人工撰写」是终态：business_key = draft_id，重放短路，
+    留痕里保留第一个按下按钮的人。"""
+    draft_id = _persist(conn)
+    _mark(conn, draft_id, reviewer="hr-1")
+    assert _mark(conn, draft_id, reviewer="hr-2") is None
+    assert _draft_row(conn, draft_id)[:4] == (1, 0, "hr-1", "2026-10-10 09:00:00")
+    assert _effect_count(conn, _MARK_NODE) == 1
+
+
+def test_edit_after_mark_does_not_reattach_label(conn):
+    """已标记人工撰写的草稿，其作者已经是人：后续编辑只剥不贴。"""
+    draft_id = _persist(conn)
+    _mark(conn, draft_id)
+    body = _edit(conn, draft_id, "人手写的内容")
+    assert body == "人手写的内容"
+    assert AI_LABEL_PREFIX not in body
+
+
+def test_effect_log_matches_business_rows_for_edit_and_mark(conn):
+    """铁律 1 恒等式：edit / mark 的 effect_log 条数与各自落地的业务写恒等
+    （edit 只改行、不经手新行 ⇒ 用「本行是否已带标识／已置人工」回指）。"""
+    draft_id = _persist(conn)
+    _edit(conn, draft_id, "改一句")
+    _mark(conn, draft_id)
+    assert _effect_count(conn, _EDIT_NODE) == 1
+    assert _effect_count(conn, _MARK_NODE) == 1
+    assert _draft_row(conn, draft_id)[:4] == (1, 0, "hr-1", "2026-10-10 09:00:00")

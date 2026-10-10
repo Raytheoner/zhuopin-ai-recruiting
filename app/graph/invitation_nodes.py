@@ -147,3 +147,79 @@ def effect_persist_invitation_draft(
         (slot_id,),
     )
     return draft_id
+
+
+def draft_edit_business_key(draft_id: str, text: str) -> str:
+    """编辑动作的 business_key：同一份草稿 + 同一段正文只算一次编辑。"""
+    digest = hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:16]
+    return f"{draft_id}:{digest}"
+
+
+@idempotent_effect("effect_edit_draft")
+def effect_edit_draft(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    draft_id: str,
+    edited_body: str,
+) -> str:
+    """effect_* 节点：把 HR 编辑后的正文写回（spec「人工改写后的标识处置」——
+    **编辑不去标**）。
+
+    标识保护与 app/graph/jd_nodes.py::effect_update_jd_text、letter_nodes.py::
+    effect_edit_letter 同款：⛔ 不检查用户有没有删标识（检查就有绕过空间——改一个字、
+    换个标点、插一行空白都能骗过检查），而是无条件把提交上来的文本当正文重新贴标识。
+    唯一例外是已「标记为人工撰写」的草稿（ai_generated=0）：那份作者已经是人，只剥不贴。
+
+    ⚠️ 重新贴的是**回读出来的原生成时间**（`extract_label_generated_at`），不是"现在"：
+    标识记录的是"这份文案什么时候由 AI 生成"，编辑一次就把时间往后推会让标识从事实
+    退化成噪声；读不出来才落 `UNKNOWN_GENERATED_AT` 占位，⛔ 不拿"现在"冒充。
+    """
+    draft = load_draft(conn, draft_id)
+    if draft["ai_generated"]:
+        generated_at = (
+            extract_label_generated_at(draft["body"]) or UNKNOWN_GENERATED_AT
+        )
+        final_body = enforce_ai_label(edited_body, generated_at=generated_at)
+    else:
+        final_body = strip_ai_label(edited_body)
+    conn.execute(
+        "UPDATE interview_invitation_draft SET body = ? WHERE id = ?",
+        (final_body, draft_id),
+    )
+    return final_body
+
+
+@idempotent_effect("effect_mark_draft_human_written")
+def effect_mark_draft_human_written(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    draft_id: str,
+    reviewer: str,
+    marked_at: str,
+) -> str:
+    """effect_* 节点：显式「标记为人工撰写」去标识 + 留痕（spec「人工改写后的标识
+    处置」第二个 Scenario）。
+
+    这是**唯一**能去掉邀约文案 AI 标识的路径。去标识与留痕在同一次 UPDATE 里落地：
+    `body` 剥掉标识、`ai_generated=0`、`authorship_marked_by` / `authorship_marked_at`
+    一起写，结构上不存在「标识没了但查不到谁去的」中间态。
+    「原 AI 版本标识」＝**同一行自身的 `version`**（该草稿就是被标记的那一版 AI 稿，
+    `analysis_run_id` 还指向产生它的那次模型调用），因此⛔ 不需要给表加列。
+    ⛔ `reviewer` 不接受空白（决策人只能是人）。
+    """
+    if not str(reviewer).strip():
+        raise ValueError(
+            "标记为人工撰写必须记下是谁标的（合规红线：决策人只能是人）"
+        )
+    draft = load_draft(conn, draft_id)
+    final_body = strip_ai_label(draft["body"])
+    conn.execute(
+        "UPDATE interview_invitation_draft SET body = ?, ai_generated = 0, "
+        "authorship_marked_by = ?, authorship_marked_at = ? WHERE id = ?",
+        (final_body, reviewer, marked_at, draft_id),
+    )
+    return final_body
