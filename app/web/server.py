@@ -105,6 +105,16 @@ from app.storage.interviewer import (
     list_interviewers,
     update_interviewer,
 )
+from app.storage.interview_scheduling import (
+    AvailabilityNotFoundError,
+    AvailabilityOccupiedError,
+    AvailabilityOverlapError,
+    InterviewerNotInRosterError,
+    delete_availability,
+    interviewer_id_for_username,
+    list_availability,
+    register_availability,
+)
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
 from app.storage.live_resume_gate import is_live_resume_intake_enabled
 from app.storage.offer_approval_chain import (
@@ -215,6 +225,14 @@ class InterviewerPatchRequest(BaseModel):
     department: str | None = None
     interviewable_jobs: list[str] | None = None
     enabled: bool | None = None
+
+
+class AvailabilityRegisterRequest(BaseModel):
+    start_at: str
+    end_at: str
+    note: str | None = None
+    on_behalf: bool = False
+    interviewer_id: str | None = None
 
 
 class OnboardingTemplateItem(BaseModel):
@@ -364,6 +382,21 @@ def create_app(
         if row is None or row[0] != "hr":
             raise HTTPException(status_code=403, detail="仅 HR 角色可维护面试官名单")
 
+    def _authenticated_username(request: Request) -> str:
+        auth = getattr(request.state, "auth", None)
+        if not getattr(auth, "authenticated", False):
+            raise HTTPException(status_code=401, detail="未登录")
+        username = getattr(auth, "user_id", None)
+        if not username:
+            raise HTTPException(status_code=401, detail="未登录")
+        return username
+
+    def _account_role(username: str) -> str | None:
+        row = conn.execute(
+            "SELECT role FROM hr_account WHERE username = ?", (username,)
+        ).fetchone()
+        return row[0] if row else None
+
     @router.get("/api/interviewers")
     def interviewers_list(request: Request):
         _require_hr_role(request)
@@ -400,6 +433,78 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/api/interviewers/me/availability")
+    def my_availability(request: Request, interviewer_id: str | None = None):
+        username = _authenticated_username(request)
+        role = _account_role(username)
+        if role == "hr":
+            if interviewer_id is None:
+                raise HTTPException(status_code=422, detail="HR 只读查看需指定 interviewer_id")
+            target = interviewer_id
+        elif role == "interviewer":
+            target = interviewer_id_for_username(conn, username)
+            if target is None:
+                raise HTTPException(status_code=403, detail="当前账号不在面试官名单内")
+            if interviewer_id is not None and interviewer_id != target:
+                raise HTTPException(status_code=403, detail="面试官只能查看本人的可用时段")
+        else:
+            raise HTTPException(status_code=403, detail="仅面试官或 HR 可访问")
+        return {"interviewer_id": target, "availability": list_availability(conn, interviewer_id=target)}
+
+    @router.post("/api/interviewers/me/availability", status_code=201)
+    def register_my_availability(req: AvailabilityRegisterRequest, request: Request):
+        username = _authenticated_username(request)
+        role = _account_role(username)
+        if role == "interviewer":
+            interviewer_id = interviewer_id_for_username(conn, username)
+            if interviewer_id is None:
+                raise HTTPException(status_code=403, detail="当前账号不在面试官名单内")
+            on_behalf = False
+        elif role == "hr":
+            if not req.on_behalf or not req.interviewer_id:
+                raise HTTPException(
+                    status_code=422, detail="HR 代登记需 on_behalf=true 且指定 interviewer_id"
+                )
+            interviewer_id = req.interviewer_id
+            on_behalf = True
+        else:
+            raise HTTPException(status_code=403, detail="仅面试官或 HR 可登记时段")
+        try:
+            return register_availability(
+                conn,
+                interviewer_id=interviewer_id,
+                start_at=req.start_at,
+                end_at=req.end_at,
+                note=req.note,
+                registered_by=username,
+                on_behalf=on_behalf,
+            )
+        except (InterviewerNotInRosterError, AvailabilityOverlapError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.delete("/api/interviewers/me/availability/{availability_id}")
+    def delete_my_availability(availability_id: str, request: Request):
+        username = _authenticated_username(request)
+        role = _account_role(username)
+        if role != "interviewer":
+            raise HTTPException(status_code=403, detail="仅面试官本人可撤销自己的时段")
+        interviewer_id = interviewer_id_for_username(conn, username)
+        if interviewer_id is None:
+            raise HTTPException(status_code=403, detail="当前账号不在面试官名单内")
+        row = conn.execute(
+            "SELECT interviewer_id FROM interviewer_availability WHERE id = ?",
+            (availability_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="时段不存在")
+        if row[0] != interviewer_id:
+            raise HTTPException(status_code=403, detail="只能撤销本人的时段")
+        try:
+            delete_availability(conn, availability_id=availability_id)
+        except (AvailabilityNotFoundError, AvailabilityOccupiedError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"ok": True}
 
     @router.get("/login")
     def login_page():
