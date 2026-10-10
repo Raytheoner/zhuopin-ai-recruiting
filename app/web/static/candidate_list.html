@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css?v=20261010">
+  <title>候选人列表 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 候选人列表</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">候选人列表</h1>
+    <div class="card">
+      <table id="candidate-table" class="data-table">
+        <thead>
+          <tr><th>候选人</th><th>来源</th><th>简历数</th><th>疑似重复</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody id="candidate-body"></tbody>
+      </table>
+      <p id="empty-hint" class="empty-hint" style="display:none">暂无候选人。</p>
+    </div>
+    <p id="error" style="color:red"></p>
+  </main>
+
+  <script>
+    const SOURCE_LABELS = {
+      boss: "Boss直聘", liepin: "猎聘", "51job": "前程无忧",
+      zhaopin: "智联", referral: "内推", other: "其他", unknown: "未知",
+    };
+
+    async function loadCandidates() {
+      const resp = await fetch("api/candidates");
+      if (resp.status === 401) { window.location.href = "login"; return; }
+      if (!resp.ok) { document.getElementById("error").textContent = "加载失败"; return; }
+      const body = await resp.json();
+      const tbody = document.getElementById("candidate-body");
+      tbody.innerHTML = "";
+      if (body.candidates.length === 0) {
+        document.getElementById("empty-hint").style.display = "";
+        return;
+      }
+      for (const item of body.candidates) {
+        const tr = document.createElement("tr");
+        const suspected = item.suspected_duplicate_ids.length > 0 ? "疑似重复" : "-";
+        const merged = item.merged_into ? "已合并" : "正常";
+        [item.name, SOURCE_LABELS[item.source] || item.source, String(item.resume_count),
+         suspected, merged].forEach((text) => {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.appendChild(td);
+        });
+        const actionTd = document.createElement("td");
+        const link = document.createElement("a");
+        link.href = `candidates/${item.candidate_id}/merge`;
+        link.textContent = "合并";
+        link.className = "link";
+        actionTd.appendChild(link);
+        tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+      }
+    }
+
+    loadCandidates();
+  </script>
+</body>
+</html>

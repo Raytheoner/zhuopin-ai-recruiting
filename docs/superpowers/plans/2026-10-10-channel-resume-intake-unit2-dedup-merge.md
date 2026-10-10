@@ -1428,6 +1428,52 @@ python -m pytest tests/test_merge_unmerge.py -q
 
 - Produces: `GET /candidates`、`GET /api/candidates`、`GET /candidates/{candidate_id}/merge`、`GET /api/candidates/{candidate_id}/merge`、`POST /api/candidates/merge`、`POST /api/candidates/merge/{merge_log_id}/unmerge`
 
+> **偏离登记 D-CU2-8 / D-CU2-8a / D-CU2-8b（执行期实测，2026-10-11 Task 7 落地
+> 时登记）**
+>
+> **D-CU2-8（闸命令换解释器，环境，可代）——Step 7 的裸 `python -m pytest` 在本
+> 泳道 worktree 里没有对应可执行体。** 本 worktree 无 `venv/`、本机 `python3` 是
+> 3.9（导入 `app` 即失败），按本会话的执行引导一律改用 `$SDD_PYTHON`（=
+> `/Users/paulshao/Projects/HumanResource/venv/bin/python`）。落地实测：
+> `"$SDD_PYTHON" -m pytest tests/test_candidates_api.py tests/test_static_frontend.py -q`
+> ⇒ `50 passed`（本任务新增 8 条 + `test_static_frontend.py` 既有 42 条），exit 0。
+> ⛔ 判据本身（两个文件全绿）与计划文本一致，换的只是解释器入口。
+>
+> **D-CU2-8a（import 形态，形式，可代）——Step 1 的 `app.intake.merge` 那条导入与
+> 既有第 92 行合成同一条 import。** 文件里本来就有
+> `from app.intake.merge import effect_attach_resume_to_candidate`，逐字追加计划那段
+> 会得到同一个模块的两条 import 语句（可用名字与计划逐字相同，只是无意义重复）。
+> 落地：把既有那条展开成多行 import，四个名字（`MergeValidationError`、
+> `effect_attach_resume_to_candidate`、`effect_merge_candidates`、
+> `effect_unmerge_candidates`）一次导全；另两行
+> （`app.intake.duplicates`、`app.storage.source`）按计划文本新增，位置落在各自
+> 模块的字母序处。⛔ 无行为差异。
+>
+> **D-CU2-8b（追加用例，additive，非偏离）——补 4 条计划未覆盖的产出面判据。**
+> Step 6 的四条用例只覆盖列表页数据与合并/撤销主路径，本任务**产出**的三个面
+> 因此没有判据，落地时补上（⛔ 不改动计划那四条用例一个字）：
+> ① `test_candidate_apis_require_login`——Global Constraints 第 17 条明确适用的
+> 登录墙（`/api/candidates` 与其两个 POST 未登录一律 401）；
+> ② `test_merge_data_endpoint_reports_suspects_conflicts_and_history`——`GET
+> /api/candidates/{id}/merge` 与它的 `_conflict_jobs` helper（合并页靠它拿到"同岗位
+> 双投递保留哪份"的选项，此前零覆盖），并顺带断言撤销后 `unmerged_at` 非空；
+> ③ `test_merge_conflict_without_keep_choice_is_409_and_writes_nothing`——spec
+> 「同岗位双投递」未指定保留份时的 409 拦截面，同时钉住工程铁律 1 的失败语义
+> （被拒的效果不留痕迹：`candidate_merge_log` 与 `effect_log` 都 0 行）；
+> ④ `test_new_pages_substitute_base_href_and_keep_every_path_relative`——Global
+> Constraints 第 15 条在前端的落点（`<!--BASE_HREF-->` 必须被换成真实 `<base href>`，
+> 摘掉 `<base>` 标签后不得再有写死开头 "/" 的 `href/src/fetch` 引用）。
+> 实测：本文件 4 → 8 条，与 `test_static_frontend.py` 合计 50 passed。
+>
+> **观察项 D-CU2-8c（环境，非本任务红灯，不需返工）——全量 `pytest tests/ -q`
+> 仍只有 D-CU2-7c 那一条红。** 实测 `1 failed, 3030 passed, 7 skipped`，唯一失败项
+> 是同一条 `tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit`
+> （泳道 worktree 无 `venv/` ⇒ 体积闸被跳过 ⇒ 期望 `rejected` 变成 `done`），
+> 成因与判定见 D-CU2-7c，与本任务改动无关（本任务没碰 launcher / `commit_request.py`
+> / 该用例）。
+>
+> 注：Step 2 / Step 3 / Step 4 / Step 5 / Step 6 的代码与用例体**逐字落地**，⛔ 无偏离。
+
 - [ ] **Step 1: 在 `app/web/server.py` 顶部 import 区追加本任务所需导入**
 
 ```python
