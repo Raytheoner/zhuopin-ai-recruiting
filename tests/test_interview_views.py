@@ -1,8 +1,8 @@
 """视图硬约束：当日安排/HR 排期页⛔不显示评分/排名/硬门槛/联系方式；子路径前缀正确。
 
-Task 6 范围（面试官周视图页 + 当日安排页 + `/api/interviewers/me/schedule`）先落
-「当日安排 JSON 字段级无敏感信息」与「两个面试官页面在任意挂载前缀下可渲染」两条；
-HR 排期页（`/api/applications/{id}/schedule`，Task 7 交付）相关用例在 Task 10 补齐。
+Task 10 落齐三条：HR 排期页 JSON 字段级无敏感信息、已安排但逾期未回填邀约的醒目标记、
+HR 只读查看任一面试官时段。并保留 Task 7（Spec review 实测）已落入本文件的回归钉：
+HR 排期页 appId 取中段字面量断言 / 非 401 就地提示断言 / POST 排期未知投递 404 语义用例。
 """
 from __future__ import annotations
 
@@ -104,6 +104,15 @@ def test_day_schedule_json_has_no_sensitive_fields(tmp_path):
     _assert_no_forbidden_keys(body)
 
 
+def test_hr_schedule_json_has_no_sensitive_fields(tmp_path):
+    client, conn = _make(tmp_path)
+    seed = _seed(conn)
+    _login(client, conn, seed["hr_id"])
+    resp = client.get(f"{ROOT_PATH}/api/applications/app1/schedule")
+    assert resp.status_code == 200
+    _assert_no_forbidden_keys(resp.json())
+
+
 def test_pages_render_under_root_path_prefix(tmp_path):
     client, conn = _make(tmp_path)
     seed = _seed(conn)
@@ -113,9 +122,34 @@ def test_pages_render_under_root_path_prefix(tmp_path):
         assert resp.status_code == 200
         assert f'<base href="{ROOT_PATH}/">' in resp.text
     # 2026-10-11 修正（Spec review）：HR 排期页一并纳入子路径渲染核验。
+    _login(client, conn, seed["hr_id"])
     resp = client.get(f"{ROOT_PATH}/applications/app1/schedule")
     assert resp.status_code == 200
     assert f'<base href="{ROOT_PATH}/">' in resp.text
+
+
+def test_stale_invitation_followup_marker(tmp_path):
+    client, conn = _make(tmp_path)
+    seed = _seed(conn)
+    conn.execute(
+        "UPDATE interview_slot SET created_at = datetime('now', '-3 days') WHERE application_id='app1'"
+    )
+    conn.commit()
+    _login(client, conn, seed["hr_id"])
+    resp = client.get(f"{ROOT_PATH}/api/applications/app1/schedule")
+    assert resp.status_code == 200
+    assert resp.json()["slots"][0]["needs_invitation_followup"] is True
+
+
+def test_hr_read_only_view_of_any_interviewer(tmp_path):
+    client, conn = _make(tmp_path)
+    seed = _seed(conn)
+    _login(client, conn, seed["hr_id"])
+    resp = client.get(
+        f"{ROOT_PATH}/api/interviewers/me/availability?interviewer_id={seed['interviewer_id']}"
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()["availability"]) == 1
 
 
 def test_application_schedule_page_extracts_application_id_from_middle_segment():
