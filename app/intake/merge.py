@@ -39,11 +39,19 @@ def _create_application(
         "VALUES (?, ?, ?, ?, 'initial')",
         (application_id, candidate_id, job_id, resume_id),
     )
+    # channel-resume-intake U3 task 3.1：投递创建的初始流转事实带上来源
+    # （resume.source）。来源改正走"追加"而不是"改写"（task 3.2，见
+    # app/intake/stage_history.py），所以这条初始行此后永不更新。
+    # 未标来源的简历（U1 的单文件上传路径会留 NULL）原样落 NULL——与
+    # candidate_source() 的「NULL 视为 unknown」同一口径，⛔ 不回填 'unknown'。
+    source_row = conn.execute(
+        "SELECT source FROM resume WHERE id = ?", (resume_id,)
+    ).fetchone()
     conn.execute(
         "INSERT INTO application_stage_history "
-        "(id, application_id, from_stage_id, to_stage_id, actor_type) "
-        "VALUES (?, ?, NULL, 'initial', 'agent')",
-        (str(uuid.uuid4()), application_id),
+        "(id, application_id, from_stage_id, to_stage_id, actor_type, source) "
+        "VALUES (?, ?, NULL, 'initial', 'agent', ?)",
+        (str(uuid.uuid4()), application_id, source_row[0] if source_row else None),
     )
     return application_id
 
