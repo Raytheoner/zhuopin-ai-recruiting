@@ -1498,6 +1498,38 @@ def _seed_onboarding_default_template(conn: sqlite3.Connection) -> None:
     )
 
 
+_LETTER_TEMPLATE_OFFER_V1 = (
+    "{candidate_name}：\n\n"
+    "经我司综合评估，很高兴通知您，拟录用您担任 {job_title} 岗位，所属部门为 "
+    "{department}，预计入职日期为 {start_date}，汇报对象为 {report_to}。\n\n"
+    "如您对以上内容无异议，请于收到后 3 个工作日内回复确认。\n\n"
+    "卓品智能人力资源部"
+)
+
+_LETTER_TEMPLATE_REJECTION_V1 = (
+    "{candidate_name}：\n\n"
+    "感谢您应聘我司 {job_title} 岗位。经综合评估，我们很遗憾地通知您，本次未能为"
+    "您提供进一步的机会。您的简历我们将妥善保管，若未来有合适的岗位会再次与您联系。\n\n"
+    "祝您求职顺利。\n\n"
+    "卓品智能人力资源部"
+)
+
+
+def _seed_letter_templates(conn: sqlite3.Connection) -> None:
+    """幂等种子：Offer/拒信各一份占位模板 v1（offer-generation U2 tasks 2.1，
+    OQ1/OQ3 回件到后只换内容不改代码）。固定 (kind, version) 天然键。"""
+    conn.execute(
+        "INSERT OR IGNORE INTO letter_template (kind, version, body, updated_by) "
+        "VALUES ('offer', 1, ?, 'system')",
+        (_LETTER_TEMPLATE_OFFER_V1,),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO letter_template (kind, version, body, updated_by) "
+        "VALUES ('rejection', 1, ?, 'system')",
+        (_LETTER_TEMPLATE_REJECTION_V1,),
+    )
+
+
 def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -1763,4 +1795,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _rebuild_hr_account_role_check(conn)
     _migrate_stage_for_interview(conn)
     _seed_onboarding_default_template(conn)
+    _seed_letter_templates(conn)
     conn.commit()

@@ -113,15 +113,17 @@ def test_offer_table_has_no_salary_columns(conn):
 
 
 def test_letter_template_unique_on_kind_and_version(conn):
+    # version 1 已被 U2 的占位模板种子占用（offer/rejection 各一版），
+    # 这里用一个未被种子占用的版本号验证 (kind, version) 唯一约束。
     conn.execute(
         "INSERT INTO letter_template (kind, version, body, updated_by) "
-        "VALUES ('offer', 1, 'b', 'hr-1')"
+        "VALUES ('offer', 7, 'b', 'hr-1')"
     )
     conn.commit()
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "INSERT INTO letter_template (kind, version, body, updated_by) "
-            "VALUES ('offer', 1, 'b2', 'hr-1')"
+            "VALUES ('offer', 7, 'b2', 'hr-1')"
         )
 
 
