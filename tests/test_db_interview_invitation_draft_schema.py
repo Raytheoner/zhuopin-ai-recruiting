@@ -200,49 +200,51 @@ def test_draft_created_at_defaults_to_now(conn):
 def test_invitation_template_version_is_primary_key(conn):
     conn.execute(
         "INSERT INTO invitation_template (version, body, updated_by) "
-        "VALUES ('v1', '您好，邀请您参加面试。', 'hr-1')"
+        "VALUES ('v2', '您好，邀请您参加面试。', 'hr-1')"
     )
     conn.commit()
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "INSERT INTO invitation_template (version, body, updated_by) "
-            "VALUES ('v1', '改写后的文案', 'hr-2')"
+            "VALUES ('v2', '改写后的文案', 'hr-2')"
         )
 
 
 def test_invitation_template_keeps_multiple_versions(conn):
     conn.execute(
         "INSERT INTO invitation_template (version, body, updated_by) "
-        "VALUES ('v1', '第一版', 'hr-1')"
+        "VALUES ('v2', '第一版', 'hr-1')"
     )
     conn.execute(
         "INSERT INTO invitation_template (version, body, updated_by) "
-        "VALUES ('v2', '第二版', 'hr-1')"
+        "VALUES ('v3', '第二版', 'hr-1')"
     )
     conn.commit()
     rows = [
         row[0]
         for row in conn.execute("SELECT version FROM invitation_template ORDER BY version")
     ]
-    assert rows == ["v1", "v2"]
+    # v1 是 init_schema 的邀约模板占位种子（U3 tasks 3.1）；本用例追加的 v2/v3
+    # 与其并存——「一版一行、不覆盖」在带种子的真身上同样成立。
+    assert rows == ["v1", "v2", "v3"]
 
 
 def test_invitation_template_requires_updated_by(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "INSERT INTO invitation_template (version, body, updated_by) "
-            "VALUES ('v1', '第一版', NULL)"
+            "VALUES ('v2', '第一版', NULL)"
         )
 
 
 def test_invitation_template_updated_at_defaults_to_now(conn):
     conn.execute(
         "INSERT INTO invitation_template (version, body, updated_by) "
-        "VALUES ('v1', '第一版', 'hr-1')"
+        "VALUES ('v2', '第一版', 'hr-1')"
     )
     conn.commit()
     updated_at = conn.execute(
-        "SELECT updated_at FROM invitation_template WHERE version='v1'"
+        "SELECT updated_at FROM invitation_template WHERE version='v2'"
     ).fetchone()[0]
     assert updated_at is not None
     assert updated_at != ""

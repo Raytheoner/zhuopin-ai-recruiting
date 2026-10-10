@@ -1640,6 +1640,31 @@ def _seed_letter_templates(conn: sqlite3.Connection) -> None:
     )
 
 
+_INVITATION_TEMPLATE_V1 = (
+    "{candidate_name} 您好：\n\n"
+    "诚邀您参加我司 {job_title} 岗位第 {round} 轮面试。\n"
+    "时间：{start_at} — {end_at}\n"
+    "形式：{mode}（{location_or_link}）\n"
+    "面试官：{interviewer_names}\n"
+    "联系人：{contact}\n\n"
+    "如时间不便，请直接回复本消息，我们会与您另约。\n\n"
+    "卓品智能人力资源部"
+)
+
+
+def _seed_invitation_template(conn: sqlite3.Connection) -> None:
+    """幂等种子：邀约模板 v1 占位版（interview-scheduling U3 tasks 3.1；
+    tasks 0.4「人事部#3 邀约话术样例」回件到后只换内容不改代码）。
+    固定 version='v1' 天然键，重复调用不产生第二行。
+    ⛔ 正文 MUST NOT 含评分／排名／淘汰理由占位符——本串只有九个白名单占位符，
+    tests/test_invitation_template.py 逐条反证。"""
+    conn.execute(
+        "INSERT OR IGNORE INTO invitation_template (version, body, updated_by) "
+        "VALUES ('v1', ?, 'system')",
+        (_INVITATION_TEMPLATE_V1,),
+    )
+
+
 def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -2116,4 +2141,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_stage_for_interview(conn)
     _seed_onboarding_default_template(conn)
     _seed_letter_templates(conn)
+    _seed_invitation_template(conn)
     conn.commit()
