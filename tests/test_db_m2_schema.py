@@ -262,11 +262,12 @@ def test_application_kanban_state_defaults_null_and_accepts_pending_reject(conn)
 def test_application_stage_history_table_exists_with_expected_columns(conn):
     assert _table_exists(conn, "application_stage_history")
     # action/detail_json 由 interview-scheduling U2 task 1 加入（排期流转事实的
-    # 动作与详情，见偏离登记 D-U2-1）：新库走 CREATE TABLE、老库走
-    # _ADDED_COLUMNS，两条路径的列集合必须一致。
+    # 动作与详情，见偏离登记 D-U2-1）；source 由 channel-resume-intake U3 task 3.1
+    # 加入（投递初始事实携带来源）。新库走 CREATE TABLE、老库走 _ADDED_COLUMNS，
+    # 两条路径的列集合必须一致。
     assert _columns(conn, "application_stage_history") == {
         "id", "application_id", "from_stage_id", "to_stage_id",
-        "actor_type", "actor", "action", "detail_json", "occurred_at",
+        "actor_type", "actor", "action", "detail_json", "source", "occurred_at",
     }
 
 
@@ -286,16 +287,20 @@ def test_application_stage_history_actor_type_check(conn):
 
 
 def test_application_stage_history_action_check(conn):
-    """action 的值域由 CHECK 钉死（interview-scheduling U2 task 1，偏离登记
-    D-U2-1）：只有四个排期动作 + no_show，NULL 放行（既有 stage 流转行没有动作
-    语义），别的一律拒——多一个取值就说明有别的东西在往流转事实表里写。
+    """action 的值域由 CHECK 钉死：五个排期动作（interview-scheduling U2 task 1，
+    偏离登记 D-U2-1）+ channel-resume-intake 的 closed_by_merge（U2）/
+    source_corrected（U3），NULL 放行（既有 stage 流转行没有动作语义），别的一律
+    拒——多一个取值就说明有别的东西在往流转事实表里写。
     """
     _seed_job_candidate_resume(conn)
     conn.execute(
         "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
         "VALUES ('app-1', 'c1', 'j1', 'r1', 'initial')"
     )
-    for action in ("scheduled", "rescheduled", "cancelled", "completed", "no_show", None):
+    for action in (
+        "scheduled", "rescheduled", "cancelled", "completed", "no_show",
+        "closed_by_merge", "source_corrected", None,
+    ):
         conn.execute(
             "INSERT INTO application_stage_history "
             "(id, application_id, to_stage_id, actor_type, actor, action) "
