@@ -80,3 +80,163 @@ def effect_attach_resume_to_candidate(
         conn, candidate_id=candidate_id, job_id=job_id, resume_id=resume_id
     )
     return {"application_id": application_id, "candidate_id": candidate_id, "candidate_created": candidate_created}
+
+
+def _snapshot_secondary(conn: sqlite3.Connection, secondary_id: str) -> dict:
+    apps = conn.execute(
+        "SELECT id, job_id, resume_id, current_stage_id, status, kanban_state "
+        "FROM application WHERE candidate_id = ? ORDER BY created_at, id",
+        (secondary_id,),
+    ).fetchall()
+    return {
+        "secondary_id": secondary_id,
+        "applications": [
+            {
+                "id": a[0], "job_id": a[1], "resume_id": a[2],
+                "current_stage_id": a[3], "status": a[4], "kanban_state": a[5],
+            }
+            for a in apps
+        ],
+    }
+
+
+def _write_closed_by_merge(conn: sqlite3.Connection, application_id: str, merged_by: str) -> None:
+    row = conn.execute(
+        "SELECT current_stage_id FROM application WHERE id = ?", (application_id,)
+    ).fetchone()
+    stage_id = row[0]
+    conn.execute(
+        "INSERT INTO application_stage_history "
+        "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action) "
+        "VALUES (?, ?, ?, ?, 'human', ?, 'closed_by_merge')",
+        (str(uuid.uuid4()), application_id, stage_id, stage_id, merged_by),
+    )
+
+
+@idempotent_effect("effect_merge_candidates")
+def effect_merge_candidates(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    primary_id: str,
+    secondary_id: str,
+    reason: str,
+    keep_application_per_job: dict[str, str],
+    merged_by: str,
+) -> dict:
+    """把 secondary 并入 primary：写 secondary 快照 → secondary 的 application 全部
+    改 candidate_id 到 primary → 同岗位双投递按 HR 选择保留一份、另一份写
+    action='closed_by_merge' 流转事实不删 → secondary.merged_into = primary。
+    幂等键 {primary_id}:effect_merge_candidates:{secondary_id}:{request_id}。"""
+    if primary_id == secondary_id:
+        raise MergeValidationError("主候选人不能等于被合并候选人")
+    primary = conn.execute(
+        "SELECT id, merged_into FROM candidate WHERE id = ?", (primary_id,)
+    ).fetchone()
+    secondary = conn.execute(
+        "SELECT id, merged_into FROM candidate WHERE id = ?", (secondary_id,)
+    ).fetchone()
+    if primary is None or secondary is None:
+        raise MergeValidationError("候选人不存在")
+    if primary[1] is not None:
+        raise MergeValidationError("主候选人已被合并")
+    if secondary[1] is not None:
+        raise MergeValidationError("被合并候选人已被合并")
+
+    secondary_apps = conn.execute(
+        "SELECT id, job_id FROM application WHERE candidate_id = ? ORDER BY created_at, id",
+        (secondary_id,),
+    ).fetchall()
+
+    # 2026-10-11 修正（1001O seg2 Spec review F1）：**改挂前**冻结主方既有投递快照，
+    # 校验与写关闭共用同一份——⛔ 不在改挂循环里现查：那会读到自己刚改挂的行，被合并方
+    # 同岗位多份、主方没有时会凭空写 closed_by_merge（HR 未被提示、产生错误审计事实）。
+    primary_apps_by_job: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT id, job_id FROM application WHERE candidate_id = ? ORDER BY created_at, id",
+        (primary_id,),
+    ).fetchall():
+        primary_apps_by_job.setdefault(row[1], row[0])
+
+    # 同岗位双投递：合并前必须由 HR 选保留哪份（spec「同岗位双投递」）。
+    for application_id, job_id in secondary_apps:
+        primary_open = primary_apps_by_job.get(job_id)
+        if primary_open is None:
+            continue
+        keep_id = keep_application_per_job.get(job_id)
+        if keep_id not in (application_id, primary_open):
+            raise MergeValidationError(f"岗位 {job_id} 存在双投递，必须指定保留哪份投递")
+
+    snapshot = _snapshot_secondary(conn, secondary_id)
+    merge_log_id = str(uuid.uuid4())
+
+    for application_id, job_id in secondary_apps:
+        primary_open = primary_apps_by_job.get(job_id)
+        conn.execute(
+            "UPDATE application SET candidate_id = ? WHERE id = ?", (primary_id, application_id)
+        )
+        if primary_open is not None:
+            keep_id = keep_application_per_job.get(job_id)
+            loser_id = primary_open if keep_id == application_id else application_id
+            _write_closed_by_merge(conn, loser_id, merged_by)
+
+    conn.execute(
+        "INSERT INTO candidate_merge_log "
+        "(id, primary_id, secondary_id, reason, secondary_snapshot, merged_by) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (merge_log_id, primary_id, secondary_id, reason,
+         json.dumps(snapshot, ensure_ascii=False), merged_by),
+    )
+    conn.execute(
+        "UPDATE candidate SET merged_into = ? WHERE id = ?", (primary_id, secondary_id)
+    )
+    return {"merge_log_id": merge_log_id, "primary_id": primary_id, "secondary_id": secondary_id}
+
+
+@idempotent_effect("effect_unmerge_candidates")
+def effect_unmerge_candidates(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    merge_log_id: str,
+    unmerged_by: str,
+) -> dict:
+    """按快照恢复 secondary 原有 application 归属；合并期间 primary 新增记录保留在
+    primary；写 unmerged_by/at 并清 secondary.merged_into。
+    幂等键 {merge_log_id}:effect_unmerge_candidates:undo。"""
+    row = conn.execute(
+        "SELECT primary_id, secondary_id, secondary_snapshot, unmerged_at "
+        "FROM candidate_merge_log WHERE id = ?",
+        (merge_log_id,),
+    ).fetchone()
+    if row is None:
+        raise MergeValidationError("合并留痕不存在")
+    if row[3] is not None:
+        raise MergeValidationError("该合并已被撤销")
+
+    primary_id, secondary_id, snapshot_json = row[0], row[1], row[2]
+    # 只按快照还原：快照之外的 application（合并后 primary 新增的投递）⛔ 不动，
+    # 它们本来就挂在 primary 上。
+    snapshot = json.loads(snapshot_json)
+    for app in snapshot["applications"]:
+        conn.execute(
+            "UPDATE application SET candidate_id = ?, current_stage_id = ?, "
+            "status = ?, kanban_state = ? WHERE id = ?",
+            (
+                secondary_id,
+                app["current_stage_id"],
+                app["status"],
+                app["kanban_state"],
+                app["id"],
+            ),
+        )
+
+    conn.execute("UPDATE candidate SET merged_into = NULL WHERE id = ?", (secondary_id,))
+    conn.execute(
+        "UPDATE candidate_merge_log SET unmerged_by = ?, unmerged_at = datetime('now') "
+        "WHERE id = ?",
+        (unmerged_by, merge_log_id),
+    )
+    return {"merge_log_id": merge_log_id, "primary_id": primary_id, "secondary_id": secondary_id}

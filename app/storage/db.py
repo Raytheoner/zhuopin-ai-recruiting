@@ -7,6 +7,36 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# application_stage_history.action 的合法取值（存储层真源）。
+#
+# ⛔ 三处必须同源：SCHEMA 的 CREATE TABLE、下面的 _ADDED_COLUMNS（老库加列）、
+# _rebuild_application_stage_history_action_check（老库重建）。SCHEMA 是纯字符串
+# 字面量（内含 JSON 默认值的花括号，不能改成 f-string），所以它硬编码同一份清单；
+# tests/test_candidate_merge_schema.py 与 tests/test_db_migration.py 对每个取值在
+# 「新库」与「两类老库迁移后」都真写一次，任一处漏加即失败——列集合相同不代表
+# 约束相同，只有真写一次才知道。
+STAGE_HISTORY_ACTIONS: tuple[str, ...] = (
+    # interview-scheduling U2（1001R）：四个排期 effect_* 节点写「安排/改期/取消/
+    # 完成/未出席」，阶段不变，靠本列区分动作。
+    "scheduled",
+    "rescheduled",
+    "cancelled",
+    "completed",
+    "no_show",
+    # channel-resume-intake U2 tasks 2.5：合并时关闭被合并方在同岗位的非保留投递
+    # （阶段不变；是否「当前关闭」由 candidate_merge_log.unmerged_at IS NULL 派生）。
+    # U3 的 action=source_corrected 落地时按同法在此加值——⛔ 只改 SCHEMA 不够，
+    # 老库走的是加列/重建两条路径。
+    "closed_by_merge",
+)
+
+
+def _stage_history_action_ddl() -> str:
+    """action 列在「老库加列」与「老库重建」两条路径上的同一份列定义。"""
+    values = ", ".join(f"'{value}'" for value in STAGE_HISTORY_ACTIONS)
+    return f"TEXT CHECK (action IS NULL OR action IN ({values}))"
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job (
     id TEXT PRIMARY KEY,
@@ -294,6 +324,38 @@ CREATE TABLE IF NOT EXISTS candidate (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_name_phone
     ON candidate (name, phone_hash);
 
+-- 合并留痕（channel-resume-intake U2 tasks 2.4）。一行 = 一次合并：primary 保留、
+-- secondary 被并入。secondary_snapshot 存被合并方合并前全部 application 的 JSON
+-- 快照（撤销按它恢复）。merged_by / reason 的 CHECK 与 source_correction_log 同
+-- 一手法：空操作人 / 空依据等于没留痕。unmerged_by/at 可空——未撤销为 NULL。
+CREATE TABLE IF NOT EXISTS candidate_merge_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    primary_id TEXT NOT NULL REFERENCES candidate(id),
+    secondary_id TEXT NOT NULL REFERENCES candidate(id),
+    reason TEXT NOT NULL CHECK (
+        reason IS NOT NULL
+        AND trim(reason, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    secondary_snapshot TEXT NOT NULL,
+    merged_by TEXT NOT NULL CHECK (
+        merged_by IS NOT NULL
+        AND trim(merged_by, ' ' || char(9) || char(10) || char(13)) != ''
+    ),
+    merged_at TEXT NOT NULL DEFAULT (datetime('now')),
+    unmerged_by TEXT,
+    unmerged_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidate_merge_log_secondary
+    ON candidate_merge_log (secondary_id);
+
+-- 合并幂等的第二道防线（第一道是 Task 5 的 effect_log 唯一键
+-- {primary_id}:effect_merge_candidates:{secondary_id}:{request_id}）：同一个被合并方
+-- 在撤销前不能被合并两次。撤销（写 unmerged_at）后重新合并会产生第二行——留痕
+-- 只追加不覆盖，所以是**部分**唯一索引而不是整列唯一。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_merge_log_active_secondary
+    ON candidate_merge_log (secondary_id) WHERE unmerged_at IS NULL;
+
 -- 简历文件记录。⛔ 刻意不设 candidate_id 列：上传时（U2 POST /resumes/upload）
 -- 只知道 job_id，候选人身份要等解析完成才能确定并去重创建 candidate 行。
 -- resume 与 candidate 的关联由 application（下方）一次性接起来，不在 resume
@@ -463,6 +525,10 @@ CREATE INDEX IF NOT EXISTS idx_application_candidate ON application (candidate_i
 -- detail_json 存改期的原/新时刻与取消原因。既有 stage 流转行没有动作语义，
 -- 故 action 可空。本表是 M2 已建老表，两列必须同时登记 SCHEMA 与
 -- _ADDED_COLUMNS（与 hr_account.role 同一先例）。
+--
+-- action 的取值域真源是模块顶部的 STAGE_HISTORY_ACTIONS，这里是硬编码的同一份
+-- 清单（⛔ 改一处必须同步改另外两处，见该常量的说明）。'closed_by_merge' 是
+-- channel-resume-intake U2 Task 4 加的：Task 5 的 _write_closed_by_merge 写它。
 CREATE TABLE IF NOT EXISTS application_stage_history (
     id TEXT PRIMARY KEY NOT NULL,
     application_id TEXT NOT NULL REFERENCES application(id),
@@ -471,7 +537,9 @@ CREATE TABLE IF NOT EXISTS application_stage_history (
     actor_type TEXT NOT NULL CHECK (actor_type IN ('human', 'agent')),
     actor TEXT,
     action TEXT CHECK (
-        action IS NULL OR action IN ('scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show')
+        action IS NULL OR action IN (
+            'scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show', 'closed_by_merge'
+        )
     ),
     detail_json TEXT,
     occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1469,8 +1537,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # interview-scheduling U2：四个排期 effect_* 节点的流转事实动作与详情。
     # application_stage_history 是 M2 已建老表，CREATE TABLE IF NOT EXISTS 对老库
     # 无效，必须走加列迁移；可空是刻意的——既有 stage 流转行没有动作语义。
-    ("application_stage_history", "action",
-     "TEXT CHECK (action IS NULL OR action IN ('scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show'))"),
+    # ⚠️ channel-resume-intake U2 Task 4：取值清单从 STAGE_HISTORY_ACTIONS 生成，
+    # 因此本行与 SCHEMA 一起多出 'closed_by_merge'（该值由 Task 5 写）。这是对
+    # 1001R 已落地的五值 CHECK 的**放宽**，不是去掉 CHECK——去掉会一起废掉排期包
+    # 钉住的取值域。⚠️ 本行改动对「列表已存在」的老库是 no-op（apply_column_migrations
+    # 逐列判重），那批库由 _rebuild_application_stage_history_action_check 整表重建。
+    ("application_stage_history", "action", _stage_history_action_ddl()),
     ("application_stage_history", "detail_json", "TEXT"),
 )
 
@@ -1870,6 +1942,111 @@ def _rebuild_application_status_check(conn: sqlite3.Connection) -> None:
         raise sqlite3.IntegrityError(f"application 重建后外键不一致: {violations}")
 
 
+def _stage_history_action_check_is_current(conn: sqlite3.Connection) -> bool:
+    """application_stage_history.action 上的 CHECK 是否已放行 STAGE_HISTORY_ACTIONS
+    全部取值——即无需整表重建。
+
+    SQLite 改不了 CHECK，本判断看 sqlite_master.sql 原文，手法与
+    _stage_type_check_complete / _role_check_allows_dept_manager 一致。除「清单已
+    齐」外，下面两种形态同样不需要重建，必须一并放行：
+
+    - 表不存在：没有可放宽的约束（调用点在 SCHEMA 之后，新库这里恒不成立）；
+    - 表里没有 action 列（M2 U1 / 1001R 之前形态的老库）：_ADDED_COLUMNS 加列时
+      带的就是完整清单，重建是空转。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='application_stage_history'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return True
+    ddl = row[0]
+    has_action_column = any(
+        info[1] == "action"
+        for info in conn.execute("PRAGMA table_info(application_stage_history)")
+    )
+    if not has_action_column:
+        return True
+    return all(f"'{value}'" in ddl for value in STAGE_HISTORY_ACTIONS)
+
+
+def _rebuild_application_stage_history_action_check(conn: sqlite3.Connection) -> None:
+    """把 application_stage_history.action 的 CHECK 放宽到 STAGE_HISTORY_ACTIONS。
+
+    先跑过 interview-scheduling U2（1001R）的库：action 列在、CHECK 只放行五值，
+    而 _ADDED_COLUMNS 逐列判重会静默跳过这一列。channel-resume-intake U2 Task 5 的
+    _write_closed_by_merge 要写第六个值——不重建的话合并动作在服务器上当场
+    IntegrityError（与 hr_account.role 缺 dept_manager 同一故障形态，同样是
+    _rebuild_hr_account_role_check 的先例）。
+
+    SQLite 无法用 ALTER TABLE 修改 CHECK（同 _rebuild_stage_table 结论）。本表被
+    零个外键引用，但自身引用 application / stage，重建期间 PRAGMA foreign_keys=OFF，
+    完成后 PRAGMA foreign_key_check 复验；idx_application_stage_history_application
+    随 DROP TABLE 一起消失，必须原样重建。PRAGMA 在事务内是 no-op：try 内 commit、
+    except 里 rollback 之后 finally 再重开（同 _rebuild_hr_account_role_check）。
+    """
+    if _stage_history_action_check_is_current(conn):
+        return
+    # 重建的列清单是硬编码的（与 _rebuild_application_status_check 同一形态）：
+    # 出现清单外的列就说明有后续单元往本表加了列而没同步到这里——那会**静默丢列
+    # 数据**，所以宁可在切 foreign_keys 之前当场炸掉。
+    known_columns = {
+        "id", "application_id", "from_stage_id", "to_stage_id",
+        "actor_type", "actor", "action", "detail_json", "occurred_at",
+    }
+    unexpected_columns = _existing_columns(conn, "application_stage_history") - known_columns
+    if unexpected_columns:
+        raise sqlite3.IntegrityError(
+            "application_stage_history 出现重建 DDL 未覆盖的列 "
+            f"{sorted(unexpected_columns)}：本函数会丢这些列的数据，"
+            "请先把它们补进下面的 CREATE TABLE 与 INSERT ... SELECT"
+        )
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            f"""
+            CREATE TABLE application_stage_history_new (
+                id TEXT PRIMARY KEY NOT NULL,
+                application_id TEXT NOT NULL REFERENCES application(id),
+                from_stage_id TEXT REFERENCES stage(id),
+                to_stage_id TEXT NOT NULL REFERENCES stage(id),
+                actor_type TEXT NOT NULL CHECK (actor_type IN ('human', 'agent')),
+                actor TEXT,
+                action {_stage_history_action_ddl()},
+                detail_json TEXT,
+                occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO application_stage_history_new "
+            "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, "
+            "detail_json, occurred_at) "
+            "SELECT id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, "
+            "detail_json, occurred_at FROM application_stage_history"
+        )
+        conn.execute("DROP TABLE application_stage_history")
+        conn.execute(
+            "ALTER TABLE application_stage_history_new RENAME TO application_stage_history"
+        )
+        conn.execute(
+            "CREATE INDEX idx_application_stage_history_application "
+            "ON application_stage_history (application_id)"
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(
+            f"application_stage_history 重建后外键不一致: {violations}"
+        )
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     # executescript 里的 INSERT OR IGNORE 种子行会打开一个隐式事务；PRAGMA
@@ -1885,6 +2062,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 新库 SCHEMA 本就是三值 ⇒ 空转。
     _rebuild_hr_account_role_check(conn)
     _rebuild_application_status_check(conn)
+    # 同类放宽，第三步：action 的五值 CHECK（1001R）要能承载本包的 closed_by_merge。
+    # 新库 SCHEMA 本就是六值 ⇒ 空转；没跑过 1001R 的老库由加列路径一步到位 ⇒ 空转。
+    _rebuild_application_stage_history_action_check(conn)
     _migrate_stage_for_interview(conn)
     _seed_onboarding_default_template(conn)
     _seed_letter_templates(conn)
