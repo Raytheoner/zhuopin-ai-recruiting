@@ -57,28 +57,10 @@ def _persist(conn, **overrides):
     return effect_persist_parse(conn, **kwargs)
 
 
-def test_first_parse_creates_candidate_and_application(conn):
-    application_id = _persist(conn)
-    assert application_id is not None
-    app_row = conn.execute(
-        "SELECT candidate_id, job_id, resume_id, current_stage_id FROM application WHERE id = ?",
-        (application_id,),
-    ).fetchone()
-    assert app_row == (app_row[0], "j1", "r1", "initial")
-    candidate_row = conn.execute(
-        "SELECT name FROM candidate WHERE id = ?", (app_row[0],)
-    ).fetchone()
-    assert candidate_row[0] == "张三"
-
-
-def test_first_parse_writes_stage_history_and_resume_columns(conn):
-    application_id = _persist(conn)
-    history = conn.execute(
-        "SELECT from_stage_id, to_stage_id, actor_type FROM application_stage_history "
-        "WHERE application_id = ?",
-        (application_id,),
-    ).fetchone()
-    assert history == (None, "initial", "agent")
+def test_parse_writes_resume_columns_and_version_but_no_application(conn):
+    assert _persist(conn) is None
+    assert conn.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM candidate").fetchone()[0] == 0
     resume_row = conn.execute(
         "SELECT status, parser_version, parse_confidence FROM resume WHERE id = 'r1'"
     ).fetchone()
@@ -106,32 +88,19 @@ def test_high_confidence_field_does_not_enter_review_queue(conn):
 def test_rerun_same_effect_key_does_not_duplicate(conn):
     first = _persist(conn)
     second = _persist(conn)
-    assert second is None
-    count = conn.execute("SELECT COUNT(*) FROM application").fetchone()[0]
+    assert first is None and second is None
+    count = conn.execute("SELECT COUNT(*) FROM resume_parse_version WHERE resume_id = 'r1'").fetchone()[0]
     assert count == 1
-    history_count = conn.execute(
-        "SELECT COUNT(*) FROM application_stage_history"
-    ).fetchone()[0]
-    assert history_count == 1
 
 
 def test_reparse_new_version_updates_resume_and_keeps_old_version_row(conn):
     _persist(conn, parser_version="v1", business_key="v1")
-    application_id = _persist(
-        conn,
-        parser_version="v2",
-        business_key="v2",
-        fields=_fields(name_confidence=0.95),
-    )
+    _persist(conn, parser_version="v2", business_key="v2", fields=_fields(name_confidence=0.95))
     versions = conn.execute(
         "SELECT parser_version FROM resume_parse_version WHERE resume_id = 'r1' "
         "ORDER BY parser_version"
     ).fetchall()
     assert [v[0] for v in versions] == ["v1", "v2"]
-    resume_row = conn.execute(
-        "SELECT parser_version FROM resume WHERE id = 'r1'"
-    ).fetchone()
+    resume_row = conn.execute("SELECT parser_version FROM resume WHERE id = 'r1'").fetchone()
     assert resume_row[0] == "v2"
-    application_count = conn.execute("SELECT COUNT(*) FROM application").fetchone()[0]
-    assert application_count == 1  # 重解析不产生第二个 application
-    assert application_id is not None
+    assert conn.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 0

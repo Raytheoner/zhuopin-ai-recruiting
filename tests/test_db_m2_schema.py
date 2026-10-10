@@ -37,7 +37,12 @@ def conn(tmp_path):
 
 def test_candidate_table_exists_with_expected_columns(conn):
     assert _table_exists(conn, "candidate")
-    assert _columns(conn, "candidate") == {"id", "name", "phone_hash", "created_at"}
+    # merged_into（channel-resume-intake U2 task 2/2.4）：被合并候选人指向保留方，
+    # 未合并为 NULL。本列由该单元 Task 2 提前落地，理由见 app/storage/db.py 的
+    # candidate 表定义注释。
+    assert _columns(conn, "candidate") == {
+        "id", "name", "phone_hash", "merged_into", "created_at",
+    }
 
 
 def test_candidate_has_no_status_column(conn):
@@ -773,6 +778,10 @@ def test_added_columns_tuple_still_only_touches_job_profile():
     任何库里它都已经存在，U2 给它加的 raw_text 属于"老表缺列"，必须登记进
     _ADDED_COLUMNS 才补得上（漏登记的话老库上每次上传都 500）。护栏本意不变：
     进这个集合的表必须在 SCHEMA 里已有 CREATE TABLE IF NOT EXISTS。
+
+    channel-resume-intake U2 task 2 再把 candidate 加进来：candidate 是 M2 U1
+    建的老表，新增 merged_into 列（本列由 Task 2 提前落地，理由见
+    app/storage/db.py 的 candidate 表定义注释）。护栏本意不变。
     """
     from app.storage.db import _ADDED_COLUMNS
 
@@ -784,6 +793,7 @@ def test_added_columns_tuple_still_only_touches_job_profile():
         "job_prep_config",
         "interview_session",
         "hr_account",
+        "candidate",
     }
 
 
