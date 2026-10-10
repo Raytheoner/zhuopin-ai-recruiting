@@ -206,14 +206,14 @@ def test_unlisted_criterion_assertion_passes_for_every_whitelisted_key(conn):
 
 # ── 结构 ───────────────────────────────────────────────────────────────
 
-def test_run_compliance_assertions_returns_all_three(conn):
+def test_run_compliance_assertions_covers_every_assertion(conn):
     results = run_compliance_assertions(conn)
 
-    assert len(results) == 4
-    assert len(COMPLIANCE_ASSERTIONS) == 4
+    assert len(results) == 7
+    assert len(COMPLIANCE_ASSERTIONS) == 7
     assert all(isinstance(r, AssertionResult) for r in results)
     # 名字必须两两不同：报告里靠 name 定位是哪条红线破了。
-    assert len({r.name for r in results}) == 4
+    assert len({r.name for r in results}) == 7
     assert all(r.ok for r in results)
 
 

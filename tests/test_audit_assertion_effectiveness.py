@@ -307,9 +307,11 @@ def test_run_compliance_assertions_reports_every_broken_line_at_once(conn):
 
     results = run_compliance_assertions(conn)
 
-    assert len(results) == 4
-    # 第四条（human_review）本次没有被破坏——没有终态画像版本，自然无违例。
-    assert [r.ok for r in results] == [False, False, False, True]
+    assert len(results) == 7
+    # 第一至三条（本次被破坏的三条）必须全部红。第四至七条（human_review 与
+    # channel-resume-intake U3 的三条结构断言）本次没有被破坏——
+    # 没有终态画像版本、没有违例列、没有合并留痕、没有已合并候选人，自然无违例。
+    assert [r.ok for r in results] == [False, False, False, True, True, True, True]
     # spec：任一条不成立时判定为失败**并指出违例记录**。
     assert all(r.violations for r in results if not r.ok)
 
@@ -426,3 +428,103 @@ def test_missing_reviewer_column_fails_closed(conn):
     result = assert_every_decision_has_human_review(conn)
     assert result.ok is False
     assert "reviewer" in str(result.violations)
+
+
+# ── channel-resume-intake U3 tasks 3.4：三条新断言的反证 ────────────────
+#
+# "0 命中"同样兼容"红线守住了"与"断言根本没生效"两种解释。下面这几条各自造一次
+# 违例，断言必须变红——这是新增三条断言唯一的效力来源。
+
+def test_plaintext_phone_column_is_detected(conn):
+    from app.audit.assertions import assert_no_plaintext_phone_column
+
+    conn.execute("ALTER TABLE candidate RENAME TO candidate_old")
+    conn.execute(
+        "CREATE TABLE candidate "
+        "(id TEXT PRIMARY KEY, name TEXT, phone TEXT, phone_hash TEXT)"
+    )
+    conn.commit()
+
+    result = assert_no_plaintext_phone_column(conn)
+
+    assert result.ok is False
+    assert {"table": "candidate", "column": "phone"} in result.violations
+
+
+def test_resume_source_text_column_is_detected(conn):
+    from app.audit.assertions import assert_no_plaintext_phone_column
+
+    conn.execute("ALTER TABLE resume ADD COLUMN source_text TEXT")
+    conn.commit()
+
+    result = assert_no_plaintext_phone_column(conn)
+
+    assert result.ok is False
+    assert {"table": "resume", "column": "source_text"} in result.violations
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t", "\n"])
+def test_merge_log_blank_actor_is_detected(conn, blank):
+    """DDL 自带 CHECK，所以违例行只能靠 PRAGMA ignore_check_constraints 造出来
+    ——这正是本条断言存在的理由（CHECK 之上的纵深防御）。"""
+    from app.audit.assertions import assert_merge_log_rows_have_actor
+
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c1', '张三')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c2', '李四')")
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    conn.execute(
+        "INSERT INTO candidate_merge_log "
+        "(id, primary_id, secondary_id, reason, secondary_snapshot, merged_by) "
+        "VALUES ('m1', 'c1', 'c2', '同一人', '{}', ?)",
+        (blank,),
+    )
+    conn.commit()
+
+    result = assert_merge_log_rows_have_actor(conn)
+
+    assert result.ok is False
+    assert [row["id"] for row in result.violations] == ["m1"]
+
+
+def test_merged_candidate_with_active_application_is_detected(conn):
+    from app.audit.assertions import assert_merged_candidates_have_no_active_application
+
+    conn.execute("INSERT INTO job (id, title) VALUES ('j1', '嵌入式工程师')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c1', '张三')")
+    conn.execute("INSERT INTO candidate (id, name, merged_into) VALUES ('c2', '李四', 'c1')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r2', 'j1', 'synthetic', 'b.pdf', 'h2', 'alice')"
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('app-2', 'c2', 'j1', 'r2', 'initial')"
+    )
+    conn.commit()
+
+    result = assert_merged_candidates_have_no_active_application(conn)
+
+    assert result.ok is False
+    assert [row["candidate_id"] for row in result.violations] == ["c2"]
+
+
+def test_merged_candidate_without_active_applications_passes(conn):
+    """反向对照：同一行改成 rejected 就该放过——否则这条断言会把"合并后正常被
+    淘汰的历史投递"报成违例。"""
+    from app.audit.assertions import assert_merged_candidates_have_no_active_application
+
+    conn.execute("INSERT INTO job (id, title) VALUES ('j1', '嵌入式工程师')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c1', '张三')")
+    conn.execute("INSERT INTO candidate (id, name, merged_into) VALUES ('c2', '李四', 'c1')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('r2', 'j1', 'synthetic', 'b.pdf', 'h2', 'alice')"
+    )
+    conn.execute(
+        "INSERT INTO application "
+        "(id, candidate_id, job_id, resume_id, current_stage_id, status) "
+        "VALUES ('app-2', 'c2', 'j1', 'r2', 'initial', 'rejected')"
+    )
+    conn.commit()
+
+    assert assert_merged_candidates_have_no_active_application(conn).ok is True
