@@ -2491,6 +2491,69 @@ def create_app(
     def onboarding_checklist_page(application_id: str):
         return _render_static_page("onboarding_checklist.html", root_path)
 
+    # ── onboarding-flow U2：HR 总览页（tasks 2.5）──
+
+    def _checklist_summary(application_id: str) -> dict:
+        cl = conn.execute(
+            "SELECT id, start_date FROM onboarding_checklist WHERE application_id = ?",
+            (application_id,),
+        ).fetchone()
+        if cl is None:
+            return {"progress_percent": 0, "overdue_count": 0}
+        rows = conn.execute(
+            "SELECT id, status, due_offset_days, required FROM onboarding_item "
+            "WHERE checklist_id = ?",
+            (cl[0],),
+        ).fetchall()
+        prog = progress(
+            [
+                {"id": r[0], "status": r[1], "due_offset_days": r[2], "required": bool(r[3])}
+                for r in rows
+            ],
+            start_date=cl[1],
+            today=date.today().isoformat(),
+        )
+        return {"progress_percent": prog["progress_percent"], "overdue_count": len(prog["overdue_item_ids"])}
+
+    def _onboarding_overview_rows(department: str | None = None):
+        sql = (
+            "SELECT c.name, a.id, j.department, cl.start_date "
+            "FROM onboarding_checklist cl "
+            "JOIN application a ON a.id = cl.application_id "
+            "JOIN candidate c ON c.id = a.candidate_id "
+            "JOIN job j ON j.id = a.job_id "
+            "WHERE cl.status = 'open'"
+        )
+        params: list = []
+        if department is not None:
+            sql += " AND j.department = ?"
+            params.append(department)
+        sql += " ORDER BY cl.start_date ASC, a.id ASC"
+        return conn.execute(sql, params).fetchall()
+
+    @router.get("/api/onboarding")
+    def onboarding_overview(request: Request):
+        _require_role(request, "hr")
+        rows = _onboarding_overview_rows()
+        checklists = []
+        for r in rows:
+            summary = _checklist_summary(r[1])
+            checklists.append(
+                {
+                    "candidate_name": r[0],
+                    "application_id": r[1],
+                    "department": r[2],
+                    "start_date": r[3],
+                    "progress_percent": summary["progress_percent"],
+                    "overdue_count": summary["overdue_count"],
+                }
+            )
+        return {"checklists": checklists}
+
+    @router.get("/onboarding")
+    def onboarding_overview_page():
+        return _render_static_page("onboarding_overview.html", root_path)
+
     @router.post("/api/applications/{application_id}/interview-sessions")
     def create_interview_session(
         application_id: str, req: InterviewSessionCreateRequest, request: Request

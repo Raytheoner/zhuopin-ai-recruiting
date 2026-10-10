@@ -1596,6 +1596,32 @@ Expected: FAIL —— `FileNotFoundError`（`onboarding_overview.html` 不存在
 Run: `./venv/bin/python -m pytest tests/test_onboarding_pages.py -q -k "overview"`
 Expected: 全绿（总览三个用例）。
 
+> **D-ON2-6a（闸口径，2026-10-11 实测）——Step 1 用例里的日历字面量改成相对今天，⛔ 不是把断言改松。**
+> plan 原文 `_seed_hired_x(..., "2026-10-20" / "2026-10-15")` ＋ `assert checklists[0]["overdue_count"] == 0`
+> **只在计划成稿当天（10-10）成立**：逾期口径是「`status='pending'` 且 入职日 + `due_offset_days` < 今天」，
+> 默认模板「体检报告」`due_offset_days = -5`（`app/storage/db.py::_ONBOARDING_DEFAULT_TEMPLATE_ITEMS`），
+> `2026-10-15 - 5 = 2026-10-10`：10-10 当天 `due < today` 为假 ⇒ 0；到 10-11 当天为真 ⇒ 实测 `1 == 0` 红。
+> 落地写法：`late / early = (date.today() + timedelta(days=30 / 25)).isoformat()`，**四条断言逐字不变**
+> （升序 `["app-early","app-late"]`、`candidate_name == "李四"`、`progress_percent == 0`、`overdue_count == 0`），
+> 只把「入职日」从日历常量换成相对量 ⇒ 同一件事不再随运行日期漂移。⛔ 未改实现侧的逾期口径（与 Task 4/Task 5 同一把尺）。
+>
+> **D-ON2-6b（补用例，Global Constraints 部署约束 1）——总览页补子路径前缀用例。**
+> 新增 `test_overview_page_works_under_subpath_prefix`：`/hr/recruit-agent/onboarding` ⇒ 200 ＋
+> `<base href="/hr/recruit-agent/">`，且前缀下 `api/onboarding` 路由可达（未登录 401，不是 404）。
+> 依据＝约束段「挂到任意子路径下都能正常工作，**且有测试覆盖**」属每任务隐含验收；与 Task 5 的
+> `test_checklist_page_works_under_subpath_prefix`（1001G Spec review 实测缺口的补法）同款判据。
+>
+> **D-ON2-6c（补用例，Interfaces 字面「全部 `open` 清单」）**：新增 `test_hr_overview_excludes_closed_checklists`。
+> U2 没有任何把清单置 `closed` 的代码路径（关闭归 U3），这条过滤只能直接改库来覆盖，否则 `WHERE cl.status='open'`
+> 全程无用例。
+>
+> **观察项 D-ON2-6d（环境，非本任务红灯，不需返工）**：泳道 worktree 全量 `"$SDD_PYTHON" -m pytest tests/ -q`
+> 实测 `1 failed, 3022 passed, 7 skipped`，唯一失败项 `tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit`
+> 与本任务改动无关（本任务没碰 `docs/openers/commit-launcher.sh` / `scripts/commit_request.py` / 该用例）；
+> 成因＝本泳道 worktree **无 `venv/`**，launcher 的 python 解析回退到系统 python3（3.9、无 pytest）⇒ 体积闸被跳过
+> ⇒ 期望的 `.rejected` 变成 `.done`。同源登记与主工作区反证见
+> `2026-10-10-channel-resume-intake-unit2-dedup-merge.md` 的 D-CU2-7c。⛔ 不在本任务里修（越出本任务 Files 段）。
+
 ---
 
 ### Task 7: 部门经理只读页（HTML + JSON 端点，tasks 2.6）

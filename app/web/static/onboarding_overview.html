@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css?v=20261010">
+  <title>入职总览 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">HR 工作台 · 入职总览</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">入职总览</h1>
+    <div class="card">
+      <table class="data-table">
+        <thead>
+          <tr><th>候选人</th><th>部门</th><th>入职日</th><th>进度</th><th>逾期条目</th><th>操作</th></tr>
+        </thead>
+        <tbody id="overview-body"></tbody>
+      </table>
+      <p id="empty-hint" class="empty-hint" style="display:none">暂无进行中的入职清单。</p>
+    </div>
+  </main>
+  <script>
+    async function load() {
+      const resp = await fetch("api/onboarding");
+      if (!resp.ok) throw new Error("加载失败");
+      const data = await resp.json();
+      const body = document.getElementById("overview-body");
+      body.innerHTML = "";
+      document.getElementById("empty-hint").style.display = data.checklists.length ? "none" : "block";
+      for (const c of data.checklists) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${c.candidate_name}</td><td>${c.department || ""}</td>` +
+          `<td>${c.start_date}</td><td>${c.progress_percent}%</td><td>${c.overdue_count}</td>` +
+          `<td><a href="applications/${c.application_id}/onboarding">查看清单</a></td>`;
+        body.appendChild(tr);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
