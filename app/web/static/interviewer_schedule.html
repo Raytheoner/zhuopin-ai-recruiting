@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>当日安排</title><!--BASE_HREF--></head>
+<body>
+<h1>当日安排（未来 7 日）</h1>
+<ul id="list"></ul>
+<script>
+async function refresh() {
+  const r = await fetch("api/interviewers/me/schedule");
+  if (r.status === 401) { location.href = "login"; return; }
+  const d = await r.json();
+  document.getElementById("list").innerHTML = d.slots.map(s =>
+    `<li>${s.start_at}–${s.end_at} · ${s.candidate_name} · ${s.job_title} · ` +
+    `第${s.round}轮 · ${s.mode} · ${s.status}</li>`).join("");
+}
+refresh();
+</script>
+</body>
+</html>

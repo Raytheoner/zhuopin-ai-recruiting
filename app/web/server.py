@@ -110,6 +110,7 @@ from app.storage.interview_scheduling import (
     AvailabilityOccupiedError,
     AvailabilityOverlapError,
     InterviewerNotInRosterError,
+    day_schedule,
     delete_availability,
     interviewer_id_for_username,
     list_availability,
@@ -505,6 +506,30 @@ def create_app(
         except (AvailabilityNotFoundError, AvailabilityOccupiedError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"ok": True}
+
+    @router.get("/api/interviewers/me/schedule")
+    def my_schedule(request: Request, interviewer_id: str | None = None):
+        username = _authenticated_username(request)
+        role = _account_role(username)
+        if role == "hr":
+            if interviewer_id is None:
+                raise HTTPException(status_code=422, detail="HR 只读查看需指定 interviewer_id")
+            target = interviewer_id
+        elif role == "interviewer":
+            target = interviewer_id_for_username(conn, username)
+            if target is None:
+                raise HTTPException(status_code=403, detail="当前账号不在面试官名单内")
+        else:
+            raise HTTPException(status_code=403, detail="仅面试官或 HR 可访问")
+        return {"interviewer_id": target, "slots": day_schedule(conn, interviewer_id=target)}
+
+    @router.get("/interviewers/me/availability")
+    def interviewer_availability_page():
+        return _render_static_page("interviewer_availability.html", root_path)
+
+    @router.get("/interviewers/me/schedule")
+    def interviewer_schedule_page():
+        return _render_static_page("interviewer_schedule.html", root_path)
 
     @router.get("/login")
     def login_page():
