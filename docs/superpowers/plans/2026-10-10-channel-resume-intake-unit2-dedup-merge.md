@@ -983,32 +983,36 @@ def effect_merge_candidates(
         (secondary_id,),
     ).fetchall()
 
+    # 2026-10-11 修正（1001O seg2 Spec review F1）：**改挂前**冻结主方既有投递快照，
+    # 校验与写关闭共用同一份——⛔ 不在改挂循环里现查：那会读到自己刚改挂的行，被合并方
+    # 同岗位多份、主方没有时会凭空写 closed_by_merge（HR 未被提示、产生错误审计事实）。
+    primary_apps_by_job: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT id, job_id FROM application WHERE candidate_id = ? ORDER BY created_at, id",
+        (primary_id,),
+    ).fetchall():
+        primary_apps_by_job.setdefault(row[1], row[0])
+
     # 同岗位双投递：合并前必须由 HR 选保留哪份（spec「同岗位双投递」）。
     for application_id, job_id in secondary_apps:
-        primary_open = conn.execute(
-            "SELECT id FROM application WHERE candidate_id = ? AND job_id = ? AND id != ?",
-            (primary_id, job_id, application_id),
-        ).fetchone()
+        primary_open = primary_apps_by_job.get(job_id)
         if primary_open is None:
             continue
         keep_id = keep_application_per_job.get(job_id)
-        if keep_id not in (application_id, primary_open[0]):
+        if keep_id not in (application_id, primary_open):
             raise MergeValidationError(f"岗位 {job_id} 存在双投递，必须指定保留哪份投递")
 
     snapshot = _snapshot_secondary(conn, secondary_id)
     merge_log_id = str(uuid.uuid4())
 
     for application_id, job_id in secondary_apps:
-        primary_open = conn.execute(
-            "SELECT id FROM application WHERE candidate_id = ? AND job_id = ? AND id != ?",
-            (primary_id, job_id, application_id),
-        ).fetchone()
+        primary_open = primary_apps_by_job.get(job_id)
         conn.execute(
             "UPDATE application SET candidate_id = ? WHERE id = ?", (primary_id, application_id)
         )
         if primary_open is not None:
             keep_id = keep_application_per_job.get(job_id)
-            loser_id = primary_open[0] if keep_id == application_id else application_id
+            loser_id = primary_open if keep_id == application_id else application_id
             _write_closed_by_merge(conn, loser_id, merged_by)
 
     conn.execute(
@@ -1113,6 +1117,29 @@ def test_same_job_double_application_requires_keep_choice(conn):
         "AND action = 'closed_by_merge'"
     ).fetchone()
     assert closed is not None
+    assert result["merge_log_id"]
+
+
+def test_secondary_multi_same_job_without_primary_open_stays_open(conn):
+    """主方同岗位没有投递、被合并方同岗位两份：两份都改挂，⛔ 不产生 closed_by_merge。
+
+    2026-10-11 修正（1001O seg2 Spec review F1）：旧实现改挂后重查主方投递会读到
+    自己刚改挂的行，凭空写 closed_by_merge（HR 未被提示）。"""
+    _seed_candidate(conn, "p1", "张三")
+    _seed_candidate(conn, "s1", "李四")
+    _seed_resume_application(conn, resume_id="r1", candidate_id="s1", job_id="j1")
+    _seed_resume_application(conn, resume_id="r2", candidate_id="s1", job_id="j1")
+
+    result = _merge(conn, primary_id="p1", secondary_id="s1", keep={})
+
+    rows = conn.execute(
+        "SELECT id, candidate_id FROM application WHERE job_id = 'j1' ORDER BY id"
+    ).fetchall()
+    assert rows == [("app-r1", "p1"), ("app-r2", "p1")]
+    closed = conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE action = 'closed_by_merge'"
+    ).fetchone()[0]
+    assert closed == 0
     assert result["merge_log_id"]
 
 
