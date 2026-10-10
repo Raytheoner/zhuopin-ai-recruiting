@@ -19,8 +19,8 @@
 
 ② 计划文本的 import 行同时引入 `effect_unmerge_candidates`，那是 **Task 6** 才落地的
    符号。照抄的话本文件 import 期即 ImportError，`-k 'not unmerge'` 拦不住
-   （收集中断不是用例失败）。落地：本任务只 import Task 5 真正产出的两个名字，
-   Task 6 追加撤销用例时把第三个名字补回这一行。
+   （收集中断不是用例失败）。落地：Task 5 只 import 它真正产出的两个名字；Task 6
+   追加撤销用例时把第三个名字补回这一行（已完成）。
 """
 from __future__ import annotations
 
@@ -29,7 +29,11 @@ import sqlite3
 
 import pytest
 
-from app.intake.merge import MergeValidationError, effect_merge_candidates
+from app.intake.merge import (
+    MergeValidationError,
+    effect_merge_candidates,
+    effect_unmerge_candidates,
+)
 from app.storage.db import init_schema
 
 
@@ -146,3 +150,55 @@ def test_merge_replay_is_short_circuited(conn):
     second = _merge(conn, primary_id="p1", secondary_id="s1", request_id="req-1")
     assert first is not None and second is None
     assert conn.execute("SELECT COUNT(*) FROM candidate_merge_log").fetchone()[0] == 1
+
+
+def test_unmerge_restores_secondary_and_keeps_new_primary_records(conn):
+    """合并→新增→撤销三段：撤销只恢复 secondary 原有归属，primary 新增记录保留。"""
+    _seed_candidate(conn, "p1", "张三")
+    _seed_candidate(conn, "s1", "李四")
+    _seed_resume_application(conn, resume_id="r1", candidate_id="s1", job_id="j1")
+    result = _merge(conn, primary_id="p1", secondary_id="s1")
+
+    # 合并期间 primary 新增一份投递（不在快照里）
+    _seed_resume_application(conn, resume_id="r-new", candidate_id="p1", job_id="j2")
+
+    effect_unmerge_candidates(
+        conn,
+        thread_id=result["merge_log_id"],
+        business_key="undo",
+        merge_log_id=result["merge_log_id"],
+        unmerged_by="alice",
+    )
+
+    assert conn.execute(
+        "SELECT merged_into FROM candidate WHERE id = 's1'"
+    ).fetchone()[0] is None
+    assert conn.execute(
+        "SELECT candidate_id FROM application WHERE resume_id = 'r1'"
+    ).fetchone()[0] == "s1"
+    assert conn.execute(
+        "SELECT candidate_id FROM application WHERE resume_id = 'r-new'"
+    ).fetchone()[0] == "p1"
+    log = conn.execute(
+        "SELECT unmerged_by, unmerged_at FROM candidate_merge_log WHERE id = ?",
+        (result["merge_log_id"],),
+    ).fetchone()
+    assert log[0] == "alice"
+    assert log[1] is not None
+
+
+def test_unmerge_replay_is_short_circuited_and_second_is_rejected(conn):
+    _seed_candidate(conn, "p1", "张三")
+    _seed_candidate(conn, "s1", "李四")
+    _seed_resume_application(conn, resume_id="r1", candidate_id="s1", job_id="j1")
+    result = _merge(conn, primary_id="p1", secondary_id="s1")
+
+    first = effect_unmerge_candidates(
+        conn, thread_id=result["merge_log_id"], business_key="undo",
+        merge_log_id=result["merge_log_id"], unmerged_by="alice",
+    )
+    second = effect_unmerge_candidates(
+        conn, thread_id=result["merge_log_id"], business_key="undo",
+        merge_log_id=result["merge_log_id"], unmerged_by="alice",
+    )
+    assert first is not None and second is None

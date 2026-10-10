@@ -109,7 +109,11 @@ from app.graph.resume_nodes import effect_persist_parse
 from app.graph.screening_nodes import compute_screen, effect_persist_flags
 from app.intake.bundle import FileEntry
 from app.intake.ingest_bundle import effect_ingest_bundle
-from app.intake.merge import effect_attach_resume_to_candidate, effect_merge_candidates
+from app.intake.merge import (
+    effect_attach_resume_to_candidate,
+    effect_merge_candidates,
+    effect_unmerge_candidates,
+)
 from app.outbound.messages import CandidateOutboundMessage
 from app.schemas.job_profile import JobProfile
 from app.schemas.live_turn_event import LiveTurnEvent
@@ -152,6 +156,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_ingest_bundle",
         "effect_attach_resume_to_candidate",
         "effect_merge_candidates",
+        "effect_unmerge_candidates",
         "effect_persist_flags",
         "effect_persist_prep_draft",
         "effect_freeze_prep",
@@ -418,6 +423,9 @@ _APPLICATION = "application-4-4"
 # thread_id（幂等键 = {primary_id}:effect_merge_candidates:{secondary_id}:{request_id}）。
 _MERGE_PRIMARY = "candidate-4-4-merge-primary"
 _MERGE_SECONDARY = "candidate-4-4-merge-secondary"
+# channel-resume-intake U2 Task 6：撤销配方的合并留痕 id 同时是 thread_id
+# （幂等键 = {merge_log_id}:effect_unmerge_candidates:undo）。
+_MERGE_LOG = "merge-log-4-4"
 _ONBOARDING_CHECKLIST = "checklist-4-4"
 _ONBOARDING_ITEM = "item-4-4"
 _PREP_RUN = "prep-run-4-4"
@@ -549,6 +557,64 @@ def _seed_merge_pair(conn: sqlite3.Connection) -> None:
         "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
         "VALUES (?, ?, ?, ?, 'initial')",
         (_APPLICATION, _MERGE_SECONDARY, _JOB, _RESUME),
+    )
+    conn.commit()
+
+
+def _seed_merge_log_for_unmerge(conn: sqlite3.Connection) -> None:
+    """`effect_unmerge_candidates` 的种子：一份**已完成**的合并留痕。
+
+    ⛔ 刻意**不**调 `effect_merge_candidates` 造这行留痕：那会给 effect_log 写一行，
+    而配方连接的 `_CrashBeforeDurableCommit` 正是在"INSERT INTO effect_log 之后的
+    那一次 commit"上抛——种子的 commit 就成了崩溃点，`recipe.seed()` 自己先炸，
+    协议还没开始就结束了。这里按合并**之后**的磁盘状态手插：
+    application 挂在 primary 名下、secondary.merged_into 已指向 primary、
+    candidate_merge_log 带一份包含该 application 的快照（撤销就是按它还原）。
+    """
+    conn.execute(
+        "INSERT INTO job (id, title, status) VALUES (?, '嵌入式工程师', 'drafting')",
+        (_JOB,),
+    )
+    conn.execute("INSERT INTO candidate (id, name) VALUES (?, '张三')", (_MERGE_PRIMARY,))
+    conn.execute("INSERT INTO candidate (id, name) VALUES (?, '李四')", (_MERGE_SECONDARY,))
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES (?, ?, 'synthetic', 'a.pdf', 'hash1', 'alice')",
+        (_RESUME, _JOB),
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES (?, ?, ?, ?, 'initial')",
+        (_APPLICATION, _MERGE_PRIMARY, _JOB, _RESUME),
+    )
+    conn.execute(
+        "UPDATE candidate SET merged_into = ? WHERE id = ?", (_MERGE_PRIMARY, _MERGE_SECONDARY)
+    )
+    conn.execute(
+        "INSERT INTO candidate_merge_log "
+        "(id, primary_id, secondary_id, reason, secondary_snapshot, merged_by) "
+        "VALUES (?, ?, ?, '电话确认同一人', ?, 'alice')",
+        (
+            _MERGE_LOG,
+            _MERGE_PRIMARY,
+            _MERGE_SECONDARY,
+            json.dumps(
+                {
+                    "secondary_id": _MERGE_SECONDARY,
+                    "applications": [
+                        {
+                            "id": _APPLICATION,
+                            "job_id": _JOB,
+                            "resume_id": _RESUME,
+                            "current_stage_id": "initial",
+                            "status": "active",
+                            "kanban_state": None,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ),
     )
     conn.commit()
 
@@ -1350,6 +1416,34 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "effect_log INSERT 之后的那次 commit 上，此时留痕、application 改挂、"
                 "secondary.merged_into 三处业务写都还在同一个事务里，随连接一起丢弃；"
                 "重放时 effect_log 先短路，撞不到 idx_candidate_merge_log_active_secondary。"
+            ),
+        ),
+        "effect_unmerge_candidates": Recipe(
+            thread_id=_MERGE_LOG,
+            seed=_seed_merge_log_for_unmerge,
+            invoke=lambda conn: effect_unmerge_candidates(
+                conn,
+                thread_id=_MERGE_LOG,
+                # 幂等键 = {merge_log_id}:effect_unmerge_candidates:undo
+                business_key="undo",
+                merge_log_id=_MERGE_LOG,
+                unmerged_by="alice",
+            ),
+            # 业务事实 = 按快照**归还**给被合并方的投递份数（种子那份挂在 primary
+            # 名下 ⇒ 生效前 0、生效后 1）。⚠️ 与合并配方口径相反不是笔误：合并只
+            # 改挂、行数不变，只有"归属"能分辨；撤销的归属变化本身就是可数的——它
+            # 恰恰是 spec「撤销合并 ⇒ 简历与投递归还」那句话的可执行形式。
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM application WHERE candidate_id = ?", (_MERGE_SECONDARY,)
+            ).fetchone()[0],
+            note=(
+                "**value-idempotent**：撤销是 UPDATE 族（恢复投递归属 + 清 "
+                "merged_into + 写 unmerged_by/at），行数口径改用「已归还到被合并方名下的"
+                "投递数」，与 effect_mark_needs_manual / effect_update_item 同一手法。"
+                "崩溃点落在 effect_log INSERT 之后的那次 commit 上，三处业务写都还在"
+                "同一个事务里、随连接一起丢弃（这正是最危险的那个窗口：业务写落了盘而"
+                "effect_log 没落，重放会撞「该合并已被撤销」永久失败）；重放时 effect_log "
+                "先短路，撤销恰好发生一次。"
             ),
         ),
         "effect_ingest_bundle": Recipe(

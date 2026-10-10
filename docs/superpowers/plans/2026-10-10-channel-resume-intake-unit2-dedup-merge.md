@@ -1256,6 +1256,57 @@ python -m pytest tests/test_merge_unmerge.py -q -k 'not unmerge'
 - Produces: `effect_unmerge_candidates(conn, *, thread_id, business_key, merge_log_id, unmerged_by) -> dict | None`
 - 幂等键：`{merge_log_id}:effect_unmerge_candidates:undo`
 
+> **偏离登记 D-CU2-7（执行期实测，2026-10-11 Task 6 落地时登记）**
+>
+> **D-CU2-7a（漏列文件，不可代）——Task 6 的 Files 段漏了
+> `tests/test_effect_idempotency_suite.py`，与 D-CU2-6 同一类。**
+> 该文件是工程铁律 1 的全量守护（AST 扫 `app/` 下全部 `@idempotent_effect`
+> 字面量，与硬编码 `EFFECT_NODE_MANIFEST` 双向比对，并要求每个节点各有一条
+> 崩溃-恢复配方）。只加节点不改这份清单时，实测当场变红：
+> `test_manifest_matches_the_source_tree` →
+> 「源码里新增了 effect 节点但没进本文件的清单：['effect_unmerge_candidates']」
+> （98 passed / 1 failed）。这条不是新发现——D-CU2-6 的登记里已写明「Task 6 的
+> 撤销节点落地时同样要在此处补一条」，本任务照此执行。
+> 落地：清单加 `effect_unmerge_candidates`；新增种子 `_seed_merge_log_for_unmerge`
+> ＋ `Recipe(thread_id=merge_log_id, business_key="undo",
+> count_business_rows=已归还到被合并方名下的投递数)`。实测该文件 99 → 101 passed
+> （两条通用协议 × 新节点 = 2 条新用例，与 D-CU2-6 的 97 → 99 同构）。
+> ⚠️ 两条口径为什么与合并配方相反不是笔误：合并只把 `application.candidate_id`
+> 改挂、**行数不变**，只有 `candidate_merge_log` 行数能分辨生效与否；撤销的归属
+> 变化本身可数（`candidate_id = secondary` 的投递数 0 → 1），且它正是 spec
+> 「撤销合并 ⇒ 简历与投递归还」那句的可执行形式，故取它。撤销是 UPDATE 族
+> （恢复归属 + 清 `merged_into` + 写 `unmerged_by/at`），与
+> `effect_mark_needs_manual`／`effect_update_item` 同属 value-idempotent 口径。
+> ⛔ 种子**不**调 `effect_merge_candidates` 造留痕：配方连接的
+> `_CrashBeforeDurableCommit` 在「`INSERT INTO effect_log` 之后的那次 commit」
+> 上抛，合并节点会在种子的 `commit()` 里就打响中断，协议还没开始就结束。
+> 种子按合并**之后**的磁盘状态手插（application 挂 primary、`merged_into` 已置、
+> 留痕带快照）。
+>
+> **D-CU2-7b（闸数字，不可代）——Step 3 写的「预期 5 passed」在本仓已过期。**
+> 实际 `"$SDD_PYTHON" -m pytest tests/test_merge_unmerge.py -q` ⇒ `6 passed`：
+> Task 5 落地时该文件是 4 条（D-CU2-5 的登记已按 main `56c9395` 的 F1 回归用例
+> 修正为 4），加上本任务 Step 2 的 2 条 = 6。D-CU2-5 的登记里已预先写明
+> 「Task 6 落地后同一文件自然变成 6 passed」，此处只是实测坐实；⛔ 不要为了让
+> 数字对上计划文本而删用例。
+>
+> 注：Step 1 的节点代码与 Step 2 的用例体**逐字落地**，⛔ 无偏离。
+>
+> **观察项 D-CU2-7c（环境，非本任务红灯，不需返工）——泳道 worktree 里
+> `tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit` 必红。**
+> 全量 `pytest tests/ -q` 实测 `1 failed, 2971 passed, 7 skipped`，唯一失败项就是它。
+> 成因（读源码定位，非猜测）：`docs/openers/commit-launcher.sh` 的 python 解析顺序是
+> `$REPO/venv` → `$REPO/.venv`（单测里 `$REPO` 是 tmp 仓，二者必无）→
+> `$SELF_DIR/../../venv`（= **本泳道 worktree 的** venv，本 worktree 无 venv）→
+> `command -v python3`（本机 3.9、无 pytest）；而 `scripts/commit_request.py`
+> `run_doc_size_test()` 的判据是「没有 venv 且当前解释器没有 pytest ⇒ 跳过、算通过」。
+> 于是体积闸被跳过 ⇒ 该用例期望的 `rejected` 变成 `done`。
+> 🧪 反证：同一用例在**主工作区**（有 `venv/`）跑 ⇒ `1 passed in 0.63s`。
+> ⇒ 与本任务改动无关（本任务没碰 launcher／`commit_request.py`／该用例），
+> 是"泳道 worktree 无 venv"这一既有环境差异的必然结果。
+> ⛔ 不在本任务里修（改 launcher 的 venv 回退属于工具链变更，越出 Task 6 的 Files 段）；
+> 留作观察项，供收口批次按需处置。
+
 - [ ] **Step 1: 在 `app/intake/merge.py` 追加撤销逻辑**
 
 ```python

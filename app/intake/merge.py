@@ -192,3 +192,51 @@ def effect_merge_candidates(
         "UPDATE candidate SET merged_into = ? WHERE id = ?", (primary_id, secondary_id)
     )
     return {"merge_log_id": merge_log_id, "primary_id": primary_id, "secondary_id": secondary_id}
+
+
+@idempotent_effect("effect_unmerge_candidates")
+def effect_unmerge_candidates(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    merge_log_id: str,
+    unmerged_by: str,
+) -> dict:
+    """按快照恢复 secondary 原有 application 归属；合并期间 primary 新增记录保留在
+    primary；写 unmerged_by/at 并清 secondary.merged_into。
+    幂等键 {merge_log_id}:effect_unmerge_candidates:undo。"""
+    row = conn.execute(
+        "SELECT primary_id, secondary_id, secondary_snapshot, unmerged_at "
+        "FROM candidate_merge_log WHERE id = ?",
+        (merge_log_id,),
+    ).fetchone()
+    if row is None:
+        raise MergeValidationError("合并留痕不存在")
+    if row[3] is not None:
+        raise MergeValidationError("该合并已被撤销")
+
+    primary_id, secondary_id, snapshot_json = row[0], row[1], row[2]
+    # 只按快照还原：快照之外的 application（合并后 primary 新增的投递）⛔ 不动，
+    # 它们本来就挂在 primary 上。
+    snapshot = json.loads(snapshot_json)
+    for app in snapshot["applications"]:
+        conn.execute(
+            "UPDATE application SET candidate_id = ?, current_stage_id = ?, "
+            "status = ?, kanban_state = ? WHERE id = ?",
+            (
+                secondary_id,
+                app["current_stage_id"],
+                app["status"],
+                app["kanban_state"],
+                app["id"],
+            ),
+        )
+
+    conn.execute("UPDATE candidate SET merged_into = NULL WHERE id = ?", (secondary_id,))
+    conn.execute(
+        "UPDATE candidate_merge_log SET unmerged_by = ?, unmerged_at = datetime('now') "
+        "WHERE id = ?",
+        (unmerged_by, merge_log_id),
+    )
+    return {"merge_log_id": merge_log_id, "primary_id": primary_id, "secondary_id": secondary_id}
