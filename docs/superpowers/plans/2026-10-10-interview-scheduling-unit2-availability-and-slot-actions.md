@@ -1574,6 +1574,11 @@ python3 -m pytest tests/test_interview_views.py -q
 > 面试官名单」改为通用措辞（被排期场景复用时属文案串岗）。回归钉（已随本次落地在
 > `tests/test_interview_views.py`）：取法断言／非 401 分支断言／POST-404 用例／
 > HR 排期页子路径渲染用例。
+> **补充（同日 Task 8 review 后）**：⑤ `ScheduleSlotRequest` 加 `round: int = Field(ge=1)`
+> 与 `mode: Literal["onsite","phone","online"]`（文件顶部补 import `Field`/`Literal`）——
+> 非法值 422，⛔ 不漏到 DB CHECK 的 IntegrityError；⑥ reschedule／cancel／complete
+> 三路由的 `except SlotNotFoundError` 同样单独前置（404 语义），配套用例见 Task 8
+> （`test_reschedule_must_pass_conflict_check`／`test_schedule_rejects_invalid_mode_and_round`）。
 
 **文件**：`app/web/server.py`（修改）、`app/middleware/auth.py`（修改）、
 `app/web/static/application_schedule.html`（新增）
@@ -1617,10 +1622,12 @@ from app.storage.interview_scheduling import (
 class ScheduleSlotRequest(BaseModel):
     request_id: str
     interviewer_ids: list[str]
-    round: int
+    # 2026-10-11 修正（Spec review 实测）：round≥1、mode 白名单——⛔ 不能让非法值
+    # 漏到 DB CHECK（IntegrityError 未处理 ⇒ 500）；Pydantic 层直接 422。
+    round: int = Field(ge=1)
     start_at: str
     end_at: str
-    mode: str
+    mode: Literal["onsite", "phone", "online"]
     location_or_link: str | None = None
 
 
@@ -1731,7 +1738,11 @@ class CompleteSlotRequest(BaseModel):
                     "details": [c.detail for c in exc.conflicts],
                 },
             ) from exc
-        except (SlotStateError, SlotNotFoundError, ValueError) as exc:
+        except SlotNotFoundError as exc:
+            # 2026-10-11 修正（Spec review）：SlotNotFoundError 是 ValueError 子类，
+            # ⛔ 必须单独前置——否则"场次中途消失"的 404 语义被宽分支吞成 422。
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return slot_for(conn, slot_id)
 
@@ -1751,7 +1762,9 @@ class CompleteSlotRequest(BaseModel):
                 cancel_reason=req.cancel_reason,
                 actor=actor,
             )
-        except (SlotStateError, SlotNotFoundError, ValueError) as exc:
+        except SlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return slot_for(conn, slot_id)
 
@@ -1773,7 +1786,9 @@ class CompleteSlotRequest(BaseModel):
                 target_status=req.target_status,
                 actor=reviewer_of(request),
             )
-        except (SlotStateError, CompletionBeforeStartError, SlotNotFoundError, ValueError) as exc:
+        except SlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, CompletionBeforeStartError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return slot_for(conn, slot_id)
 ```
@@ -1910,9 +1925,12 @@ def _login(client, conn, account_id: str) -> None:
 
 
 def _avail(conn, interviewer_id: str) -> None:
+    # 2026-10-11 修正（Spec review）：窗口取到 3000 年——test_complete_before_start_rejected
+    # 排的是 2999-01-01 的场次，窗口若只到 2020 该场次会被判 interviewer_no_availability
+    # 而根本没建成（complete 退化成 404 而非 422）。窗口必须覆盖本文件全部用例。
     conn.execute(
         "INSERT INTO interviewer_availability (id, interviewer_id, start_at, end_at, note, registered_by, on_behalf) "
-        "VALUES (?, ?, '2020-01-01 00:00', '2020-01-01 23:00', NULL, 'iv-1', 0)",
+        "VALUES (?, ?, '2020-01-01 00:00', '3000-01-01 00:00', NULL, 'iv-1', 0)",
         (str(uuid.uuid4()), interviewer_id),
     )
     conn.commit()
@@ -1981,6 +1999,38 @@ def test_duplicate_round_rejected(make_test_client):
     assert resp.status_code == 422
 
 
+def test_reschedule_must_pass_conflict_check(make_test_client):
+    """改期重过冲突检查：改到可用窗口之外 ⇒ 409（删掉 `_assert_no_conflicts` 必红）。"""
+    client, conn = make_test_client()
+    seed = _seed(conn)
+    _avail(conn, seed["interviewer_id"])
+    _login(client, conn, seed["hr_id"])
+    assert _schedule(client, request_id="req-1", interviewer_ids=[seed["interviewer_id"]]).status_code == 201
+    resp = client.post("/api/interview-slots/req-1/reschedule", json={
+        "request_id": "rr-1", "start_at": "2019-01-01 10:00", "end_at": "2019-01-01 11:00",
+    })
+    assert resp.status_code == 409
+    assert "interviewer_no_availability" in resp.json()["detail"]["conflicts"]
+
+
+def test_schedule_rejects_invalid_mode_and_round(make_test_client):
+    """非法 mode / round<1 ⇒ 422（⛔ 不能漏到 DB CHECK 的 IntegrityError ⇒ 500）。"""
+    client, conn = make_test_client()
+    seed = _seed(conn)
+    _avail(conn, seed["interviewer_id"])
+    _login(client, conn, seed["hr_id"])
+    bad_mode = client.post("/api/applications/app1/schedule", json={
+        "request_id": "req-m", "interviewer_ids": [seed["interviewer_id"]], "round": 1,
+        "start_at": "2020-01-01 10:00", "end_at": "2020-01-01 11:00", "mode": "video",
+    })
+    assert bad_mode.status_code == 422
+    bad_round = client.post("/api/applications/app1/schedule", json={
+        "request_id": "req-r", "interviewer_ids": [seed["interviewer_id"]], "round": 0,
+        "start_at": "2020-01-01 10:00", "end_at": "2020-01-01 11:00", "mode": "onsite",
+    })
+    assert bad_round.status_code == 422
+
+
 def test_reschedule_updates_time_and_history(make_test_client):
     client, conn = make_test_client()
     seed = _seed(conn)
@@ -1994,7 +2044,10 @@ def test_reschedule_updates_time_and_history(make_test_client):
     assert resp.json()["start_at"] == "2020-01-01 12:00"
     assert resp.json()["status"] == "rescheduled"
     rows = conn.execute(
-        "SELECT action FROM application_stage_history WHERE application_id='app1' ORDER BY occurred_at, id"
+        # 2026-10-11 修正（Spec review）：occurred_at 是秒级、id 是随机 uuid ⇒ 同秒落库时
+        # 排序随机；改按插入顺序 rowid 稳定断言 scheduled → rescheduled。
+        "SELECT action FROM application_stage_history WHERE application_id='app1' "
+        "ORDER BY occurred_at, rowid"
     ).fetchall()
     assert [r[0] for r in rows] == ["scheduled", "rescheduled"]
 
