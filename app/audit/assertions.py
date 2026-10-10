@@ -409,18 +409,200 @@ def assert_every_decision_has_human_review(
     )
 
 
-# ── 四条一起跑 ──────────────────────────────────────────────────────────
+# ── 断言五（channel-resume-intake U3 tasks 3.4①）：候选人表无明文手机号列 ────
+#
+# 合规红线「模型全部走境内，简历数据不出境」与 M2 D11「手机号只用于去重、以哈希
+# 存储、明文不落库」的结构守护。
+# ⚠️ 它验的是**表结构**，不是行内容：明文手机号一旦有列可落，写入方迟早会出现，
+# 而等它出现再查数据，数据已经进库了。
+# 「扩到 resume.source_*」= 同一手法钉住简历的来源列集合：只许 source /
+# source_origin 两个取值，⛔ 不许出现 source_text 这类"明文来源文本"列（来源一旦
+# 有自由文本列，确定性规则与值域约束就会被绕过）。
+
+ASSERTION_NO_PLAINTEXT_PHONE = "candidate 无明文手机号列（resume 的来源列集合同时被钉住）"
+
+# 「疑似手机号列」的判据是列名标记，不是数据内容。⚠️ 白名单是显式的：phone_hash
+# 命中标记但必须放行——哈希列是"手机号可以落库的唯一形态"（M2 D11）。
+_PHONE_COLUMN_MARKERS = ("phone", "mobile", "cell", "tel")
+_CANDIDATE_PHONE_COLUMNS_ALLOWED = frozenset({"phone_hash"})
+_RESUME_SOURCE_COLUMNS_ALLOWED = frozenset({"source", "source_origin"})
+
+
+def assert_no_plaintext_phone_column(conn: sqlite3.Connection) -> AssertionResult:
+    """候选人与简历两张表的结构判据。
+
+    两张表缺一不可：candidate 是"手机号有没有明文列"的唯一归属地，resume 是
+    "来源有没有变成自由文本"的唯一归属地。缺表一律 fail-closed——验不了就算不
+    通过（与断言一/断言四同一口径）。
+    """
+    for table in ("candidate", "resume"):
+        if not _table_exists(conn, table):
+            return AssertionResult(
+                name=ASSERTION_NO_PLAINTEXT_PHONE,
+                ok=False,
+                violations=({"table": table, "issue": "table_missing"},),
+                detail=(
+                    f"{table} 表不存在。本条断言是「手机号明文不落库」与「来源不得"
+                    "变成自由文本」的结构守卫，缺表等于验不了——fail-closed："
+                    "验不了就算不通过。"
+                ),
+            )
+
+    violations: list[dict[str, Any]] = []
+    for column in sorted(_columns(conn, "candidate")):
+        if column in _CANDIDATE_PHONE_COLUMNS_ALLOWED:
+            continue
+        lowered = column.lower()
+        if any(marker in lowered for marker in _PHONE_COLUMN_MARKERS):
+            violations.append({"table": "candidate", "column": column})
+    for column in sorted(_columns(conn, "resume")):
+        if column in _RESUME_SOURCE_COLUMNS_ALLOWED:
+            continue
+        if column.lower().startswith("source"):
+            violations.append({"table": "resume", "column": column})
+
+    return AssertionResult(
+        name=ASSERTION_NO_PLAINTEXT_PHONE,
+        ok=not violations,
+        violations=tuple(violations),
+        detail=(
+            ""
+            if not violations
+            else "发现疑似明文手机号列或来源自由文本列。手机号只允许哈希列"
+            "（candidate.phone_hash，M2 D11）；简历来源只允许 resume.source /"
+            " resume.source_origin 两列（值域由应用层 Source 枚举约束）。"
+            "⛔ 不要把这些列加进白名单——那是把红线缺口登记成合规。"
+        ),
+    )
+
+
+# ── 断言六（U3 tasks 3.4②）：合并留痕的操作人非空 ────────────────────────
+#
+# 合规红线「淘汰必须有人工确认节点并留痕」在合并路径上的对应物：合并是不可逆的
+# 个人信息记录变更（design D4），没有操作人的合并行等于没人负责。
+# ⚠️ candidate_merge_log 的 DDL 自带 CHECK，所以本断言的违例行只可能来自绕过
+# CHECK 的写入路径（PRAGMA ignore_check_constraints）——与断言二同一性质：是
+# CHECK 之上的纵深防御，不是重复劳动。
+
+MERGE_LOG_TABLE = "candidate_merge_log"
+
+ASSERTION_MERGE_LOG_HAS_ACTOR = "candidate_merge_log 每行 merged_by 非空"
+
+
+def assert_merge_log_rows_have_actor(conn: sqlite3.Connection) -> AssertionResult:
+    if not _table_exists(conn, MERGE_LOG_TABLE):
+        return AssertionResult(
+            name=ASSERTION_MERGE_LOG_HAS_ACTOR,
+            ok=False,
+            violations=({"table": MERGE_LOG_TABLE, "issue": "table_missing"},),
+            detail=(
+                f"{MERGE_LOG_TABLE} 表不存在。合并留痕是「谁把两个人合并成一个人」"
+                "的唯一记录，缺表等于这条红线完全没有机器守护——fail-closed："
+                "验不了就算不通过。"
+            ),
+        )
+    if "merged_by" not in _columns(conn, MERGE_LOG_TABLE):
+        return AssertionResult(
+            name=ASSERTION_MERGE_LOG_HAS_ACTOR,
+            ok=False,
+            violations=({"table": MERGE_LOG_TABLE, "missing_column": "merged_by"},),
+            detail=(
+                f"{MERGE_LOG_TABLE} 缺 merged_by 列。fail-closed：验不了就算不通过，"
+                "⛔ 不要改成跳过——跳过会把「列名改了」静默折成「零违例」。"
+            ),
+        )
+
+    rows = _rows(
+        conn,
+        f"SELECT * FROM {MERGE_LOG_TABLE} "
+        "WHERE merged_by IS NULL "
+        "OR trim(merged_by, ' ' || char(9) || char(10) || char(13)) = ''",
+    )
+    return AssertionResult(
+        name=ASSERTION_MERGE_LOG_HAS_ACTOR,
+        ok=not rows,
+        violations=tuple(rows),
+        detail=(
+            ""
+            if not rows
+            else f"发现 {len(rows)} 条没有操作人的合并留痕，违反合规红线"
+            "「淘汰必须有人工确认节点并留痕」在合并路径上的对应要求"
+            "（合并是对个人信息记录的不可逆变更，必须有人签字）。"
+            "这类记录只可能来自绕过 CHECK 的写入路径，需要查清来源。"
+        ),
+    )
+
+
+# ── 断言七（U3 tasks 3.4③）：被合并的候选人没有活跃投递 ──────────────────
+#
+# 合并的结构不变式：secondary 的 resume / application 一律改挂到 primary
+# （design D4），所以 merged_into 非空的候选人**不该**再持有任何活跃投递。
+# 它若成立，意味着有一条写入路径把新投递挂到了已合并候选人身上——那会让这个
+# 候选人在列表里"复活"，并在后续合并/撤销时产生归属混乱（design Risks 第 4 条）。
+
+ASSERTION_MERGED_CANDIDATE_HAS_NO_ACTIVE_APPLICATION = (
+    "merged_into 非空的候选人没有活跃投递"
+)
+
+
+def assert_merged_candidates_have_no_active_application(
+    conn: sqlite3.Connection,
+) -> AssertionResult:
+    if not _table_exists(conn, "candidate"):
+        return AssertionResult(
+            name=ASSERTION_MERGED_CANDIDATE_HAS_NO_ACTIVE_APPLICATION,
+            ok=False,
+            violations=({"table": "candidate", "issue": "table_missing"},),
+            detail="candidate 表不存在，合并标记无从校验——fail-closed：验不了就算不通过。",
+        )
+    if "merged_into" not in _columns(conn, "candidate"):
+        return AssertionResult(
+            name=ASSERTION_MERGED_CANDIDATE_HAS_NO_ACTIVE_APPLICATION,
+            ok=False,
+            violations=({"table": "candidate", "missing_column": "merged_into"},),
+            detail=(
+                "candidate 缺 merged_into 列（channel-resume-intake U2 tasks 2.4）。"
+                "fail-closed：验不了就算不通过。"
+            ),
+        )
+
+    rows = _rows(
+        conn,
+        "SELECT c.id AS candidate_id, c.merged_into AS merged_into, a.id AS application_id "
+        "FROM candidate c JOIN application a ON a.candidate_id = c.id "
+        "WHERE c.merged_into IS NOT NULL AND a.status = 'active'",
+    )
+    return AssertionResult(
+        name=ASSERTION_MERGED_CANDIDATE_HAS_NO_ACTIVE_APPLICATION,
+        ok=not rows,
+        violations=tuple(rows),
+        detail=(
+            ""
+            if not rows
+            else f"发现 {len(rows)} 条挂到已合并候选人身上的活跃投递。合并的约定是"
+            "被合并方的投递全部改挂到保留方（design D4）——这些行说明有写入路径把"
+            "投递挂给了已合并候选人，撤销合并时归属会乱。"
+        ),
+    )
+
+
+# ── 七条一起跑 ──────────────────────────────────────────────────────────
 
 COMPLIANCE_ASSERTIONS: tuple[Callable[[sqlite3.Connection], AssertionResult], ...] = (
     assert_no_ai_score_rejections,
     assert_no_blank_evidence_ref,
     assert_no_unlisted_criterion_key,
     assert_every_decision_has_human_review,
+    # channel-resume-intake U3 tasks 3.4：三条结构性红线（明文手机号 / 合并留痕
+    # 的操作人 / 被合并候选人的活跃投递）。
+    assert_no_plaintext_phone_column,
+    assert_merge_log_rows_have_actor,
+    assert_merged_candidates_have_no_active_application,
 )
 
 
 def run_compliance_assertions(conn: sqlite3.Connection) -> list[AssertionResult]:
-    """spec「合规断言在 CI 中执行」：四条全部成立才通过。
+    """spec「合规断言在 CI 中执行」：七条全部成立才通过。
 
     ⚠️ **全部跑完再返回，⛔ 不短路。** 第一条红了就返回的话，一次修复只能
     看到一条违例，第二条要等下一轮 CI 才现形。
