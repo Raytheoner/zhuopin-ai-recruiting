@@ -1063,6 +1063,13 @@ def test_checklist_page_html_has_no_upload_control():
     assert 'enctype="multipart/form-data"' not in html
 
 
+def test_checklist_page_extracts_application_id_from_middle_segment():
+    """2026-10-11 修正：⛔ 不能取 URL 末段（那是字面量 "onboarding"）。"""
+    html = (STATIC / "onboarding_checklist.html").read_text(encoding="utf-8")
+    assert "match(/\\/applications\\/([^/]+)\\/onboarding\\/?$/)" in html
+    assert 'split("/").filter(Boolean).pop()' not in html
+
+
 def test_checklist_page_is_served(make_test_client):
     client, conn = make_test_client()
     _seed_hired(conn)
@@ -1321,7 +1328,12 @@ from app.graph.onboarding_nodes import (
     </div>
   </main>
   <script>
-    const applicationId = location.pathname.split("/").filter(Boolean).pop();
+    // 2026-10-11 修正（1001G，Spec review 实测 blocker）：⛔ 不能用
+    // split("/").pop()——本页 URL 末段是字面量 "onboarding"，取到的是它而不是
+    // application_id（清单页会永远去拉一个不存在的投递）。用与 letters.html
+    // 同款正则从路径中段取（部署约束 1：不硬编码前缀，正则不含前导 "/"）。
+    const applicationId =
+      location.pathname.match(/\/applications\/([^/]+)\/onboarding\/?$/)[1];
     const detailUrl = `api/applications/${applicationId}/onboarding`;
     const instantiateUrl = `api/applications/${applicationId}/onboarding/instantiate`;
     const itemUrl = "api/onboarding/items";
