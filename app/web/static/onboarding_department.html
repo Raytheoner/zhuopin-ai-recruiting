@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css?v=20261010">
+  <title>部门入职进度 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">用人部门 · 入职进度（只读）</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">本部门入职进度</h1>
+    <div class="card" id="list-card">
+      <table class="data-table">
+        <thead>
+          <tr><th>待入职者</th><th>入职日</th><th>进度</th><th>逾期条目</th><th>操作</th></tr>
+        </thead>
+        <tbody id="list-body"></tbody>
+      </table>
+    </div>
+    <div class="card" id="detail-card" style="display:none">
+      <p id="detail-head"></p>
+      <table class="data-table">
+        <thead>
+          <tr><th>条目</th><th>负责方</th><th>状态</th><th>原因</th><th>操作</th></tr>
+        </thead>
+        <tbody id="detail-body"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    async function loadList() {
+      const resp = await fetch("api/onboarding/department");
+      if (!resp.ok) { alert("加载失败（可能留痕失败）"); return; }
+      const data = await resp.json();
+      const body = document.getElementById("list-body");
+      body.innerHTML = "";
+      for (const c of data.checklists) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${c.candidate_name}</td><td>${c.start_date}</td>` +
+          `<td>${c.progress_percent}%</td><td>${c.overdue_count}</td>` +
+          `<td><button data-app="${c.application_id}">查看</button></td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    async function openDetail(applicationId) {
+      const resp = await fetch(`api/onboarding/department/${applicationId}`);
+      if (!resp.ok) { alert("无法查看（可能跨部门或留痕失败）"); return; }
+      const payload = await resp.json();
+      document.getElementById("detail-card").style.display = "block";
+      document.getElementById("detail-head").textContent =
+        `${payload.candidate_name} · 入职日 ${payload.start_date} · 进度 ${payload.progress_percent}%`;
+      const body = document.getElementById("detail-body");
+      body.innerHTML = "";
+      for (const it of payload.items) {
+        const overdue = it.overdue ? " ⚠️逾期" : "";
+        const canEdit = it.owner_party === "dept" && it.status !== "done" && it.status !== "waived";
+        const btn = canEdit
+          ? `<button data-item="${it.item_id}">本部门完成</button>`
+          : "";
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${it.name}${overdue}</td><td>${it.owner_party}</td>` +
+          `<td>${it.status}</td><td>${it.reason || ""}</td><td>${btn}</td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    async function updateItem(itemId) {
+      const resp = await fetch(`api/onboarding/items/${itemId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to_status: "done", reason: null, request_id: crypto.randomUUID() }),
+      });
+      if (!resp.ok) { alert("操作失败"); return; }
+      location.reload();
+    }
+
+    document.getElementById("list-body").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-app]");
+      if (btn) openDetail(btn.dataset.app);
+    });
+    document.getElementById("detail-body").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-item]");
+      if (btn) updateItem(btn.dataset.item);
+    });
+    loadList();
+  </script>
+</body>
+</html>

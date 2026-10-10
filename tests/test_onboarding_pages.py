@@ -255,3 +255,124 @@ def test_hr_overview_excludes_closed_checklists(make_test_client):
     conn.commit()
     checklists = client.get("/api/onboarding").json()["checklists"]
     assert [c["application_id"] for c in checklists] == ["app-b"]
+
+
+# ── Task 7：部门经理只读页 ─────────────────────────────────────────────
+
+
+def _manager_item(conn, application_id, owner_party):
+    row = conn.execute(
+        "SELECT i.id FROM onboarding_item i "
+        "JOIN onboarding_checklist c ON c.id = i.checklist_id "
+        "WHERE c.application_id=? AND i.owner_party=? LIMIT 1",
+        (application_id, owner_party),
+    ).fetchone()
+    return row[0]
+
+
+def test_department_list_filters_by_department(make_test_client):
+    client, conn = make_test_client()
+    _seed_hired_x(conn, "app-rd", "j-rd", "张三", "研发部", "2026-10-20")
+    _seed_hired_x(conn, "app-proc", "j-proc", "李四", "采购部", "2026-10-21")
+    _login(client, conn, "hr", "hr")
+    _instantiate(client, "app-rd", request_id="r-rd")
+    _instantiate(client, "app-proc", request_id="r-proc")
+    _login(client, conn, "mgr-rd", "dept_manager", department="研发部")
+    resp = client.get("/api/onboarding/department")
+    assert resp.status_code == 200
+    apps = [c["application_id"] for c in resp.json()["checklists"]]
+    assert apps == ["app-rd"]
+
+
+def test_department_detail_cross_department_403(make_test_client):
+    client, conn = make_test_client()
+    _seed_hired_x(conn, "app-rd", "j-rd", "张三", "研发部", "2026-10-20")
+    _login(client, conn, "hr", "hr")
+    _instantiate(client, "app-rd", request_id="r-rd")
+    _login(client, conn, "mgr-proc", "dept_manager", department="采购部")
+    resp = client.get("/api/onboarding/department/app-rd")
+    assert resp.status_code == 403
+
+
+def test_department_detail_writes_access_log(make_test_client):
+    client, conn = make_test_client()
+    _seed_hired_x(conn, "app-rd", "j-rd", "张三", "研发部", "2026-10-20")
+    _login(client, conn, "hr", "hr")
+    _instantiate(client, "app-rd", request_id="r-rd")
+    _login(client, conn, "mgr-rd", "dept_manager", department="研发部")
+    resp = client.get("/api/onboarding/department/app-rd")
+    assert resp.status_code == 200
+    assert conn.execute(
+        "SELECT COUNT(*) FROM onboarding_access_log WHERE accessor='mgr-rd' AND application_id='app-rd'"
+    ).fetchone()[0] == 1
+
+
+def test_department_detail_log_failure_returns_no_content(make_test_client):
+    client, conn = make_test_client()
+    _seed_hired_x(conn, "app-rd", "j-rd", "张三", "研发部", "2026-10-20")
+    _login(client, conn, "hr", "hr")
+    _instantiate(client, "app-rd", request_id="r-rd")
+    _login(client, conn, "mgr-rd", "dept_manager", department="研发部")
+    conn.execute("DROP TABLE onboarding_access_log")
+    conn.commit()
+    resp = client.get("/api/onboarding/department/app-rd")
+    assert resp.status_code == 503
+    assert "张三" not in resp.text
+
+
+def test_department_page_and_json_have_no_recruiting_data(make_test_client):
+    client, conn = make_test_client()
+    _seed_hired_x(conn, "app-rd", "j-rd", "张三", "研发部", "2026-10-20")
+    _login(client, conn, "hr", "hr")
+    _instantiate(client, "app-rd", request_id="r-rd")
+    _login(client, conn, "mgr-rd", "dept_manager", department="研发部")
+    page = client.get("/onboarding/department")
+    html = page.text
+    for forbidden in ("评分", "排名", "简历原文", "联系方式", "复核", "总分"):
+        assert forbidden not in html
+    detail = client.get("/api/onboarding/department/app-rd").json()
+    for key in ("score", "rank", "resume", "contact", "phone", "email"):
+        assert key not in detail
+        for it in detail["items"]:
+            assert key not in it
+
+
+def test_department_requires_manager_role(make_test_client):
+    client, conn = make_test_client()
+    assert client.get("/api/onboarding/department").status_code == 401
+    _login(client, conn, "iv", "interviewer")
+    assert client.get("/api/onboarding/department").status_code == 403
+    _login(client, conn, "hr", "hr")
+    assert client.get("/api/onboarding/department").status_code == 403
+
+
+def test_manager_can_toggle_own_dept_item(make_test_client):
+    client, conn = make_test_client()
+    _seed_hired_x(conn, "app-rd", "j-rd", "张三", "研发部", "2026-10-20")
+    _login(client, conn, "hr", "hr")
+    _instantiate(client, "app-rd", request_id="r-rd")
+    _login(client, conn, "mgr-rd", "dept_manager", department="研发部")
+    dept_item = _manager_item(conn, "app-rd", "dept")
+    resp = client.post(
+        f"/api/onboarding/items/{dept_item}",
+        json={"to_status": "done", "reason": None, "request_id": "r-mgr-done"},
+    )
+    assert resp.status_code == 200
+    hr_item = _manager_item(conn, "app-rd", "hr")
+    resp = client.post(
+        f"/api/onboarding/items/{hr_item}",
+        json={"to_status": "done", "reason": None, "request_id": "r-mgr-bad"},
+    )
+    assert resp.status_code == 403
+
+
+def test_department_page_works_under_subpath_prefix(tmp_path):
+    """Global Constraints 部署约束：Task 7 的 HTML 用 <!--BASE_HREF--> + 相对 fetch，
+    任意挂载前缀下页面路由与接口调用都可用。与 Task 5/6 同款判据。"""
+    client = _make("/hr/recruit-agent", tmp_path)
+    resp = client.get("/hr/recruit-agent/onboarding/department")
+    assert resp.status_code == 200
+    assert '<base href="/hr/recruit-agent/">' in resp.text
+    # 页面里是相对 fetch("api/onboarding/department")——带前缀时应解析到
+    # /hr/recruit-agent/api/onboarding/department（路由可达 ⇒ 401 未登录，而不是 404）。
+    assert client.get("/hr/recruit-agent/api/onboarding/department").status_code == 401
