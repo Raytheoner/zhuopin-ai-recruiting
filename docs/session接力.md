@@ -207,6 +207,18 @@
   含 demo.db 备份）：seg3 件（`/api/interviewers`、`/api/jobs/{id}/offer-approval-chain`）＋样张并轨一并上线；
   冒烟：两新接口未登录 `401`（路由已接）、`/api/jobs` `200`、served 页面/样式并轨判据过、合规断言 `EXIT=0`、
   入库闸 False；未回滚；③ 至此**四包 U1 全部完成＋全站新视觉已在 `.51` 共处一版**（main `b53e615`）。
+- **2026-10-10 21:35（`1001G` 续）：U2 计划批四条全绿（lane-dispatch 发车）**——① 编排：四包 U2 spec-to-plan
+  各一泳道（1001V 渠道去重合并／1001W 排期时段登记与排期动作／1001X Offer 文书引擎／1001Y 入职清单页与进度），
+  无头块进 `OP-0820-全量编排.md`、引用式 opener 落 `docs/openers/1001V–Y-*.md`、号池已登记；
+  四者触碰区零重叠 ⇒ `--max-parallel 4 --stagger 30` 并行；② 结果：**4/4 OK**（V 18′／W 17′／X 20′／Y 17′），
+  机器判据 4 条过 0 条不过，stage2 自动合合并并推送（`0186efa`/`4b793bb`/`bc31beb`/`d9e0950`）；
+  产物＝四份 U2 计划：`docs/superpowers/plans/2026-10-10-channel-resume-intake-unit2-dedup-merge.md`（8 Task/1913 行）／
+  `…interview-scheduling-unit2-availability-and-slot-actions.md`（11/2529）／`…offer-generation-unit2-letter-engine.md`（8/2049）／
+  `…onboarding-flow-unit2-checklist-and-progress.md`（8/2133）——均含 Global Constraints 段与单元标志词；
+  ③ 🔴 **发现一处执行器小缺口（待修，非本批产物问题）**：`run-lanes.sh` 批次私信入队用 `python3`（本机解析
+  `/usr/bin/python3`＝3.9.6）⇒ `tools.liaison` 导不进、**入队必失败**——全 OK 批次按口径不私信（CLI rc=2，
+  run-lanes 还会把它当失败打一条多余警告），但**有失败的批次恰恰发不出私信**（最需要它的场景）；服务用
+  `/opt/homebrew/bin/python3.14` 可正常跑同命令（已实证）。改执行器属红线③，待 Shao Peishen 点头派专门修复＋冒烟。
 - 【谁做：看护者/下一场主会话】【状态：待 `#4` 回件闭环】【判据：`docs/跟进信/README-跟进信清单.md` 中
   `人事部#4` 转闭环四态之后，把 M2 判例批改表包作为独立新信过 G4 发出】【不做会怎样：M2 评测集标注
   （U6 前置）无法启动，U4 召回精排继续无真实样本】。
