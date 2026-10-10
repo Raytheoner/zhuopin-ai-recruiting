@@ -9,15 +9,16 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Callable, Literal, NamedTuple
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from app.agents.intake_agent import derive_unspecified_fields
+from app.agents.conflict_check import ConflictError
 from app.agents.intake_question import normalize_question_payload
 from app.agents.interview_prep import PrepGenerationFailed, regenerate_one
 from app.agents.jd_grounding import verify_jd_grounding
@@ -86,6 +87,12 @@ from app.graph.onboarding_nodes import (
     effect_update_item,
 )
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
+from app.graph.scheduling_nodes import (
+    effect_cancel_slot,
+    effect_complete_slot,
+    effect_reschedule_slot,
+    effect_schedule_slot,
+)
 from app.graph.screening_nodes import latest_approved_profile_version, screen_and_persist
 from app.intake.bundle import BundleTooLarge, unpack_bundle
 from app.intake.duplicates import CandidateRef, detect_suspected_duplicates
@@ -128,12 +135,18 @@ from app.storage.interview_scheduling import (
     AvailabilityNotFoundError,
     AvailabilityOccupiedError,
     AvailabilityOverlapError,
+    CompletionBeforeStartError,
     InterviewerNotInRosterError,
+    NotInterviewStageError,
+    SlotNotFoundError,
+    SlotStateError,
+    application_schedule_data,
     day_schedule,
     delete_availability,
     interviewer_id_for_username,
     list_availability,
     register_availability,
+    slot_for,
 )
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
 from app.storage.live_resume_gate import is_live_resume_intake_enabled
@@ -281,6 +294,32 @@ class AvailabilityRegisterRequest(BaseModel):
     note: str | None = None
     on_behalf: bool = False
     interviewer_id: str | None = None
+
+
+class ScheduleSlotRequest(BaseModel):
+    request_id: str
+    interviewer_ids: list[str]
+    # 2026-10-11 修正（Spec review 实测）：round≥1、mode 白名单——⛔ 不能让非法值
+    # 漏到 DB CHECK（IntegrityError 未处理 ⇒ 500）；Pydantic 层直接 422。
+    round: int = Field(ge=1)
+    start_at: str
+    end_at: str
+    mode: Literal["onsite", "phone", "online"]
+    location_or_link: str | None = None
+
+
+class RescheduleSlotRequest(BaseModel):
+    request_id: str
+    start_at: str
+    end_at: str
+
+
+class CancelSlotRequest(BaseModel):
+    cancel_reason: str
+
+
+class CompleteSlotRequest(BaseModel):
+    target_status: str
 
 
 class OnboardingTemplateItem(BaseModel):
@@ -437,10 +476,12 @@ def create_app(
         return {"ok": True}
 
     def _require_hr_role(request: Request) -> None:
-        """面试官名单维护的 HR 角色闸。
+        """HR 角色闸（名单维护 / 排期与时段等 HR 专属接口共用）。
 
         与 _require_hr_login 的区别：登录只证明「你是谁」，这里是「你是不是 HR」。
-        现阶段只给 HR 开放名单维护；面试官账号（role='interviewer'）登录后仍然 403。
+        面试官账号（role='interviewer'）登录后仍然 403。
+        2026-10-11 修正（Spec review）：403 文案原来是「仅 HR 角色可维护面试官名单」——
+        被排期等非名单场景复用后属「文案串岗」，改为与场景无关的通用措辞。
         """
         auth = getattr(request.state, "auth", None)
         if not getattr(auth, "authenticated", False):
@@ -450,7 +491,7 @@ def create_app(
             "SELECT role FROM hr_account WHERE username = ?", (username,)
         ).fetchone()
         if row is None or row[0] != "hr":
-            raise HTTPException(status_code=403, detail="仅 HR 角色可维护面试官名单")
+            raise HTTPException(status_code=403, detail="仅 HR 角色可执行此操作")
 
     def _authenticated_username(request: Request) -> str:
         auth = getattr(request.state, "auth", None)
@@ -599,6 +640,150 @@ def create_app(
     @router.get("/interviewers/me/schedule")
     def interviewer_schedule_page():
         return _render_static_page("interviewer_schedule.html", root_path)
+
+    def _can_complete_slot(slot: dict, username: str, role: str | None) -> bool:
+        if role == "hr":
+            return True
+        if role != "interviewer":
+            return False
+        assigned = [
+            r[0]
+            for r in conn.execute(
+                "SELECT a.username FROM interview_slot_interviewer x "
+                "JOIN interviewer i ON i.id = x.interviewer_id "
+                "JOIN hr_account a ON a.id = i.account_id "
+                "WHERE x.interview_slot_id = ?",
+                (slot["slot_id"],),
+            ).fetchall()
+        ]
+        return username in assigned
+
+    @router.get("/applications/{application_id}/schedule")
+    def application_schedule_page(application_id: str):
+        return _render_static_page("application_schedule.html", root_path)
+
+    @router.get("/api/applications/{application_id}/schedule")
+    def application_schedule_data_route(application_id: str, request: Request):
+        _require_hr_role(request)
+        data = application_schedule_data(conn, application_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail="投递不存在")
+        return data
+
+    @router.post("/api/applications/{application_id}/schedule", status_code=201)
+    def schedule_slot(application_id: str, req: ScheduleSlotRequest, request: Request):
+        _require_hr_role(request)
+        actor = reviewer_of(request)
+        slot_id = req.request_id
+        try:
+            effect_schedule_slot(
+                conn,
+                thread_id=application_id,
+                business_key=slot_id,
+                slot_id=slot_id,
+                application_id=application_id,
+                interviewer_ids=req.interviewer_ids,
+                round_=req.round,
+                start_at=req.start_at,
+                end_at=req.end_at,
+                mode=req.mode,
+                location_or_link=req.location_or_link,
+                actor=actor,
+            )
+        except ConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "conflicts": [c.code for c in exc.conflicts],
+                    "details": [c.detail for c in exc.conflicts],
+                },
+            ) from exc
+        except SlotNotFoundError as exc:
+            # 2026-10-11 修正（Spec review）：SlotNotFoundError 是 ValueError 子类，
+            # ⛔ 必须排在下面的宽 ValueError 分支之前，否则是死分支、404 退化成 422。
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (NotInterviewStageError, SlotStateError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return slot_for(conn, slot_id)
+
+    @router.post("/api/interview-slots/{slot_id}/reschedule")
+    def reschedule_slot(slot_id: str, req: RescheduleSlotRequest, request: Request):
+        _require_hr_role(request)
+        actor = reviewer_of(request)
+        slot = slot_for(conn, slot_id)
+        if slot is None:
+            raise HTTPException(status_code=404, detail="场次不存在")
+        try:
+            effect_reschedule_slot(
+                conn,
+                thread_id=slot["application_id"],
+                business_key=f"{slot_id}:{req.request_id}",
+                slot_id=slot_id,
+                start_at=req.start_at,
+                end_at=req.end_at,
+                actor=actor,
+            )
+        except ConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "conflicts": [c.code for c in exc.conflicts],
+                    "details": [c.detail for c in exc.conflicts],
+                },
+            ) from exc
+        except SlotNotFoundError as exc:
+            # 2026-10-11 修正（Spec review）：SlotNotFoundError 是 ValueError 子类，
+            # ⛔ 必须单独前置——否则"场次中途消失"的 404 语义被宽分支吞成 422。
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return slot_for(conn, slot_id)
+
+    @router.post("/api/interview-slots/{slot_id}/cancel")
+    def cancel_slot(slot_id: str, req: CancelSlotRequest, request: Request):
+        _require_hr_role(request)
+        actor = reviewer_of(request)
+        slot = slot_for(conn, slot_id)
+        if slot is None:
+            raise HTTPException(status_code=404, detail="场次不存在")
+        try:
+            effect_cancel_slot(
+                conn,
+                thread_id=slot["application_id"],
+                business_key=slot_id,
+                slot_id=slot_id,
+                cancel_reason=req.cancel_reason,
+                actor=actor,
+            )
+        except SlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return slot_for(conn, slot_id)
+
+    @router.post("/api/interview-slots/{slot_id}/complete")
+    def complete_slot(slot_id: str, req: CompleteSlotRequest, request: Request):
+        username = _authenticated_username(request)
+        role = _account_role(username)
+        slot = slot_for(conn, slot_id)
+        if slot is None:
+            raise HTTPException(status_code=404, detail="场次不存在")
+        if not _can_complete_slot(slot, username, role):
+            raise HTTPException(status_code=403, detail="仅 HR 或该场面试官可标记完成/未出席")
+        try:
+            effect_complete_slot(
+                conn,
+                thread_id=slot["application_id"],
+                business_key=f"{slot_id}:{req.target_status}",
+                slot_id=slot_id,
+                target_status=req.target_status,
+                actor=reviewer_of(request),
+            )
+        except SlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SlotStateError, CompletionBeforeStartError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return slot_for(conn, slot_id)
 
     @router.get("/login")
     def login_page():
