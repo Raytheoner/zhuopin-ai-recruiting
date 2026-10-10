@@ -59,6 +59,12 @@ from app.graph.manual_handoff import (
     effect_mark_needs_manual,
 )
 from app.graph.onboarding_nodes import effect_instantiate_checklist, effect_update_item
+from app.graph.scheduling_nodes import (
+    effect_cancel_slot,
+    effect_complete_slot,
+    effect_reschedule_slot,
+    effect_schedule_slot,
+)
 from app.graph.nodes import (
     effect_abandon_profile,
     effect_confirm_profile,
@@ -184,6 +190,10 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_send_verification_code",
         "effect_instantiate_checklist",
         "effect_update_item",
+        "effect_schedule_slot",
+        "effect_reschedule_slot",
+        "effect_cancel_slot",
+        "effect_complete_slot",
     }
 )
 
@@ -805,6 +815,69 @@ def _seed_pending_hr_item_for_update(conn: sqlite3.Connection) -> None:
         "VALUES ('account-4-4', 'alice', 'pbkdf2_sha256$1$deadbeef', 'aabbccdd', 'hr')"
     )
     conn.commit()
+
+
+def _seed_interview_ready(conn: sqlite3.Connection) -> None:
+    """排期四节点共用种子（2026-10-11 修正）：一个 HR 账号＋一个面试官（名下
+    可用时段覆盖 2026-10-14 06:00–08:00）＋一个处于 `interview` 阶段的投递。
+
+    可用时段是必须的：`effect_schedule_slot` 过冲突检查，没时段会以
+    「面试官无可用时段」拒绝，配方就永远撞不到崩溃-恢复协议要测的那条路径。"""
+    conn.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+        "VALUES ('sched-hr', 'sched-hr', 'h', 's')"
+    )
+    conn.execute(
+        "INSERT INTO hr_account (id, username, password_hash, password_salt) "
+        "VALUES ('sched-iv-acc', 'sched-iv', 'h', 's')"
+    )
+    conn.execute(
+        "INSERT INTO interviewer (id, account_id, name, department, interviewable_jobs, enabled) "
+        "VALUES ('sched-iv1', 'sched-iv-acc', '面试官甲', '研发部', '[]', 1)"
+    )
+    conn.execute("INSERT INTO job (id, title) VALUES ('sched-job', '嵌入式软件工程师')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('sched-c1', '张三')")
+    conn.execute(
+        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+        "VALUES ('sched-r1', 'sched-job', 'synthetic', 'a.pdf', 'sha-sched', 'sched-hr')"
+    )
+    conn.execute(
+        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+        "VALUES ('sched-app1', 'sched-c1', 'sched-job', 'sched-r1', 'interview')"
+    )
+    conn.execute(
+        "INSERT INTO interviewer_availability "
+        "(id, interviewer_id, start_at, end_at, registered_by) "
+        "VALUES ('sched-av1', 'sched-iv1', '2026-10-14 06:00', '2026-10-14 08:00', 'sched-hr')"
+    )
+    conn.commit()
+
+
+def _seed_scheduled_slot(
+    conn: sqlite3.Connection,
+    *,
+    start_at: str = "2026-10-14 06:30",
+    end_at: str = "2026-10-14 07:30",
+) -> None:
+    """改期/取消/完成三个节点的种子：面试就绪数据＋一条 `scheduled` 场次
+    （按固定 id 手插，⛔ 不调 `effect_schedule_slot`——thread_id 要点名确定性 id）。"""
+    _seed_interview_ready(conn)
+    conn.execute(
+        "INSERT INTO interview_slot "
+        "(id, application_id, round, start_at, end_at, mode, created_by) "
+        "VALUES ('sched-slot1', 'sched-app1', 1, ?, ?, 'onsite', 'sched-hr')",
+        (start_at, end_at),
+    )
+    conn.execute(
+        "INSERT INTO interview_slot_interviewer (interview_slot_id, interviewer_id) "
+        "VALUES ('sched-slot1', 'sched-iv1')"
+    )
+    conn.commit()
+
+
+def _seed_past_scheduled_slot(conn: sqlite3.Connection) -> None:
+    """`effect_complete_slot` 种子：开始时刻已过的场次（节点要求 now ≥ start）。"""
+    _seed_scheduled_slot(conn, start_at="2026-01-01 06:00", end_at="2026-01-01 07:00")
 
 
 def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
@@ -2003,6 +2076,86 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "`tests/test_onboarding_nodes.py::test_update_item_rerun_no_second_history` "
                 "另有一条用例锁死「重跑不产生第二条留痕」。"
             ),
+        ),
+        "effect_schedule_slot": Recipe(
+            thread_id="sched-app1",
+            seed=_seed_interview_ready,
+            invoke=lambda conn: effect_schedule_slot(
+                conn,
+                thread_id="sched-app1",
+                business_key="sched-slot1",
+                slot_id="sched-slot1",
+                application_id="sched-app1",
+                interviewer_ids=["sched-iv1"],
+                round_=1,
+                start_at="2026-10-14 06:30",
+                end_at="2026-10-14 07:30",
+                mode="onsite",
+                location_or_link=None,
+                actor="sched-hr",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_slot WHERE application_id = 'sched-app1'"
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 interview_slot（同事务还有 roster 行与 "
+                "scheduled 留痕）；场次主键与 effect_log 幂等键共同兜底唯一性。"
+            ),
+        ),
+        "effect_reschedule_slot": Recipe(
+            thread_id="sched-app1",
+            seed=_seed_scheduled_slot,
+            invoke=lambda conn: effect_reschedule_slot(
+                conn,
+                thread_id="sched-app1",
+                business_key="sched-slot1:req-1",
+                slot_id="sched-slot1",
+                start_at="2026-10-14 06:45",
+                end_at="2026-10-14 07:45",
+                actor="sched-hr",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM application_stage_history "
+                "WHERE application_id = 'sched-app1' AND action = 'rescheduled'"
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 rescheduled 留痕；场次行本身是 UPDATE，"
+                "重复执行状态幂等，拿它当口径测不出双写。"
+            ),
+        ),
+        "effect_cancel_slot": Recipe(
+            thread_id="sched-app1",
+            seed=_seed_scheduled_slot,
+            invoke=lambda conn: effect_cancel_slot(
+                conn,
+                thread_id="sched-app1",
+                business_key="sched-slot1",
+                slot_id="sched-slot1",
+                cancel_reason="候选人改约",
+                actor="sched-hr",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM application_stage_history "
+                "WHERE application_id = 'sched-app1' AND action = 'cancelled'"
+            ).fetchone()[0],
+            note="业务事实是 INSERT 的一行 cancelled 留痕（场次行是 UPDATE）。",
+        ),
+        "effect_complete_slot": Recipe(
+            thread_id="sched-app1",
+            seed=_seed_past_scheduled_slot,
+            invoke=lambda conn: effect_complete_slot(
+                conn,
+                thread_id="sched-app1",
+                business_key="sched-slot1:completed",
+                slot_id="sched-slot1",
+                target_status="completed",
+                actor="sched-hr",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM application_stage_history "
+                "WHERE application_id = 'sched-app1' AND action = 'completed'"
+            ).fetchone()[0],
+            note="业务事实是 INSERT 的一行 completed 留痕；种子场次开始时刻已过。",
         ),
     }
 
