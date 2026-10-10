@@ -812,11 +812,11 @@ def test_legacy_pre_m3_db_existing_tables_and_rows_are_untouched(tmp_path):
     单独钉住，这里只把 resume 从"DDL 原文逐字不变"的老表未触碰判据里摘出去，
     其余老表的保护力度不变（行数比对仍保留 resume，确认加列不改行）。
 
-    stage 同理是刻意的例外：interview-scheduling U1 合法把 stage.stage_type 的
-    CHECK 从三值放宽到四值（追加 interview），SQLite 改不了 CHECK、只能整表重建
-    （offer-generation U1 之后还会再放宽到五值），stage 的 sqlite_master.sql 因此
-    必然变化。放宽后的枚举、interview 预置行与老库原三行的保留由
-    tests/test_db_interview_schema.py 单独钉住；这里只把 stage 从"DDL 原文逐字
+    stage 同理是刻意的例外：interview-scheduling U1 把 stage.stage_type 的 CHECK 从
+    三值放宽到四值（追加 interview），offer-generation U1 再放宽到六值（追加
+    offer/hired）——SQLite 改不了 CHECK、只能整表重建，stage 的 sqlite_master.sql
+    因此必然变化。放宽后的枚举与预置行由 tests/test_db_interview_schema.py、
+    tests/test_db_offer_schema.py 分别单独钉住；这里只把 stage 从"DDL 原文逐字
     不变"里摘出去，其余老表（含被 stage 外键引用的 application）保护力度不变。
 
     hr_account 同理是刻意的例外：interview-scheduling U1 task 6 经 _ADDED_COLUMNS

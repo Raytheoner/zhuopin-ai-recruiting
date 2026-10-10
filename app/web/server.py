@@ -105,6 +105,11 @@ from app.storage.interviewer import (
 )
 from app.storage.job_discard import discard_thread_checkpoints, discard_unstarted_job
 from app.storage.live_resume_gate import is_live_resume_intake_enabled
+from app.storage.offer_approval_chain import (
+    UnknownApproverError,
+    get_approval_chain,
+    put_approval_chain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +189,15 @@ class ConsentSubmitRequest(BaseModel):
 
 class VerifyCodeRequest(BaseModel):
     code: str
+
+
+class OfferApprovalChainItem(BaseModel):
+    level: int
+    approver_account_ids: list[str] = []
+
+
+class OfferApprovalChainRequest(BaseModel):
+    chain: list[OfferApprovalChainItem]
 
 
 class InterviewerCreateRequest(BaseModel):
@@ -1835,6 +1849,42 @@ def create_app(
         auth = getattr(request.state, "auth", None)
         if not getattr(auth, "authenticated", False):
             raise HTTPException(status_code=401, detail="未登录")
+
+    # ── offer-generation U1 Task 7：岗位级审批链维护接口 ─────────────────
+    # `/api/jobs` 前缀不在 PROTECTED_PATH_PREFIXES 里（app/middleware/auth.py），
+    # 必须在路由内手动调 _require_hr_login；该 helper 定义在本段之前，故路由
+    # 放在它后面，避免闭包引用的定义顺序问题。
+    @router.get("/api/jobs/{job_id}/offer-approval-chain")
+    def get_offer_approval_chain(job_id: str, request: Request):
+        _require_hr_login(request)
+        job = conn.execute("SELECT id FROM job WHERE id = ?", (job_id,)).fetchone()
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        return {"job_id": job_id, "chain": get_approval_chain(conn, job_id)}
+
+    @router.put("/api/jobs/{job_id}/offer-approval-chain")
+    def put_offer_approval_chain(
+        job_id: str, req: OfferApprovalChainRequest, request: Request
+    ):
+        _require_hr_login(request)
+        job = conn.execute("SELECT id FROM job WHERE id = ?", (job_id,)).fetchone()
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        try:
+            put_approval_chain(
+                conn,
+                job_id=job_id,
+                chain=[
+                    {"level": item.level, "approver_account_ids": item.approver_account_ids}
+                    for item in req.chain
+                ],
+                updated_by=reviewer_of(request),
+            )
+        except UnknownApproverError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"job_id": job_id, "chain": get_approval_chain(conn, job_id)}
 
     _ALLOWED_OWNER_PARTIES = frozenset({"hr", "it", "admin", "finance", "dept"})
 
