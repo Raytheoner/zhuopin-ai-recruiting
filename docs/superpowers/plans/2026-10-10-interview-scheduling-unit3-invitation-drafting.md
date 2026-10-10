@@ -3311,6 +3311,39 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 > ⇒ **31 passed**（计划预期「30 passed」是条数笔误：新增文件实为 15 条用例——10 条普通
 > ＋ `test_put_rejects_forbidden_placeholders` 的 5 个参数化实例；U1 schema 文件 16 条＝15＋1）。
 
+> **落地说明 D-U3-8（Task 4 实现时发现的节点名重名；以磁盘真身为准，⛔ 不弱化任何既有守卫）。**
+> 计划 Task 4 把持久化节点的字面量写成 `effect_persist_draft`，但**这个名字在 main 上
+> 早已被 M1 画像泳道占用**（`app/graph/nodes.py::effect_persist_draft`，落 job_profile
+> 草案）。仓库级铁律 1 守卫当场判红两处：
+> `tests/test_effect_idempotency_suite.py::test_no_duplicate_effect_node_name_literals`
+> （同一 `@idempotent_effect(...)` 字面量不得出现在两处）与
+> `::test_collector_reports_where_each_node_lives`（该名字的位置仍须指向 nodes.py）。
+> 重名不只是两条断言：两个节点共享 node_name 时，只要 thread_id + business_key 也相同，
+> 幂等键 `{thread_id}:{node_name}:{business_key}` 就会撞车、后一个节点被 `idempotent_effect`
+> 静默短路；更隐蔽的是 `test_manifest_matches_the_source_tree` 会因名字已在清单里而
+> **误判「清单已覆盖」**，新节点从此躲过全部崩溃-恢复用例。
+>
+> **处置**：
+> ① 节点改名 `effect_persist_invitation_draft`（函数名同步），业务语义、幂等键口径、
+> 落库内容一字不变。名字取域前缀，与 `effect_persist_letter`、
+> `effect_persist_prep_draft` 同一先例（后者正是为绕开同一个 `effect_persist_draft`
+> 而加的前缀）。其余四个节点（`effect_edit_draft` / `effect_mark_draft_human_written` /
+> `effect_backfill_invitation_outcome` / `effect_send_invitation`）在 main 上无重名，
+> **逐字不动**。⇒ 后续 Task 5 / Task 7 的 AST 名单与 Task 10 的 import、`node_name`
+> 断言里出现的 `effect_persist_draft`，一律以 `effect_persist_invitation_draft` 为准。
+> ② Task 4 的 AST 判据预期输出相应变为 `['_assert_slot_invitable',
+> 'compute_invitation_draft_for_slot', 'effect_persist_invitation_draft']`
+> （函数名口径，与计划原预期只差这一个词）。
+> ③ **`tests/test_effect_idempotency_suite.py` 必改**（⚠️ 该文件不在 §1 文件清单里、
+> 但漏登记必红，与 U2 计划 Task 4 的「修正」同款）：`EFFECT_NODE_MANIFEST` 加一行
+> ＋ `build_recipes()` 加一条崩溃-恢复配方（种子＝投递闭环＋一场 `scheduled` 场次；
+> 业务事实＝`interview_invitation_draft` 行数）。本节点的 `analysis_run_id` **无外键**，
+> 配方用打桩 run_id 即可，不需要造 `analysis_run` 行（`effect_persist_letter` 的配方
+> 则必须造——那里有外键）。
+>
+> **验证证据**：`tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py -q`
+> ⇒ **125 passed**；全量 `-q` ⇒ 除已知红项外全绿（另见 §4 之外的红灯登记）。
+
 ## 5. 提取验证记录（`spec-to-plan` 第 6 步，本计划写作时已做的最小核验）
 
 - 已在仓库磁盘上核对：U1 的 `interview_invitation_draft` / `invitation_template`

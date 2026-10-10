@@ -82,6 +82,8 @@ from app.graph.interview_prep_nodes import (
     effect_persist_prep_draft,
     effect_regenerate_prep_question,
 )
+from app.agents.invitation_drafter import InvitationDraft
+from app.graph.invitation_nodes import effect_persist_invitation_draft
 from app.agents.interview_prep import PrepDraft, PrepQuestionDraft
 from app.graph.interview_scoring_nodes import (
     AlignedTurn,
@@ -194,6 +196,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_reschedule_slot",
         "effect_cancel_slot",
         "effect_complete_slot",
+        "effect_persist_invitation_draft",
     }
 )
 
@@ -454,6 +457,17 @@ _LETTER_BODY_TEXT = "张三：\n\n拟录用您担任嵌入式软件工程师。"
 # 抄一份迟早与真源漂移，而 effect_edit_letter 的「回读原生成时间」会当场摔。
 _LETTER_AI_BODY = enforce_ai_label(_LETTER_BODY_TEXT, generated_at=_TS)
 _EDITED_LETTER_BODY = "张三：\n\n拟录用您担任嵌入式软件工程师（HR 手改版）。"
+
+# interview-scheduling U3 Task 4：邀约草稿持久化配方的种子 id 与正文。
+# 正文走 enforce_ai_label（唯一真源），与 L3 生成物同形——节点本身不校验标识
+# （那是外发门禁的职责），但配方喂进来的东西要与真实链路一致才有意义。
+_INV_SLOT = "inv-slot-4-4"
+_INV_APPLICATION = "inv-application-4-4"
+_INV_THREAD = _INV_APPLICATION
+_INV_RUN = "invitation-run-4-4"
+_INV_BODY = enforce_ai_label(
+    "张三您好：\n\n邀请您参加嵌入式软件工程师岗位的一面。", generated_at=_TS
+)
 
 
 class _CrashBeforeDurableCommit(sqlite3.Connection):
@@ -1135,6 +1149,45 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
         run_id=_LETTER_RUN,
         response_model="deepseek-chat",
         prompt_version="letter-offer-v1",
+    )
+
+    # ── interview-scheduling U3（app/graph/invitation_nodes.py）持久化节点的种子 ──
+    def _seed_invitation_slot(conn):
+        """`effect_persist_invitation_draft` 的前置：job→candidate→resume→
+        application→interview_slot 最小闭环，`invitation_status` 取默认 'none'
+        （节点生效后会推到 'drafted'，崩溃点之前必须仍是 'none'）。
+
+        ⛔ 不需要 analysis_run：`interview_invitation_draft.analysis_run_id` **无外键**
+        （U3 计划 §5 已在磁盘上核对过），草稿的 run_id 用打桩值即可——这与
+        `effect_persist_letter` 的配方不同，后者的 analysis_run_id 是有外键的。"""
+        conn.execute(
+            "INSERT INTO job (id, title, status) "
+            "VALUES ('inv-job-4-4', '嵌入式软件工程师', 'approved')"
+        )
+        conn.execute("INSERT INTO candidate (id, name) VALUES ('inv-cand-4-4', '张三')")
+        conn.execute(
+            "INSERT INTO resume "
+            "(id, job_id, sample_class, file_name, content_sha256, uploaded_by) "
+            "VALUES ('inv-resume-4-4', 'inv-job-4-4', 'synthetic', 'a.pdf', "
+            "'inv-hash-4-4', 'tester')"
+        )
+        conn.execute(
+            "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
+            "VALUES (?, 'inv-cand-4-4', 'inv-job-4-4', 'inv-resume-4-4', 'interview')",
+            (_INV_APPLICATION,),
+        )
+        conn.execute(
+            "INSERT INTO interview_slot (id, application_id, round, start_at, end_at, mode) "
+            "VALUES (?, ?, 1, '2026-10-12 14:00', '2026-10-12 15:00', 'onsite')",
+            (_INV_SLOT, _INV_APPLICATION),
+        )
+        conn.commit()
+
+    _invitation_draft = InvitationDraft(
+        body=_INV_BODY,
+        run_id=_INV_RUN,
+        response_model="deepseek-chat-actual-v1",
+        prompt_version="invite-v1",
     )
 
     return {
@@ -2156,6 +2209,33 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "WHERE application_id = 'sched-app1' AND action = 'completed'"
             ).fetchone()[0],
             note="业务事实是 INSERT 的一行 completed 留痕；种子场次开始时刻已过。",
+        ),
+        # ⚠️ 节点名字面量与 interview-scheduling U3 计划原文不同：计划写的是
+        # `effect_persist_draft`，那个字面量已被 M1 画像泳道占用（app/graph/nodes.py），
+        # 重名会被本文件的 `test_no_duplicate_effect_node_name_literals` 判红，更隐蔽的是
+        # `test_manifest_matches_the_source_tree` 会因重名误判"清单已覆盖"、让新节点
+        # 躲过全部崩溃-恢复用例。⇒ 加域前缀，与 `effect_persist_letter` /
+        # `effect_persist_prep_draft` 同一先例（见偏离登记 D-U3-8）。
+        "effect_persist_invitation_draft": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_slot,
+            invoke=lambda conn: effect_persist_invitation_draft(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=_INV_RUN,
+                slot_id=_INV_SLOT,
+                template_version="v1",
+                draft=_invitation_draft,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM interview_invitation_draft WHERE slot_id = ?",
+                (_INV_SLOT,),
+            ).fetchone()[0],
+            note=(
+                "业务事实是 INSERT 的一行 interview_invitation_draft；同一事务里还有"
+                "把 invitation_status 从 'none' UPDATE 成 'drafted' 的一步，但那一步"
+                "是状态幂等、拿它当口径测不出双写。"
+            ),
         ),
     }
 
