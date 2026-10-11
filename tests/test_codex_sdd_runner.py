@@ -228,3 +228,25 @@ def test_default_model_is_luna_per_user_instruction(tmp_path, capsys):
     assert main(["--plan", str(plan), "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "-m gpt-6-luna" in out and "-m deepseek-v4-pro" not in out
+
+
+def test_test_evidence_skips_warnings_and_preserves_latest_failed_run(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from scripts import codex_sdd_runner as runner
+
+    def event(kind, code, output):
+        return json.dumps({"type": kind, "item": {"type": "command_execution", "command": "python -m pytest", "aggregated_output": output, "exit_code": code}})
+    raw = ("WARN plugin icon\n" + event("item.completed", 0, "3 passed") + "\n" + event("item.started", None, "") + "\n" + event("item.completed", 1, "1 failed") + "\n").encode()
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=raw, returncode=0))
+    monkeypatch.setattr(runner, "summarize", lambda output: (["-"] * 7, "done", True))
+    log = tmp_path / "task-1.log"
+    runner._run("task", ["codex"], tmp_path, log)
+    events = json.loads(log.with_suffix(".pytest-evidence.json").read_text())["pytest_events"]
+    assert len(events) == 2
+    assert events[-1]["exit_code"] == 1
+    assert events[-1]["aggregated_output"] == "1 failed"
+    assert events[-1]["execution_line"] == 4
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=b"WARN only\n", returncode=0))
+    runner._run("task", ["codex"], tmp_path, log)
+    assert json.loads(log.with_suffix(".pytest-evidence.json").read_text())["pytest_events"] == []

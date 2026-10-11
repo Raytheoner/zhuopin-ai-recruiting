@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -162,7 +163,7 @@ def build_review_prompt(task: tuple[int, str], constraints: str, role: str) -> s
         f"- 日志会追加多轮；events JSONL 必须逐行解析并筛选完成的 command_execution 中实际 pytest 命令，核对最后一次输出和 exit_code。"
         f"CLI stderr 合并输出会出现独立 WARN 非 JSON 行；逐行 try json.loads，跳过独立警告行并保留有效事件，不能因此弃用整个日志。不要用早期记录或被截断的整读结果判定最新测试证据缺失。\n"
         f"- 测试证据读取当前 worktree 的 .superpowers/sdd/<计划名>/task-{task[0]}.log，"
-        f"以及同目录 task-{task[0]}.events.jsonl 中的实际命令输出和退出码，"
+        f"优先读取同目录 task-{task[0]}.pytest-evidence.json（runner 从本轮真实 completed command_execution 提取的 command/aggregated_output/exit_code），再核对 events.jsonl；不可读取不存在的 output 字段，"
         f"结合真实代码、测试断言与 git diff 核验；不得只因只读环境无法执行测试而判 FAIL，"
         f"也不得仅凭实现方声称通过就忽略缺陷。证据缺失、测试失败或发现实质问题仍须 FAIL。\n"
         f"最后输出一行 VERDICT: PASS 或 VERDICT: FAIL <原因>，并列出 findings。\n\n"
@@ -186,6 +187,24 @@ def _run(prompt: str, argv: list[str], cwd: Path, log_path: Path) -> tuple[int, 
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.with_suffix(".events.jsonl").open("ab") as events:
             events.write(proc.stdout)
+        # Preserve raw CLI warnings and events, but provide bounded evidence
+        # from this execution so stale results cannot mask a later failure.
+        test_events = []
+        for line_number, line in enumerate(proc.stdout.decode("utf-8", errors="replace").splitlines(), 1):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            item = event.get("item", {})
+            if (event.get("type") == "item.completed"
+                    and item.get("type") == "command_execution"
+                    and "pytest" in item.get("command", "")):
+                test_events.append({"execution_line": line_number, **item})
+        if log_path.name.startswith("task-"):
+            log_path.with_suffix(".pytest-evidence.json").write_text(
+                json.dumps({"source": "current execution raw stdout", "pytest_events": test_events}, ensure_ascii=False),
+                encoding="utf-8",
+            )
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"argv={' '.join(argv)}\n{final or '(无最终文本)'}\nusage={'|'.join(fields)}\n")
     except OSError:
