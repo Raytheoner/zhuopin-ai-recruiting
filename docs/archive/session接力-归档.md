@@ -1834,3 +1834,75 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
 - **2a 已交付**：`docs/templates/m1-画像技术栈评估表-转发说明.md` —— 含**可直接粘贴的企微消息**（带 `<称呼>`／
   `<截止日>` 占位）、评估人填写口径（同义/大小写/中英混写算命中；「未提及」而 JD 里有 ⇒ 未命中）、
   回收流程（原文件回传 ⇒ 看护者只统计落档、⛔ 不代填）。⏭ 待 Shao Peishen 指定评估人并转发。
+
+
+<!-- 〔归档工具〕 2026-10-11 搬入：四包 U1 构建与发版七/八【已闭环】 -->
+
+### 四包 U1 构建与发版七/八【已闭环】
+
+- **2026-10-08 22:0x（`1001G` 本场）：子任务全部换挡 flash ＋ 排期包 U1 seg1 闭环**——① Shao Peishen 指令
+  「所有子任务都用 flash」：`codex_sdd_runner` 默认模型 `deepseek-v4-pro/high` → **`deepseek-flash/low`**
+  （`625cbca`，含 dry-run 钉死断言；无头纪律⑤补一句「计划里的裸 `python3` 一律换 `$SDD_PYTHON`」——本机
+  python3=3.9 导入 app 即失败，Task 2/3 实测已用）；换挡时排期 Task 1 已由 v4-pro 双 review PASS 并代提交
+  （`ef3639b`，保留不重跑），Task 2 起用 flash 重投（`20261008-215400-排期seg1-flash.action`；旧 action 落
+  `.failed`＝诚实记录）；② **排期 seg1 已闭环**：Task 2/3 flash 红→绿（27＋16 用例）＋双 review 全 PASS＋
+  Final Review PASS，`.done` rc=0（21:52→22:06，**14 分钟**）；判据 `pytest test_db_migration + 两个新 schema 套件`
+  ＝ **57 passed** ＋ 两条 grep → 合回 main **`9a39875`**（已推）。产物＝`app/storage/db.py` 六张新表
+  （interviewer／interviewer_availability／interview_slot／interview_slot_interviewer／
+  interview_invitation_draft／invitation_template）＋ `tests/test_db_interview_slot_schema.py` ＋
+  `tests/test_db_interview_invitation_draft_schema.py`；③ **执行器缺陷修复**（flash 的质量 review 实测带出）：
+  `parse_plan` 把 Global Constraints 截成 **56 字符**（段内 `### 工程铁律/红线` 被误当边界 ⇒ 透镜静默为空），
+  已修为「同级/更高级标题或裸 `### Task N:` 收尾」，四计划实测 56 → **1329~2809 字符**（`d5b8c5f`，89 passed，已推）；
+  ④ 续跑中：Offer seg1（`lane-1001s-offer-u1-build`，已 ff 到 main）→ 入职 seg1（`lane-1001t-onboard-u1-build`），
+  均 flash 经 run-sdd 通道；⑤ ⚠️ 遗留提醒：排期计划 Task 9 的聚合测试文件 `tests/test_db_interview_schema.py`
+  与 seg1 已落的两个分文件 schema 测试重叠——下一段开工时定「聚合复测 or 合并去重」；
+  `interviewer_availability` 目前无专门测试文件引用（Task 1 计划未要求，Final Review 建议 stage2 前留意）。
+- **2026-10-08 22:5x（`1001G` 本场收口）：四包 U1 的 seg1 全部落地（Task 1–3）**——① 今晚由 run-sdd 通道
+  ＋ **flash** 连跑三段：排期（21:52→22:06，14 分钟）／Offer（22:08→22:29，21 分钟）／入职（22:30→22:49，
+  19 分钟）；每段＝3 个 Task（红→绿＋双只读 review）＋全分支 Final Review，**全部 PASS、`.done` rc=0**；
+  ② 判据（worktree 内跑＋main 复跑同口径）：排期 **57 passed**＋2 grep；Offer **22 passed**＋五表 grep＋
+  `offer` 表列块零薪资类词（红线反证）；入职 **34 passed**＋六表 grep＋六表列块零「内容/附件/证件号」类词
+  （材料不入库反证）；③ 合回 main：`9a39875`（排期）／`924b423`（Offer）／`46494fe`（入职）——均已推送；
+  ④ 本场新增产物：`app/storage/db.py` **17 张域表**（排期 6：interviewer／interviewer_availability／
+  interview_slot／interview_slot_interviewer／interview_invitation_draft／invitation_template；Offer 5：
+  letter_template／candidate_letter／offer／offer_approval_chain／offer_approval；入职 6：onboarding_template／
+  onboarding_checklist／onboarding_item／onboarding_item_history／onboarding_access_log／
+  data_disposition_queue）＋四个新测试文件（`test_db_interview_slot_schema.py`／
+  `test_db_interview_invitation_draft_schema.py`／`test_db_offer_schema.py`／`test_db_onboarding_schema.py`）；
+  ⑤ 待续段（下一场可接，均走 run-sdd＋flash）：排期 Task 4–6（含 `stage` CHECK 四值重建迁移——触碰
+  `.51` 现网表结构，开跑前需人核）／Offer Task 4–6（stage 五值＋`letter_access_log`＋审批链存储）／
+  入职 Task 4–5（`hr_account.role/department` 加列＋占位模板种子）／渠道 Task 4–6；⑥ `任务台账.yaml`
+  已按真身刷新（seg1 四条仍显示 ready——tasks.md 未回勾是 opener 约定，⛔ 不是漏做）。
+- **2026-10-09 10:0x（`1001G` 续跑）：四包 U1 的 seg2 全部落地**——① 全部走 run-sdd 通道＋**flash**（单段 20~40 分钟），
+  每段＝逐 Task 红→绿＋双只读 review＋Final Review，判据在 worktree 与 main 各跑一遍：排期 Task 4-6 **187 passed**
+  ＋老库实证；Offer Task 4-6 **205 passed**；入职 Task 4-5 **111 passed**＋两值 role 老库实测；渠道 Task 4-6 **73 passed**
+  （另渠道包全量 4068 passed）；② 合回 main：`e71c586`（排期）／`39151cd`（Offer）／`e30b917`（入职）／`8d9c3a3`（渠道）
+  ——均已推送；**main 全量 4070 passed / 10 skipped**；③ 本场三处**真缺陷**都由 review/实证抓住并按根因修（其中两处改的是计划文本本身）：
+  排期包 `stage` 四值重建迁移（老库三值路径亲手实证：原行保留／`interview` 可写／FK=1／幂等）；
+  Offer 计划 Task 5 的 `PRAGMA foreign_keys` 顺序坑（**事务内 PRAGMA 是 no-op** ⇒ 老库迁移后 FK 强制被留在 OFF）→ 计划修正
+  `a6cf562`＋泳道修正版落成**六值** CHECK（`initial/screening/rejected/interview/offer/hired`，不清退排期包的 `interview`）；
+  入职计划 Task 4 的**跨包 role CHECK 冲突**（排期两值 `('hr','interviewer')` vs 入职三值；列已存在时 ALTER 路径静默跳过 ⇒
+  `dept_manager` 恒被旧 CHECK 拒）→ 计划修正 `9046bd4`＋`hr_account` 整表重建迁移（两值老库实测：`dept_manager` 可写、
+  会话行不丢、FK=1）；④ 执行器两处加固：无头纪律⑤「计划里的裸 `python3` 一律换 `$SDD_PYTHON`」；`progress.md`
+  分段重跑补行（勾选不再静默丢失，`06d911e`）；⑤ 一次 review **输出截断假阴**（Offer Task 5 第二份 Spec review
+  未落 `VERDICT:` 行）→ 主会话做更强等价复核（真跑 pytest）后代提交 `dac66f9`，证据留档泳道进度目录
+  `主会话复核-任务5-截断假阴补证.md`；⑥ 遗留：排期包老库 `stage` 守卫的补偿断言在 Task 9（聚合
+  `tests/test_db_interview_schema.py`）落地前暂缺；⑦ 进度：**入职包 U1 已全部完成（Task 1-5）**；待续段＝排期 Task 7-10
+  （名单维护接口＋聚合 schema 测试）／Offer Task 7-9（审批链接口＋无薪资聚合断言）／渠道 Task 7（收口）；
+  ⑧ ⚠️ **`.51` 发版注意**：U1 合入后 `stage`（3/4→6 值）与 `hr_account`（role 2→3 值）都带**整表重建迁移**——
+  发版前按发版清单先做 DB 快照，G3 仍需 Shao Peishen 放行。
+- **2026-10-10 19:1x（`1001G` 收官）：四包 U1 全部完成＋发版七已上 `.51`＋两页样张在线**——① seg3 三段连跑（run-sdd＋flash）：
+  排期 Task 7-10（36 分钟，判据 120）／Offer Task 7-9（30 分钟，判据 163）／渠道 Task 7（8 分钟，判据 32）；合回 main：
+  `40e26e4`／`100bc5f`／`1f1ec9e`——**渠道 7/7、排期 10/10、Offer 9/9、入职 5/5，四包 U1 全部收官**；main 全量
+  **4129 passed／10 skipped／0 失败**；② **发版七已上 `.51`**（G3 `Q-69`，答 `2a`；快照 `C:\apps\backups\20261010-1816`
+  含 demo.db 在线备份）：U1 seg1+seg2 全量＋**首页/上传页观感样张**（`app-sample.css`，仅两页引用，删文件即回退）；
+  迁移判据实测：`stage` 六行／`hr_account` 含 `dept_manager`／U1 八张抽样表全在；合规断言 `EXIT=0`；入库闸 False；未回滚；
+  **样张待 Shao Peishen 评审**（通过 ⇒ 并入 `app.css` 全量、更新各页 `?v=`；不通过 ⇒ 删文件回退）；③ 发版八
+  （seg3 件：`/api/interviewers` 与审批链接口）**已备料到可执行**（`docs/releases/2026-10-10-发版八-U1-seg3收官执行清单.md`），
+  **G3 待放行**（发版决定不可代）；④ 遗留：渠道 Task 7 Spec review 记一条跟进建议（路由级超限场景测试缺失＝F1，非阻塞）。
+- **2026-10-10 21:2x（`1001G` 续）：样张全量并轨（答 `1a`）＋发版八已上（答 `2a`）**——① 并轨：`app-sample.css` 并入
+  `app.css`（全站 8 页统一视觉层）、删除样张文件、8 页 `app.css?v=` 同步 `20261010`；提交 `b53e615`（main 全量
+  **4129 passed**；本机抽查登录/校对/候选人同意页无破样）；② **发版八已上 `.51`**（快照 `C:\apps\backups\20261010-2115`
+  含 demo.db 备份）：seg3 件（`/api/interviewers`、`/api/jobs/{id}/offer-approval-chain`）＋样张并轨一并上线；
+  冒烟：两新接口未登录 `401`（路由已接）、`/api/jobs` `200`、served 页面/样式并轨判据过、合规断言 `EXIT=0`、
+  入库闸 False；未回滚；③ 至此**四包 U1 全部完成＋全站新视觉已在 `.51` 共处一版**（main `b53e615`）。
