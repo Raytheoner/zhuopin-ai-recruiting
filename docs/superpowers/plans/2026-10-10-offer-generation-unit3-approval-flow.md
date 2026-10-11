@@ -697,6 +697,38 @@ python -m pytest tests/test_offer_storage.py -q
 
 ### Task 2: `effect_create_offer` 节点（tasks 3.1）
 
+**1011R 恢复配方恒等式补强（最高优先）**：`_count_offer_create_facts` 内除了 Offer/人工history/阶段一致，还显式按 thread_id=offer-app 且 node_name=effect_create_offer 查询effect_log，并断言 Offer数量=该节点该线程日志数量（0/0和1/1）。补漂移检测测试，单侧预置事实/日志时该核验必须失败，不修改业务节点。实跑节点、装饰器和配方143项相关回归，加新增测试；本次只测试辅助核验变更，已取得全量4504passed证据，不再重复全量，最终整合时另跑。更新偏离登记，保持旧全量证据的适用范围如实可查。
+
+
+**1011R 主会话实际全量验收结果**：主会话对当前 worktree 使用主仓 venv 实跑全量，4504 passed/12 skipped，exit_code=0，耗时141.26秒。完整命令/实际stdout/exit_code保存在 `.superpowers/sdd/2026-10-10-offer-generation-unit3-approval-flow/task-2.parent-tests.log`（非摘要声称）。Task 2 未再改变业务实现则不重复全量，只跑目标相关套件，再核验该原始父进程证据；更新旧“全量留步”记录为本次实测通过。不要因 CLI旧未完成事件否定本次父进程完整证据。
+
+
+**1011R 最新验收补充**：worktree 已链接主仓 venv，修复全量测试中提交器退回系统 Python、缺 pytest 导致体积红闸未拒绝的环境问题。实跑 Task 2 相关测试并核验父进程全量证据，必须登记当前 10 条节点测试及已有事务重放拒绝覆盖、最新命令/数量/退出码；旧 127 passed 仅历史记录，不作为本轮最终证据。无需修改提交器或放宽测试。
+
+
+**2026-10-11 `1011R` Spec review 阻塞修正（优先于下方旧测试样例）**：
+前置 SELECT 必须在写事务的锁保护中执行，不得直到首次 INSERT 才开始隐式事务。
+在 `effect_create_offer` 的第一次业务读取前显式 `BEGIN IMMEDIATE`，提交/回滚继续由
+既有 idempotent_effect 唯一管理，节点内不得 commit 或调用其他 effect。先补失败测试：
+另一连接尝试在校验和三写之间淘汰应被锁阻止；第二/第三写抛异常时 Offer、阶段、历史及
+effect_log 均回滚，保留同一连接做无关提交也不泄漏。若已有事务不允许额外嵌套管理者。
+本 Task 新节点必须同时登记 `tests/test_effect_idempotency_suite.py` 的 manifest 与真实
+配方，跑全套守卫并核对成功/崩溃事实恒等；允许本 Task 扩展此测试文件，不能等 Task 9
+才登记。使用 FakeChannel/测试数据，不生成淘汰事实作为自动决策，只测试既有人工作用。
+测试原始执行事件由 runner 保存；同步偏离登记，不以旧“4 passed”作为完整验收。
+
+**Luna review 补充修复（`1011R`）**：已有事务的拒绝必须发生在装饰器的异常清理范围
+之外，不能因 `BEGIN IMMEDIATE` 报错就回滚调用方既有事务。允许在
+`app/storage/idempotency.py` 给 `idempotent_effect` 增加默认关闭的
+`require_no_transaction` 选项：在 wrapper 开始、预检及 fn 之前，检查
+`conn.in_transaction`，存在则明确拒绝且不 rollback/commit 调用方事务；原调用默认语义不变。
+本 Task 新 Offer 节点启用该选项。新增测试保留调用方未提交的哨兵行，拒绝后仍在原事务，
+之后由调用方 commit，哨兵存在而 Offer/历史/effect_log 为 0；也覆盖正常调用。
+允许同步 `tests/test_idempotency.py` 与本计划偏离登记，运行原装饰器回归。
+Task 3 的两个新节点也使用该显式保护，所有代码样例随修复同步。
+
+**Task 2 完整授权文件清单（优先于下方原单文件标记）**：`app/graph/offer_nodes.py`、`tests/test_offer_nodes_create.py`、`app/storage/idempotency.py`、`tests/test_idempotency.py`、`tests/test_effect_idempotency_suite.py`、本计划文件。上述文件均属于本 Task；审查逐项按本清单及补充修复判范围。
+
 **文件**：`app/graph/offer_nodes.py`（新建）
 
 ```python
@@ -787,6 +819,7 @@ def effect_create_offer(
         start_date=start_date,
         report_to=report_to,
     )
+    conn.execute("BEGIN IMMEDIATE")
     assert_offer_creatable(conn, application_id=application_id)
     row = conn.execute(
         "SELECT job_id, current_stage_id FROM application WHERE id = ?",
@@ -943,6 +976,10 @@ python -m pytest tests/test_offer_nodes_create.py -q
 ---
 
 ### Task 3: `effect_record_approval` 与 `effect_revise_offer`（tasks 3.2 / 3.3）
+
+**并发与铁律补充（`1011R`）**：本 Task 两个 effect 的状态/审批前置读取与业务写
+也必须位于同一受控事务；首次业务读前 `BEGIN IMMEDIATE`，只有装饰器提交/回滚。
+逐节点登记 manifest/崩溃配方，增加中途写失败回滚测试，不能依赖仅正常路径证明原子性。
 
 **文件**：`app/graph/offer_nodes.py`（追加到 Task 2 之后；⛔ import 区不变——
 本 Task 用到的名字 Task 2 已全部 import）
@@ -3350,3 +3387,9 @@ python -m pytest tests/test_offer_storage.py tests/test_offer_nodes_create.py \
 U3 完成后，`offer-generation` 的 U4（门禁接线与拒信）才可发车——其前置是 U2 与 M2 的
 `rejection_record`（design D9），而 **U5 的前置是 U3＋U4**。
 ⛔ tasks.md 的勾选在该 plan 的 final review 通过后由收口方做，本计划不勾。
+
+### Task 2 执行偏离登记（2026-10-11，1011R）
+
+按 1011R 优先修正，验收扩为 10 条节点测试，并当次登记幂等 manifest 与真实恢复配方。前置读取前显式 BEGIN IMMEDIATE，提交/回滚仍由既有装饰器管理，无嵌套事务管理者、无节点内提交。覆盖锁竞争、第二/第三写异常与无关提交防泄漏、成功后事务不泄漏、已有事务拒绝及已有事务重放拒绝。锁竞争用同步双连接实测：另一连接在校验完成、三写开始前尝试淘汰，因写锁立即返回 locked；第二、三写异常后无关提交不泄漏 Offer、阶段、历史或 effect_log。全套恢复配方同时核对 Offer、阶段、历史同生共死。
+
+本轮验收证据（2026-10-11，Task 2 执行会话复验与恢复核验补强）：`"$SDD_PYTHON" -m pytest tests/test_offer_nodes_create.py -q` → 10 passed（退出码 0，继承前次执行会话原始记录）；本轮单独执行 `"$SDD_PYTHON" -m pytest tests/test_effect_idempotency_suite.py -q` → 121 passed（退出码 0），以及 `"$SDD_PYTHON" -m pytest tests/test_offer_nodes_create.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → 145 passed（退出码 0）。新增两条漂移用例分别单侧预置 Offer 或 `effect_create_offer` 日志，恢复配方计数器均断言失败；计数器现在按 `thread_id='offer-app' AND node_name='effect_create_offer'` 计日志，并要求 Offer 与日志数相等，且继续验证阶段及人工 history。恢复守卫配方核验成功，崩溃重放后 Offer/阶段/历史数量不变；节点测试覆盖已有事务重放拒绝。全量测试未因仅修改辅助核验代码而重跑；已核验父进程原始日志 `.superpowers/sdd/2026-10-10-offer-generation-unit3-approval-flow/task-2.parent-tests.log`，其中记录实际全量命令 `['/Users/paulshao/Projects/HumanResource/venv/bin/python', '-m', 'pytest', '-q']`、`4504 passed, 12 skipped in 141.26s`、`exit_code=0`。该证据适用于这次辅助核验补强前的代码，不能冒称覆盖本轮新增漂移用例；最终整合仍需按总计划运行全量。

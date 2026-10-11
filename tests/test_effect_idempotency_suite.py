@@ -40,6 +40,7 @@ from app.audit.recorder import AuditRecorder
 from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.channels.base import OutboundMessage
 from app.channels.web_channel import WebChannel
+from app.graph.offer_nodes import effect_create_offer
 from app.graph.jd_nodes import (
     JD_AUTHORSHIP_KEY,
     JD_TEXT_KEY,
@@ -198,6 +199,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_send_verification_code",
         "effect_instantiate_checklist",
         "effect_update_item",
+        "effect_create_offer",
         "effect_schedule_slot",
         "effect_reschedule_slot",
         "effect_cancel_slot",
@@ -906,6 +908,53 @@ def _seed_scheduled_slot(
 def _seed_past_scheduled_slot(conn: sqlite3.Connection) -> None:
     """`effect_complete_slot` 种子：开始时刻已过的场次（节点要求 now ≥ start）。"""
     _seed_scheduled_slot(conn, start_at="2026-01-01 06:00", end_at="2026-01-01 07:00")
+
+
+def _seed_offer_create(conn):
+    conn.execute("INSERT INTO job (id, title, status) VALUES ('offer-j','测试岗位','approved')")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('offer-c','合成候选人')")
+    conn.execute("INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, status, uploaded_by) VALUES ('offer-r','offer-j','synthetic','test.pdf','offer-sha','parsed','hr')")
+    conn.execute("INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id, status) VALUES ('offer-app','offer-c','offer-j','offer-r','interview','active')")
+    conn.commit()
+
+
+def _count_offer_create_facts(conn):
+    offers = conn.execute("SELECT COUNT(*) FROM offer WHERE application_id='offer-app'").fetchone()[0]
+    history = conn.execute("SELECT COUNT(*) FROM application_stage_history WHERE application_id='offer-app' AND to_stage_id='offer'").fetchone()[0]
+    stage = conn.execute("SELECT current_stage_id, status FROM application WHERE id='offer-app'").fetchone()
+    effects = conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE thread_id='offer-app' "
+        "AND node_name='effect_create_offer'"
+    ).fetchone()[0]
+    assert history == offers
+    assert stage == ("offer" if offers else "interview", "active")
+    assert offers == effects
+    return offers
+
+
+@pytest.mark.parametrize("fact", ["offer", "effect_log"])
+def test_offer_create_fact_counter_rejects_one_sided_drift(tmp_path, fact):
+    conn = get_connection(str(tmp_path / f"offer-create-drift-{fact}.db"))
+    init_schema(conn)
+    _seed_offer_create(conn)
+
+    if fact == "offer":
+        conn.execute(
+            "INSERT INTO offer (id, application_id, job_id, department, start_date, "
+            "report_to, status, approval_round, created_by, updated_by) "
+            "VALUES ('drift-offer', 'offer-app', 'offer-j', '研发', '2026-11-01', "
+            "'负责人', 'pending_approval', 1, 'hr', 'hr')"
+        )
+    else:
+        conn.execute(
+            "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+            "VALUES ('offer-app:effect_create_offer:drift', 'offer-app', "
+            "'effect_create_offer', 'drift', datetime('now'))"
+        )
+    conn.commit()
+
+    with pytest.raises(AssertionError):
+        _count_offer_create_facts(conn)
 
 
 def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
@@ -2170,6 +2219,18 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "`tests/test_onboarding_nodes.py::test_update_item_rerun_no_second_history` "
                 "另有一条用例锁死「重跑不产生第二条留痕」。"
             ),
+        ),
+        "effect_create_offer": Recipe(
+            thread_id="offer-app",
+            seed=_seed_offer_create,
+            invoke=lambda conn: effect_create_offer(
+                conn, thread_id="offer-app", business_key="offer-req",
+                application_id="offer-app", department="研发",
+                start_date="2026-11-01", report_to="负责人",
+                note=None, created_by="hr",
+            ),
+            count_business_rows=_count_offer_create_facts,
+            note="Offer INSERT 是业务事实；阶段 UPDATE 和人工历史与其同事务。",
         ),
         "effect_schedule_slot": Recipe(
             thread_id="sched-app1",

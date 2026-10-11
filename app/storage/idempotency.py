@@ -16,7 +16,9 @@ class EffectAlreadyApplied(Exception):
     """
 
 
-def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
+def idempotent_effect(
+    node_name: str, *, require_no_transaction: bool = False
+) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
     """
     装饰一个 effect_* 节点函数。被装饰函数必须接受
     (conn: sqlite3.Connection, thread_id: str, business_key: str, **kwargs) 签名。
@@ -29,6 +31,13 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
         def wrapper(
             conn: sqlite3.Connection, *, thread_id: str, business_key: str, **kwargs
         ) -> T | None:
+            # This check intentionally sits outside the exception cleanup below:
+            # a transaction owned by the caller must never be committed or rolled
+            # back by this effect wrapper.
+            if require_no_transaction and conn.in_transaction:
+                raise RuntimeError(
+                    f"{node_name} requires a connection without an active transaction"
+                )
             effect_key = f"{thread_id}:{node_name}:{business_key}"
             existing = conn.execute(
                 "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
