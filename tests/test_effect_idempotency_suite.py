@@ -10,9 +10,9 @@
    悄悄溜过去。铁律 1 的失败是静默的（不报错、不失败，只是少做/多做一次副
    作用），能抓住它的只有"清单过期即变红"这一条机制。
 
-⛔ **本文件不改 `app/` 任何代码。** 若某个节点在这里被测出真的不幂等，
-登记进计划的「红灯与观察项」，由另一个交付单元修——在测试单元里顺手改
-被测代码，等于让测试给自己开绿灯。
+本文件通常只登记 manifest 与崩溃-恢复配方；若本任务授权实现 effect 节点，
+允许同步扩展本文件的导入、manifest、配方与相应业务事实计数器。失败修复仍须先
+由独立节点测试暴露，再实现后回归，不能只改配方让守卫自我放行。
 
 ⚠️ 与既有三个文件的分工（⛔ 不重复造）：
 - `tests/test_idempotency.py`     —— 装饰器**本身**的语义（短路、回滚、日志）
@@ -40,7 +40,7 @@ from app.audit.recorder import AuditRecorder
 from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.channels.base import OutboundMessage
 from app.channels.web_channel import WebChannel
-from app.graph.offer_nodes import effect_create_offer
+from app.graph.offer_nodes import effect_create_offer, effect_record_approval, effect_revise_offer
 from app.graph.jd_nodes import (
     JD_AUTHORSHIP_KEY,
     JD_TEXT_KEY,
@@ -200,6 +200,8 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_instantiate_checklist",
         "effect_update_item",
         "effect_create_offer",
+        "effect_record_approval",
+        "effect_revise_offer",
         "effect_schedule_slot",
         "effect_reschedule_slot",
         "effect_cancel_slot",
@@ -930,6 +932,39 @@ def _count_offer_create_facts(conn):
     assert stage == ("offer" if offers else "interview", "active")
     assert offers == effects
     return offers
+
+
+def _seed_offer_approval(conn):
+    _seed_offer_create(conn)
+    conn.execute("INSERT INTO offer (id, application_id, job_id, department, start_date, report_to, status, approval_round, created_by, updated_by) VALUES ('offer-approval','offer-app','offer-j','研发','2026-11-01','负责人','pending_approval',1,'hr','hr')")
+    from app.storage.hr_account import upsert_account
+    from app.storage.offer_approval_chain import put_approval_chain
+    upsert_account(conn, username="offer-mgr", password="secret")
+    conn.commit()
+    put_approval_chain(conn, job_id="offer-j", chain=[{"level": 1, "approver_account_ids": ["offer-mgr"]}], updated_by="hr")
+
+
+def _count_offer_approval_facts(conn):
+    approvals = conn.execute("SELECT COUNT(*) FROM offer_approval WHERE offer_id='offer-approval'").fetchone()[0]
+    effects = conn.execute("SELECT COUNT(*) FROM effect_log WHERE thread_id='offer-approval' AND node_name='effect_record_approval'").fetchone()[0]
+    status = conn.execute("SELECT status FROM offer WHERE id='offer-approval'").fetchone()[0]
+    assert approvals == effects
+    assert status == ("approved" if approvals else "pending_approval")
+    return approvals
+
+
+def _seed_offer_revision(conn):
+    _seed_offer_approval(conn)
+    conn.execute("UPDATE offer SET status='needs_revision' WHERE id='offer-approval'")
+    conn.commit()
+
+
+def _count_offer_revision_facts(conn):
+    row = conn.execute("SELECT approval_round, status FROM offer WHERE id='offer-approval'").fetchone()
+    effects = conn.execute("SELECT COUNT(*) FROM effect_log WHERE thread_id='offer-approval' AND node_name='effect_revise_offer'").fetchone()[0]
+    assert row[0] == 1 + effects
+    assert row[1] == ("pending_approval" if effects else "needs_revision")
+    return effects
 
 
 @pytest.mark.parametrize("fact", ["offer", "effect_log"])
@@ -2231,6 +2266,27 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             ),
             count_business_rows=_count_offer_create_facts,
             note="Offer INSERT 是业务事实；阶段 UPDATE 和人工历史与其同事务。",
+        ),
+        "effect_record_approval": Recipe(
+            thread_id="offer-approval",
+            seed=_seed_offer_approval,
+            invoke=lambda conn: effect_record_approval(
+                conn, thread_id="offer-approval", business_key="1:1:offer-mgr:approved",
+                offer_id="offer-approval", level=1, approver="offer-mgr", decision="approved",
+            ),
+            count_business_rows=_count_offer_approval_facts,
+            note="审批留痕、Offer 状态和 effect_log 同生共死。",
+        ),
+        "effect_revise_offer": Recipe(
+            thread_id="offer-approval",
+            seed=_seed_offer_revision,
+            invoke=lambda conn: effect_revise_offer(
+                conn, thread_id="offer-approval", business_key="revision-request-1",
+                offer_id="offer-approval", department="研发", start_date="2026-12-01",
+                report_to="负责人", note="已修改", updated_by="hr",
+            ),
+            count_business_rows=_count_offer_revision_facts,
+            note="新审批轮次、Offer 状态和 effect_log 同生共死，旧轮留痕保留。",
         ),
         "effect_schedule_slot": Recipe(
             thread_id="sched-app1",

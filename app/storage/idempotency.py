@@ -17,7 +17,11 @@ class EffectAlreadyApplied(Exception):
 
 
 def idempotent_effect(
-    node_name: str, *, require_no_transaction: bool = False
+    node_name: str,
+    *,
+    require_no_transaction: bool = False,
+    begin_immediate: bool = False,
+    thread_arg: str | None = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
     """
     装饰一个 effect_* 节点函数。被装饰函数必须接受
@@ -31,49 +35,43 @@ def idempotent_effect(
         def wrapper(
             conn: sqlite3.Connection, *, thread_id: str, business_key: str, **kwargs
         ) -> T | None:
+            # Bind the idempotency thread to the business object before taking
+            # a lock or consulting the cache, including on replay hits.
+            if thread_arg is not None and kwargs.get(thread_arg) != thread_id:
+                raise ValueError(
+                    f"{node_name} thread_id must match {thread_arg}"
+                )
             # This check intentionally sits outside the exception cleanup below:
             # a transaction owned by the caller must never be committed or rolled
             # back by this effect wrapper.
-            if require_no_transaction and conn.in_transaction:
+            if (require_no_transaction or begin_immediate) and conn.in_transaction:
                 raise RuntimeError(
                     f"{node_name} requires a connection without an active transaction"
                 )
             effect_key = f"{thread_id}:{node_name}:{business_key}"
-            existing = conn.execute(
-                "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
-            ).fetchone()
-            if existing is not None:
-                return None
+            if begin_immediate:
+                # The write lock must cover the idempotency precheck as well as
+                # every business read/write. Reject caller-owned transactions
+                # above, before entering any cleanup path that could roll them back.
+                conn.execute("BEGIN IMMEDIATE")
+
+            try:
+                existing = conn.execute(
+                    "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
+                ).fetchone()
+                if existing is not None:
+                    if begin_immediate:
+                        conn.rollback()
+                    return None
+            except Exception:
+                if begin_immediate:
+                    _rollback_preserving_original(conn, effect_key, "precheck")
+                raise
 
             try:
                 result = fn(conn, thread_id=thread_id, business_key=business_key, **kwargs)
             except Exception:
-                # conn is a single connection shared across the whole app
-                # (see db.get_connection); if fn wrote rows before raising,
-                # those writes sit in SQLite's implicit open transaction and
-                # would otherwise be durably committed the next time ANY
-                # unrelated effect calls conn.commit(). Roll back so a failed
-                # effect leaves no trace for a later, unrelated commit to pick up.
-                #
-                # The rollback itself can fail (e.g. the transaction was
-                # already ended by another owner before we got here) — that
-                # failure must never replace the original exception the
-                # caller needs to see and act on. But it must not be silent
-                # either: if the rollback fails, the partial write it was
-                # supposed to undo is left sitting in the still-open
-                # transaction and will be durably committed by the next,
-                # unrelated effect's conn.commit() — log it at ERROR so this
-                # failure mode leaves a trace somewhere.
-                try:
-                    conn.rollback()
-                except Exception as rollback_exc:
-                    logger.error(
-                        "rollback failed while cleaning up after effect_key=%s "
-                        "raised; the effect's partial write was NOT undone and "
-                        "may be silently committed by a later, unrelated effect",
-                        effect_key,
-                        exc_info=rollback_exc,
-                    )
+                _rollback_preserving_original(conn, effect_key, "effect function")
                 raise
 
             try:
@@ -98,20 +96,7 @@ def idempotent_effect(
                 # 当场破掉，而且没有任何症状。
                 # ⛔ 同理不能用 INSERT OR IGNORE 之后照常 commit：那等于主动把
                 # 重复的业务行提交下去。
-                try:
-                    conn.rollback()
-                except Exception as rollback_exc:
-                    # 回滚失败 ⇒ 那批业务写仍留在未提交事务里，随时会被下一次
-                    # 不相关的 commit 带下去。此时**不能**假装幂等成功返回 None
-                    # （那会让调用方以为一切正常，而恒等式正悬在破掉的边缘），
-                    # 只能记 ERROR 并把原始异常抛给调用方。
-                    logger.error(
-                        "rollback failed while short-circuiting duplicate effect_key=%s; "
-                        "this call's business write was NOT undone and may be silently "
-                        "committed by a later, unrelated effect",
-                        effect_key,
-                        exc_info=rollback_exc,
-                    )
+                if not _rollback_preserving_original(conn, effect_key, "duplicate effect_log"):
                     raise exc
 
                 # 语义判据，⛔ 不匹配错误文案（SQLite 的消息措辞不是契约）：
@@ -152,22 +137,33 @@ def idempotent_effect(
                 # （调用方要看的是"磁盘满"，不是"rollback 炸了"），但也不能静默：
                 # 回滚失败 ⇒ 那批业务写仍留在未提交事务里，随时会被下一次不相关
                 # 的 commit 带下去，记 ERROR 让这个失败模式留下痕迹。
-                try:
-                    conn.rollback()
-                except Exception as rollback_exc:
-                    logger.error(
-                        "rollback failed while cleaning up after effect_log insert "
-                        "for effect_key=%s failed; this call's business write was NOT "
-                        "undone and may be silently committed by a later, unrelated "
-                        "effect",
-                        effect_key,
-                        exc_info=rollback_exc,
-                    )
+                _rollback_preserving_original(conn, effect_key, "effect_log insert")
                 raise
 
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                _rollback_preserving_original(conn, effect_key, "commit")
+                raise
             return result
 
         return wrapper
 
     return decorator
+
+
+def _rollback_preserving_original(
+    conn: sqlite3.Connection, effect_key: str, phase: str
+) -> bool:
+    try:
+        conn.rollback()
+    except Exception as rollback_exc:
+        logger.error(
+            "rollback failed while cleaning up %s for effect_key=%s; partial writes "
+            "may remain in the connection",
+            phase,
+            effect_key,
+            exc_info=rollback_exc,
+        )
+        return False
+    return True
