@@ -3039,23 +3039,31 @@ def test_export_unknown_letter_raises_not_found(conn):
 
 ### Task 8: U3 e2e（tasks 3.7）
 
+> 当前 Spec 返工：synthetic_draft 内 INSERT analysis_run + commit 违反纯计算要求。
+> 移到该测试的夹具准备段，在monkeypatch调用前插入合成analysis_run并提交；替身本身只能
+> 做参数断言与返回固定Draft/version，不写库、不调用effect、不提交。保留真实HTTP整链、
+> 幂等重放、业务事实守恒、docx/导出留痕断言。同步实际测试docstring，清除“U2未落地”旧说明。
+> 本计划旧示例已同步当前口径。最后实跑完整联合32项（实测数为准），记录真实退出码。
+
+> 1011R 当前依赖实核：POST /api/applications/{id}/letters 与 GET /api/letters/{id}/export.docx
+> 均已存在。原“U2未落地而只走节点”的理由已经消失；保留原节点e2e，同时在同一新文件
+> 补全一条真实HTTP整链：发起Offer→一级退回→PATCH修改→新轮两级通过→POST生成文书→GET导出。
+> LLM仅使用合成stub/monkeypatch，不联网、不碰真实简历/外发。核验返回docx、round2、审批留痕3条、
+> 创建/审批/修订幂等日志与业务事实、导出访问日志/状态；重放关键请求不重复事实。
+> Task7现有HTTP409负例保留；本Task只使用新 tests/test_offer_unit3_e2e.py 与本计划。删除上轮尚未提交、与步B冲突的重复 tests/test_offer_export_gate_endpoint.py，不删原有测试。
+> 若确有路由接线缺陷则最小改server/letter_nodes并记依据；不修改旧tests/test_letter_*.py。
+
 **文件**：`tests/test_offer_unit3_e2e.py`（新建）
 
-> ⚠️ **这段为什么走节点而不是 HTTP**：tasks 3.7 的链路是
-> 「发起 → 一级退回 → 修改 → 两级通过 → 生成文书 → 导出」，其中**前四段走 U3 自己的
-> HTTP 端点**（本文件用 `make_test_client` 真跑），**后两段走节点/卡点**
-> （`effect_persist_letter` + `record_letter_access`）——文书生成/导出的 HTTP 端点属
-> U2 Task 5，本计划写作时磁盘上还没有（见「零」节表格）。tasks 3.7 要验的是 U3 的
-> 链路是否把 Offer 推到"可导出"，节点级足以判定；Task 7 已由真实 HTTP 负例补足路由判据。
+> 当前验收保留节点链以核事实守恒，并新增真实 HTTP 整链以核生成与导出接线。
+> 两个接口都已存在，不能再登记未落地留步。Task7的HTTP409门槛测试独立保留。
 
 ```python
 """U3 e2e（tasks 3.7）：发起 → 一级退回 → 修改 → 两级通过 → 生成文书 → 导出；
 审批留痕条数守恒。
 
-⚠️ 文书生成/导出走节点与卡点（`effect_persist_letter` + `record_letter_access`），
-不走 `/api/letters*`：那是 U2 Task 5 的端点，本计划写作时尚未落地（见「零」节表格）。
-U2 落地后应补一条 HTTP 版（把下面第 5/6 段换成 POST /api/applications/{id}/letters
-与 GET /api/letters/{id}/export.docx），本文件保持不动。
+节点链核业务事实守恒；同文件另有HTTP整链，生成与导出均走实际端点。
+分析记录在夹具准备阶段写入，合成compute替身只返回固定Draft，无SQL、commit或effect调用。
 """
 from __future__ import annotations
 
@@ -3244,7 +3252,7 @@ def test_unit3_end_to_end(env):
 python -m pytest tests/test_offer_unit3_e2e.py -q
 ```
 
-预期：全部通过（0 failed，1 passed）。
+预期：全部通过（0 failed，数量按节点链及新增HTTP整链实际收集）。
 
 **步 B（probe 后核验）**：
 
@@ -3259,6 +3267,11 @@ grep -q 'export.docx' app/web/server.py && echo "U2 Task 5 已落地" || echo "U
 ---
 
 ### Task 9: 全量回归
+
+> 1011R 验收落档：本Task授权修改本计划，写实际定向/全量命令、收集数、skipped、退出码、
+> 对应HEAD及证据路径。全量完成事件必须poll到最终exit，不把session_id当通过；用$SDD_PYTHON。
+> 这份验收记录由父runner提交为Task9产物，不能只说通过而让Task9无对应提交。
+> 原业务/旧测试不改，除非发现真实回归；有缺陷登记并修复后再验收，不修改执行器证据文件。
 
 **命令与预期输出**：
 
