@@ -2724,6 +2724,9 @@ python3 -m pytest tests/test_invitation_effect.py -q
 
 ### Task 11: `tests/test_interview_invitation_api.py`（路由契约 + 邀约页 + 子路径前缀）
 
+**1011R 路由契约修正及完整授权**：允许新增该 API 测试文件、修改本计划偏离登记及 `app/storage/interview_scheduling.py` 的 `slot_for()` 读取/序列化：现有列 sent_channel 已由回填写入但 API 场次对象漏返，补此字段，不做迁移、不改动作语义。实测先红（缺字段）后绿23项；本轮增加既有排期存储/API相关测试回归并把该必要共用文件修改落偏离登记，审查按这份完整授权核对。
+
+
 **文件**：`tests/test_interview_invitation_api.py`（新增，整文件）
 
 ```python
@@ -3215,6 +3218,11 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 | 文案模板的来源与版本 | Task 1（表 + 白名单校验 + v1 占位种子）、Task 8（PUT） | 升版不覆盖；留痕记模板版本；⛔ 无评分/排名/淘汰理由占位符（参数化反证） |
 
 ## 4. 本计划相对 `tasks.md` / `design.md` / spec 的偏离登记
+
+### D-U3-14：Task 11 API 场次对象补返已存储的发送渠道（1011R）
+
+`slot_for()` 原先漏选/漏序列化现有 `sent_channel` 列，导致回填 API 响应无渠道。Task 11 路由测试先 14 passed/1 failed，补字段后 API 契约与原路由23项通过，追加既有排期存储/API回归共58项通过（原始任务事件中 exit_code=0）。此修复仅补响应字段，不改变 schema、状态转移或 U2 不变式。允许改本计划、存储函数和本 Task API 测试。再补直接存储函数断言以确认现有 sent_channel 读回和无发送时 null，并实跑相关回归；不得覆盖原测试。
+
 
 1. **D-U3-1（实现细节）**：模板占位符白名单在 tasks 3.1 列的六项之外多放
    `candidate_name`（收信人姓名），共九个。理由：邀约文案要称呼候选人，而它是普通

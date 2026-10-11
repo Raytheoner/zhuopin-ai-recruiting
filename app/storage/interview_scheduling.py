@@ -206,7 +206,7 @@ def _needs_invitation_followup(
 def slot_for(conn: sqlite3.Connection, slot_id: str) -> dict | None:
     row = conn.execute(
         "SELECT id, application_id, round, start_at, end_at, mode, location_or_link, "
-        "status, cancel_reason, invitation_status, created_by, updated_by, created_at, updated_at "
+        "status, cancel_reason, invitation_status, sent_channel, created_by, updated_by, created_at, updated_at "
         "FROM interview_slot WHERE id = ?",
         (slot_id,),
     ).fetchone()
@@ -214,7 +214,7 @@ def slot_for(conn: sqlite3.Connection, slot_id: str) -> dict | None:
         return None
     (
         id_, application_id, round_, start_at, end_at, mode, location_or_link,
-        status, cancel_reason, invitation_status, created_by, updated_by,
+        status, cancel_reason, invitation_status, sent_channel, created_by, updated_by,
         created_at, updated_at,
     ) = row
     interviewer_ids = [
@@ -236,6 +236,7 @@ def slot_for(conn: sqlite3.Connection, slot_id: str) -> dict | None:
         "status": status,
         "cancel_reason": cancel_reason,
         "invitation_status": invitation_status,
+        "sent_channel": sent_channel,
         "created_by": created_by,
         "updated_by": updated_by,
         "created_at": created_at,
