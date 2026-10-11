@@ -81,6 +81,41 @@ def test_create_rejects_blank_fields(conn):
         _create(conn, department="   ")
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_create_rejects_swapped_application_before_new_or_cached_key(conn, cached):
+    if cached:
+        assert _create(conn)
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('c2','李四')")
+    conn.execute("INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, status, uploaded_by) VALUES ('r2','j1','synthetic','b.pdf','sha2','parsed','hr')")
+    conn.execute("INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id, status) VALUES ('app2','c2','j1','r2','interview','active')")
+    conn.commit()
+    before = (
+        conn.execute("SELECT * FROM application ORDER BY id").fetchall(),
+        conn.execute("SELECT * FROM offer ORDER BY id").fetchall(),
+        conn.execute("SELECT * FROM application_stage_history ORDER BY id").fetchall(),
+        conn.execute("SELECT * FROM effect_log ORDER BY effect_key").fetchall(),
+    )
+    with pytest.raises(ValueError, match="thread_id must match application_id"):
+        _create(conn, application_id="app2")
+    after = (
+        conn.execute("SELECT * FROM application ORDER BY id").fetchall(),
+        conn.execute("SELECT * FROM offer ORDER BY id").fetchall(),
+        conn.execute("SELECT * FROM application_stage_history ORDER BY id").fetchall(),
+        conn.execute("SELECT * FROM effect_log ORDER BY effect_key").fetchall(),
+    )
+    assert after == before
+
+
+def test_create_binds_thread_to_application_and_rejects_blank_request_id(conn):
+    with pytest.raises(ValueError, match="thread_id must match application_id"):
+        _create(conn, thread_id="other")
+    with pytest.raises(ValueError, match="business_key 不能为空"):
+        _create(conn, request_id="  ")
+    assert conn.execute("SELECT COUNT(*) FROM offer").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM application_stage_history WHERE application_id='app1'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM effect_log WHERE thread_id='app1'").fetchone()[0] == 0
+
+
 @pytest.mark.parametrize("failure_point", ["stage", "history"])
 def test_midwrite_failure_rolls_back_all_facts_and_unrelated_commit(conn, failure_point):
     if failure_point == "stage":

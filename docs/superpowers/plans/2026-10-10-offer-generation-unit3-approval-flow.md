@@ -977,6 +977,26 @@ python -m pytest tests/test_offer_nodes_create.py -q
 
 ### Task 3: `effect_record_approval` 与 `effect_revise_offer`（tasks 3.2 / 3.3）
 
+**1011R 实际缓存命中与跨轮覆盖补强（最高优先）**：审批、修改、创建三节点缓存错配测试先成功写缓存，再保持原thread_id/business_key不变，仅换实际offer_id/application_id，以确保若无绑定校验就真正命中原effect_key；各业务表/log快照无变化，明确错配ValueError，而不是换thread导致新键。可再保留新键错配测试，不能拿它替代缓存路径。
+旧轮重放测试先第1轮退回留痕→修改到第2轮pending_approval→使用第1轮成功键重放，必须None且第2轮状态、round、全部审批/history/effect_log快照不变。不能只在同一轮里重复然后命名“旧轮”。本轮新增后联合真实数量替代历史209/199，不固定旧数字、不删测试；同步顶层函数与展开用例口径及最后联合命令/exit码登记。
+
+
+**1011R 顺序场景补充**：在审批测试中新增真实顺序：准备needs_revision→req-A成功修改并round+1/status=pending_approval→req-B再次修改被现有OfferNotEditableError（needs_revision状态前置条件）拒绝；前后字段、round、旧审批行、history和effect_log全量快照相等，修改节点日志仍1条。不同键但首次就pending的现有用例不能替代该顺序场景。最后联合验收包含新增用例（原208＋新增），按真实收集数登记；events的完成命令记录结构是type=item.completed、item.type=command_execution，输出字段aggregated_output，不是顶层command_execution或output。
+
+
+**1011R 业务对象绑定修复与口径澄清（最高优先）**：Offer三节点必须绑定thread_id与实际业务对象，创建绑定application_id，审批/修改绑定offer_id；在幂等预检前拒绝错配，包括已存在effect_key时也拒绝，无业务/日志写且不伤caller事务。允许给装饰器新增默认None `thread_arg` 纯参数绑定选项，预检/锁/try之前验证kwargs[thread_arg]==thread_id，旧节点默认不变；三节点显式启用。审批执行阶段在锁内读取当前round，并校验business_key为 `{round}:{level}:{approver}:{decision}`；同一已完成旧轮键重放仍由装饰器正常幂等返回。
+修改的business_key本身就是调用方request_id（spec没规定从正文推导，随机非空请求ID合法），不新增第二个虚构请求ID参数、不把不同合法request_id自动归一。修改拒绝空键、thread错配；不同request键第二次修改仍按needs_revision状态拒绝。创建也拒绝空request键。补新键/缓存命中键错配测试，核facts/log均无新增；文档明确17顶层函数/19收集用例或更新为最新实际数，最后联合验收登记实际输出与退出码。
+
+**实现口径说明（2026-10-11）**：`tests/test_offer_nodes_approval.py` 当前含 **24 个顶层测试函数**，参数化展开后 pytest 实际收集 **35 项**；按本任务三节点及装饰器/恢复配方相关集合计数，以 pytest 实际收集/执行输出为准，不沿用计划早期的 17/19 估数。
+
+
+**1011R 节点级并发验收补充**：通用装饰器并发测试不能替代实际 Offer 节点。给 `effect_record_approval` 和 `effect_revise_offer` 各补双连接线程同步用例：业务首请求持锁，竞争相同业务键以 `busy_timeout=0` 明确被锁阻断，首个提交后相同键重放 `None`；核审批留痕/轮次/状态/历史与本节点 `effect_log` 精确一次。不同键走业务前置拒绝且无写入。事务顺序使用 `Connection.execute` 子类记录，不用会吞异常的 trace callback；原顺序测试已替换。194/199/209 为早轮历史结果，不是固定验收数量；加入缓存对象绑定与跨轮重放覆盖后，本轮最新联合回归为 **216 项、exit 0**，以原始证据核验，禁止为固定旧数量删测试。
+
+
+**1011R 预检竞态修复（最高优先，完整授权）**：允许本 Task 修改 offer_nodes、idempotency装饰器、test_idempotency、offer审批/创建节点测试、effect守卫及本计划登记。新增默认False的 `begin_immediate` 选项；True时在装饰器预检effect_log之前取得BEGIN IMMEDIATE，且在任何清理try之前拒绝调用方已有事务。预检命中时释放本节点事务再返回None；其后函数、日志及commit任一异常都完整rollback并保留原异常；唯一键竞态既有正常语义保留。不要改变默认调用事务约定。
+Offer三节点启用begin_immediate=True并移除节点内重复BEGIN，装饰器唯一管理事务。测试用两个独立连接/线程同步，第二连接busy_timeout=0，先确认锁竞争，首请求提交后重放同键只返回幂等成功、不抛业务重复异常、不多写facts/effect_log；不同键/已退回/不同轮验证真实业务拒绝。caller事务哨兵仍不受拒绝影响。不要用会吞异常的trace callback做线程同步。跑相关节点、装饰器、配方回归，记录最新命令/exit码，不重复全量（最终整合再跑）。
+
+
 **并发与铁律补充（`1011R`）**：本 Task 两个 effect 的状态/审批前置读取与业务写
 也必须位于同一受控事务；首次业务读前 `BEGIN IMMEDIATE`，只有装饰器提交/回滚。
 逐节点登记 manifest/崩溃配方，增加中途写失败回滚测试，不能依赖仅正常路径证明原子性。
@@ -3393,3 +3413,15 @@ U3 完成后，`offer-generation` 的 U4（门禁接线与拒信）才可发车�
 按 1011R 优先修正，验收扩为 10 条节点测试，并当次登记幂等 manifest 与真实恢复配方。前置读取前显式 BEGIN IMMEDIATE，提交/回滚仍由既有装饰器管理，无嵌套事务管理者、无节点内提交。覆盖锁竞争、第二/第三写异常与无关提交防泄漏、成功后事务不泄漏、已有事务拒绝及已有事务重放拒绝。锁竞争用同步双连接实测：另一连接在校验完成、三写开始前尝试淘汰，因写锁立即返回 locked；第二、三写异常后无关提交不泄漏 Offer、阶段、历史或 effect_log。全套恢复配方同时核对 Offer、阶段、历史同生共死。
 
 本轮验收证据（2026-10-11，Task 2 执行会话复验与恢复核验补强）：`"$SDD_PYTHON" -m pytest tests/test_offer_nodes_create.py -q` → 10 passed（退出码 0，继承前次执行会话原始记录）；本轮单独执行 `"$SDD_PYTHON" -m pytest tests/test_effect_idempotency_suite.py -q` → 121 passed（退出码 0），以及 `"$SDD_PYTHON" -m pytest tests/test_offer_nodes_create.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → 145 passed（退出码 0）。新增两条漂移用例分别单侧预置 Offer 或 `effect_create_offer` 日志，恢复配方计数器均断言失败；计数器现在按 `thread_id='offer-app' AND node_name='effect_create_offer'` 计日志，并要求 Offer 与日志数相等，且继续验证阶段及人工 history。恢复守卫配方核验成功，崩溃重放后 Offer/阶段/历史数量不变；节点测试覆盖已有事务重放拒绝。全量测试未因仅修改辅助核验代码而重跑；已核验父进程原始日志 `.superpowers/sdd/2026-10-10-offer-generation-unit3-approval-flow/task-2.parent-tests.log`，其中记录实际全量命令 `['/Users/paulshao/Projects/HumanResource/venv/bin/python', '-m', 'pytest', '-q']`、`4504 passed, 12 skipped in 141.26s`、`exit_code=0`。该证据适用于这次辅助核验补强前的代码，不能冒称覆盖本轮新增漂移用例；最终整合仍需按总计划运行全量。
+
+### Task 3 执行登记（2026-10-11，1011R）
+
+`effect_record_approval` 与 `effect_revise_offer` 均在首次业务读取前 `BEGIN IMMEDIATE`，节点不提交，装饰器独占回滚/提交；approval 留痕唯一索引冲突映射 `ApprovalAlreadyRecordedError`。新增 17 条节点用例，覆盖两级审批、退回、跳级、非审批人、空链、重放、改后新轮及 salary 列反证；另有 approval 状态更新中断与 revise 更新中断两条失败注入，之后无关提交均未带出部分业务写或 effect_log。两个节点均登记在 `tests/test_effect_idempotency_suite.py` 的 `EFFECT_NODE_MANIFEST` 和 `build_recipes()`：强制提交前崩溃并重新打开连接恢复，approval 留痕/状态与 effect_log 对账，revision 轮次/状态与 effect_log 对账。
+
+验收：`"$SDD_PYTHON" -m pytest tests/test_offer_nodes_approval.py tests/test_offer_nodes_create.py tests/test_offer_storage.py tests/test_effect_idempotency_suite.py -q` → **176 passed / 0 failed**。该集合包含 manifest 与恢复配方闸门、崩溃恢复协议及按 thread 的 effect_log/业务事实恒等测试；`git diff --check` 通过。
+
+**1011R 节点绑定与预检竞态最终验收（2026-10-11）**：先新增 `thread_arg` 装饰器测试及 Offer 对象错配（新键与缓存命中）、审批 business_key、创建/修改空键测试，先运行暴露失败再实现。`thread_arg` 在事务检查、BEGIN、预检和清理 try 之前验证，三 Offer effect 分别绑定其真实业务对象。审批在锁内按当前轮次校验 business_key；修改的 business_key 直接作为非空 request_id。两个审批节点均有双连接线程锁竞争、execute 子类事务顺序、调用方事务哨兵、业务拒绝和中途写回滚覆盖；三个节点均在 manifest 与崩溃恢复配方登记。
+
+实际命令：`"$SDD_PYTHON" -m pytest tests/test_idempotency.py tests/test_offer_nodes_approval.py tests/test_offer_nodes_create.py tests/test_offer_storage.py tests/test_effect_idempotency_suite.py -q` → `209 passed in 13.68s`，退出码 0。此前在缺少 `effect_create_offer` 空 request_id 校验时，针对新增测试单跑 → `1 failed`，退出码 1；修复后最终集合全绿。单独 `--collect-only` 的恢复配方套件为 `125 tests collected`；截至这次 209 项执行，审批节点模块有 21 个顶层测试函数、30 个展开用例。新增 req-A 成功、req-B 因状态已回到 `pending_approval` 被 `OfferNotEditableError` 拒绝的真实顺序测试，逐项比较 Offer 字段、旧审批行、history、effect_log 快照，并确认 revise 日志仍只有一条。`git diff --check` → 通过，退出码 0。此前基线 194/目标 199 属节点并发补充之前估计；加入对象绑定与顺序用例后，该次联合集合实测为 209。
+
+**1011R 缓存对象绑定与跨轮重放复验（2026-10-11）**：在既有实现上新增审批/修改分别对缓存未命中与命中路径替换实际 `offer_id` 的四个用例、创建节点替换实际 `application_id` 的两个用例，以及“第 1 轮退回留痕→修改至第 2 轮待审批→重放第 1 轮成功键”的整组快照用例。新增用例先于本轮联合验收运行：`"$SDD_PYTHON" -m pytest tests/test_offer_nodes_approval.py tests/test_offer_nodes_create.py -q -k 'old_round_approval_replay or swapped_business_object or swapped_application'` → `7 passed, 41 deselected`，退出码 0（既有实现已包含绑定校验，因此无新增红灯）。本轮审批模块实收 **24 个顶层测试函数、35 个展开用例**；联合命令 `"$SDD_PYTHON" -m pytest tests/test_idempotency.py tests/test_offer_nodes_approval.py tests/test_offer_nodes_create.py tests/test_offer_storage.py tests/test_effect_idempotency_suite.py -q` → **216 passed in 14.65s**，退出码 0。`git diff --check` → 通过，退出码 0。该结果取代此前 209 作为本轮最新联合验收证据。

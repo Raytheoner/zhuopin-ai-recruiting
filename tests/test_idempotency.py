@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import threading
 
 import pytest
 
@@ -55,6 +56,132 @@ def test_require_no_transaction_allows_normal_effect_call(tmp_path):
     assert not conn.in_transaction
     assert conn.execute("SELECT name FROM candidate WHERE id='normal'").fetchone()[0] == "正常调用"
     assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 1
+
+
+def test_thread_arg_binding_rejects_before_cache_and_preserves_caller_transaction(tmp_path):
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+
+    @idempotent_effect("effect_bound", begin_immediate=True, thread_arg="object_id")
+    def effect(conn, thread_id, business_key, *, object_id):
+        conn.execute("INSERT INTO candidate (id, name) VALUES ('wrong', 'wrong')")
+
+    conn.execute(
+        "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+        "VALUES ('t:effect_bound:cached', 't', 'effect_bound', 'cached', datetime('now'))"
+    )
+    conn.commit()
+    with pytest.raises(ValueError, match="thread_id must match object_id"):
+        effect(conn, thread_id="t", business_key="cached", object_id="elsewhere")
+    with pytest.raises(ValueError, match="thread_id must match object_id"):
+        effect(conn, thread_id="t", business_key="new", object_id="elsewhere")
+    assert not conn.in_transaction
+    assert conn.execute("SELECT COUNT(*) FROM candidate").fetchone()[0] == 0
+
+
+def test_begin_immediate_locks_before_idempotency_precheck_and_releases_on_hit(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    first = get_connection(db_path)
+    init_schema(first)
+    second = get_connection(db_path)
+    second.execute("PRAGMA busy_timeout = 0")
+    first.execute(
+        "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+        "VALUES ('t:effect_locked:b', 't', 'effect_locked', 'b', datetime('now'))"
+    )
+    first.commit()
+
+    @idempotent_effect("effect_locked", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        raise AssertionError("precheck hit must skip function")
+
+    first.execute("BEGIN IMMEDIATE")
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        effect(second, thread_id="t", business_key="b")
+    first.rollback()
+
+    assert effect(second, thread_id="t", business_key="b") is None
+    assert not second.in_transaction
+
+
+def test_begin_immediate_rejects_caller_transaction_without_touching_it(tmp_path):
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('sentinel', 'caller')")
+
+    @idempotent_effect("effect_locked", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        raise AssertionError("function must not run")
+
+    with pytest.raises(RuntimeError, match="active transaction"):
+        effect(conn, thread_id="t", business_key="b")
+    assert conn.in_transaction
+    conn.commit()
+    assert conn.execute("SELECT name FROM candidate WHERE id='sentinel'").fetchone()[0] == "caller"
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+
+
+def test_begin_immediate_rolls_back_function_and_effect_log_failures(tmp_path):
+    class _EffectLogInsertFailingConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if sql.lstrip().upper().startswith("INSERT INTO EFFECT_LOG"):
+                raise sqlite3.OperationalError("log write failed")
+            return super().execute(sql, *args, **kwargs)
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path, factory=_EffectLogInsertFailingConnection)
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)
+
+    @idempotent_effect("effect_locked", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        conn.execute("INSERT INTO job (id, title) VALUES ('partial', 'partial')")
+
+    with pytest.raises(sqlite3.OperationalError, match="log write failed"):
+        effect(conn, thread_id="t", business_key="b")
+    conn.commit()
+    reader = get_connection(db_path)
+    assert reader.execute("SELECT COUNT(*) FROM job WHERE id='partial'").fetchone()[0] == 0
+    assert reader.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+
+
+def test_begin_immediate_serializes_same_key_and_replay_short_circuits(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    initialize = get_connection(db_path)
+    init_schema(initialize)
+    first = get_connection(db_path)
+    second = get_connection(db_path)
+    second.execute("PRAGMA busy_timeout = 0")
+    entered = threading.Event()
+    release = threading.Event()
+    outcomes = []
+    calls = []
+
+    @idempotent_effect("effect_serialized", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        calls.append(threading.current_thread().name)
+        conn.execute("INSERT INTO job (id, title) VALUES ('only-once', 'once')")
+        if threading.current_thread().name == "first-effect":
+            entered.set()
+            assert release.wait(5)
+        return "applied"
+
+    def first_call():
+        outcomes.append(effect(first, thread_id="t", business_key="b"))
+
+    thread = threading.Thread(target=first_call, name="first-effect")
+    thread.start()
+    assert entered.wait(5)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        effect(second, thread_id="t", business_key="b")
+    release.set()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert outcomes == ["applied"]
+    assert effect(second, thread_id="t", business_key="b") is None
+    assert calls == ["first-effect"]
+    assert second.execute("SELECT COUNT(*) FROM job WHERE id='only-once'").fetchone()[0] == 1
+    assert second.execute("SELECT COUNT(*) FROM effect_log WHERE thread_id='t'").fetchone()[0] == 1
 
 
 def test_effect_runs_once_on_first_call(tmp_path):

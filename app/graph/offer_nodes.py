@@ -43,7 +43,7 @@ def _require_non_empty(**fields: str | None) -> None:
             raise ValueError(f"{name} 不能为空")
 
 
-@idempotent_effect("effect_create_offer", require_no_transaction=True)
+@idempotent_effect("effect_create_offer", begin_immediate=True, thread_arg="application_id")
 def effect_create_offer(
     conn: sqlite3.Connection,
     *,
@@ -63,13 +63,13 @@ def effect_create_offer(
     在 effect 面重做前置校验，防止路由校验后投递状态已经改变。
     """
     _require_non_empty(
+        business_key=business_key,
         created_by=created_by,
         department=department,
         start_date=start_date,
         report_to=report_to,
     )
-    # 首次业务读取前取得写锁；提交与异常回滚仍由装饰器唯一管理。
-    conn.execute("BEGIN IMMEDIATE")
+    # 装饰器在 effect_log 预检前取得写锁，覆盖创建资格读取与业务写。
     assert_offer_creatable(conn, application_id=application_id)
     row = conn.execute(
         "SELECT job_id, current_stage_id FROM application WHERE id = ?",
@@ -96,3 +96,112 @@ def effect_create_offer(
         (str(uuid.uuid4()), application_id, from_stage_id, created_by),
     )
     return offer_id
+
+
+@idempotent_effect("effect_record_approval", begin_immediate=True, thread_arg="offer_id")
+def effect_record_approval(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    offer_id: str,
+    level: int,
+    approver: str,
+    decision: str,
+    comment: str | None = None,
+) -> dict:
+    """记一级审批并推进状态；状态读取、留痕、状态更新与 effect_log 同事务。"""
+    if decision not in ("approved", "returned"):
+        raise ValueError(f"decision 只能是 approved/returned，收到: {decision!r}")
+    _require_non_empty(approver=approver)
+    if decision == "returned" and not (comment or "").strip():
+        raise ValueError("退回必须填意见（spec Scenario「一级退回：退回并填意见」）")
+
+    # 装饰器在 effect_log 预检前取得写锁，覆盖后续状态读取与业务写。
+    offer = get_offer(conn, offer_id)
+    expected_key = f"{offer['approval_round']}:{level}:{approver}:{decision}"
+    if business_key != expected_key:
+        raise ValueError("business_key 必须匹配当前审批轮次、级别、审批人与决定")
+    if offer["status"] != "pending_approval":
+        raise OfferNotPendingApprovalError(
+            f"Offer 当前状态为「{offer['status_label']}」，不接受审批动作"
+        )
+    round_no = offer["approval_round"]
+    expected_level = current_approval_level(conn, offer_id)
+    if level != expected_level:
+        raise ApprovalOutOfOrderError(
+            f"第 {expected_level} 级尚未通过，不能直接审批第 {level} 级"
+        )
+    approvers = approvers_for_level(conn, offer["job_id"], level)
+    if not approvers:
+        raise ApprovalChainNotConfiguredError(
+            f"岗位 {offer['job_id']!r} 第 {level} 级尚未配置审批人，请先由 HR 维护该岗位的审批链"
+        )
+    if approver not in approvers:
+        raise NotAnApproverError(f"{approver!r} 不是第 {level} 级审批人")
+
+    try:
+        conn.execute(
+            "INSERT INTO offer_approval (id, offer_id, round, level, approver, decision, comment) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), offer_id, round_no, level, approver, decision, comment),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise ApprovalAlreadyRecordedError(
+            f"第 {level} 级审批已记录（offer={offer_id} round={round_no}）"
+        ) from exc
+
+    if decision == "returned":
+        new_status = "needs_revision"
+    elif level >= total_approval_levels(conn, offer["job_id"]):
+        new_status = "approved"
+    else:
+        new_status = "pending_approval"
+    conn.execute(
+        "UPDATE offer SET status = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?",
+        (new_status, approver, offer_id),
+    )
+    return {
+        "offer_id": offer_id,
+        "round": round_no,
+        "level": level,
+        "approver": approver,
+        "decision": decision,
+        "status": new_status,
+    }
+
+
+@idempotent_effect("effect_revise_offer", begin_immediate=True, thread_arg="offer_id")
+def effect_revise_offer(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    offer_id: str,
+    department: str,
+    start_date: str,
+    report_to: str,
+    note: str | None,
+    updated_by: str,
+) -> int:
+    """退回后修改 Offer，保留旧轮审批事实并从新一轮重新审批。"""
+    _require_non_empty(
+        business_key=business_key,
+        updated_by=updated_by,
+        department=department,
+        start_date=start_date,
+        report_to=report_to,
+    )
+    offer = get_offer(conn, offer_id)
+    if offer["status"] != "needs_revision":
+        raise OfferNotEditableError(
+            f"Offer 当前状态为「{offer['status_label']}」，只有「待修改」可以修改"
+        )
+    new_round = offer["approval_round"] + 1
+    conn.execute(
+        "UPDATE offer SET department = ?, start_date = ?, report_to = ?, note = ?, "
+        "status = 'pending_approval', approval_round = ?, updated_by = ?, "
+        "updated_at = datetime('now') WHERE id = ?",
+        (department, start_date, report_to, note, new_round, updated_by, offer_id),
+    )
+    return new_round
