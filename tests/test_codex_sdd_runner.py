@@ -175,6 +175,18 @@ def test_read_only_review_uses_task_test_evidence_instead_of_pytest():
     assert '跑测试用 "$SDD_PYTHON"' not in rp
 
 
+def test_run_preserves_execution_events_for_read_only_review(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts import codex_sdd_runner as runner
+
+    raw = b'{"type":"item.completed","item":{"type":"command_execution","command":"pytest","aggregated_output":"3 passed","exit_code":0}}\n'
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=raw, returncode=0))
+    monkeypatch.setattr(runner, "summarize", lambda output: (["-"] * 7, "done", True))
+    log = tmp_path / "task-7.log"
+    assert runner._run("task", ["codex"], tmp_path, log) == (0, "done")
+    assert log.with_suffix(".events.jsonl").read_bytes() == raw
+
+
 def test_main_dry_run_prints_tasks_and_exits_zero(tmp_path, capsys):
     plan = tmp_path / "plan.md"
     plan.write_text(PLAN, encoding="utf-8")
@@ -187,6 +199,21 @@ def test_main_rejects_plan_without_global_constraints(tmp_path):
     plan = tmp_path / "bad.md"
     plan.write_text("### Task 1: x\n正文\n", encoding="utf-8")
     assert main(["--plan", str(plan), "--dry-run"]) == 3
+
+
+def test_final_review_is_scoped_to_selected_tasks(tmp_path, monkeypatch):
+    from scripts import codex_sdd_runner as runner
+
+    plan = tmp_path / "plan.md"
+    plan.write_text(PLAN)
+    prompts = []
+    def fake_run(prompt, *args):
+        prompts.append(prompt)
+        return 0, "VERDICT: PASS"
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_git_commit", lambda *args, **kwargs: True)
+    assert runner.main(["--plan", str(plan), "--tasks", "2", "--yes", "--cwd", str(tmp_path)]) == 0
+    assert "本段只审查 Task 2；其它未执行 Task" in prompts[-1]
 
 
 def test_default_model_is_flash_per_user_instruction(tmp_path, capsys):

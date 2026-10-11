@@ -159,6 +159,7 @@ def build_review_prompt(task: tuple[int, str], constraints: str, role: str) -> s
         f"- 代码质量重点：命名/接口一致、错误处理、可测性、无越界改动（git status 不该出现本 Task 之外的改动）。\n"
         f"- ⛔ 不在本会话跑 pytest：只读沙箱没有可写临时目录。Task 正文中的测试命令属于实现阶段。\n"
         f"- 测试证据读取当前 worktree 的 .superpowers/sdd/<计划名>/task-{task[0]}.log，"
+        f"以及同目录 task-{task[0]}.events.jsonl 中的实际命令输出和退出码，"
         f"结合真实代码、测试断言与 git diff 核验；不得只因只读环境无法执行测试而判 FAIL，"
         f"也不得仅凭实现方声称通过就忽略缺陷。证据缺失、测试失败或发现实质问题仍须 FAIL。\n"
         f"最后输出一行 VERDICT: PASS 或 VERDICT: FAIL <原因>，并列出 findings。\n\n"
@@ -180,6 +181,8 @@ def _run(prompt: str, argv: list[str], cwd: Path, log_path: Path) -> tuple[int, 
     fields, final, _saw = summarize(proc.stdout.decode("utf-8", errors="replace"))
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.with_suffix(".events.jsonl").open("ab") as events:
+            events.write(proc.stdout)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"argv={' '.join(argv)}\n{final or '(无最终文本)'}\nusage={'|'.join(fields)}\n")
     except OSError:
@@ -329,6 +332,7 @@ def main(argv: list[str]) -> int:
         print("▶ 全分支 Final Review（只读）：核本段任务是否全部提交、工作区是否干净、测试是否全绿")
         frc, ffinal = _run(
             "你是只读 Final Reviewer。对照 Global Constraints 与本次执行的 Task 清单，核验："
+            f"本段只审查 Task {', '.join(str(n) for n, _ in tasks)}；其它未执行 Task 不作为本段失败理由。"
             "① 每个 Task 都有对应提交（`git log --oneline` 可见）；② `git status` 干净、无未提交改动；"
             "③ ⛔ 不在本会话跑 pytest（只读沙箱没有可用临时目录，pytest 的 tmp_path 初始化必失败——"
             "测试是否全绿以各 Task 提交时的记录与执行器的 `## 机器判据` 为准）。"
