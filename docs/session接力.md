@@ -119,11 +119,11 @@
 
 - **2026-10-11 `1011R` 最新口径：子会话全部 Luna**——Shao Peishen 明确指示「子Session都使用luna模型」；执行、Spec/质量/Final review 均 `gpt-6-luna`，现用high推理处理事务与恢复审查，入口默认low不变。隔离修复分支已改SDD/泳道/调度器/拆件及AGENTS、Codex技能，入口165项通过；此前Flash及临时gpt-6.1-sol指令由本条替代，业务LLM配置不改。
   状态：排期U3 Tasks1–12分支完成，12 `65b7f5a` 双审/Final PASS，整合排期238项通过。Offer1–9已双审/Final PASS（9 `b1261a3`），含真实HTTP整链与导出409无写入反证。入职1–8已Final PASS（8 `f09a7ae`，486项），自定义阶段保持与真实恢复守卫齐；独立日期校验修复 `e79f907` 双审/Final PASS，238项。Offer旧全量4504passed/12skipped仅为当时基线，最终整合仍须全量。
-  runner HEAD `6022bd9`：Luna默认、只读审查、原始JSONL与本轮pytest证据、分段Final；runner/JSON解析24项通过。原worktree保留；180份原证据及20份补修证据复制至.superpowers/sdd/1011r-preserved并hash核验。本地 `codex/1011r-u3-integration` 已合全部U3与日期修复；邀约缓存补修 `bff711b`（394项）、Offer审批补修 `05ae268`（257项）双审/Final PASS。最新全量4814passed/12skipped/exit0，三包OpenSpec strict通过；整包Final PASS无findings，三个U3章节21项复勾。非main，整包待本人批准合并推送；U4/U5不归入验收。
-  【谁做：Shao Peishen 明确授权后由 `1011R` 合并】【状态：U3整包合main/推送待批准】【判据：整合Final与修复后全量通过，再明确批准整包合main并推送】【不做会怎样：U3实现留分支】。此前默认分支动作被自动审批拒绝，未绕过；本人现明确批准的两文件只读review修复 `97b7817` 已合main并推送，main与origin/main同hash。此批准仅覆盖97，后续工具链与U3整包尚待批准。main业务计划与接力文档未提交；收口以最新泳道计划为准。
+  runner HEAD `6022bd9`：Luna默认、只读审查、原始JSONL与本轮pytest证据、分段Final；runner/JSON解析24项通过。原worktree保留；180份原证据及20份补修证据复制至.superpowers/sdd/1011r-preserved并hash核验。本地 `codex/1011r-u3-integration` 已合全部U3与日期修复；邀约缓存补修 `bff711b`（394项）、Offer审批补修 `05ae268`（257项）双审/Final PASS。最新全量4814passed/12skipped/exit0，三包OpenSpec strict通过；整包Final PASS无findings，三个U3章节21项复勾。本人以1a批准后，68文件已快进合main并推送（2b0fe0d）；U4/U5不归入验收。
+  【谁做：`1011R`】【状态：U3整包已交付main并推送】【判据：4814项全量、Final PASS、21项复勾、main与origin一致、main..整合分支为0；均已实核】【不做会怎样：无待补合并】。此前自动审批拒绝未绕过；97两文件先获批准并推送，本人随后以1a明确批准整包合并推送。本次备份四份主检出草稿并核对归属，未动其它未跟踪文件；最终12份整合证据也已复制并hash核验。
 
 - **2026-10-11 09:4x（`1011R` 恢复 `1001G`）：排期 U3 seg3 中断实核＋恢复**——渠道 U3 全完、排期 U3 Task 1–6 已合 main（`53a3d0f`）；Task 7 实现与 Spec review 完成，代码质量 review 在 07:32 中断，Task 8–9 未执行。原 worktree 保留 4 文件改动；本场同 worktree 复跑 `tests/test_invitation_effect.py` 与 `tests/test_effect_idempotency_suite.py`：**165 passed**。当前全局配置 `model_provider=openai`，已无 deepseek provider；截图另有 DeepSeek 余额不足。Shao Peishen 本场明确允许改用当前 OpenAI 模型恢复构建，故本次 runner 单次覆盖 `gpt-6.1-sol/low`，不更改 Flash 的全局默认；从 Task 7 接跑，Task 1–6 不重跑。U1 构建与发版七/八历史已由归档脚本原样搬入 `docs/archive/session接力-归档.md`，守恒校验通过，接力卡恢复到 40 KB 内。
-  【谁做：`1011R` 主会话】【状态：排期 Task 7–9 SDD 恢复在跑】【判据：逐 Task 双 review＋Final Review PASS、worktree 判据通过后合 main；再续 Task 10–12／Offer U3／入职 U3】【不做会怎样：邀约接口与页面停在未交付态】。
+  【谁做：`1011R` 主会话】【状态：历史启动记录；Tasks7–12及Offer/入职U3现已交付，见最新口径】【判据：逐 Task 双 review＋Final Review PASS、worktree 判据通过后合 main；再续 Task 10–12／Offer U3／入职 U3】【不做会怎样：邀约接口与页面停在未交付态】。
   原 Spec review 的跟进项需在恢复 review／后续 Task 核实：内层投递事务与外层幂等事务关系、blocked/replay 语义、草稿与场次错配防护、取消场次 409、Task 10 不覆盖提前落地的同名测试；不得凭 165 passed 将未完成 review 判通过。
 
 - **2026-10-10 21:35（`1001G` 续）：U2 计划批四条全绿（lane-dispatch 发车）**——① 编排：四包 U2 spec-to-plan
