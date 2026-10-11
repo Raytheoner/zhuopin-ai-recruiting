@@ -1906,3 +1906,34 @@ OPENER_DONE）通过。你未提交的 `OP-0820-全量编排.md` 与 `docs/roadm
   含 demo.db 备份）：seg3 件（`/api/interviewers`、`/api/jobs/{id}/offer-approval-chain`）＋样张并轨一并上线；
   冒烟：两新接口未登录 `401`（路由已接）、`/api/jobs` `200`、served 页面/样式并轨判据过、合规断言 `EXIT=0`、
   入库闸 False；未回滚；③ 至此**四包 U1 全部完成＋全站新视觉已在 `.51` 共处一版**（main `b53e615`）。
+
+<!-- 〔归档工具〕 2026-10-11 搬入：U1 计划与执行器首跑【已闭环】 -->
+
+### U1 计划与执行器首跑【已闭环】
+
+- **2026-10-08 16:3x：泳道看护已恢复（答"能开尽开"）· 第一批（4 条 spec-to-plan）全绿闭环**——
+  `1001M/N/O/P` 四包 U1 计划（渠道/排期/Offer/入职）全部 **OK＋判据 PASS**，执行器自动合回 main
+  （merge 提交 `d6fb96e`/`f0c6c7f`(P)/`fabde0e`(N)/`afcc01b`(M)）；产物
+  `docs/superpowers/plans/2026-10-08-*`（渠道 7 Task/1510 行、排期 10/1330、Offer 9/1204、入职 5/1216，
+  均含 Global Constraints）。A/B 行：条数 4／全部 `sonnet`（results.tsv 第 6 列）／无失败；
+  ⚠️ Token 治理 P2 基线属 Claude 线（已结项），本批未回填。台账已按真身解冲突（完成 283→285）。
+- **2026-10-08 16:5x：第二批已编排待发车（串行，`--max-parallel 1`）**——`1001Q/R/S/T`：
+  四包 U1 的 **run-build Task 1–3**（`codex_sdd_runner`）。🔴 四者全触碰 `app/storage/db.py`＋
+  `app/web/server.py` ⇒ **同批串行**（分泳道判据＝触碰文件重叠），各自 worktree/branch、各自判据、
+  各自自动合并。
+- **2026-10-08 17:5x–18:2x（`1008R` 续棒看护 + `1001U` 修法）：run-build 在 codex 泳道内不可用——已定位并修一半**——
+  ① 第二批四条 run-build 泳道（`1001Q/R/S/T`）**全部 PARTIAL**（留步：执行环境不可达；无改动/无提交）；
+  ② **根因**（`docs/findings/2026-10-08-codex-run-build执行器缺口与修法.md`）：泳道内嵌套 `codex exec` 被 Seatbelt 拦
+  （两个对照实验：`workspace-write` 与 `danger-full-access` 同报 `failed to initialize in-process app-server client:
+  Operation not permitted`）⇒ **run-build 必须由非沙箱父进程执行**；另查出 runner 四处次级缺口；
+  ③ **已修（`scripts/codex_sdd_runner.py` +3 项，8 passed）**：`resolve_codex_bin` 三级解析、
+  runner 代提交（`_git_commit`，失败 fail-closed 不勾进度）、review 必须 `VERDICT: PASS`（空输出不算过）、
+  注入 `SDD_PYTHON` 供子会话跑测试；Final Review 去掉"须已合 main"（合并归执行器）；
+  ④ **过渡执行路径已验证**：主会话非沙箱直跑 runner —— 渠道包 U1 **Task 1/2 已代提交**
+  （`a21c1a2`/`af545ba`，分支 `lane-1001q-channel-u1-build`），Task 3 在跑；
+  ⑤ **Q-04 已销号**（答 `2a`；跟踪改挂「`#4` 闭环 → M2 模板发出」）；待办：executor 级"动作通道跑 runner"（红线③，候选 (a)/(b)）。
+- **2026-10-08 18:3x：`run-sdd` 通道已落地并首跑（答 `1a`）**——① `scripts/action_request.py` 新增
+  `run-sdd` 动作（三闸＋同步 7200s 超时；launchd 非沙箱执行 runner）；`tests/test_action_request.py`
+  +9 条（86 passed 同跑）；② **渠道包 U1 Task 1–3 已跑通并合回 main**（`bb99fc8`；runner 代提交
+  `a21c1a2/af545ba/9a7922c`；判据 `tests/test_bundle_unpack.py tests/test_db_migration.py` = **20 passed**）；
+  ③ Final Review 口径修正（只读会话不再要求跑 pytest）；④ 排期 seg1 起由 **`run-sdd` 通道冒烟推进**。

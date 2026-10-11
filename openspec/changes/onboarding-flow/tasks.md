@@ -29,12 +29,12 @@
 
 ## 3. U3 终态与处置登记
 
-- [ ] 3.1 节点 `effect_complete_onboarding(confirm_hired, actual_start_date, note)`：前置今日 ≥ 入职日、清单 `open`、该投递无终态；未完成必需条目 ⇒ 要求 `note` 并把未完成清单写进留痕；写 `application_stage_history(stage_type=hired, action=onboarded, actor_type=human)` ＋ 清单 `closed` ＋ 3.2 登记，同事务；幂等键 `{application_id}:effect_complete_onboarding:hired`；测试：入职日前被拒、有未完成条目需 note、重跑不重复
-- [ ] 3.2 节点 `effect_enqueue_disposition`（由 3.1 同事务调用）：六类各一行，`policy_version=NULL`、`planned_action=pending`；幂等键 `{application_id}:effect_enqueue_disposition:{category}`；测试：六行、重跑不重复
-- [ ] 3.3 节点 `effect_complete_onboarding(abandon, reason)`：`application.status=refused`、`offer.status=abandoned`、history 一条、清单 `closed(abandoned)`；⛔ 不写 `rejection_record`（测试行数不变）；幂等键 `{application_id}:effect_complete_onboarding:abandoned`；已 `hired` 终态后拒绝
-- [ ] 3.4 不变式测试 `tests/test_onboarding_terminal_invariant.py`：任一投递终态 history ≤ 1 条且与 `application.status`／`offer.status` 一致；穷举含重跑序列；⛔ 无自动终态路径（grep 反证无调度／无条件触发）
-- [ ] 3.5 终态确认 UI：清单页"确认已入职"（实际入职日、说明）与"放弃入职"（原因）；入职日已过且未确认显示"待确认"
-- [ ] 3.6 `app/audit/assertions.py` 新增：① `onboarding_item` 无内容列；② `retention_policy_signed_version` 为空时 `data_disposition_queue.executed_at` 全空；③ `application.status='refused'` 的投递无本包写入的 `rejection_record`；CI 接入
+- [x] 3.1 节点 `effect_complete_onboarding(confirm_hired, actual_start_date, note)`：前置今日 ≥ 入职日、清单 `open`、该投递无终态；未完成必需条目 ⇒ 要求 `note` 并把未完成清单写进留痕；写 `application_stage_history(stage_type=hired, action=onboarded, actor_type=human)` ＋ 清单 `closed` ＋ 3.2 登记，同事务；幂等键 `{application_id}:effect_complete_onboarding:hired`；测试：入职日前被拒、有未完成条目需 note、重跑不重复
+- [x] 3.2 节点 `effect_enqueue_disposition`（由 3.1 同事务调用）：六类各一行，`policy_version=NULL`、`planned_action=pending`；幂等键 `{application_id}:effect_enqueue_disposition:{category}`；测试：六行、重跑不重复
+- [x] 3.3 节点 `effect_complete_onboarding(abandon, reason)`：`application.status=refused`、`offer.status=abandoned`、history 一条、清单 `closed(abandoned)`；⛔ 不写 `rejection_record`（测试行数不变）；幂等键 `{application_id}:effect_complete_onboarding:abandoned`；已 `hired` 终态后拒绝
+- [x] 3.4 不变式测试 `tests/test_onboarding_terminal_invariant.py`：任一投递终态 history ≤ 1 条且与 `application.status`／`offer.status` 一致；穷举含重跑序列；⛔ 无自动终态路径（grep 反证无调度／无条件触发）
+- [x] 3.5 终态确认 UI：清单页"确认已入职"（实际入职日、说明）与"放弃入职"（原因）；入职日已过且未确认显示"待确认"
+- [x] 3.6 `app/audit/assertions.py` 新增：① `onboarding_item` 无内容列；② `retention_policy_signed_version` 为空时 `data_disposition_queue.executed_at` 全空；③ `application.status='refused'` 的投递无本包写入的 `rejection_record`；CI 接入
 
 ## 4. U4 处置执行（受签认闸）
 

@@ -31,13 +31,13 @@
 
 ## 3. U3 内部审批流
 
-- [ ] 3.1 发起 Offer `POST /applications/{id}/offer`：前置投递阶段 ≥ `interview`、无 `rejection_record`、`status=ongoing`；写 `offer(pending_approval, round=1)` ＋ 流转到 `offer` 阶段 ＋ history，同事务；幂等键 `{application_id}:effect_create_offer:{request_id}`；测试：已淘汰投递被拒、重跑不重复
-- [ ] 3.2 节点 `effect_record_approval`：校验操作人在该 `(job, level)` 审批人列表；写 `offer_approval`；最后一级 `approved` ⇒ `offer.status=approved`；任一级 `returned` ⇒ `needs_revision` 且后续级不触发；幂等键 `{offer_id}:effect_record_approval:{round}:{level}:{approver}:{decision}`；测试覆盖 spec 三个 Scenario ＋ 重跑
-- [ ] 3.3 退回后修改 `PATCH /offers/{id}`（仅 `needs_revision` 可改；改后 `round+1`、`status=pending_approval`）；测试：链从第一级重走
-- [ ] 3.4 审批页 `GET /offers/pending`（本人待审列表）与 `GET /offers/{id}/approve`：显示 Offer 非敏感字段与投递基本信息；⛔ 不显示 AI 评分／排名／"建议录用"类文本（测试反证页面无相关字符串）；通过／退回＋意见
-- [ ] 3.5 审批待办的内部通知：复用既有内部通知通道（`question`／`confirmation_prompt` 同类，非候选人门禁范围）；幂等键含 `offer_id/round/level`；无通道时只靠列表页（不阻塞）
-- [ ] 3.6 导出门槛：2.5 的导出接口对 `offer.status ∉ {approved, exported, accepted, declined, negotiating}` 拒绝；测试：`pending_approval` 导出被拒
-- [ ] 3.7 U3 e2e：发起 → 一级退回 → 修改 → 两级通过 → 生成文书 → 导出；审批留痕条数守恒
+- [x] 3.1 发起 Offer `POST /applications/{id}/offer`：前置投递阶段 ≥ `interview`、无 `rejection_record`、`status=ongoing`；写 `offer(pending_approval, round=1)` ＋ 流转到 `offer` 阶段 ＋ history，同事务；幂等键 `{application_id}:effect_create_offer:{request_id}`；测试：已淘汰投递被拒、重跑不重复
+- [x] 3.2 节点 `effect_record_approval`：校验操作人在该 `(job, level)` 审批人列表；写 `offer_approval`；最后一级 `approved` ⇒ `offer.status=approved`；任一级 `returned` ⇒ `needs_revision` 且后续级不触发；幂等键 `{offer_id}:effect_record_approval:{round}:{level}:{approver}:{decision}`；测试覆盖 spec 三个 Scenario ＋ 重跑
+- [x] 3.3 退回后修改 `PATCH /offers/{id}`（仅 `needs_revision` 可改；改后 `round+1`、`status=pending_approval`）；测试：链从第一级重走
+- [x] 3.4 审批页 `GET /offers/pending`（本人待审列表）与 `GET /offers/{id}/approve`：显示 Offer 非敏感字段与投递基本信息；⛔ 不显示 AI 评分／排名／"建议录用"类文本（测试反证页面无相关字符串）；通过／退回＋意见
+- [x] 3.5 审批待办的内部通知：复用既有内部通知通道（`question`／`confirmation_prompt` 同类，非候选人门禁范围）；幂等键含 `offer_id/round/level`；无通道时只靠列表页（不阻塞）
+- [x] 3.6 导出门槛：2.5 的导出接口对 `offer.status ∉ {approved, exported, accepted, declined, negotiating}` 拒绝；测试：`pending_approval` 导出被拒
+- [x] 3.7 U3 e2e：发起 → 一级退回 → 修改 → 两级通过 → 生成文书 → 导出；审批留痕条数守恒
 
 ## 4. U4 门禁接线与拒信
 

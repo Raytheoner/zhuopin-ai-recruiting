@@ -32,14 +32,14 @@
 
 ## 3. U3 邀约文案生成与回填
 
-- [ ] 3.1 `invitation_template` v1 占位模板（岗位／轮次／时刻／形式／面试官称谓／联系人占位符；⛔ 无评分／排名／淘汰理由占位符，测试反证）；模板维护接口 `PUT /invitation-templates`（版本递增，不覆盖）；0.4 回件到后只换内容
-- [ ] 3.2 `app/agents/invitation_drafter.py::compute_invitation_draft(slot, template, contact_hint) -> Draft` 纯函数：走 LLM 网关 json_schema 路径，`temperature=0`，`prompt_version=invite-v1`，模型标识取 API 响应 `model` 字段，`AuditHook` 留痕到 `analysis_run`；输出带 AI 生成标识（与 M1 JD 同一标识字符串）
-- [ ] 3.3 节点 `effect_persist_draft`：写 `interview_invitation_draft`（版本递增）；幂等键 `{slot_id}:effect_persist_draft:{analysis_run_id}`；对 `cancelled` 场次拒绝生成。测试：重复生成产生新版本、旧版保留；重跑不重复
-- [ ] 3.4 编辑与"标记为人工撰写"：编辑后仍带标识；标记动作记录 `authorship_marked_by/at` 与原 AI 版本；测试两个 Scenario
-- [ ] 3.5 回填接口 `POST /interview-slots/{id}/invitation/outcome`：`sent(channel)/confirmed/declined(reason)/reschedule_requested`；记录操作人时刻；`declined` ⛔ 不写 `rejection_record`、投递阶段不动（测试断言 `rejection_record` 行数不变）；幂等：同状态重复提交无第二条留痕
-- [ ] 3.6 系统外发接线（默认不可用）：`POST /interview-slots/{id}/invitation/send` 调 `deliver_candidate_message(type='interview_invitation', recipient=<从 U4 读取的联系方式拍平字符串，U4 关闭时为空 ⇒ 门禁按收件对象未知拦截>, confirmed_by=<HR>)`；⛔ 不新增外发路径；测试：总开关关 ⇒ 拦截入队并留痕"总开关关闭"；缺 AI 标识 ⇒ 拦截
-- [ ] 3.7 邀约页 `GET /interview-slots/{id}/invitation`：生成、查看各版本、复制、编辑、标记人工、回填结果；AI 标识可见；相对路径
-- [ ] 3.8 U3 e2e：安排 → 生成 → 复制 → 回填已发出 → 回填确认；`declined` 路径投递阶段不变
+- [x] 3.1 `invitation_template` v1 占位模板（岗位／轮次／时刻／形式／面试官称谓／联系人占位符；⛔ 无评分／排名／淘汰理由占位符，测试反证）；模板维护接口 `PUT /invitation-templates`（版本递增，不覆盖）；0.4 回件到后只换内容
+- [x] 3.2 `app/agents/invitation_drafter.py::compute_invitation_draft(slot, template, contact_hint) -> Draft` 纯函数：走 LLM 网关 json_schema 路径，`temperature=0`，`prompt_version=invite-v1`，模型标识取 API 响应 `model` 字段，`AuditHook` 留痕到 `analysis_run`；输出带 AI 生成标识（与 M1 JD 同一标识字符串）
+- [x] 3.3 节点 `effect_persist_draft`：写 `interview_invitation_draft`（版本递增）；幂等键 `{slot_id}:effect_persist_draft:{analysis_run_id}`；对 `cancelled` 场次拒绝生成。测试：重复生成产生新版本、旧版保留；重跑不重复
+- [x] 3.4 编辑与"标记为人工撰写"：编辑后仍带标识；标记动作记录 `authorship_marked_by/at` 与原 AI 版本；测试两个 Scenario
+- [x] 3.5 回填接口 `POST /interview-slots/{id}/invitation/outcome`：`sent(channel)/confirmed/declined(reason)/reschedule_requested`；记录操作人时刻；`declined` ⛔ 不写 `rejection_record`、投递阶段不动（测试断言 `rejection_record` 行数不变）；幂等：同状态重复提交无第二条留痕
+- [x] 3.6 系统外发接线（默认不可用）：`POST /interview-slots/{id}/invitation/send` 调 `deliver_candidate_message(type='interview_invitation', recipient=<从 U4 读取的联系方式拍平字符串，U4 关闭时为空 ⇒ 门禁按收件对象未知拦截>, confirmed_by=<HR>)`；⛔ 不新增外发路径；测试：总开关关 ⇒ 拦截入队并留痕"总开关关闭"；缺 AI 标识 ⇒ 拦截
+- [x] 3.7 邀约页 `GET /interview-slots/{id}/invitation`：生成、查看各版本、复制、编辑、标记人工、回填结果；AI 标识可见；相对路径
+- [x] 3.8 U3 e2e：安排 → 生成 → 复制 → 回填已发出 → 回填确认；`declined` 路径投递阶段不变
 
 ## 4. U4 候选人联系方式保管
 
