@@ -22,6 +22,7 @@ def idempotent_effect(
     require_no_transaction: bool = False,
     begin_immediate: bool = False,
     thread_arg: str | None = None,
+    business_key_args: tuple[str, ...] = (),
 ) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
     """
     装饰一个 effect_* 节点函数。被装饰函数必须接受
@@ -41,6 +42,15 @@ def idempotent_effect(
                 raise ValueError(
                     f"{node_name} thread_id must match {thread_arg}"
                 )
+            if business_key_args:
+                expected_business_key = ":".join(
+                    str(kwargs.get(arg)) for arg in business_key_args
+                )
+                if business_key != expected_business_key:
+                    arg_names = ":".join(business_key_args)
+                    raise ValueError(
+                        f"{node_name} business_key 必须匹配 {arg_names}"
+                    )
             # This check intentionally sits outside the exception cleanup below:
             # a transaction owned by the caller must never be committed or rolled
             # back by this effect wrapper.

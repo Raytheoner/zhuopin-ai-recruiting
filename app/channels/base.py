@@ -7,6 +7,7 @@ from typing import Protocol
 @dataclass
 class OutboundMessage:
     type: str  # "question" | "confirmation_prompt" | "jd_result" | "needs_manual"
+    #          | "offer_approval_todo"（offer-generation U3：Offer 审批待办，内部通知）
     payload: dict
 
 

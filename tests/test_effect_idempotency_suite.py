@@ -40,7 +40,12 @@ from app.audit.recorder import AuditRecorder
 from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.channels.base import OutboundMessage
 from app.channels.web_channel import WebChannel
-from app.graph.offer_nodes import effect_create_offer, effect_record_approval, effect_revise_offer
+from app.graph.offer_nodes import (
+    effect_create_offer,
+    effect_publish_approval_todo,
+    effect_record_approval,
+    effect_revise_offer,
+)
 from app.graph.jd_nodes import (
     JD_AUTHORSHIP_KEY,
     JD_TEXT_KEY,
@@ -204,6 +209,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_create_offer",
         "effect_record_approval",
         "effect_revise_offer",
+        "effect_publish_approval_todo",
         "effect_schedule_slot",
         "effect_reschedule_slot",
         "effect_cancel_slot",
@@ -968,6 +974,19 @@ def _count_offer_revision_facts(conn):
     assert row[0] == 1 + effects
     assert row[1] == ("pending_approval" if effects else "needs_revision")
     return effects
+
+
+def _count_offer_todo_facts(conn):
+    outbox_rows = conn.execute(
+        "SELECT COUNT(*) FROM outbox WHERE thread_id='offer-approval' "
+        "AND message_type='offer_approval_todo'"
+    ).fetchone()[0]
+    effects = conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE thread_id='offer-approval' "
+        "AND node_name='effect_publish_approval_todo'"
+    ).fetchone()[0]
+    assert outbox_rows == effects
+    return outbox_rows
 
 
 @pytest.mark.parametrize("fact", ["offer", "effect_log"])
@@ -2296,6 +2315,24 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             ),
             count_business_rows=_count_offer_revision_facts,
             note="新审批轮次、Offer 状态和 effect_log 同生共死，旧轮留痕保留。",
+        ),
+        "effect_publish_approval_todo": Recipe(
+            thread_id="offer-approval",
+            seed=_seed_offer_approval,
+            invoke=lambda conn: effect_publish_approval_todo(
+                conn,
+                thread_id="offer-approval",
+                business_key="1:1",
+                channel=WebChannel(conn),
+                offer_id="offer-approval",
+                application_id="offer-app",
+                job_title="测试岗位",
+                round_no=1,
+                level=1,
+                approvers=["offer-mgr"],
+            ),
+            count_business_rows=_count_offer_todo_facts,
+            note="内部 outbox 待办与 effect_log 同事务提交。",
         ),
         "effect_schedule_slot": Recipe(
             thread_id="sched-app1",
