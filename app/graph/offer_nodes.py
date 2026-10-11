@@ -43,6 +43,38 @@ def _require_non_empty(**fields: str | None) -> None:
             raise ValueError(f"{name} 不能为空")
 
 
+def _validate_approval_key_binding(
+    _conn: sqlite3.Connection,
+    *,
+    business_key: str,
+    level: int,
+    approver: str,
+    decision: str,
+    comment: str | None = None,
+    **_kwargs,
+) -> None:
+    """Validate request fields and bind them to the key without consulting DB state.
+
+    The first key component is the original approval round. Keep it intact for
+    valid old-round replays after an Offer revision; only the remaining key
+    components are compared with the arguments on this invocation.
+    """
+    if decision not in ("approved", "returned"):
+        raise ValueError(f"decision 只能是 approved/returned，收到: {decision!r}")
+    _require_non_empty(approver=approver)
+    if decision == "returned" and not (comment or "").strip():
+        raise ValueError("退回必须填意见（spec Scenario「一级退回：退回并填意见」）")
+
+    round_part, separator, request_part = business_key.partition(":")
+    expected_request_part = f"{level}:{approver}:{decision}"
+    if (
+        not separator
+        or not round_part.isdecimal()
+        or request_part != expected_request_part
+    ):
+        raise ValueError("business_key 必须匹配审批轮次格式、级别、审批人与决定")
+
+
 @idempotent_effect("effect_create_offer", begin_immediate=True, thread_arg="application_id")
 def effect_create_offer(
     conn: sqlite3.Connection,
@@ -98,7 +130,12 @@ def effect_create_offer(
     return offer_id
 
 
-@idempotent_effect("effect_record_approval", begin_immediate=True, thread_arg="offer_id")
+@idempotent_effect(
+    "effect_record_approval",
+    begin_immediate=True,
+    thread_arg="offer_id",
+    validate_before_cache=_validate_approval_key_binding,
+)
 def effect_record_approval(
     conn: sqlite3.Connection,
     *,

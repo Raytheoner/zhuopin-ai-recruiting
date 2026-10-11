@@ -203,6 +203,157 @@ def test_old_round_approval_replay_after_revision_is_noop(conn):
     assert _status(conn) == ("pending_approval", 2)
 
 
+@pytest.mark.parametrize("comment", [None, "", "   ", " \t\n"])
+def test_cached_returned_approval_still_requires_non_empty_comment(conn, comment):
+    """请求字段校验必须发生在缓存短路前，不能用成功键绕过退回意见要求。"""
+    _offer(conn)
+    key = "1:1:mgr:returned"
+    assert effect_record_approval(
+        conn, thread_id="o1", business_key=key, offer_id="o1",
+        level=1, approver="mgr", decision="returned", comment="需修改入职日期",
+    ) is not None
+
+    def snapshot():
+        return (
+            conn.execute("SELECT * FROM offer WHERE id='o1'").fetchall(),
+            conn.execute(
+                "SELECT * FROM offer_approval WHERE offer_id='o1' ORDER BY round, level"
+            ).fetchall(),
+            conn.execute(
+                "SELECT * FROM application_stage_history WHERE application_id='app1' ORDER BY id"
+            ).fetchall(),
+            conn.execute(
+                "SELECT * FROM effect_log WHERE thread_id='o1' ORDER BY effect_key"
+            ).fetchall(),
+        )
+
+    before = snapshot()
+    with pytest.raises(ValueError, match="退回必须填意见"):
+        effect_record_approval(
+            conn, thread_id="o1", business_key=key, offer_id="o1",
+            level=1, approver="mgr", decision="returned", comment=comment,
+        )
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize(
+    ("decision", "approver", "message"),
+    [
+        ("unknown", "mgr", "decision 只能是 approved/returned"),
+        ("approved", "  ", "approver 不能为空"),
+    ],
+)
+def test_cached_approval_still_validates_decision_and_approver(
+    conn, decision, approver, message
+):
+    _offer(conn)
+    key = "1:1:mgr:approved"
+    assert effect_record_approval(
+        conn, thread_id="o1", business_key=key, offer_id="o1",
+        level=1, approver="mgr", decision="approved",
+    ) is not None
+    before = (
+        conn.execute("SELECT * FROM offer WHERE id='o1'").fetchall(),
+        conn.execute("SELECT * FROM offer_approval WHERE offer_id='o1'").fetchall(),
+        conn.execute("SELECT * FROM application_stage_history WHERE application_id='app1'").fetchall(),
+        conn.execute("SELECT * FROM effect_log WHERE thread_id='o1'").fetchall(),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        effect_record_approval(
+            conn, thread_id="o1", business_key=key, offer_id="o1",
+            level=1, approver=approver, decision=decision,
+        )
+
+    after = (
+        conn.execute("SELECT * FROM offer WHERE id='o1'").fetchall(),
+        conn.execute("SELECT * FROM offer_approval WHERE offer_id='o1'").fetchall(),
+        conn.execute("SELECT * FROM application_stage_history WHERE application_id='app1'").fetchall(),
+        conn.execute("SELECT * FROM effect_log WHERE thread_id='o1'").fetchall(),
+    )
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    ("parameter", "overrides"),
+    [
+        ("level", {"level": 2}),
+        ("approver", {"approver": "gm"}),
+        ("decision", {"decision": "returned", "comment": "合法退回意见"}),
+    ],
+)
+@pytest.mark.parametrize("cached", [False, True], ids=["fresh", "cached"])
+def test_approval_key_rejects_parameter_mismatch_without_changing_facts(
+    conn, parameter, overrides, cached
+):
+    """同 thread/key 只换实际参数时，fresh 和缓存命中前都必须拒绝。"""
+    _offer(conn)
+    key = "1:1:mgr:approved"
+    if cached:
+        assert effect_record_approval(
+            conn, thread_id="o1", business_key=key, offer_id="o1",
+            level=1, approver="mgr", decision="approved",
+        ) is not None
+
+    def snapshot():
+        return (
+            conn.execute("SELECT * FROM offer WHERE id='o1'").fetchall(),
+            conn.execute(
+                "SELECT * FROM offer_approval WHERE offer_id='o1' ORDER BY round, level"
+            ).fetchall(),
+            conn.execute(
+                "SELECT * FROM application_stage_history WHERE application_id='app1' ORDER BY id"
+            ).fetchall(),
+            conn.execute(
+                "SELECT * FROM effect_log WHERE thread_id='o1' ORDER BY effect_key"
+            ).fetchall(),
+        )
+
+    before = snapshot()
+    kwargs = {"level": 1, "approver": "mgr", "decision": "approved"}
+    kwargs.update(overrides)
+    with pytest.raises(ValueError, match="business_key 必须匹配"):
+        effect_record_approval(
+            conn, thread_id="o1", business_key=key, offer_id="o1", **kwargs
+        )
+    assert snapshot() == before
+    if not cached:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM effect_log WHERE thread_id='o1' "
+            "AND node_name='effect_record_approval'"
+        ).fetchone()[0] == 0
+    assert parameter in {"level", "approver", "decision"}
+
+
+def test_approval_key_with_colon_in_approver_supports_fresh_and_replay(conn):
+    approver = "team:lead"
+    upsert_account(conn, username=approver, password="s3cret!")
+    put_approval_chain(conn, job_id="j1", chain=[
+        {"level": 1, "approver_account_ids": [approver]},
+        {"level": 2, "approver_account_ids": ["gm"]},
+    ], updated_by="hr1")
+    _offer(conn)
+    key = f"1:1:{approver}:approved"
+    kwargs = dict(
+        thread_id="o1", business_key=key, offer_id="o1", level=1,
+        approver=approver, decision="approved",
+    )
+
+    assert effect_record_approval(conn, **kwargs)["approver"] == approver
+    before = (
+        conn.execute("SELECT * FROM offer WHERE id='o1'").fetchall(),
+        conn.execute("SELECT * FROM offer_approval WHERE offer_id='o1'").fetchall(),
+        conn.execute("SELECT * FROM effect_log WHERE thread_id='o1'").fetchall(),
+    )
+    assert effect_record_approval(conn, **kwargs) is None
+    after = (
+        conn.execute("SELECT * FROM offer WHERE id='o1'").fetchall(),
+        conn.execute("SELECT * FROM offer_approval WHERE offer_id='o1'").fetchall(),
+        conn.execute("SELECT * FROM effect_log WHERE thread_id='o1'").fetchall(),
+    )
+    assert after == before
+
+
 @pytest.mark.parametrize("effect_name", ["approval", "revise"])
 @pytest.mark.parametrize("cached", [False, True])
 def test_offer_effect_rejects_swapped_business_object_before_new_or_cached_key(
@@ -376,6 +527,20 @@ def test_approval_key_must_describe_current_round_and_replays_old_round(conn):
         )
     assert _approve(conn, level=1, approver="mgr")
     assert _approve(conn, level=1, approver="mgr") is None
+
+
+def test_fresh_old_round_approval_key_is_rejected_after_revision(conn):
+    _offer(conn, round_no=2)
+    with pytest.raises(ValueError, match="business_key 必须匹配"):
+        effect_record_approval(
+            conn, thread_id="o1", business_key="1:1:mgr:approved", offer_id="o1",
+            level=1, approver="mgr", decision="approved",
+        )
+    assert _status(conn) == ("pending_approval", 2)
+    assert conn.execute("SELECT COUNT(*) FROM offer_approval").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_record_approval'"
+    ).fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("blank_key", ["", "   "])
