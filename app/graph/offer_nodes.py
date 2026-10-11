@@ -205,3 +205,75 @@ def effect_revise_offer(
         (department, start_date, report_to, note, new_round, updated_by, offer_id),
     )
     return new_round
+
+
+@idempotent_effect(
+    "effect_publish_approval_todo",
+    begin_immediate=True,
+    thread_arg="offer_id",
+    business_key_args=("round_no", "level"),
+)
+def effect_publish_approval_todo(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    channel: Channel,
+    offer_id: str,
+    application_id: str,
+    job_title: str,
+    round_no: int,
+    level: int,
+    approvers: list[str],
+) -> None:
+    """把内部审批待办写入通知通道；outbox 与 effect_log 同事务提交。
+
+    装饰器在事务与缓存预检前校验 business_key 与 round_no/level 绑定，防止
+    错误参数借已存在的键命中缓存而漏发通知。
+    """
+    if channel is None:
+        raise ValueError(
+            "channel 不能为空——无通道的情形由 publish_approval_todo() 在调用本节点"
+            "之前处置（tasks 3.5：无通道时只靠列表页，且不写 effect_log）"
+        )
+    channel.deliver(
+        offer_id,
+        OutboundMessage(
+            type="offer_approval_todo",
+            payload={
+                "offer_id": offer_id,
+                "application_id": application_id,
+                "job_title": job_title,
+                "round": round_no,
+                "level": level,
+                "approvers": list(approvers),
+                "approve_url": f"/offers/{offer_id}/approve",
+            },
+        ),
+    )
+
+
+def publish_approval_todo(
+    conn: sqlite3.Connection, *, offer: dict, channel: Channel | None
+) -> None:
+    """通知本轮当前级审批人；无通道时由待办列表提供权威视图。"""
+    if channel is None:
+        logger.warning(
+            "内部通知通道未装配：Offer %s 第 %s 轮的审批待办仅靠列表页",
+            offer["id"],
+            offer["approval_round"],
+        )
+        return
+    level = current_approval_level(conn, offer["id"])
+    effect_publish_approval_todo(
+        conn,
+        thread_id=offer["id"],
+        business_key=f"{offer['approval_round']}:{level}",
+        channel=channel,
+        offer_id=offer["id"],
+        application_id=offer["application_id"],
+        job_title=offer["job_title"],
+        round_no=offer["approval_round"],
+        level=level,
+        approvers=approvers_for_level(conn, offer["job_id"], level),
+    )

@@ -1427,6 +1427,21 @@ python -m pytest tests/test_offer_nodes_approval.py -q
 
 ### Task 4: `effect_publish_approval_todo` 审批待办的内部通知（tasks 3.5）
 
+> 当前 Spec 返工：todo 的 business_key 未校验 round_no/level，错键可在缓存命中前漏通知。
+> 必须在缓存命中前校验 key=f"{round_no}:{level}"；允许对共享 idempotency 增加默认关闭的
+> 纯参数绑定校验（如 business_key_args=("round_no","level")，先于事务/缓存），并修改其测试。
+> 不重做已通过的节点。新增 fresh wrong-key 和真正已缓存 key 搭配其它 round/level 的负例，
+> 对业务表/log快照完全不变、caller事务不受影响。保留thread绑定、恢复配方与内部原子通知测试。
+> 实跑 todo/idempotency/recovery 联合测试，结果写计划，执行器证据文件由父runner生成，不手改。
+
+> 1011R 执行补充（保持既有 spec）：本 Task 同时登记新副作用的 manifest 与 recovery recipe，
+> 允许修改 `tests/test_effect_idempotency_suite.py` 并新增该节点恢复反证；不能推迟至 Task 9。
+> `thread_id` 必须与 `offer_id` 绑定，business_key 为 round:level；使用已有装饰器的 thread_arg
+> 在缓存命中前拒绝错绑。outbox 与 effect_log 同连接同事务，内部 WebChannel 禁止自行提交；
+> 失败/重放/无通道均有事实与日志守恒断言。不得嵌套调用另一个 effect 节点。
+> 本任务授权范围含 `app/channels/base.py` 的事务契约注释（若需），以上测试与本计划；
+> 原示例是实现参考，以当前已通过审查的装饰器与存储接口为准。测试数量不锁定历史基线。
+
 **文件**：`app/graph/offer_nodes.py`（追加到 Task 3 之后）
 
 ```python
@@ -1691,6 +1706,20 @@ python -m pytest tests/test_offer_nodes_todo.py -q
 ```
 
 预期：全部通过（0 failed，6 passed）。
+
+**1011R Task 4 执行记录（2026-10-11）**：先为 fresh 错 business_key 和“真实已缓存
+`1:1` 键搭配其它 round/level”新增反例；首次执行 `tests/test_offer_nodes_todo.py` 得
+`2 failed, 8 passed`，确认错键会在调用方事务检查处被拒但不是参数绑定错误，且缓存键可
+搭配错参数静默短路。随后给 `idempotent_effect` 增加默认关闭的 `business_key_args`，
+在 thread 绑定后、事务检查/BEGIN/缓存查询前按传入参数构造冒号分隔 key 并校验；todo
+节点绑定 `("round_no", "level")`。反例同时验证 outbox/effect_log 快照不变；fresh 错键
+用例还验证调用方事务及其哨兵写仍由调用方控制。
+
+联合实跑：`"$SDD_PYTHON" -m pytest tests/test_offer_nodes_todo.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q`
+→ **156 passed / 0 failed（5.39s，退出码 0）**。恢复配方 manifest 与 recipe 中的
+`effect_publish_approval_todo` 登记在本任务开始前已存在，本轮通过整套恢复套件重新核验；
+该节点通过提交前强制中断、重开连接重放，以及按 thread 的 outbox/effect_log 恒等断言。
+`app/channels/base.py` 的待办类型注释也已存在，无需重复改动。
 
 ---
 
