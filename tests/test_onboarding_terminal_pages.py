@@ -148,6 +148,29 @@ def test_confirm_hired_endpoint_rejects_before_start_date(make_test_client):
     assert conn.execute("SELECT COUNT(*) FROM application_stage_history").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("invalid_date", ["0", "2026-02-30", "2026-1-02", ""])
+def test_confirm_hired_endpoint_rejects_invalid_actual_date_without_writes(
+    make_test_client, invalid_date
+):
+    client, conn = make_test_client()
+    _seed_hired(conn)
+    _finish_all_required(conn)
+    _login(client, conn, "hr", "hr")
+    tables = (
+        "application", "offer", "application_stage_history", "onboarding_checklist",
+        "onboarding_item", "data_disposition_queue", "effect_log",
+    )
+    before = {table: conn.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+
+    resp = client.post(
+        "/api/applications/app-1/onboarding/confirm-hired",
+        json={"actual_start_date": invalid_date, "note": None},
+    )
+
+    assert resp.status_code == 422
+    assert {table: conn.execute(f"SELECT * FROM {table}").fetchall() for table in tables} == before
+
+
 def test_confirm_hired_endpoint_requires_note_when_items_pending(make_test_client):
     client, conn = make_test_client()
     _seed_hired(conn)
