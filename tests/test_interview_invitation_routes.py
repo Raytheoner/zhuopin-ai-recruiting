@@ -106,11 +106,11 @@ def test_missing_cancelled_and_invalid_requests(api):
     assert client.post(url + "/outcome", json={"status": "confirmed"}).status_code == 409
 
 
-def test_existing_outcome_with_other_key_is_success(api):
+def test_existing_outcome_with_canonical_effect_key_is_success(api):
     from app.graph.invitation_nodes import effect_backfill_invitation_outcome
     client, conn = api
     original = effect_backfill_invitation_outcome(
-        conn, thread_id="a", business_key="other-key", slot_id="s1",
+        conn, thread_id="a", business_key="s1:declined", slot_id="s1",
         status="declined", actor="first-hr", reason="时间冲突", channel=None,
     )
     response = client.post("/api/interview-slots/s1/invitation/outcome", json={

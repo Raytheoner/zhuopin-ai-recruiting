@@ -75,6 +75,65 @@ def _assert_slot_invitable(conn: sqlite3.Connection, slot_id: str) -> str:
     return status
 
 
+def _validate_slot_thread(conn, *, slot_id: str, thread_id: str) -> str:
+    application_id = slot_application_id(conn, slot_id)
+    if application_id != thread_id:
+        raise InvitationNotAllowedError("场次不属于该投递")
+    return application_id
+
+
+def _validate_persist_binding(
+    conn, *, thread_id, business_key, slot_id, draft, **kwargs,
+) -> None:
+    if business_key != str(draft.run_id):
+        raise ValueError("persist business_key 必须匹配 draft.run_id")
+    _validate_slot_thread(conn, slot_id=slot_id, thread_id=thread_id)
+    previous = conn.execute(
+        "SELECT slot_id FROM interview_invitation_draft WHERE analysis_run_id = ?",
+        (draft.run_id,),
+    ).fetchone()
+    if previous is not None and previous[0] != slot_id:
+        raise InvitationNotAllowedError("该 run_id 已绑定到另一场次")
+
+
+def _validate_edit_binding(
+    conn, *, thread_id, business_key, draft_id, edited_body, **kwargs,
+) -> None:
+    if business_key != draft_edit_business_key(draft_id, edited_body):
+        raise ValueError("edit business_key 必须匹配 draft_id 与 edited_body")
+    draft = load_draft(conn, draft_id)
+    _validate_slot_thread(conn, slot_id=draft["slot_id"], thread_id=thread_id)
+
+
+def _validate_mark_binding(
+    conn, *, thread_id, business_key, draft_id, **kwargs,
+) -> None:
+    if business_key != draft_id:
+        raise ValueError("mark business_key 必须匹配 draft_id")
+    draft = load_draft(conn, draft_id)
+    _validate_slot_thread(conn, slot_id=draft["slot_id"], thread_id=thread_id)
+
+
+def _validate_backfill_binding(
+    conn, *, thread_id, business_key, slot_id, status, **kwargs,
+) -> None:
+    if business_key != f"{slot_id}:{status}":
+        raise ValueError("backfill business_key 必须匹配 slot_id 与 status")
+    _validate_slot_thread(conn, slot_id=slot_id, thread_id=thread_id)
+
+
+def _validate_sent_binding(
+    conn, *, thread_id, business_key, slot_id, draft_id, body_digest, **kwargs,
+) -> None:
+    expected_key = f"{slot_id}:{draft_id}:{body_digest}"
+    if business_key != expected_key:
+        raise ValueError("sent business_key 必须匹配 slot_id、draft_id 与 body_digest")
+    draft = load_draft(conn, draft_id)
+    if draft["slot_id"] != slot_id:
+        raise InvitationNotAllowedError("草稿不属于该场次")
+    _validate_slot_thread(conn, slot_id=slot_id, thread_id=thread_id)
+
+
 def compute_invitation_draft_for_slot(
     conn: sqlite3.Connection,
     *,
@@ -112,7 +171,10 @@ def compute_invitation_draft_for_slot(
     return draft, template["version"]
 
 
-@idempotent_effect("effect_persist_invitation_draft")
+@idempotent_effect(
+    "effect_persist_invitation_draft", begin_immediate=True,
+    validate_before_cache=_validate_persist_binding,
+)
 def effect_persist_invitation_draft(
     conn: sqlite3.Connection,
     *,
@@ -160,7 +222,10 @@ def draft_edit_business_key(draft_id: str, text: str) -> str:
     return f"{draft_id}:{digest}"
 
 
-@idempotent_effect("effect_edit_draft")
+@idempotent_effect(
+    "effect_edit_draft", begin_immediate=True,
+    validate_before_cache=_validate_edit_binding,
+)
 def effect_edit_draft(
     conn: sqlite3.Connection,
     *,
@@ -196,7 +261,10 @@ def effect_edit_draft(
     return final_body
 
 
-@idempotent_effect("effect_mark_draft_human_written")
+@idempotent_effect(
+    "effect_mark_draft_human_written", begin_immediate=True,
+    validate_before_cache=_validate_mark_binding,
+)
 def effect_mark_draft_human_written(
     conn: sqlite3.Connection,
     *,
@@ -244,7 +312,10 @@ def validate_outcome(*, status: str, channel: str | None, reason: str | None) ->
         raise ValueError("回填「候选人拒绝」必须填原因")
 
 
-@idempotent_effect("effect_backfill_invitation_outcome")
+@idempotent_effect(
+    "effect_backfill_invitation_outcome", begin_immediate=True,
+    validate_before_cache=_validate_backfill_binding,
+)
 def effect_backfill_invitation_outcome(
     conn: sqlite3.Connection,
     *,
@@ -334,14 +405,15 @@ def _validate_invitation_send(conn, *, slot_id, draft_id, thread_id):
     return draft
 
 
-@idempotent_effect("effect_mark_invitation_sent")
+@idempotent_effect(
+    "effect_mark_invitation_sent", begin_immediate=True,
+    validate_before_cache=_validate_sent_binding,
+)
 def effect_mark_invitation_sent(
     conn: sqlite3.Connection, *, thread_id: str, business_key: str,
     slot_id: str, draft_id: str, body_digest: str, actor: str,
 ) -> None:
     """独占状态写；业务事实与 effect_log 由装饰器同事务提交。"""
-    # 在首次读之前锁定事务，避免校验后场次被另一连接取消。
-    conn.execute("BEGIN IMMEDIATE")
     draft = _validate_invitation_send(
         conn, slot_id=slot_id, draft_id=draft_id, thread_id=thread_id,
     )

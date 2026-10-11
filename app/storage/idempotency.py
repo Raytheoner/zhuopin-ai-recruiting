@@ -23,6 +23,7 @@ def idempotent_effect(
     begin_immediate: bool = False,
     thread_arg: str | None = None,
     business_key_args: tuple[str, ...] = (),
+    validate_before_cache: Callable[..., None] | None = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
     """
     装饰一个 effect_* 节点函数。被装饰函数必须接受
@@ -66,6 +67,10 @@ def idempotent_effect(
                 conn.execute("BEGIN IMMEDIATE")
 
             try:
+                if validate_before_cache is not None:
+                    validate_before_cache(
+                        conn, thread_id=thread_id, business_key=business_key, **kwargs
+                    )
                 existing = conn.execute(
                     "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
                 ).fetchone()

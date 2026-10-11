@@ -39,6 +39,7 @@ from app.graph.invitation_nodes import (
     effect_backfill_invitation_outcome,
     effect_edit_draft,
     effect_mark_draft_human_written,
+    effect_mark_invitation_sent,
     effect_persist_invitation_draft,
     send_invitation,
     validate_outcome,
@@ -308,6 +309,123 @@ def test_persist_draft_records_effect_log_alongside_business_row(conn):
     assert _effect_count(conn, _PERSIST_NODE) == _draft_count(conn) == 2
 
 
+def _invitation_fact_snapshot(conn):
+    tables = (
+        "interview_slot", "interview_invitation_draft", "invitation_outcome_log",
+        "invitation_send_log", "effect_log",
+    )
+    return tuple(
+        (table, tuple(conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()))
+        for table in tables
+    )
+
+
+def _add_second_slot(conn):
+    conn.execute(
+        "INSERT INTO interview_slot (id, application_id, round, start_at, end_at, mode) "
+        "VALUES ('s2', 'app1', 2, '2026-10-20 06:00', '2026-10-20 07:00', 'onsite')"
+    )
+    conn.commit()
+
+
+def test_persist_cache_hit_rejects_rebound_slot_and_preserves_facts(conn):
+    _persist(conn)
+    _add_second_slot(conn)
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(InvitationNotAllowedError):
+        _persist(conn, slot_id="s2")
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_persist_fresh_key_rejects_mismatched_run_id_without_fact_changes(conn):
+    draft = _draft(run_id="run-B")
+    before = _invitation_fact_snapshot(conn)
+
+    with pytest.raises(ValueError):
+        effect_persist_invitation_draft(
+            conn, thread_id="app1", business_key="run-A", slot_id="s1",
+            template_version="v1", draft=draft,
+        )
+
+    assert _effect_count(conn, _PERSIST_NODE) == 0
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_successful_invitation_effect_keys_replay_after_slot_is_cancelled(conn):
+    """缓存重放代表历史事实；场次后来取消不能改变原成功键的结果。"""
+    draft_id = _persist(conn)
+    edited_body = "先编辑，再标记与发送"
+    edit_key = draft_edit_business_key(draft_id, edited_body)
+    effect_edit_draft(
+        conn, thread_id="app1", business_key=edit_key, draft_id=draft_id,
+        edited_body=edited_body,
+    )
+    effect_mark_draft_human_written(
+        conn, thread_id="app1", business_key=draft_id, draft_id=draft_id,
+        reviewer="hr-1", marked_at="2026-10-11 09:00:00",
+    )
+    body = conn.execute(
+        "SELECT body FROM interview_invitation_draft WHERE id = ?", (draft_id,)
+    ).fetchone()[0]
+    digest = draft_body_digest(body)
+    effect_mark_invitation_sent(
+        conn, thread_id="app1", business_key=f"s1:{draft_id}:{digest}",
+        slot_id="s1", draft_id=draft_id, body_digest=digest, actor="hr-1",
+    )
+    effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s1:confirmed", slot_id="s1",
+        status="confirmed", actor="hr-1",
+    )
+    conn.execute("UPDATE interview_slot SET status = 'cancelled' WHERE id = 's1'")
+    conn.commit()
+    before = _invitation_fact_snapshot(conn)
+
+    assert _persist(conn) is None
+    assert effect_edit_draft(
+        conn, thread_id="app1", business_key=edit_key, draft_id=draft_id,
+        edited_body=edited_body,
+    ) is None
+    assert effect_mark_draft_human_written(
+        conn, thread_id="app1", business_key=draft_id, draft_id=draft_id,
+        reviewer="hr-2", marked_at="2026-10-11 10:00:00",
+    ) is None
+    assert effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s1:confirmed", slot_id="s1",
+        status="confirmed", actor="hr-2",
+    ) is None
+    assert effect_mark_invitation_sent(
+        conn, thread_id="app1", business_key=f"s1:{draft_id}:{digest}",
+        slot_id="s1", draft_id=draft_id, body_digest=digest, actor="hr-2",
+    ) is None
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_persist_existing_run_id_cannot_bind_to_another_slot_in_same_application(conn):
+    _add_second_slot(conn)
+    conn.execute(
+        "INSERT INTO interview_invitation_draft "
+        "(id, slot_id, version, template_version, body, ai_generated, analysis_run_id) "
+        "VALUES ('legacy-draft', 's1', 1, 'v1', ?, 1, 'run-u3-1')",
+        (_draft().body,),
+    )
+    conn.commit()
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(InvitationNotAllowedError):
+        _persist(conn, slot_id="s2")
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_persist_rejects_wrong_thread_on_cached_key_without_fact_changes(conn):
+    _persist(conn)
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(InvitationNotAllowedError):
+        effect_persist_invitation_draft(
+            conn, thread_id="wrong-app", business_key="run-u3-1", slot_id="s1",
+            template_version="v1", draft=_draft(),
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
 def test_compute_then_persist_twice_yields_two_versions(conn):
     scripted = _ScriptedClient([json.dumps({"body": "您好"}), json.dumps({"body": "您好"})])
     gateway = _gateway(scripted)
@@ -397,6 +515,50 @@ def test_edit_business_key_is_stable_per_text(conn):
     assert _effect_count(conn, _EDIT_NODE) == 1
 
 
+def test_edit_cache_hit_rejects_changed_text_with_original_business_key(conn):
+    draft_id = _persist(conn)
+    original_text = "原编辑正文"
+    key = draft_edit_business_key(draft_id, original_text)
+    effect_edit_draft(
+        conn, thread_id="app1", business_key=key, draft_id=draft_id,
+        edited_body=original_text,
+    )
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(ValueError):
+        effect_edit_draft(
+            conn, thread_id="app1", business_key=key, draft_id=draft_id,
+            edited_body="改过的编辑正文",
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_edit_fresh_key_rejects_mismatched_body_without_fact_changes(conn):
+    draft_id = _persist(conn)
+    original_text = "键对应的正文 A"
+    before = _invitation_fact_snapshot(conn)
+
+    with pytest.raises(ValueError):
+        effect_edit_draft(
+            conn, thread_id="app1",
+            business_key=draft_edit_business_key(draft_id, original_text),
+            draft_id=draft_id, edited_body="实际传入的正文 B",
+        )
+
+    assert _effect_count(conn, _EDIT_NODE) == 0
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_edit_rejects_wrong_thread_for_fresh_key_without_fact_changes(conn):
+    draft_id = _persist(conn)
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(InvitationNotAllowedError):
+        effect_edit_draft(
+            conn, thread_id="wrong-app", business_key=draft_edit_business_key(draft_id, "x"),
+            draft_id=draft_id, edited_body="x",
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
 def test_edit_does_not_create_a_new_version(conn):
     """编辑是就地改这一版正文，⛔ 不产生新版本、不覆盖版本递增语义。"""
     draft_id = _persist(conn)
@@ -424,6 +586,35 @@ def test_mark_human_written_strips_label_and_records_who_and_when(conn):
     assert AI_LABEL_PREFIX not in body
     assert _draft_row(conn, draft_id)[:4] == (1, 0, "hr-1", "2026-10-10 09:00:00")
     assert _effect_count(conn, _MARK_NODE) == 1
+
+
+def test_mark_cache_hit_rejects_rebound_draft_without_fact_changes(conn):
+    first = _persist(conn)
+    second = _persist(conn, draft=_draft(run_id="run-u3-2"))
+    _mark(conn, first)
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(ValueError):
+        effect_mark_draft_human_written(
+            conn, thread_id="app1", business_key=first, draft_id=second,
+            reviewer="hr-2", marked_at="2026-10-11 09:00:00",
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_mark_fresh_key_rejects_mismatched_draft_id_without_fact_changes(conn):
+    expected_draft_id = _persist(conn)
+    actual_draft_id = _persist(conn, draft=_draft(run_id="run-u3-2"))
+    assert _effect_count(conn, _MARK_NODE) == 0
+    before = _invitation_fact_snapshot(conn)
+
+    with pytest.raises(ValueError):
+        effect_mark_draft_human_written(
+            conn, thread_id="app1", business_key=expected_draft_id,
+            draft_id=actual_draft_id, reviewer="hr-1", marked_at="2026-10-11 09:00:00",
+        )
+
+    assert _invitation_fact_snapshot(conn) == before
+    assert _effect_count(conn, _MARK_NODE) == 0
 
 
 def test_mark_requires_reviewer(conn):
@@ -529,14 +720,53 @@ def test_backfill_same_status_twice_writes_one_row_and_one_effect_log(conn):
     assert _effect_count(conn, _BACKFILL_NODE) == 1
 
 
-def test_backfill_duplicate_with_new_request_key_raises_without_orphan_effect_log(conn):
-    """2026-10-11 修正（Spec review F1）：用不同幂等键重复回填同一 (slot,status)
-    ⇒ 抛领域异常（⛔ 不是成功形状），且**不写孤儿 effect_log**（恒等式守恒）。"""
+def test_backfill_cache_hit_rejects_changed_status_with_original_business_key(conn):
     _backfill(conn, status="sent", channel="wechat")
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(ValueError):
+        effect_backfill_invitation_outcome(
+            conn, thread_id="app1", business_key="s1:sent", slot_id="s1",
+            status="confirmed", actor="hr-2",
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_backfill_fresh_key_rejects_mismatched_status_without_fact_changes(conn):
+    before = _invitation_fact_snapshot(conn)
+
+    with pytest.raises(ValueError):
+        effect_backfill_invitation_outcome(
+            conn, thread_id="app1", business_key="s1:sent", slot_id="s1",
+            status="confirmed", actor="hr-1",
+        )
+
+    assert _effect_count(conn, _BACKFILL_NODE) == 0
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_backfill_rejects_wrong_thread_for_fresh_key_without_fact_changes(conn):
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(InvitationNotAllowedError):
+        effect_backfill_invitation_outcome(
+            conn, thread_id="wrong-app", business_key="s1:confirmed", slot_id="s1",
+            status="confirmed", actor="hr-1",
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_backfill_duplicate_with_fresh_canonical_key_raises_without_orphan_effect_log(conn):
+    """已有业务事实但该状态的节点键尚未用过时，规范业务键仍抛领域异常，
+    且**不写孤儿 effect_log**（恒等式守恒）。"""
+    _backfill(conn, status="confirmed")
+    conn.execute(
+        "INSERT INTO invitation_outcome_log (id, slot_id, status, channel, actor) "
+        "VALUES ('prior-outcome', 's1', 'sent', 'wechat', 'hr-1')"
+    )
+    conn.commit()
     with pytest.raises(InvitationOutcomeAlreadyRecordedError) as excinfo:
-        _backfill(conn, status="sent", channel="wechat", business_key="s1:sent:req-2")
+        _backfill(conn, status="sent", channel="wechat")
     assert excinfo.value.outcome["id"]
-    assert _outcome_count(conn) == 1
+    assert _outcome_count(conn) == 2
     assert _effect_count(conn, _BACKFILL_NODE) == 1
 
 
@@ -919,6 +1149,88 @@ def test_send_fact_tracks_each_draft_version_and_replay(conn, wired):
     assert len({row[2] for row in rows}) == 2
     assert all(row[0] == 'app1' and row[1] == 's1' and row[4] == 'hr-1' and row[5] for row in rows)
     assert len(wired[0].delivered) == 2
+
+
+def test_sent_cache_hit_rejects_changed_digest_with_original_business_key(conn, wired):
+    draft_id = _persist(conn)
+    assert _send(conn, wired, enabled=True).allowed
+    body = conn.execute(
+        "SELECT body FROM interview_invitation_draft WHERE id = ?", (draft_id,)
+    ).fetchone()[0]
+    digest = draft_body_digest(body)
+    before = _invitation_fact_snapshot(conn)
+    with pytest.raises(ValueError):
+        effect_mark_invitation_sent(
+            conn, thread_id="app1", business_key=f"s1:{draft_id}:{digest}",
+            slot_id="s1", draft_id=draft_id, body_digest="wrong-digest", actor="hr-1",
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
+@pytest.mark.parametrize("mismatch", ["draft_id", "body_digest"])
+def test_sent_fresh_key_rejects_mismatched_parameters_without_fact_changes(
+    conn, mismatch,
+):
+    expected_draft_id = _persist(conn)
+    actual_draft_id = _persist(
+        conn,
+        draft=_draft(
+            run_id="run-u3-2",
+            body=enforce_ai_label("另一份邀约正文。", generated_at=GENERATED_AT),
+        ),
+    )
+    expected_body = conn.execute(
+        "SELECT body FROM interview_invitation_draft WHERE id = ?",
+        (expected_draft_id,),
+    ).fetchone()[0]
+    expected_digest = draft_body_digest(expected_body)
+    key = f"s1:{expected_draft_id}:{expected_digest}"
+    assert _effect_count(conn, _SEND_NODE) == 0
+    before = _invitation_fact_snapshot(conn)
+    if mismatch == "draft_id":
+        draft_id, body_digest = actual_draft_id, expected_digest
+    else:
+        draft_id, body_digest = expected_draft_id, "0" * 16
+
+    with pytest.raises(ValueError):
+        effect_mark_invitation_sent(
+            conn, thread_id="app1", business_key=key, slot_id="s1",
+            draft_id=draft_id, body_digest=body_digest, actor="hr-1",
+        )
+
+    assert _invitation_fact_snapshot(conn) == before
+    assert _effect_count(conn, _SEND_NODE) == 0
+
+
+def test_sent_cache_hit_rejects_draft_from_another_slot(conn, wired):
+    draft_id = _persist(conn)
+    _add_second_slot(conn)
+    before = _invitation_fact_snapshot(conn)
+    digest = draft_body_digest(_draft().body)
+    with pytest.raises(InvitationNotAllowedError):
+        effect_mark_invitation_sent(
+            conn, thread_id="app1", business_key=f"s2:{draft_id}:{digest}",
+            slot_id="s2", draft_id=draft_id, body_digest=digest, actor="hr-1",
+        )
+    assert _invitation_fact_snapshot(conn) == before
+
+
+def test_sent_success_key_replays_after_current_draft_body_is_edited(conn, wired):
+    draft_id = _persist(conn)
+    assert _send(conn, wired, enabled=True).allowed
+    original_body = conn.execute(
+        "SELECT body FROM interview_invitation_draft WHERE id = ?", (draft_id,)
+    ).fetchone()[0]
+    original_digest = draft_body_digest(original_body)
+    original_key = f"s1:{draft_id}:{original_digest}"
+    _edit(conn, draft_id, "发送成功后当前草稿发生了新编辑")
+    before = _invitation_fact_snapshot(conn)
+
+    assert effect_mark_invitation_sent(
+        conn, thread_id="app1", business_key=original_key,
+        slot_id="s1", draft_id=draft_id, body_digest=original_digest, actor="hr-2",
+    ) is None
+    assert _invitation_fact_snapshot(conn) == before
 
 
 def test_send_fact_schema_migrates_idempotently_without_changing_drafts(conn):

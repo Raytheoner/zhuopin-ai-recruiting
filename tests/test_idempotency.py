@@ -812,3 +812,56 @@ def test_final_commit_failure_rolls_back_and_preserves_original(tmp_path, caplog
     finally:
         reader.close()
         conn.close()
+
+
+def test_validate_before_cache_runs_under_lock_before_cache_lookup_on_replay(tmp_path):
+    conn = get_connection(str(tmp_path / "validate-order.db"))
+    init_schema(conn)
+    seen = []
+
+    def validate(conn, *, thread_id, business_key, marker):
+        seen.append((conn.in_transaction, thread_id, business_key, marker))
+
+    @idempotent_effect("effect_validate_order", begin_immediate=True, validate_before_cache=validate)
+    def effect(conn, thread_id, business_key, *, marker):
+        conn.execute("INSERT INTO job (id, title) VALUES ('once', 'once')")
+
+    effect(conn, thread_id="t", business_key="b", marker="first")
+    assert effect(conn, thread_id="t", business_key="b", marker="replay") is None
+    assert seen == [(True, "t", "b", "first"), (True, "t", "b", "replay")]
+
+
+def test_validate_before_cache_failure_rolls_back_owned_lock_and_preserves_error(tmp_path):
+    conn = get_connection(str(tmp_path / "validate-failure.db"))
+    init_schema(conn)
+
+    def validate(conn, **kwargs):
+        assert conn.in_transaction
+        raise ValueError("bad binding")
+
+    @idempotent_effect("effect_validate_failure", begin_immediate=True, validate_before_cache=validate)
+    def effect(conn, thread_id, business_key):
+        pytest.fail("must not execute")
+
+    with pytest.raises(ValueError, match="bad binding"):
+        effect(conn, thread_id="t", business_key="b")
+    assert not conn.in_transaction
+
+
+def test_validate_before_cache_failure_does_not_rollback_caller_transaction(tmp_path):
+    conn = get_connection(str(tmp_path / "validate-caller-tx.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('sentinel', 'caller')")
+
+    def validate(conn, **kwargs):
+        raise ValueError("bad binding")
+
+    @idempotent_effect("effect_validate_caller", validate_before_cache=validate)
+    def effect(conn, thread_id, business_key):
+        pytest.fail("must not execute")
+
+    with pytest.raises(ValueError, match="bad binding"):
+        effect(conn, thread_id="t", business_key="b")
+    assert conn.in_transaction
+    conn.commit()
+    assert conn.execute("SELECT name FROM candidate WHERE id='sentinel'").fetchone() == ("caller",)
