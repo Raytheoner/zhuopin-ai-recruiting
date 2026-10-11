@@ -167,6 +167,14 @@ def test_prompts_carry_constraints_and_discipline():
     assert "{thread_id}:{node_name}:{business_key}" in rp
 
 
+def test_read_only_review_uses_task_test_evidence_instead_of_pytest():
+    rp = build_review_prompt((7, "实现阶段运行 pytest 验证事务回滚"), "铁律", "Spec 合规")
+    assert "不在本会话跑 pytest" in rp
+    assert "task-7.log" in rp
+    assert "证据缺失" in rp
+    assert '跑测试用 "$SDD_PYTHON"' not in rp
+
+
 def test_main_dry_run_prints_tasks_and_exits_zero(tmp_path, capsys):
     plan = tmp_path / "plan.md"
     plan.write_text(PLAN, encoding="utf-8")

@@ -153,11 +153,14 @@ def build_task_prompt(task: tuple[int, str], constraints: str) -> str:
 def build_review_prompt(task: tuple[int, str], constraints: str, role: str) -> str:
     return (
         f"你是只读 {role} reviewer，⛔ 不修改任何文件。\n"
-        f"对照下面的 Global Constraints 审查 Task {task[0]} 刚提交的代码与测试：\n"
+        f"对照下面的 Global Constraints 审查 Task {task[0]} 的实现与测试（双 review 通过后才由 runner 提交）：\n"
         f"- Spec 合规重点：每个 effect_* 节点独占且带幂等键 {{thread_id}}:{{node_name}}:{{business_key}}、"
         f"compute_* 无副作用、temperature=0、模型版本显式锁定、evidence_ref 非空。\n"
         f"- 代码质量重点：命名/接口一致、错误处理、可测性、无越界改动（git status 不该出现本 Task 之外的改动）。\n"
-        f"- 跑测试用 \"$SDD_PYTHON\" -m pytest …（本 worktree 没有 venv，⛔ 不要用 ./venv/bin/python）。\n"
+        f"- ⛔ 不在本会话跑 pytest：只读沙箱没有可写临时目录。Task 正文中的测试命令属于实现阶段。\n"
+        f"- 测试证据读取当前 worktree 的 .superpowers/sdd/<计划名>/task-{task[0]}.log，"
+        f"结合真实代码、测试断言与 git diff 核验；不得只因只读环境无法执行测试而判 FAIL，"
+        f"也不得仅凭实现方声称通过就忽略缺陷。证据缺失、测试失败或发现实质问题仍须 FAIL。\n"
         f"最后输出一行 VERDICT: PASS 或 VERDICT: FAIL <原因>，并列出 findings。\n\n"
         f"## Global Constraints\n{constraints}\n\n## Task {task[0]}\n{task[1]}\n"
     )
