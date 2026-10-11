@@ -2084,6 +2084,24 @@ python3 -m pytest tests/test_auth_middleware.py tests/test_auth_routes.py -q
 
 ### Task 9: 邀约页 `app/web/static/invitation_review.html`（tasks 3.7）
 
+**2026-10-11 `1011R` Luna review 阻塞修正**：本 Task 的实现会话必须亲自复跑
+已有页面测试与 Task 8 路由测试，不能因文件已存在就将测试推给 runner。Task 11 的
+`tests/test_interview_invitation_api.py` 尚未交付时，先用当前
+`tests/test_invitation_review_page.py`＋`tests/test_interview_invitation_routes.py` 验证。
+页面测试 mock 应按实际请求路径/动作分别响应，不得把所有 API 返回固定 send 结果，
+使 allowed/blocked/已有投递事实三分支成为真实接口契约对应的输入。增加真实路由草稿
+响应到页面展示的衔接证据，验证 AI 标识及正文不会被页面剥除；使用测试数据/FakeChannel，
+不得真实外发。同步本 Task 后续测试命令与偏离登记，原样例中的 path `.pop()` 已修正，
+不得回退。
+
+**兼容性补充**：页面提取路径倒数第二段时使用数组长度索引，不使用较新的 Array.prototype.at；补对应路径测试并实跑。
+
+**本 Task 授权文件**：除页面与页面测试外，允许修改本计划的 Task 9 修正、相关测试
+命令与偏离登记（主会话在 Task 开始前已写入的说明亦属于本 Task）。页面测试须分别验证
+GET 草稿列表、generate、edit、mark-human、outcome、send 的请求路径/方法/请求 body，
+按各动作响应真实结构分别返回并断言页面状态；不得用一个泛化 POST 返回体掩盖接口错接。
+真实 API 的契约验证可由已通过的 Task 8 路由测试与页面契约测试组合证明，不要求真实外发。
+
 **文件**：`app/web/static/invitation_review.html`（新增，整文件）
 
 页面路由（`GET /interview-slots/{slot_id}/invitation`）已在 Task 8 落地；本 Task 只写
@@ -2144,7 +2162,8 @@ python3 -m pytest tests/test_auth_middleware.py tests/test_auth_routes.py -q
   </main>
 
   <script>
-    const slotId = location.pathname.split("/").filter(Boolean).pop();
+    const pathParts = location.pathname.split("/").filter(Boolean);
+    const slotId = pathParts[pathParts.length - 2];
     const api = `api/interview-slots/${slotId}/invitation`;
     let currentDraftId = null;
 
@@ -2276,13 +2295,15 @@ python3 -m pytest tests/test_auth_middleware.py tests/test_auth_routes.py -q
 </html>
 ```
 
-**命令与预期输出**：
+**命令与预期输出**（Task 11 的 `tests/test_interview_invitation_api.py` 尚未落地时，以当前页面测试和 Task 8 路由测试验收）：
 
 ```bash
-python3 -m pytest tests/test_interview_invitation_api.py -q
+"$SDD_PYTHON" -m pytest tests/test_invitation_review_page.py tests/test_interview_invitation_routes.py -q
 ```
 
-预期输出（Task 11 落地后）：`15 passed in X.XXs`。
+预期输出：页面测试与 Task 8 路由测试全绿。Task 11 落地后再单独运行 `"$SDD_PYTHON" -m pytest tests/test_interview_invitation_api.py -q`。
+
+**Task 9 落地偏离登记**：页面与初始实现已存在于本 worktree；本 Task 补强页面测试以逐一断言 GET、模板 PUT、generate、edit、mark-human、outcome、send 的路径、方法及请求体，并按各 API 的实际响应结构分别 mock。页面测试覆盖 blocked/allowed/replay 三种 send 结果及真实路由草稿正文/AI 标识衔接。计划内过时的 `.pop()` 路径示例修正为兼容旧浏览器的数组索引 `parts[parts.length - 2]`，测试命令使用 runner 注入的 `$SDD_PYTHON`，并先跑当前页面与 Task 8 路由测试。无页面行为偏离，无真实外发。
 
 ---
 
