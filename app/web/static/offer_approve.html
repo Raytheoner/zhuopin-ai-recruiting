@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css?v=20261010">
+  <title>Offer 审批详情 · 卓品智能招聘助手</title>
+  <style>
+    .kv { margin: 4px 0; }
+    .kv .k { color: var(--color-text-muted); display: inline-block; min-width: 96px; }
+    textarea { width: 100%; min-height: 72px; }
+    .actions button { margin-right: 8px; }
+    #status-bar { padding: 12px 16px; margin-bottom: 16px; border-radius: 8px; }
+    .status-pending { background: #fff3cd; }
+    .status-approved { background: #d3f9d8; }
+    .status-revision { background: #ffe3e3; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">业务经理 · Offer 审批</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">Offer 审批</h1>
+    <div id="status-bar">加载中…</div>
+    <div class="card" id="offer-card"></div>
+    <div class="card">
+      <h2>审批留痕</h2>
+      <table class="data-table">
+        <thead><tr><th>轮次</th><th>级</th><th>审批人</th><th>结论</th><th>意见</th><th>时刻</th></tr></thead>
+        <tbody id="history-body"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>审批操作</h2>
+      <p><label for="comment">意见（退回必填）</label></p>
+      <textarea id="comment"></textarea>
+      <div class="actions toolbar">
+        <button id="approve-btn" class="btn btn-primary">通过</button>
+        <button id="return-btn" class="btn btn-danger">退回</button>
+      </div>
+    </div>
+    <p id="error" style="color:red"></p>
+  </main>
+
+  <script>
+    const DECISION_LABELS = { approved: "通过", returned: "退回" };
+    const STATUS_CLASS = {
+      pending_approval: "status-pending",
+      needs_revision: "status-revision",
+      approved: "status-approved",
+    };
+
+    function offerIdFromPath() {
+      const m = window.location.pathname.match(/\/offers\/([^/]+)\/approve\/?$/);
+      return m ? m[1] : null;
+    }
+
+    function kv(label, value) {
+      const p = document.createElement("p");
+      p.className = "kv";
+      const k = document.createElement("span");
+      k.className = "k";
+      k.textContent = label;
+      const v = document.createElement("span");
+      v.textContent = value === null || value === undefined || value === "" ? "-" : value;
+      p.appendChild(k);
+      p.appendChild(v);
+      return p;
+    }
+
+    let currentOfferId = null;
+    let currentLevel = null;
+
+    async function loadOffer() {
+      currentOfferId = offerIdFromPath();
+      if (!currentOfferId) {
+        document.getElementById("error").textContent = "无法识别 Offer 标识";
+        return;
+      }
+      const resp = await fetch(`api/offers/${currentOfferId}`);
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return;
+      }
+      if (!resp.ok) {
+        document.getElementById("error").textContent = "加载失败";
+        return;
+      }
+      const offer = await resp.json();
+      currentLevel = offer.current_level;
+      const bar = document.getElementById("status-bar");
+      bar.className = STATUS_CLASS[offer.status] || "";
+      bar.textContent = `状态：${offer.status_label}（第 ${offer.approval_round} 轮，当前第 ${offer.current_level}/${offer.total_levels} 级）`;
+
+      const card = document.getElementById("offer-card");
+      card.innerHTML = "";
+      card.appendChild(kv("岗位", offer.job_title));
+      card.appendChild(kv("候选人", offer.candidate_name));
+      card.appendChild(kv("部门", offer.department));
+      card.appendChild(kv("拟入职日期", offer.start_date));
+      card.appendChild(kv("汇报对象", offer.report_to));
+      card.appendChild(kv("备注", offer.note));
+      card.appendChild(kv("发起人", offer.created_by));
+
+      const tbody = document.getElementById("history-body");
+      tbody.innerHTML = "";
+      for (const item of offer.approvals) {
+        const tr = document.createElement("tr");
+        for (const text of [
+          `第 ${item.round} 轮`,
+          `第 ${item.level} 级`,
+          item.approver,
+          DECISION_LABELS[item.decision] || item.decision,
+          item.comment || "",
+          item.at,
+        ]) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+
+      const actionable = offer.status === "pending_approval";
+      document.getElementById("approve-btn").disabled = !actionable;
+      document.getElementById("return-btn").disabled = !actionable;
+    }
+
+    async function decide(decision) {
+      document.getElementById("error").textContent = "";
+      const comment = document.getElementById("comment").value;
+      const resp = await fetch(`api/offers/${currentOfferId}/approval`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // level 必须回传：它与 round/approver/decision 一起构成审批的幂等键，
+        // 重试同一个 level 才会命中同一条键（否则重放会撞 403）。
+        body: JSON.stringify({
+          decision: decision,
+          comment: comment || null,
+          level: currentLevel,
+        }),
+      });
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return;
+      }
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        document.getElementById("error").textContent = body.detail || "操作失败";
+        return;
+      }
+      document.getElementById("comment").value = "";
+      await loadOffer();
+    }
+
+    document.getElementById("approve-btn").addEventListener("click", () => decide("approved"));
+    document.getElementById("return-btn").addEventListener("click", () => decide("returned"));
+    loadOffer();
+  </script>
+</body>
+</html>

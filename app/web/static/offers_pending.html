@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--BASE_HREF-->
+  <link rel="stylesheet" href="static/app.css?v=20261010">
+  <title>Offer 审批 · 卓品智能招聘助手</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">卓品智能招聘助手</span>
+      <span class="brand-sub">业务经理 · Offer 审批</span>
+    </div>
+  </header>
+  <main class="page">
+    <h1 class="page-title">待我审批的 Offer</h1>
+    <p class="notice"><strong>本页只展示 Offer 记录里的非敏感字段与投递基本信息；Offer 记录不含薪资等报酬信息，薪资由 HR 在文书里手工填写。</strong></p>
+    <div class="card">
+      <table class="data-table">
+        <thead>
+          <tr><th>岗位</th><th>候选人</th><th>部门</th><th>拟入职日期</th>
+              <th>汇报对象</th><th>审批进度</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody id="offer-body"></tbody>
+      </table>
+      <p id="empty-hint" class="empty-hint" style="display:none">当前没有待你审批的 Offer。</p>
+    </div>
+    <p id="error" style="color:red"></p>
+  </main>
+
+  <script>
+    async function loadPending() {
+      const resp = await fetch("api/offers/pending");
+      if (resp.status === 401) {
+        window.location.href = "login";
+        return;
+      }
+      if (!resp.ok) {
+        document.getElementById("error").textContent = "加载失败";
+        return;
+      }
+      const body = await resp.json();
+      const tbody = document.getElementById("offer-body");
+      tbody.innerHTML = "";
+      if (body.offers.length === 0) {
+        document.getElementById("empty-hint").style.display = "";
+        return;
+      }
+      for (const offer of body.offers) {
+        const tr = document.createElement("tr");
+        const cells = [
+          offer.job_title,
+          offer.candidate_name,
+          offer.department,
+          offer.start_date,
+          offer.report_to,
+          `第 ${offer.current_level}/${offer.total_levels} 级`,
+          offer.status_label,
+        ];
+        for (const text of cells) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.appendChild(td);
+        }
+        const actionTd = document.createElement("td");
+        const link = document.createElement("a");
+        link.href = `offers/${offer.id}/approve`;
+        link.textContent = "查看并审批";
+        link.className = "link";
+        actionTd.appendChild(link);
+        tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+      }
+    }
+
+    loadPending();
+  </script>
+</body>
+</html>
