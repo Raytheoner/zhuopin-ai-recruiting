@@ -161,7 +161,7 @@ def build_review_prompt(task: tuple[int, str], constraints: str, role: str) -> s
         f"- 代码质量重点：命名/接口一致、错误处理、可测性、无越界改动（先汇总 Task 中的完整授权清单、补充修复和原文件标记；明确授权的共用文件与计划偏离登记均在范围内，不能只读原单文件标记）。\n"
         f"- ⛔ 不在本会话跑 pytest：只读沙箱没有可写临时目录。Task 正文中的测试命令属于实现阶段。\n"
         f"- 日志会追加多轮；events JSONL 必须逐行解析并筛选完成的 command_execution 中实际 pytest 命令，核对最后一次输出和 exit_code。"
-        f"CLI stderr 合并输出会出现独立 WARN 非 JSON 行；逐行 try json.loads，跳过独立警告行并保留有效事件，不能因此弃用整个日志。不要用早期记录或被截断的整读结果判定最新测试证据缺失。\n"
+        f"CLI stderr 合并输出会出现独立 WARN 非 JSON 行；逐行 try json.loads，跳过独立警告行并保留有效事件，不能因此弃用整个日志。必须按嵌套结构筛选：顶层type==item.completed且item.type==command_execution；顶层不存在command_execution类型。输出字段为item.aggregated_output、item.exit_code。不要用早期记录或被截断的整读结果判定最新测试证据缺失。\n"
         f"- 测试证据读取当前 worktree 的 .superpowers/sdd/<计划名>/task-{task[0]}.log，"
         f"优先读取同目录 task-{task[0]}.pytest-evidence.json（runner 从本轮真实 completed command_execution 提取的 command/aggregated_output/exit_code），再核对 events.jsonl；不可读取不存在的 output 字段，"
         f"结合真实代码、测试断言与 git diff 核验；不得只因只读环境无法执行测试而判 FAIL，"
