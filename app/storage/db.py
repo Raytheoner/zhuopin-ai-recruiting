@@ -29,6 +29,9 @@ STAGE_HISTORY_ACTIONS: tuple[str, ...] = (
     # channel-resume-intake U3 tasks 3.2：HR 事后改正来源时**追加**一条事实
     # （source 记新值），⛔ 绝不更新初始记录（design D5：本表是只追加的事实表）。
     "source_corrected",
+    # onboarding-flow U3：同一阶段上的入职确认 / 候选人自愿放弃。
+    "onboarded",
+    "abandoned",
 )
 
 
@@ -572,7 +575,7 @@ CREATE TABLE IF NOT EXISTS application_stage_history (
     action TEXT CHECK (
         action IS NULL OR action IN (
             'scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show',
-            'closed_by_merge', 'source_corrected'
+            'closed_by_merge', 'source_corrected', 'onboarded', 'abandoned'
         )
     ),
     detail_json TEXT,
@@ -2155,7 +2158,8 @@ def _rebuild_application_stage_history_action_check(conn: sqlite3.Connection) ->
     先跑过 interview-scheduling U2（1001R）的库：action 列在、CHECK 只放行五值，
     而 _ADDED_COLUMNS 逐列判重会静默跳过这一列。channel-resume-intake U2 Task 5 的
     _write_closed_by_merge 要写第六个值、U3 tasks 3.2 的来源改正要写第七个值
-    （source_corrected）——不重建的话两条写入在服务器上当场 IntegrityError（与
+    （source_corrected），onboarding-flow U3 增加 onboarded / abandoned——
+    不重建的话新增动作写入会当场 IntegrityError（与
     hr_account.role 缺 dept_manager 同一故障形态，同样是
     _rebuild_hr_account_role_check 的先例）。
 
@@ -2244,9 +2248,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _rebuild_application_status_check(conn)
     _rebuild_offer_status_check(conn)
     # 同类放宽，第三步：action 的五值 CHECK（1001R）要能承载本包的 closed_by_merge
-    # 与 channel-resume-intake U3 的 source_corrected。⚠️ 必须排在
+    # 与 channel-resume-intake U3 的 source_corrected，以及 onboarding-flow U3 的
+    # onboarded / abandoned。⚠️ 必须排在
     # apply_column_migrations 之后——老库里 action/source 列可能是刚刚才 ALTER
-    # 出来的，重建要连它们一起搬。新库 SCHEMA 本就是七值 ⇒ 空转；没跑过 1001R 的老库
+    # 出来的，重建要连它们一起搬。新库 SCHEMA 本就是九值 ⇒ 空转；没跑过 1001R 的老库
     # 由加列路径一步到位 ⇒ 空转。
     _rebuild_application_stage_history_action_check(conn)
     _migrate_stage_for_interview(conn)

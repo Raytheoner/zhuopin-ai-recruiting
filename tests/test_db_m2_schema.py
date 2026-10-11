@@ -288,7 +288,8 @@ def test_application_stage_history_actor_type_check(conn):
 
 def test_application_stage_history_action_check(conn):
     """action 的值域由 CHECK 钉死：五个排期动作（interview-scheduling U2 task 1，
-    偏离登记 D-U2-1）+ channel-resume-intake 的 closed_by_merge（U2）/
+    偏离登记 D-U2-1）+ onboarding-flow U3 的 onboarded / abandoned
+    （共七个动作）+ channel-resume-intake 的 closed_by_merge（U2）/
     source_corrected（U3），NULL 放行（既有 stage 流转行没有动作语义），别的一律
     拒——多一个取值就说明有别的东西在往流转事实表里写。
     """
