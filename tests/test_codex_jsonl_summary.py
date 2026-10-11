@@ -97,3 +97,12 @@ def test_agent_message_text_order_preserved():
     _fields, txt, saw = summarize(seq + "\n")
     assert saw is True
     assert txt == "第一段\n第二段\n"
+
+
+def test_json_scalars_and_arrays_are_not_execution_events():
+    raw = '\n'.join(['"warning"', 'null', '42', '[]', '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'])
+    _fields, final, saw = summarize(raw)
+    assert saw is True
+    assert final.strip() == 'done'
+    _fields, _final, saw = summarize('"warning"\nnull\n[]\n')
+    assert saw is False
