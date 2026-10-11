@@ -10,6 +10,7 @@ thread_id 语义：实例化取 application_id（一份投递一份清单）；�
 """
 from __future__ import annotations
 
+from datetime import date
 import json
 import logging
 import sqlite3
@@ -276,3 +277,115 @@ def effect_enqueue_disposition(
                 application_id,
             )
         raise
+
+
+# U3 终态动作与结局。
+TERMINAL_OUTCOMES = ("hired",)  # Task 5 扩为 ("hired", "abandoned")
+TERMINAL_ACTION_ONBOARDED = "onboarded"
+TERMINAL_ACTION_ABANDONED = "abandoned"
+TERMINAL_ACTIONS = (TERMINAL_ACTION_ONBOARDED, TERMINAL_ACTION_ABANDONED)
+
+
+class OnboardingTerminalRejected(Exception):
+    """终态动作不满足前置条件。"""
+
+
+def terminal_history_rows(
+    conn: sqlite3.Connection, application_id: str
+) -> list[sqlite3.Row]:
+    """只读返回该投递的终态流转事实；终态由 action 值定义。"""
+    return conn.execute(
+        "SELECT id, action, actor_type, actor, occurred_at FROM application_stage_history "
+        "WHERE application_id = ? AND action IN (?, ?) ORDER BY occurred_at, id",
+        (application_id, TERMINAL_ACTION_ONBOARDED, TERMINAL_ACTION_ABANDONED),
+    ).fetchall()
+
+
+@idempotent_effect("effect_complete_onboarding")
+def effect_complete_onboarding(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    actor_username: str,
+    actual_start_date: str | None = None,
+    note: str | None = None,
+    reason: str | None = None,
+    today: str | None = None,
+) -> str:
+    """确认入职终态，并在同一事务中关闭清单、登记六类待处置事项。"""
+    application_id = thread_id
+    outcome = business_key
+    if outcome not in TERMINAL_OUTCOMES:
+        raise OnboardingTerminalRejected(f"未知终态结局: {outcome!r}")
+    if not actor_username or not actor_username.strip():
+        raise OnboardingTerminalRejected("终态必须由可识别的人确认")
+
+    row = conn.execute(
+        "SELECT a.status, a.current_stage_id, a.candidate_id, "
+        "c.id, c.status, o.status, o.start_date "
+        "FROM application a "
+        "LEFT JOIN onboarding_checklist c ON c.application_id = a.id "
+        "LEFT JOIN offer o ON o.application_id = a.id WHERE a.id = ?",
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        raise OnboardingTerminalRejected("投递不存在")
+    _, current_stage, candidate_id, checklist_id, checklist_status, offer_status, offer_start_date = row
+
+    if terminal_history_rows(conn, application_id):
+        raise OnboardingTerminalRejected("该投递已有终态事实")
+    if offer_status != "accepted":
+        raise OnboardingTerminalRejected("Offer 尚未确认接受")
+    if outcome == "hired":
+        if checklist_id is None:
+            raise OnboardingTerminalRejected("该投递尚无入职清单")
+        if checklist_status != "open":
+            raise OnboardingTerminalRejected(f"清单状态为 {checklist_status}，不能确认已入职")
+        effective_start_date = actual_start_date or offer_start_date
+        if not effective_start_date:
+            raise OnboardingTerminalRejected("缺少实际入职日")
+        today_str = today or date.today().isoformat()
+        if effective_start_date > today_str:
+            raise OnboardingTerminalRejected("入职日尚未到达，不能确认已入职")
+        incomplete = conn.execute(
+            "SELECT name, owner_party FROM onboarding_item "
+            "WHERE checklist_id = ? AND required = 1 AND status = 'pending' ORDER BY rowid",
+            (checklist_id,),
+        ).fetchall()
+        if incomplete and not (note and note.strip()):
+            raise OnboardingTerminalRejected("仍有未完成的必需条目，必须填写说明")
+        detail = {
+            "outcome": TERMINAL_ACTION_ONBOARDED,
+            "actual_start_date": effective_start_date,
+            "offer_start_date": offer_start_date,
+            "note": note or "",
+            "incomplete_required_items": [
+                {"name": item[0], "owner_party": item[1]} for item in incomplete
+            ],
+        }
+        history_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO application_stage_history "
+            "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, detail_json) "
+            "VALUES (?, ?, ?, 'hired', 'human', ?, ?, ?)",
+            (
+                history_id, application_id, current_stage, actor_username,
+                TERMINAL_ACTION_ONBOARDED, json.dumps(detail, ensure_ascii=False),
+            ),
+        )
+        conn.execute(
+            "UPDATE application SET status = 'hired', current_stage_id = 'hired' WHERE id = ?",
+            (application_id,),
+        )
+        conn.execute(
+            "UPDATE onboarding_checklist SET status = 'closed', closed_reason = 'hired' WHERE id = ?",
+            (checklist_id,),
+        )
+        _enqueue_disposition_rows(
+            conn, application_id=application_id, candidate_id=candidate_id
+        )
+        return history_id
+
+    # Task 5 实现 abandoned 分支。
+    raise OnboardingTerminalRejected(f"未知终态结局: {outcome!r}")

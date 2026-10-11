@@ -10,7 +10,12 @@ import sqlite3
 
 import pytest
 
+from app.graph import onboarding_nodes
 from app.graph.onboarding_nodes import (
+    OnboardingTerminalRejected,
+    TERMINAL_ACTION_ONBOARDED,
+    effect_complete_onboarding,
+    terminal_history_rows,
     DISPOSITION_CATEGORIES,
     effect_enqueue_disposition,
     effect_instantiate_checklist,
@@ -363,3 +368,181 @@ def test_enqueue_disposition_preserves_write_error_when_rollback_fails(tmp_path,
     ) == len(DISPOSITION_CATEGORIES)
     _assert_disposition_pairs(writer)
     writer.close()
+
+
+# ── Task 4：effect_complete_onboarding(confirm_hired) ──────────────────
+
+
+def test_confirm_hired_writes_history_checklist_and_disposition(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+
+    history_id = _confirm(conn)
+
+    assert history_id is not None
+    row = conn.execute(
+        "SELECT from_stage_id, to_stage_id, actor_type, actor, action, detail_json "
+        "FROM application_stage_history WHERE id = ?",
+        (history_id,),
+    ).fetchone()
+    assert row[0] == "hired" and row[1] == "hired"
+    assert row[2] == "human" and row[3] == "hr-user"
+    assert row[4] == "onboarded"
+    detail = json.loads(row[5])
+    assert detail["actual_start_date"] == START_DATE
+    assert detail["incomplete_required_items"] == []
+    assert detail["note"] == ""
+
+    assert conn.execute(
+        "SELECT status, closed_reason FROM onboarding_checklist WHERE id = ?", (checklist_id,)
+    ).fetchone() == ("closed", "hired")
+    assert conn.execute(
+        "SELECT status, current_stage_id FROM application WHERE id='app-1'"
+    ).fetchone() == ("hired", "hired")
+    assert conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1'"
+    ).fetchone()[0] == 6
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE effect_key='app-1:effect_complete_onboarding:hired'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE effect_key LIKE 'app-1:effect_enqueue_disposition:%'"
+    ).fetchone()[0] == 6
+
+
+def test_confirm_hired_records_incomplete_items_and_note(conn):
+    """有未完成条目时确认，但必须留痕未完成项与 HR 说明。"""
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    conn.execute(
+        "UPDATE onboarding_item SET status='done' WHERE checklist_id=? AND required=1 "
+        "AND name != '体检报告'",
+        (checklist_id,),
+    )
+    conn.commit()
+
+    history_id = _confirm(conn, note="体检报告下周补，人已到岗")
+    detail = json.loads(conn.execute(
+        "SELECT detail_json FROM application_stage_history WHERE id=?", (history_id,)
+    ).fetchone()[0])
+    assert [item["name"] for item in detail["incomplete_required_items"]] == ["体检报告"]
+    assert detail["note"] == "体检报告下周补，人已到岗"
+
+
+def test_confirm_hired_requires_note_when_required_items_are_pending(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    with pytest.raises(OnboardingTerminalRejected):
+        _confirm(conn)
+    assert conn.execute("SELECT COUNT(*) FROM application_stage_history").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT status FROM onboarding_checklist WHERE id=?", (checklist_id,)
+    ).fetchone() == ("open",)
+
+
+def test_confirm_hired_rejects_before_start_date(conn):
+    _seed_hired_application(conn, start_date="2026-10-21")
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    with pytest.raises(OnboardingTerminalRejected):
+        _confirm(conn)
+    assert conn.execute("SELECT COUNT(*) FROM application_stage_history").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM data_disposition_queue").fetchone()[0] == 0
+
+
+def test_confirm_hired_rejects_without_accepted_offer(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    conn.execute("UPDATE offer SET status='exported' WHERE application_id='app-1'")
+    conn.commit()
+    with pytest.raises(OnboardingTerminalRejected):
+        _confirm(conn)
+
+
+def test_confirm_hired_rejects_without_checklist(conn):
+    _seed_hired_application(conn)
+    with pytest.raises(OnboardingTerminalRejected):
+        _confirm(conn)
+
+
+def test_confirm_hired_rejects_when_terminal_fact_already_exists(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    conn.execute(
+        "INSERT INTO application_stage_history "
+        "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action) "
+        "VALUES ('h-manual', 'app-1', 'hired', 'hired', 'human', 'hr-user', 'onboarded')"
+    )
+    conn.commit()
+    with pytest.raises(OnboardingTerminalRejected):
+        _confirm(conn)
+
+
+def test_confirm_hired_rerun_is_idempotent(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    first = _confirm(conn)
+    second = _confirm(conn)
+    assert first is not None and second is None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE action='onboarded'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1'"
+    ).fetchone()[0] == 6
+
+
+def test_confirm_hired_requires_actor(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    with pytest.raises(OnboardingTerminalRejected):
+        effect_complete_onboarding(
+            conn, thread_id="app-1", business_key="hired", actor_username="  ", today=TODAY
+        )
+
+
+def test_complete_onboarding_rejects_unknown_outcome(conn):
+    _seed_hired_application(conn)
+    with pytest.raises(OnboardingTerminalRejected):
+        effect_complete_onboarding(
+            conn, thread_id="app-1", business_key="ghost", actor_username="hr-user", today=TODAY
+        )
+    assert conn.execute("SELECT COUNT(*) FROM application_stage_history").fetchone()[0] == 0
+
+
+def test_confirm_hired_rolls_back_everything_when_registration_fails(conn, monkeypatch):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("模拟登记失败")
+
+    monkeypatch.setattr(onboarding_nodes, "_enqueue_disposition_rows", _boom)
+    with pytest.raises(RuntimeError):
+        _confirm(conn)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE action='onboarded'"
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT status FROM onboarding_checklist WHERE id=?", (checklist_id,)
+    ).fetchone() == ("open",)
+    assert conn.execute("SELECT COUNT(*) FROM data_disposition_queue").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE effect_key='app-1:effect_complete_onboarding:hired'"
+    ).fetchone()[0] == 0
+
+
+def test_terminal_history_rows_only_counts_terminal_actions(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    assert terminal_history_rows(conn, "app-1") == []
+    _confirm(conn)
+    actions = [row[1] for row in terminal_history_rows(conn, "app-1")]
+    assert actions == ["onboarded"]
