@@ -546,3 +546,96 @@ def test_terminal_history_rows_only_counts_terminal_actions(conn):
     _confirm(conn)
     actions = [row[1] for row in terminal_history_rows(conn, "app-1")]
     assert actions == ["onboarded"]
+
+
+# ── Task 5：effect_complete_onboarding(abandon) ────────────────────────
+
+
+def test_abandon_writes_terminal_facts(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    history_id = _abandon(conn, reason="接受其他公司")
+    assert history_id is not None
+    row = conn.execute(
+        "SELECT from_stage_id, to_stage_id, actor_type, actor, action, detail_json "
+        "FROM application_stage_history WHERE id = ?", (history_id,),
+    ).fetchone()
+    assert row[0] == "hired" and row[1] == "hired"
+    assert row[2] == "human" and row[3] == "hr-user"
+    assert row[4] == "abandoned"
+    assert json.loads(row[5])["reason"] == "接受其他公司"
+    assert conn.execute("SELECT status FROM application WHERE id='app-1'").fetchone() == ("refused",)
+    assert conn.execute(
+        "SELECT status, updated_by FROM offer WHERE application_id='app-1'"
+    ).fetchone() == ("abandoned", "hr-user")
+    assert conn.execute(
+        "SELECT status, closed_reason FROM onboarding_checklist WHERE id = ?", (checklist_id,)
+    ).fetchone() == ("closed", "abandoned")
+
+
+def test_abandon_writes_no_rejection_record(conn):
+    """候选人自愿退出不是我方淘汰，不写拒绝记录。"""
+    _seed_hired_application(conn)
+    _instantiated(conn)
+    before = conn.execute("SELECT COUNT(*) FROM rejection_record").fetchone()[0]
+    _abandon(conn, reason="接受其他公司")
+    assert conn.execute("SELECT COUNT(*) FROM rejection_record").fetchone()[0] == before == 0
+
+
+def test_abandon_registers_no_disposition(conn):
+    _seed_hired_application(conn)
+    _instantiated(conn)
+    _abandon(conn, reason="接受其他公司")
+    assert conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1'"
+    ).fetchone()[0] == 0
+
+
+def test_abandon_requires_reason(conn):
+    _seed_hired_application(conn)
+    _instantiated(conn)
+    with pytest.raises(OnboardingTerminalRejected):
+        _abandon(conn, reason="   ")
+    assert conn.execute("SELECT COUNT(*) FROM application_stage_history").fetchone()[0] == 0
+    assert conn.execute("SELECT status FROM application WHERE id='app-1'").fetchone() == ("hired",)
+
+
+def test_abandon_after_hired_confirmation_is_rejected(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    _confirm(conn)
+    with pytest.raises(OnboardingTerminalRejected):
+        _abandon(conn, reason="反悔")
+    assert conn.execute("SELECT status FROM application WHERE id='app-1'").fetchone() == ("hired",)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE action IN ('onboarded','abandoned')"
+    ).fetchone()[0] == 1
+
+
+def test_abandon_without_checklist_is_allowed(conn):
+    _seed_hired_application(conn)
+    history_id = _abandon(conn, reason="入职前一周告知不来了")
+    assert history_id is not None
+    assert conn.execute("SELECT status FROM application WHERE id='app-1'").fetchone() == ("refused",)
+    assert conn.execute("SELECT COUNT(*) FROM onboarding_checklist").fetchone()[0] == 0
+
+
+def test_abandon_rejects_unsigned_offer(conn):
+    _seed_hired_application(conn)
+    _instantiated(conn)
+    conn.execute("UPDATE offer SET status='exported' WHERE application_id='app-1'")
+    conn.commit()
+    with pytest.raises(OnboardingTerminalRejected):
+        _abandon(conn, reason="不来了")
+
+
+def test_abandon_rerun_is_idempotent(conn):
+    _seed_hired_application(conn)
+    _instantiated(conn)
+    first = _abandon(conn, reason="接受其他公司")
+    second = _abandon(conn, reason="接受其他公司")
+    assert first is not None and second is None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE action='abandoned'"
+    ).fetchone()[0] == 1

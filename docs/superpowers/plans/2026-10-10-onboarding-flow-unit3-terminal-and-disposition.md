@@ -1567,6 +1567,9 @@ Expected: 全绿（12 个用例；`abandon` 用例属 Task 5，此处尚未存�
 
 ### Task 5: `effect_complete_onboarding` 的 `abandoned` 分支（tasks 3.3）
 
+**1011R 审查证据核验补充**：本 Task 允许同步本计划偏离登记。旧事件中的初查发生在文件物理第 12、17 行，失败 pytest 在第 21 行，修复后的 31 passed/exit_code=0 在第 26 行；不能逆序把初查说成最后测试之后的记录。再次实跑当前文件并保存证据和当前 git diff；审查按事件物理行顺序核验，要求失败→修复→通过顺序，独立 WARN 行忽略而不丢弃有效 JSON。
+
+
 **Files:**
 - Modify: `app/graph/onboarding_nodes.py`（`TERMINAL_OUTCOMES` 扩为 `("hired", "abandoned")`；在兜底 `raise` 之前插入 `abandoned` 分支体）
 - Test: `tests/test_onboarding_terminal_nodes.py`（追加 Task 5 用例）

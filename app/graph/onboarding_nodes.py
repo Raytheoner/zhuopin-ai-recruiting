@@ -280,7 +280,7 @@ def effect_enqueue_disposition(
 
 
 # U3 终态动作与结局。
-TERMINAL_OUTCOMES = ("hired",)  # Task 5 扩为 ("hired", "abandoned")
+TERMINAL_OUTCOMES = ("hired", "abandoned")
 TERMINAL_ACTION_ONBOARDED = "onboarded"
 TERMINAL_ACTION_ABANDONED = "abandoned"
 TERMINAL_ACTIONS = (TERMINAL_ACTION_ONBOARDED, TERMINAL_ACTION_ABANDONED)
@@ -387,5 +387,36 @@ def effect_complete_onboarding(
         )
         return history_id
 
-    # Task 5 实现 abandoned 分支。
-    raise OnboardingTerminalRejected(f"未知终态结局: {outcome!r}")
+    # outcome == "abandoned"：候选人自愿退出，⛔ 不是我方淘汰（合规红线）
+    if not reason or not reason.strip():
+        raise OnboardingTerminalRejected("放弃入职必须填写原因")
+    detail = {
+        "outcome": TERMINAL_ACTION_ABANDONED,
+        "reason": reason,
+        "offer_status_before": offer_status,
+    }
+    history_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO application_stage_history "
+        "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, detail_json) "
+        "VALUES (?, ?, ?, ?, 'human', ?, ?, ?)",
+        (
+            history_id, application_id, current_stage, current_stage, actor_username,
+            TERMINAL_ACTION_ABANDONED, json.dumps(detail, ensure_ascii=False),
+        ),
+    )
+    conn.execute(
+        "UPDATE application SET status = 'refused' WHERE id = ?", (application_id,)
+    )
+    conn.execute(
+        "UPDATE offer SET status = 'abandoned', updated_by = ?, updated_at = datetime('now') "
+        "WHERE application_id = ?",
+        (actor_username, application_id),
+    )
+    if checklist_id is not None:
+        conn.execute(
+            "UPDATE onboarding_checklist SET status = 'closed', closed_reason = 'abandoned' "
+            "WHERE id = ?",
+            (checklist_id,),
+        )
+    return history_id
