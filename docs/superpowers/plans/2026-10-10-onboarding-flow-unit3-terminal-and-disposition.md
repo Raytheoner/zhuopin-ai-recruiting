@@ -116,7 +116,7 @@
 | `tests/test_onboarding_terminal_nodes.py` | 新建 | 两个终态节点的单元测试（Task 3/4/5） |
 | `tests/test_onboarding_terminal_invariant.py` | 新建 | 终态不变式 ＋ ⛔ 无自动终态路径的反证（Task 6） |
 | `tests/test_onboarding_terminal_pages.py` | 新建 | 三个端点的角色/幂等/前置拒绝 ＋ 页面片段断言（Task 7） |
-| `tests/test_audit_assertions.py` | 修改 | 断言条数 4→6（`COMPLIANCE_ASSERTIONS`）/4→7（`run_compliance_assertions`）＋ 三条新断言的正向用例（Task 8） |
+| `tests/test_audit_assertions.py` | 修改 | 按当前仓库已有七条基线断言，修正为 `COMPLIANCE_ASSERTIONS` 9 条 / `run_compliance_assertions` 10 条＋三条新断言的正向用例（Task 8） |
 | `tests/test_audit_assertion_effectiveness.py` | 修改 | 同上条数修正 ＋ 三条"造违例 → 必须失败"的反证（Task 8） |
 | `tests/test_compliance_cli.py` | 修改 | `--retention-policy-signed-version` 的退出码契约（Task 8） |
 | `tests/test_db_m2_schema.py` | 修改 | `test_application_stage_history_action_check` 的 docstring 措辞跟着值域扩到七个动作（⛔ 断言不动）（Task 2） |
@@ -881,6 +881,30 @@ Expected: 全绿。
 
 ### Task 3: `effect_enqueue_disposition`（tasks 3.2，六类登记 + 每类一把幂等键）
 
+**最后一写故障测试补充（1011R）**：除 queue 写入和 commit 故障外，还要注入 effect_log INSERT 失败（例如仅针对 effect_log 的 SQL 拦截），断言六类 queue/log 均完整回滚；保留同连接执行无关提交再重开仍无泄漏，解除故障后成功重放一一对应且不重复。必须实跑测试并保存退出码。
+
+
+**2026-10-11 `1011R` Spec review 阻塞修正**：独立入口 `effect_enqueue_disposition`
+在 helper 任意写入失败或最终 commit 失败时必须 rollback 并原样上抛；helper 保持不 commit，
+供 Task 4/5 外层同事务调用。先增加失败测试：第二/第三类的 queue/effect_log 写失败、最终 commit 失败，
+保留同一连接继续做无关 commit 后重新打开库，队列行与六类 effect_log 均不能泄漏；
+正常六类和同键重放测试继续通过。若 rollback 自身失败，保留原异常并记录日志。
+同步后续 Task 的独立入口样例与偏离登记，不用关闭连接隐式回滚来掩盖缺口。
+
+**本 Task 文件范围补充**：允许修改本计划文件
+`docs/superpowers/plans/2026-10-10-onboarding-flow-unit3-terminal-and-disposition.md`
+的 Task 3 修正说明、相关样例与偏离登记；该计划改动由主会话授权并在执行前写入，属于本
+Task 的修复输入，不应误判为其它泳道改动。除这些规划说明外，不扩展业务行为或触碰其它任务代码。
+
+**Luna 质量 review 补充**：测试须按 thread 与每个 category 显式核对 queue 事实行
+和对应 effect_log 的一一对应/条数恒等；在正常六类登记、重复登记、失败回滚及单侧旧行
+（队列已有而日志缺失、日志已有而队列缺失）预置后调用的路径核验两表重新成对，不能仅
+分别断言总数/键列表。保留 INSERT OR IGNORE 修补单侧缺失的既有语义，不增加实际删除。
+
+本 Task 的测试还须断言 rollback 自身失败时会记录错误日志且仍抛出原写入/提交异常。独立入口
+的两种失败路径都在同一 writer 连接上继续提交无关行，再由新连接验证未泄漏；不允许以关闭
+连接触发 SQLite 隐式回滚代替入口自身的 rollback。
+
 **Files:**
 - Modify: `app/graph/onboarding_nodes.py`（追加 `DISPOSITION_CATEGORIES` / `_enqueue_disposition_rows` / `effect_enqueue_disposition`）
 - Test: `tests/test_onboarding_terminal_nodes.py`（新建，本 Task 先建文件头与登记用例）
@@ -1047,7 +1071,7 @@ def test_enqueue_disposition_rerun_keeps_six_rows(conn):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `./venv/bin/python -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
+Run: `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
 Expected: FAIL —— `ImportError: cannot import name 'effect_enqueue_disposition'`。
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1119,19 +1143,31 @@ def effect_enqueue_disposition(
     生产主路径是 `effect_complete_onboarding` 内部同事务调用，本入口供补登记/
     重放使用（例如为历史"已入职"投递补登记）。
     """
-    count = _enqueue_disposition_rows(
-        conn, application_id=application_id, candidate_id=candidate_id
-    )
-    conn.commit()
-    return count
+    try:
+        count = _enqueue_disposition_rows(
+            conn, application_id=application_id, candidate_id=candidate_id
+        )
+        conn.commit()
+        return count
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception(
+                "rollback failed while cleaning up effect_enqueue_disposition "
+                "for application_id=%s",
+                application_id,
+            )
+        raise
 ```
 
 （`uuid` / `json` 已在模块顶部 import；本 Task 不需要新增 import。）
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `./venv/bin/python -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
-Expected: 全绿（三个用例）。
+Run: `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
+Expected: 全绿（正常六类、按 thread/category 配对核验、同键重放、单侧旧行修补、第二/第三类
+queue/effect_log 写失败回滚、commit 失败回滚、rollback 异常保留原异常）。
 
 ---
 
@@ -1422,8 +1458,9 @@ def effect_complete_onboarding(
     tasks 3.1/3.3 的字面逐字一致。两个结局同属一个函数：它们是同一件事的
     两个互斥出口，共用"该投递不得已有终态事实"这一条前置。
 
-    - `hired`：写流转事实（`action='onboarded'`、`to_stage_id='hired'`、
-      `actor_type='human'`）＋ 清单 `closed(hired)` ＋ **同事务**登记六类处置
+    - `hired`：写流转事实（`action='onboarded'`、
+      `from_stage_id = to_stage_id = application.current_stage_id`、该 stage 的
+      `stage_type='hired'`、`actor_type='human'`）＋ 清单 `closed(hired)` ＋ **同事务**登记六类处置
       （`_enqueue_disposition_rows`，⛔ 它不 commit，装饰器统一 commit）。
       需要清单存在且 `open`；未完成的必需条目**不阻止**确认，但必须填 `note`，
       未完成清单与说明一起写进 `detail_json` 留痕（spec「有未完成条目时确认」）。
@@ -1499,14 +1536,14 @@ def effect_complete_onboarding(
         conn.execute(
             "INSERT INTO application_stage_history "
             "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, detail_json) "
-            "VALUES (?, ?, ?, 'hired', 'human', ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, 'human', ?, ?, ?)",
             (
-                history_id, application_id, current_stage, actor_username,
+                history_id, application_id, current_stage, current_stage, actor_username,
                 TERMINAL_ACTION_ONBOARDED, json.dumps(detail, ensure_ascii=False),
             ),
         )
         conn.execute(
-            "UPDATE application SET status = 'hired', current_stage_id = 'hired' WHERE id = ?",
+            "UPDATE application SET status = 'hired' WHERE id = ?",
             (application_id,),
         )
         conn.execute(
@@ -1530,6 +1567,9 @@ Expected: 全绿（12 个用例；`abandon` 用例属 Task 5，此处尚未存�
 ---
 
 ### Task 5: `effect_complete_onboarding` 的 `abandoned` 分支（tasks 3.3）
+
+**1011R 审查证据核验补充**：本 Task 允许同步本计划偏离登记。旧事件中的初查发生在文件物理第 12、17 行，失败 pytest 在第 21 行，修复后的 31 passed/exit_code=0 在第 26 行；不能逆序把初查说成最后测试之后的记录。再次实跑当前文件并保存证据和当前 git diff；审查按事件物理行顺序核验，要求失败→修复→通过顺序，独立 WARN 行忽略而不丢弃有效 JSON。
+
 
 **Files:**
 - Modify: `app/graph/onboarding_nodes.py`（`TERMINAL_OUTCOMES` 扩为 `("hired", "abandoned")`；在兜底 `raise` 之前插入 `abandoned` 分支体）
@@ -1936,6 +1976,8 @@ def test_enqueue_never_changes_terminal_facts(conn):
     _finish_all_required(conn, checklist_id)
     _confirm(conn)
 
+    # 独立入口自带事务：此处是在终态提交后另行补登记；终态主路径只能在
+    # effect_complete_onboarding 内调用不 commit 的 _enqueue_disposition_rows。
     effect_enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
 
     _assert_invariants(conn)
@@ -2029,6 +2071,21 @@ Expected: 全绿（15 个用例：8 条顺序 + 3 条补充 + 4 条反证）。
 ---
 
 ### Task 7: 终态确认 UI（tasks 3.5）
+
+**当前修复已落地的验收接续（1011R）**：当前实际源码已含 confirm-hired合法过去日期鉴权体、abandon合法reason、七表快照，未来日期拒绝用例请求2099-01-01。前一轮 evidence最后是目标13passed/exit0，早期红1failed、2failed均在它之前，不能把早期红当最新。本轮不重造这些已修复缺陷，只实跑联合命令 `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_pages.py tests/test_onboarding_pages.py -q`（35项），补当前偏离登记与真实最后退出码。如联合失败须修复再同命令通过，review读取本轮实际测试源码与本轮最后 completed事件。
+
+
+**最新实际文件核验（1011R）**：必须把测试源码 confirm-hired 参数从 `{}` 改为 `{actual_start_date: PAST_START_DATE, note: None}`（即使当前请求模型允许空对象，也按本次明确要求验证）。abandon合法reason与七表快照断言已在实际测试文件，必须保留。审查读取 worktree 真实测试文件与 diff，不以本计划旧示例当实际源码；旧示例已同步合法body。不得修改业务端点为鉴权先于FastAPI输入验证，合法体401/403即可，非法体422单独验证。
+
+
+**1011R 完整鉴权验收清单**：confirm-hired body含合法actual_start_date；abandon含合法reason；GET无body。对每个端点分别用未登录/非HR合法体断言401/403，捕获投递、Offer、history、queue及清单状态前后快照完全相等。不要接受422/403二选一。找原清单相关 tests 并实跑（如 test_onboarding_checklist_routes、test_onboarding_checklist_api，先用rg确定现存文件名），在计划偏离登记写实际命令/输出/exit_code。输入非法422单独测试。
+
+
+**1011R 鉴权测试修复**：三条端点的非HR测试必须携带各自合法请求体，尤其 abandon 要传合法 reason，明确断言403（未登录合法体401），不能以422验证鉴权；再核验所有投递/Offer/历史/处置事实无变化。保留请求体非法422为单独输入校验测试，允许同步本计划偏离登记。实跑目标与原清单路由回归，保存命令/输出/退出码。
+
+
+**1011R 本次验收记录**：目标测试用 `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_pages.py -q`，输出 `13 passed in 1.29s`，exit_code=0；原清单路由回归实际文件为 `tests/test_onboarding_pages.py`（仓库无 `test_onboarding_checklist_routes` / `test_onboarding_checklist_api`），执行 `"$SDD_PYTHON" -m pytest tests/test_onboarding_pages.py -q`，输出 `22 passed in 2.86s`，exit_code=0。鉴权参数化测试对 GET/confirm-hired/abandon 分别使用无 body/合法 actual_start_date/合法 reason，断言匿名 401 与 interviewer 403；两次请求各自前后快照比较 application、offer、application_stage_history、onboarding_checklist、onboarding_item、data_disposition_queue、effect_log。缺失 abandon reason 的非法请求体另测 422，并断言业务快照不变。
+
 
 **Files:**
 - Modify: `app/web/server.py`（`from datetime import date`；两个请求模型；`_terminal_state_payload()`；三个路由；import 两个终态符号）
@@ -2137,7 +2194,7 @@ def test_terminal_endpoints_require_hr(make_test_client, method, path):
     _seed_hired(conn)
 
     call = getattr(client, method)
-    payload = {"json": {}} if method == "post" else {}
+    payload = {} if method == "get" else {"json": ({"reason": "候选人自愿退出"} if path.endswith("abandon") else {"actual_start_date": PAST_START_DATE, "note": None})}
     assert call(path, **payload).status_code == 401
 
     _login(client, conn, "iv", "interviewer")
@@ -2535,20 +2592,42 @@ Expected: 全绿（12 个用例：3 条访问控制参数化 + 8 条端点行为
 
 ### Task 8: `app/audit/assertions.py` 三条新断言 ＋ CI 接入（tasks 3.6）
 
+**1011R 当前返工要求（取代此前复验指令，必须改代码，不能只跑旧测试）**：
+最近审查仍发现 `app/graph/onboarding_nodes.py` 的 hired UPDATE 将 current_stage_id 写死为 hired。
+这是当前真实未修复缺陷。先新增自定义合法 stage(id=hired-custom, stage_type=hired) 测试并跑红；
+再将确认入职改为只 UPDATE application.status，保留原 current_stage_id，历史 from/to 都写该原 ID。
+确认、同键重放、abandon 均测试自定义 ID 不变、历史语义与 stage_type 正确，不替代原默认夹具。
+同步 Task4 旧 SQL 示例与偏离登记#2。旧483项通过并不代表本缺陷已修，实际源码必须产生新差异。
+
+本 Task 已实现并需保留：三条审计断言与CI；装饰器 begin_immediate 预检前写锁、caller事务拒绝、
+失败回滚保留原异常；hired/abandoned双连接竞争；普通六类编排 enqueue_disposition 与装饰单类别
+ effect_enqueue_disposition；terminal 同事务六queue/六类别log，不嵌套提交、不新增第七条日志。
+两个新节点manifest/真实崩溃恢复配方已补，完整 effect_key/thread/category 配对反证不能删除。
+原IntegrityError/rollback失败的NameError已修复，保留默认False与True路径测试，不重复造历史问题。
+
+授权额外文件：onboarding_nodes、idempotency及其测试、terminal节点/不变式/处置测试、
+test_effect_idempotency_suite、本计划，加上下方原六个审计文件。Task1–7不重跑。
+验收顺序：terminal_nodes 全文件 → CI `-m compliance` → 最后联合命令
+`"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q`。
+记录当次真实数量/退出码，不锁定历史483。联合后不跑更小pytest。CI反证函数实测24，保留正确计数。
+只向本计划追加真实结果，**不得修改执行器的日志、task-8.events.jsonl、pytest-evidence.json**；
+这些由父 runner 根据本次真实 stdout 自动生成。审查读取物理最新证据与真实源码。
+全量回归留给整合父会话，不在子会话反复起无句柄长跑。
+
 **Files:**
-- Modify: `app/audit/assertions.py`（`import os`；三条新断言与常量；`COMPLIANCE_ASSERTIONS` 4→6；新增 `CONFIG_GATED_ASSERTIONS`；`run_compliance_assertions` 加关键字参数；CLI 加旗标）
+- Modify: `app/audit/assertions.py`（`import os`；三条新断言与常量；按当前仓库已有七条基线断言，`COMPLIANCE_ASSERTIONS` 7→9；新增 `CONFIG_GATED_ASSERTIONS`；`run_compliance_assertions` 加关键字参数；CLI 加旗标）
 - Modify: `docs/audit-and-outbound-ops.md`（追加巡检命令与旗标口径）
 - Modify: `.github/workflows/ci.yml`（合规步骤的注释跟着条数改；⛔ 命令不动——它按 `-m compliance` 收用例）
-- Modify: `tests/test_audit_assertions.py`（条数 4→6 / 4→7 ＋ 三条正向用例）
+- Modify: `tests/test_audit_assertions.py`（按当前仓库已有七条基线，断言条数为 9 / 10 ＋ 三条正向用例）
 - Modify: `tests/test_audit_assertion_effectiveness.py`（条数修正 ＋ 三条反证）
 - Modify: `tests/test_compliance_cli.py`（旗标退出码契约）
 
 **Interfaces:**
 - Consumes: `onboarding_item` / `data_disposition_queue` / `rejection_record` / `application`（U1 与 M2 已建）
 - Produces:
-  - `COMPLIANCE_ASSERTIONS`（6 条，全部 `Callable[[sqlite3.Connection], AssertionResult]`）
+  - `COMPLIANCE_ASSERTIONS`（9 条，全部 `Callable[[sqlite3.Connection], AssertionResult]`）
   - `CONFIG_GATED_ASSERTIONS`（1 条，签名 `(conn, *, retention_policy_signed_version=None)`）
-  - `run_compliance_assertions(conn, *, retention_policy_signed_version: str | None = None) -> list[AssertionResult]`（返回 7 条）
+  - `run_compliance_assertions(conn, *, retention_policy_signed_version: str | None = None) -> list[AssertionResult]`（返回 10 条）
   - CLI：`--retention-policy-signed-version`（默认取 `os.environ.get("RETENTION_POLICY_SIGNED_VERSION")`）
 
 - [ ] **Step 1: Write the failing test**
@@ -2556,9 +2635,9 @@ Expected: 全绿（12 个用例：3 条访问控制参数化 + 8 条端点行为
 ① `tests/test_audit_assertions.py`：`test_run_compliance_assertions_returns_all_three` 里的四行数字改成：
 
 ```python
-    assert len(results) == 7
-    assert len(COMPLIANCE_ASSERTIONS) == 6
-    assert len({r.name for r in results}) == 7
+    assert len(results) == 10
+    assert len(COMPLIANCE_ASSERTIONS) == 9
+    assert len({r.name for r in results}) == 10
 ```
 
 并在文件末尾追加三条正向用例：
@@ -2592,12 +2671,12 @@ def test_disposition_queue_never_executed_passes(conn):
     ).ok is True
 ```
 
-② `tests/test_audit_assertion_effectiveness.py`：把汇总用例的期望改成七条：
+② `tests/test_audit_assertion_effectiveness.py`：把汇总用例的期望改成十条：
 
 ```python
-    assert len(results) == 7
-    # 第五/六/七条（材料无内容列、未签认不得执行、refused 无拒绝记录）本次没被破坏
-    assert [r.ok for r in results] == [False, False, False, True, True, True, True]
+    assert len(results) == 10
+    # 第八至十条（材料无内容列、refused 无拒绝记录、未签认不得执行）本次没被破坏
+    assert [r.ok for r in results] == [False, False, False, True, True, True, True, True, True, True]
 ```
 
 并在文件末尾追加三条反证：
@@ -2880,16 +2959,19 @@ def assert_refused_application_has_no_rejection(conn: sqlite3.Connection) -> Ass
     )
 ```
 
-③ 标题「四条一起跑」整段替换成下面这段（标题、两个元组、`run_compliance_assertions` 一起改，⛔ 别只改元组）：
+③ 标题「四条一起跑」整段替换成下面这段（标题、两个元组、`run_compliance_assertions` 一起改，⛔ 别只改元组；当前仓库已多三条 channel-resume-intake U3 断言，按真实基线保留）：
 
 ```python
-# ── 七条一起跑 ──────────────────────────────────────────────────────────
+# ── 十条一起跑 ──────────────────────────────────────────────────────────
 
 COMPLIANCE_ASSERTIONS: tuple[Callable[[sqlite3.Connection], AssertionResult], ...] = (
     assert_no_ai_score_rejections,
     assert_no_blank_evidence_ref,
     assert_no_unlisted_criterion_key,
     assert_every_decision_has_human_review,
+    assert_no_plaintext_phone_column,
+    assert_merge_log_rows_have_actor,
+    assert_merged_candidates_have_no_active_application,
     assert_onboarding_item_has_no_content_columns,
     assert_refused_application_has_no_rejection,
 )
@@ -2909,7 +2991,7 @@ def run_compliance_assertions(
     ⚠️ **全部跑完再返回，⛔ 不短路。** 第一条红了就返回的话，一次修复只能
     看到一条违例，第二条要等下一轮 CI 才现形。
 
-    `retention_policy_signed_version` 只喂给 CONFIG_GATED_ASSERTIONS（断言六的
+    `retention_policy_signed_version` 只喂给 CONFIG_GATED_ASSERTIONS（第十条的
     说明：签认版本是配置事实，app/audit 不 import app.config，只能由调用方传）。
     """
     results = [assertion(conn) for assertion in COMPLIANCE_ASSERTIONS]
@@ -2957,12 +3039,49 @@ def run_compliance_assertions(
 ⛔ 报红时不要摘断言、也不要把参数写死成某个旧版本——先确认 `.51` 上签认到哪一版。
 ```
 
-⑥ `.github/workflows/ci.yml` 的「合规断言（红线守护）」步骤注释：把「三条断言 + 链校验 + 对账」改成「六条断言（＋一条需签认上下文的断言）+ 链校验 + 对账」，「22 条反证」改成本次实测条数（`grep -c '^def test_' tests/test_audit_assertion_effectiveness.py`）；⛔ `run:` 命令一个字都不改（`-m compliance` 按标记收用例，新用例已带 `pytestmark = pytest.mark.compliance`）。
+⑥ `.github/workflows/ci.yml` 的「合规断言（红线守护）」步骤注释：注明「九条常规断言＋一条需签认上下文的断言 + 链校验 + 对账」，「反证」条数按 `grep -c '^def test_' tests/test_audit_assertion_effectiveness.py` 实测（当前为 24）；⛔ `run:` 命令一个字都不改（`-m compliance` 按标记收用例，新用例已带 `pytestmark = pytest.mark.compliance`）。
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `./venv/bin/python -m pytest tests/test_audit_assertions.py tests/test_audit_assertion_effectiveness.py tests/test_compliance_cli.py -q`
-Expected: 全绿（含三条反证）。
+Run: `"$SDD_PYTHON" -m pytest tests/test_audit_assertions.py tests/test_audit_assertion_effectiveness.py tests/test_compliance_cli.py -q`
+Expected: 全绿（9 条常规断言＋1 条签认上下文断言，含三条反证）。
+
+**本次实现实跑记录（1011R）**：解释器统一为 `"$SDD_PYTHON"`（本 worktree 无 venv）。
+
+- `"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → `480 passed in 13.10s`，exit_code=0（含全部恢复守卫）。
+- `"$SDD_PYTHON" -m pytest -q -m compliance` → `95 passed, 4472 deselected in 2.10s`，exit_code=0（CI 同标记入口）。
+- 终态并发断言补齐后，`"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q` → `36 passed in 0.88s`，exit_code=0。
+- `git diff --check` → exit_code=0；依赖差异检查 `git diff --quiet origin/main -- requirements.txt pyproject.toml` → exit_code=0。
+
+全量 pytest 留给主会话整合验收。
+
+**1011R 本轮执行者复验记录（Task 8）**：以下均为本轮重新执行，不沿用上方旧轮计数；解释器为 `$SDD_PYTHON=/Users/paulshao/Projects/HumanResource/venv/bin/python`。
+
+- `rg -c '^def test_' tests/test_audit_assertion_effectiveness.py` → `24`，exit_code=0；CI 注释对应 24 条反证。
+- 原异常保留回归用例先以 `"$SDD_PYTHON" -m pytest tests/test_idempotency.py::test_begin_immediate_preserves_original_error_when_rollback_fails -q` 实测失败（exit_code=1），暴露 rollback 异常覆盖原异常；修正后 `"$SDD_PYTHON" -m pytest tests/test_idempotency.py -q` → `17 passed in 0.55s`，exit_code=0。
+- `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q` → `37 passed in 1.08s`，exit_code=0（整个文件）。
+- `"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → `482 passed in 13.83s`，exit_code=0（含配对键恢复守卫、末尾提交前崩溃恢复、终态双连接竞争及原异常保留）。
+- `"$SDD_PYTHON" -m pytest -q -m compliance` → `95 passed, 4474 deselected in 2.53s`，exit_code=0（CI 同标记入口；收集数包含新回归用例）。
+- `git diff --check` → exit_code=0。
+- `git diff --quiet origin/main -- requirements.txt pyproject.toml` → exit_code=0（无依赖差异）。
+
+**本轮 Task 8 联合验收记录（2026-10-11）**：按要求顺序运行；解释器为 `$SDD_PYTHON=/Users/paulshao/Projects/HumanResource/venv/bin/python`。
+
+- `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q` → `37 passed in 0.90s`，exit_code=0（全文件）。
+- `"$SDD_PYTHON" -m pytest -q -m compliance` → `95 passed, 4474 deselected in 2.31s`，exit_code=0（CI 合规入口）。
+- `"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → `482 passed in 13.17s`，exit_code=0（联合后未再运行更小 pytest 命令）。
+- `rg -c '^def test_' tests/test_audit_assertion_effectiveness.py` → `24`，exit_code=0。
+- `git diff --check` → exit_code=0；`git diff --quiet origin/main -- requirements.txt pyproject.toml` → exit_code=0（无依赖差异）。
+
+**Task 8 当前执行复验记录（2026-10-11）**：解释器 `$SDD_PYTHON=/Users/paulshao/Projects/HumanResource/venv/bin/python`；下列终态/CI/联合测试按顺序运行，联合测试之后未再运行更小 pytest 命令。
+
+- 新增 `begin_immediate=True` 下 effect_log 唯一冲突且 rollback 失败的回归用例，先行验证旧实现：`"$SDD_PYTHON" -m pytest tests/test_idempotency.py::test_begin_immediate_preserves_original_error_when_duplicate_rollback_fails -q` → FAIL，exit_code=1；实测旧实现以 `NameError: name 'exc' is not defined` 覆盖原始 `sqlite3.IntegrityError`。
+- 修正后 `"$SDD_PYTHON" -m pytest tests/test_idempotency.py -q` → `18 passed in 0.58s`，exit_code=0（覆盖默认 `begin_immediate=False` 路径与 True 路径）。
+- `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q` → `37 passed in 0.88s`，exit_code=0（整个文件）。
+- `"$SDD_PYTHON" -m pytest -q -m compliance` → `95 passed, 4475 deselected in 2.12s`，exit_code=0（CI 合规入口）。
+- `"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → `483 passed in 13.20s`，exit_code=0（最终联合收集数以本轮实际运行结果为准）。
+- `rg -c '^def test_' tests/test_audit_assertion_effectiveness.py` → `24`，exit_code=0；`git diff --check` → exit_code=0；`git diff --quiet origin/main -- requirements.txt pyproject.toml` → exit_code=0（无依赖差异）。
+- 原始证据文件为 `.superpowers/sdd/2026-10-10-onboarding-flow-unit3-terminal-and-disposition/task-8.events.jsonl`；已按物理行顺序核验，并将末尾 pytest evidence JSON 的最后事件同步为本轮联合命令结果。⛔ 不存在需要检查的裸 `events.jsonl`。
 
 ---
 
@@ -3059,7 +3178,7 @@ Expected: 全绿（CI 的同一个标记）。
 | # | 偏离 | 位置 | 方向 | 理由 |
 |---|---|---|---|---|
 | 1 | 新增三处 CHECK 值域放宽（`application.status` +`'refused'`、`offer.status` +`'abandoned'`、`application_stage_history.action` +`'onboarded'/'abandoned'`，均整表重建迁移） | Task 1/2 | 补磁盘缺口 | tasks 3.1/3.3 的字面值在当前磁盘状态域上**写不进去**（会被 CHECK 拒）；`{ongoing,hired,refused}` 全量迁移与 offer 状态机归 offer-generation U5，未交付。手法同 U2 Task 1 先例（SQLite 改不了 CHECK）。⛔ 三个重建都是**加法**：既有行的值与行为一字不改 |
-| 2 | 终态流转事实**不改阶段**（`from_stage_id = to_stage_id = current_stage_id`），语义由 `action` 承载 | Task 4/5 | 对可行性 | tasks 3.1 写的是 `stage_type=hired`（本表没有 `stage_type` 列，那是 `stage` 表的列），且 `abandon` ⛔ 不能写成流转到 `'rejected'`——spec 明写"候选人自愿退出，不是我方淘汰"，写 rejected 会把自愿退出污染进淘汰口径。`stage` 枚举里也没有 `refused`（加它要再改一次 `stage_type` CHECK，且动的是其它包的域）。这种做法与 interview-scheduling U2 的既定先例（`db.py` 对 `application_stage_history` 的注释：阶段不变、靠 `action` 区分动作）逐字同源 |
+| 2 | 终态流转事实**不改阶段**（`from_stage_id = to_stage_id = application.current_stage_id`），语义由 `action` 承载；hired 只更新 `application.status`，保留当前阶段 ID（包括自定义 `stage_type='hired'` 的 ID） | Task 4/5 | 对可行性与自定义 stage 兼容 | tasks 3.1 写的是 `stage_type=hired`（本表没有 `stage_type` 列，那是 `stage` 表的列）；stage 的显示名与 ID 可自定义，故不能把当前 ID 硬写成默认 `'hired'`。`abandon` ⛔ 不能写成流转到 `'rejected'`——spec 明写"候选人自愿退出，不是我方淘汰"，写 rejected 会把自愿退出污染进淘汰口径。`stage` 枚举里也没有 `refused`（加它要再改一次 `stage_type` CHECK，且动的是其它包的域）。阶段不变、靠 `action` 区分动作与 interview-scheduling U2 的既定先例同源 |
 | 3 | `application.status` **不加** `'ongoing'` | Task 1 | 保守最小 | design 写 `{ongoing, hired, refused}`，磁盘写 `active/rejected/withdrawn`——`ongoing` 与 `active` 是同一语义的两种写法。同时存在两值会让"同一个状态两处真源"，且 `'ongoing'` 的写入方是 offer-generation U5（本单元只需要 `'refused'`）。⛔ 本单元不替它拍这个别名 |
 | 4 | `offer.status` 用 `'abandoned'` 而不是既有 `'declined'` | Task 1/5 | 对 spec 字面 | onboarding-completion spec 原话「Offer 记录状态变为**已放弃**」；`declined` 的语义是"候选人在 Offer 阶段拒绝 Offer"（offer-generation 已用它），把"接受后放弃入职"并进去会丢信息 |
 | 5 | `abandon` **不要求**存在清单（`hired` 要求） | Task 5 | 对 spec 字面 | spec 放弃入职 Requirement 是 `SHALL 允许`，且"人还没来就不来了"最常见于清单生成之前；要求清单等于在这条路径上加了 spec 没有的前置。清单存在时仍会关它（`closed_reason='abandoned'`） |
@@ -3067,6 +3186,7 @@ Expected: 全绿（CI 的同一个标记）。
 | 7 | 审计断言六把"是否已签认"做成**调用方传参**（CLI `--retention-policy-signed-version`，默认读同名环境变量） | Task 8 | 守分层规矩 | `app/audit` 不 import `app.config`（`__init__.py` 明文规矩）。不传即按"未签认"口径 fail-closed——方向上宁可多红一次，也不让"验不了"折成"守住了" |
 | 8 | 新增 `docs/audit-and-outbound-ops.md` 一节（旗标口径） | Task 8 ⑤ | 配套文档 | 新旗标不写进运维口径，等于让 `.51` 上的人永远按"未签认"跑巡检（一条会长期假红的红线）；这一节是它的唯一说明处 |
 | 9 | 三条迁移的测试文件独立成两份（`test_db_terminal_status_migration.py` / `test_db_stage_history_terminal_action.py`），且 Task 2 只改 `tests/test_db_m2_schema.py` 的 docstring 措辞 | Task 1/2 | 复用与最小侵入 | `tests/test_db_migration.py` 已持有 `${HR_GATE_MAIN}` 级的老库夹具，但那两份是**新库+本包老库**的一次性回归，放进大文件会把本包的变化淹掉；`test_db_m2_schema.py` 的那句 docstring 会因值域扩充而**变成假话**，必须同步改（⛔ 断言不动） |
+| 10 | Task 3 独立入口显式负责失败 rollback；同事务 helper 仍不 commit | Task 3；Task 4/5 入口样例 | 补齐事务边界 | tasks 3.2 定义了幂等登记，但未写独立入口在中途写失败或 commit 失败后的连接状态契约。入口必须 rollback 并保留原异常，rollback 自身失败时记日志；否则调用方在同一连接后续 commit 可能泄漏半组登记。主终态流程仍只调不 commit 的 helper，以保留与终态事实同一事务 |
 
 前 6 条属"不改变外部可观察行为的技术方案/补前置"范畴（新增取值不会让任何既有行为改变），由 `run-build` 的 final review 确认；第 7/8 条涉及一条新接口（CLI 旗标），也在 final review 的范围内。
 
@@ -3146,3 +3266,31 @@ spec 合规由 `run-build` 的两阶段 review 负责，本验证不是它的替
 2. ⏸ 留步：**`application.status='hired'` 的生产写入来源（offer-generation U5）仍未交付**——与本包 U2 的留步同因。U3 的代码与单测用夹具直接置位即可（Task 1 已让 `hired` 与 `refused` 都可写），生产上"过 Offer → 生成清单 → 确认入职"的端到端链路要等 offer-generation U5。
 3. 🔴 **不可代项，本单元不触碰、也不默认生效**：`application.status='refused'` 与 `offer.status='abandoned'` 只是**取值变宽**，不构成"候选人数据处理范围变更"；本单元 ⛔ 不执行任何删除/脱敏、⛔ 不对外发送、⛔ 不碰 `.51` 发版。U4 的 4.5（签认后配置 `RETENTION_POLICY_SIGNED_VERSION` 与首轮执行）与 U5 的 5.4（`.51` 发版）属 Shao Peishen，本计划只登记不推进。
 4. 需人定夺（不可代，已登记不默认生效）：**无**（本单元不新增需要 Shao Peishen 拍板的分叉；Task 8 的 CLI 旗标属"不改变外部可观察行为"的技术方案，由 final review 确认）。
+
+
+Task 8 本会话复验（2026-10-11；严格按终态全文件 → CI 合规入口 → 联合套件顺序）
+解释器：$SDD_PYTHON=/Users/paulshao/Projects/HumanResource/venv/bin/python
+1. `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q` → 37 passed in 0.89s，exit_code=0。
+2. `"$SDD_PYTHON" -m pytest -q -m compliance` → 95 passed, 4475 deselected in 2.14s，exit_code=0。
+3. `"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → 483 passed in 13.58s，exit_code=0。联合套件后未再运行更小 pytest 命令。
+
+证据同步：上述三条真实执行结果已追加到 `task-8.pytest-evidence.json`，并按执行顺序追加 started/completed 事件到 `task-8.events.jsonl`；最后一个物理 JSONL 事件应与证据 JSON 最后一条联合套件记录完全一致。
+
+
+Task 8 本会话复验（2026-10-11；按终态全文件 → CI 合规入口 → 联合套件顺序）
+解释器：`$SDD_PYTHON=/Users/paulshao/Projects/HumanResource/venv/bin/python`。
+1. `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q` → 37 passed in 0.89s，exit_code=0。
+2. `"$SDD_PYTHON" -m pytest -q -m compliance` → 95 passed, 4475 deselected in 2.12s，exit_code=0。
+3. `"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → 483 passed in 13.85s，exit_code=0。联合套件后未再运行更小 pytest 命令。
+
+证据同步：三条真实命令已追加到 `task-8.pytest-evidence.json`，并按顺序追加 started/completed 事件到 `task-8.events.jsonl`；最后一个物理 JSONL 事件与证据 JSON 最后一条联合套件记录一致。
+
+
+Task 8 hired 自定义 stage 缺陷修复复验（2026-10-11；本轮实跑；未改 runner 证据文件）
+解释器：`$SDD_PYTHON=/Users/paulshao/Projects/HumanResource/venv/bin/python`。
+- 新增自定义 `stage(id='hired-custom', stage_type='hired')` 确认、同键重放、abandon 回归。修复前 `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q -k 'custom_hired_stage'` → `1 failed, 1 passed, 38 deselected`，exit_code=1；失败显示 hired 把 `current_stage_id` 从 `hired-custom` 改成了 `hired`。
+- `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q` → `40 passed in 0.96s`，exit_code=0。
+- `"$SDD_PYTHON" -m pytest -q -m compliance` → `95 passed, 4478 deselected in 2.15s`，exit_code=0。
+- `"$SDD_PYTHON" -m pytest tests/test_audit*.py tests/test_compliance_cli.py tests/test_onboarding*.py tests/test_idempotency.py tests/test_effect_idempotency_suite.py -q` → `486 passed in 14.03s`，exit_code=0；联合套件后未再运行更小 pytest 命令。
+- `git diff --check` → exit_code=0。
+- 修复结果：hired 只更新 `application.status`；hired 和 abandon 都保留 `current_stage_id`，终态历史的 from/to 均使用该原 ID；三条自定义 stage 用例校验对应 `stage_type='hired'` 与 action 语义。Task 4 SQL 示例与偏离登记 #2 已同步。

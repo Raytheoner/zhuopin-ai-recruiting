@@ -29,6 +29,9 @@ STAGE_HISTORY_ACTIONS: tuple[str, ...] = (
     # channel-resume-intake U3 tasks 3.2：HR 事后改正来源时**追加**一条事实
     # （source 记新值），⛔ 绝不更新初始记录（design D5：本表是只追加的事实表）。
     "source_corrected",
+    # onboarding-flow U3：同一阶段上的入职确认 / 候选人自愿放弃。
+    "onboarded",
+    "abandoned",
 )
 
 
@@ -522,6 +525,8 @@ INSERT OR IGNORE INTO stage (id, name, stage_type) VALUES ('hired', '已入职',
 -- 写 'pending_reject'，投递进入待确认清单但**不产生拒绝记录、阶段不变**
 -- （hard-requirement-screening spec「淘汰只由人确认并可申诉」的前置状态）。
 -- 现在没有写入方，必须可空——与 human_review.batch_id 同一手法。
+-- 'refused' 由 onboarding-flow U3 加入（候选人放弃入职的终态，tasks 3.3）。
+-- design 的 'ongoing' 与既有 'active' 同义，只以 'active' 表达，不并存两值。
 CREATE TABLE IF NOT EXISTS application (
     id TEXT PRIMARY KEY NOT NULL,
     candidate_id TEXT NOT NULL REFERENCES candidate(id),
@@ -529,7 +534,7 @@ CREATE TABLE IF NOT EXISTS application (
     resume_id TEXT NOT NULL REFERENCES resume(id),
     current_stage_id TEXT NOT NULL REFERENCES stage(id),
     status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'rejected', 'withdrawn', 'hired')),
+        CHECK (status IN ('active', 'rejected', 'withdrawn', 'hired', 'refused')),
     kanban_state TEXT CHECK (kanban_state IS NULL OR kanban_state IN ('pending_reject')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -570,7 +575,7 @@ CREATE TABLE IF NOT EXISTS application_stage_history (
     action TEXT CHECK (
         action IS NULL OR action IN (
             'scheduled', 'rescheduled', 'cancelled', 'completed', 'no_show',
-            'closed_by_merge', 'source_corrected'
+            'closed_by_merge', 'source_corrected', 'onboarded', 'abandoned'
         )
     ),
     detail_json TEXT,
@@ -1463,7 +1468,7 @@ CREATE TABLE IF NOT EXISTS offer (
     note TEXT,
     status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (
         status IN ('pending_approval', 'needs_revision', 'approved', 'exported',
-                   'accepted', 'declined', 'negotiating')
+                   'accepted', 'declined', 'negotiating', 'abandoned')
     ),
     approval_round INTEGER NOT NULL DEFAULT 1,
     created_by TEXT NOT NULL,
@@ -1960,18 +1965,18 @@ def _rebuild_hr_account_role_check(conn: sqlite3.Connection) -> None:
 _APPLICATION_STATUS_CHECK_RE = re.compile(r"\bstatus\b[^,]*?\bCHECK\b", re.IGNORECASE)
 
 
-def _application_status_check_allows_hired(conn: sqlite3.Connection) -> bool:
-    """application.status 上是否「没有会拒掉 'hired' 的 CHECK」——即无需整表重建。
+def _application_status_check_allows(
+    conn: sqlite3.Connection, *, values: tuple[str, ...]
+) -> bool:
+    """application.status 上是否「没有会拒掉 values 任一取值的 CHECK」——即无需整表重建。
 
     SQLite 改不了 CHECK，本判断看 sqlite_master.sql 原文，手法与
     _stage_type_check_complete / _role_check_allows_dept_manager 一致。除
-    「CHECK 已含 'hired'」外，下面几种形态同样不需要重建，必须一并放行，否则
+    「CHECK 已含全部取值」外，下面几种形态同样不需要重建，必须一并放行，否则
     重建会当场炸（tests/test_db_migration.py 的 _legacy_db 夹具实测踩到过）：
 
-    - application 表不存在：没有可放宽的约束（调用点在 SCHEMA 之后，新库这里
-      恒不成立）；
-    - 表里没有 status 列：M2 U1 之前形态的老库就是这样，重建的
-      `INSERT ... SELECT ... status ...` 会撞 `no such column: status`；
+    - application 表不存在（调用点在 SCHEMA 之后，新库这里恒不成立）；
+    - 表里没有 status 列：M2 U1 之前形态的老库就是这样；
     - status 列上没有 CHECK：没有任何枚举被拒，重建是空转。
     """
     row = conn.execute(
@@ -1980,7 +1985,7 @@ def _application_status_check_allows_hired(conn: sqlite3.Connection) -> bool:
     if row is None or not row[0]:
         return True
     ddl = row[0]
-    if "'hired'" in ddl:
+    if all(f"'{value}'" in ddl for value in values):
         return True
     has_status_column = any(
         info[1] == "status" for info in conn.execute("PRAGMA table_info(application)")
@@ -1991,11 +1996,12 @@ def _application_status_check_allows_hired(conn: sqlite3.Connection) -> bool:
 
 
 def _rebuild_application_status_check(conn: sqlite3.Connection) -> None:
-    """把 application.status 的 CHECK 从三值放宽到四值（+hired）。
+    """把 application.status 的 CHECK 放宽到五值（hired + refused）。
 
-    只放宽到含 'hired'——U2 实例化前置需要它，且 design.md 风险表明写「U2 用夹具
-    直接置 application.status=hired」。⛔ 不加 ongoing/refused：那两值连同三值语义
-    迁移一起，归 offer-generation U5（effect_apply_offer_outcome）。
+    U2（Task 1）先放宽到含 'hired'：实例化前置需要它。U3（tasks 3.3）再补
+    'refused'：放弃入职把 application.status 置为 refused。⛔ 'ongoing' 不在
+    这次放宽里——它与磁盘既有 'active' 是同一语义的两种写法，并存两值会让
+    "同一个状态两处真源"，登记为偏离（见计划「偏离登记」3）。
 
     application 被 application_stage_history / rejection_record / offer /
     onboarding_checklist / onboarding_access_log / data_disposition_queue 外键引用，
@@ -2004,7 +2010,7 @@ def _rebuild_application_status_check(conn: sqlite3.Connection) -> None:
     随 DROP TABLE 一起消失，必须原样重建。PRAGMA 在事务内是 no-op，try 内 commit、
     except 里 rollback 之后，finally 再重开（同 _rebuild_hr_account_role_check）。
     """
-    if _application_status_check_allows_hired(conn):
+    if _application_status_check_allows(conn, values=("hired", "refused")):
         return
     conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")
@@ -2019,7 +2025,7 @@ def _rebuild_application_status_check(conn: sqlite3.Connection) -> None:
                 resume_id TEXT NOT NULL REFERENCES resume(id),
                 current_stage_id TEXT NOT NULL REFERENCES stage(id),
                 status TEXT NOT NULL DEFAULT 'active'
-                    CHECK (status IN ('active', 'rejected', 'withdrawn', 'hired')),
+                    CHECK (status IN ('active', 'rejected', 'withdrawn', 'hired', 'refused')),
                 kanban_state TEXT CHECK (kanban_state IS NULL OR kanban_state IN ('pending_reject')),
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -2045,6 +2051,83 @@ def _rebuild_application_status_check(conn: sqlite3.Connection) -> None:
     violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
         raise sqlite3.IntegrityError(f"application 重建后外键不一致: {violations}")
+
+
+_OFFER_STATUS_CHECK_RE = re.compile(r"\bstatus\b[^,]*?\bCHECK\b", re.IGNORECASE)
+
+
+def _offer_status_check_allows_abandoned(conn: sqlite3.Connection) -> bool:
+    """offer.status 上是否已放行 'abandoned'（无需重建）。三档放行形态同 application。"""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='offer'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return True
+    ddl = row[0]
+    if "'abandoned'" in ddl:
+        return True
+    has_status_column = any(
+        info[1] == "status" for info in conn.execute("PRAGMA table_info(offer)")
+    )
+    if not has_status_column:
+        return True
+    return not _OFFER_STATUS_CHECK_RE.search(ddl)
+
+
+def _rebuild_offer_status_check(conn: sqlite3.Connection) -> None:
+    """把 offer.status 的 CHECK 放宽到八值（+abandoned，tasks 3.3）。
+
+    offer 被 offer_approval.offer_id 外键引用，重建期间 PRAGMA foreign_keys=OFF
+    并在完成后 foreign_key_check 复验。offer 上没有额外索引（UNIQUE
+    application_id 写在表内，随重建保留）；idx_offer_approval_offer 建在
+    offer_approval 上，不受影响。
+    """
+    if _offer_status_check_allows_abandoned(conn):
+        return
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            """
+            CREATE TABLE offer_new (
+                id TEXT PRIMARY KEY NOT NULL,
+                application_id TEXT NOT NULL UNIQUE REFERENCES application(id),
+                job_id TEXT NOT NULL REFERENCES job(id),
+                department TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                report_to TEXT NOT NULL,
+                note TEXT,
+                status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (
+                    status IN ('pending_approval', 'needs_revision', 'approved', 'exported',
+                               'accepted', 'declined', 'negotiating', 'abandoned')
+                ),
+                approval_round INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_by TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO offer_new "
+            "(id, application_id, job_id, department, start_date, report_to, note, status, "
+            " approval_round, created_by, created_at, updated_by, updated_at) "
+            "SELECT id, application_id, job_id, department, start_date, report_to, note, status, "
+            "       approval_round, created_by, created_at, updated_by, updated_at FROM offer"
+        )
+        conn.execute("DROP TABLE offer")
+        conn.execute("ALTER TABLE offer_new RENAME TO offer")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(f"offer 重建后外键不一致: {violations}")
 
 
 def _stage_history_action_check_is_current(conn: sqlite3.Connection) -> bool:
@@ -2088,7 +2171,8 @@ def _rebuild_application_stage_history_action_check(conn: sqlite3.Connection) ->
     先跑过 interview-scheduling U2（1001R）的库：action 列在、CHECK 只放行五值，
     而 _ADDED_COLUMNS 逐列判重会静默跳过这一列。channel-resume-intake U2 Task 5 的
     _write_closed_by_merge 要写第六个值、U3 tasks 3.2 的来源改正要写第七个值
-    （source_corrected）——不重建的话两条写入在服务器上当场 IntegrityError（与
+    （source_corrected），onboarding-flow U3 增加 onboarded / abandoned——
+    不重建的话新增动作写入会当场 IntegrityError（与
     hr_account.role 缺 dept_manager 同一故障形态，同样是
     _rebuild_hr_account_role_check 的先例）。
 
@@ -2175,10 +2259,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 新库 SCHEMA 本就是三值 ⇒ 空转。
     _rebuild_hr_account_role_check(conn)
     _rebuild_application_status_check(conn)
+    _rebuild_offer_status_check(conn)
     # 同类放宽，第三步：action 的五值 CHECK（1001R）要能承载本包的 closed_by_merge
-    # 与 channel-resume-intake U3 的 source_corrected。⚠️ 必须排在
+    # 与 channel-resume-intake U3 的 source_corrected，以及 onboarding-flow U3 的
+    # onboarded / abandoned。⚠️ 必须排在
     # apply_column_migrations 之后——老库里 action/source 列可能是刚刚才 ALTER
-    # 出来的，重建要连它们一起搬。新库 SCHEMA 本就是七值 ⇒ 空转；没跑过 1001R 的老库
+    # 出来的，重建要连它们一起搬。新库 SCHEMA 本就是九值 ⇒ 空转；没跑过 1001R 的老库
     # 由加列路径一步到位 ⇒ 空转。
     _rebuild_application_stage_history_action_check(conn)
     _migrate_stage_for_interview(conn)

@@ -110,8 +110,11 @@ from app.graph.onboarding_nodes import (
     ChecklistTemplateMissing,
     ItemOperatorForbidden,
     ItemUpdateRejected,
+    OnboardingTerminalRejected,
+    effect_complete_onboarding,
     effect_instantiate_checklist,
     effect_update_item,
+    terminal_history_rows,
 )
 from app.graph.resume_nodes import effect_persist_parse, queue_reapplication_screening, record_resume_access
 from app.graph.scheduling_nodes import (
@@ -422,6 +425,17 @@ class OnboardingTemplateItem(BaseModel):
 
 class OnboardingTemplateUpdateRequest(BaseModel):
     items: list[OnboardingTemplateItem]
+
+
+class OnboardingConfirmHiredRequest(BaseModel):
+    """终态确认请求；结局自身决定幂等键，因此不接收 request_id。"""
+
+    actual_start_date: str | None = None
+    note: str | None = None
+
+
+class OnboardingAbandonRequest(BaseModel):
+    reason: str
 
 
 class OnboardingInstantiateRequest(BaseModel):
@@ -3143,6 +3157,94 @@ def create_app(
             "items": json.loads(new_items_json),
             "unchanged": False,
         }
+
+    def _terminal_state_payload(application_id: str) -> dict:
+        """终态状态（清单页用它渲染待确认状态与按钮可用性）。只读。"""
+        app_row = conn.execute(
+            "SELECT status FROM application WHERE id = ?", (application_id,)
+        ).fetchone()
+        if app_row is None:
+            raise HTTPException(status_code=404, detail="投递不存在")
+        offer_row = conn.execute(
+            "SELECT status, start_date FROM offer WHERE application_id = ?",
+            (application_id,),
+        ).fetchone()
+        checklist_row = conn.execute(
+            "SELECT id, status, closed_reason, start_date FROM onboarding_checklist "
+            "WHERE application_id = ?",
+            (application_id,),
+        ).fetchone()
+        terminal = terminal_history_rows(conn, application_id)
+        outcome = terminal[0][1] if terminal else None
+        today = date.today().isoformat()
+        start_date = checklist_row[3] if checklist_row else (offer_row[1] if offer_row else None)
+        offer_accepted = offer_row is not None and offer_row[0] == "accepted"
+        return {
+            "application_id": application_id,
+            "application_status": app_row[0],
+            "offer_status": offer_row[0] if offer_row else None,
+            "checklist_status": checklist_row[1] if checklist_row else None,
+            "closed_reason": checklist_row[2] if checklist_row else None,
+            "start_date": start_date,
+            "terminal_outcome": outcome,
+            "today": today,
+            "pending_confirmation": bool(
+                checklist_row
+                and checklist_row[1] == "open"
+                and outcome is None
+                and start_date is not None
+                and start_date <= today
+            ),
+            "can_confirm_hired": bool(
+                checklist_row
+                and checklist_row[1] == "open"
+                and outcome is None
+                and offer_accepted
+                and start_date is not None
+                and start_date <= today
+            ),
+            "can_abandon": bool(offer_accepted and outcome is None),
+        }
+
+    @router.get("/api/applications/{application_id}/onboarding/terminal")
+    def onboarding_terminal_state(application_id: str, request: Request):
+        _require_role(request, "hr")
+        return _terminal_state_payload(application_id)
+
+    @router.post("/api/applications/{application_id}/onboarding/confirm-hired")
+    def onboarding_confirm_hired(
+        application_id: str, req: OnboardingConfirmHiredRequest, request: Request
+    ):
+        username = _require_role(request, "hr")
+        try:
+            effect_complete_onboarding(
+                conn,
+                thread_id=application_id,
+                business_key="hired",
+                actor_username=username,
+                actual_start_date=req.actual_start_date,
+                note=req.note,
+            )
+        except OnboardingTerminalRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _terminal_state_payload(application_id)
+
+    @router.post("/api/applications/{application_id}/onboarding/abandon")
+    def onboarding_abandon(
+        application_id: str, req: OnboardingAbandonRequest, request: Request
+    ):
+        username = _require_role(request, "hr")
+        try:
+            effect_complete_onboarding(
+                conn,
+                thread_id=application_id,
+                business_key="abandoned",
+                actor_username=username,
+                reason=req.reason,
+            )
+        except OnboardingTerminalRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _terminal_state_payload(application_id)
 
     # ── onboarding-flow U2：HR 清单页（tasks 2.4）──
 

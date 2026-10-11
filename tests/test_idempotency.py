@@ -201,6 +201,180 @@ def test_effect_runs_once_on_first_call(tmp_path):
     assert calls == [("job1", "v1")]
 
 
+def test_begin_immediate_rejects_existing_caller_transaction_without_rolling_it_back(tmp_path):
+    db_path = str(tmp_path / "begin-immediate.db")
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.execute("INSERT INTO job (id, title) VALUES ('sentinel', 'pending')")
+
+    @idempotent_effect("effect_immediate_probe", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        raise AssertionError("must reject before invoking the effect")
+
+    with pytest.raises(RuntimeError, match="active transaction"):
+        effect(conn, thread_id="job1", business_key="1")
+
+    assert conn.in_transaction
+    conn.commit()
+    assert conn.execute("SELECT title FROM job WHERE id='sentinel'").fetchone() == ("pending",)
+
+
+def test_begin_immediate_locks_before_duplicate_precheck_and_releases_on_replay(tmp_path):
+    db_path = str(tmp_path / "begin-immediate-replay.db")
+    writer = get_connection(db_path)
+    init_schema(writer)
+    writer.commit()
+    peer = get_connection(db_path)
+    calls = []
+
+    @idempotent_effect("effect_immediate_probe", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        calls.append(business_key)
+        conn.execute("INSERT INTO job (id, title) VALUES ('written', 'once')")
+
+    effect(writer, thread_id="job1", business_key="1")
+    assert effect(writer, thread_id="job1", business_key="1") is None
+    assert calls == ["1"]
+    peer.execute("INSERT INTO job (id, title) VALUES ('peer', 'unblocked')")
+    peer.commit()
+    assert writer.execute("SELECT COUNT(*) FROM effect_log WHERE node_name='effect_immediate_probe'").fetchone()[0] == 1
+
+
+def test_begin_immediate_rolls_back_effect_and_log_failure_preserving_original_error(tmp_path):
+    db_path = str(tmp_path / "begin-immediate-error.db")
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    @idempotent_effect("effect_immediate_failure", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        conn.execute("INSERT INTO job (id, title) VALUES ('partial', 'no')")
+        raise ValueError("original effect error")
+
+    with pytest.raises(ValueError, match="original effect error"):
+        effect(conn, thread_id="job1", business_key="1")
+    assert not conn.in_transaction
+    assert conn.execute("SELECT COUNT(*) FROM job WHERE id='partial'").fetchone()[0] == 0
+
+
+def test_begin_immediate_preserves_original_error_when_rollback_fails(tmp_path):
+    class RollbackFailingConnection(sqlite3.Connection):
+        fail_rollback = False
+
+        def rollback(self):
+            if self.fail_rollback:
+                self.fail_rollback = False
+                raise sqlite3.OperationalError("rollback failed")
+            return super().rollback()
+
+    conn = sqlite3.connect(
+        str(tmp_path / "begin-immediate-rollback-error.db"),
+        factory=RollbackFailingConnection,
+    )
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)
+
+    @idempotent_effect("effect_immediate_rollback_failure", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        conn.execute("INSERT INTO job (id, title) VALUES ('partial', 'no')")
+        conn.fail_rollback = True
+        raise ValueError("original effect error")
+
+    with pytest.raises(ValueError, match="original effect error"):
+        effect(conn, thread_id="job1", business_key="1")
+    assert conn.in_transaction  # rollback 自身失败时只能记日志，不能假称事务已清理。
+    sqlite3.Connection.rollback(conn)
+    assert conn.execute("SELECT COUNT(*) FROM job WHERE id='partial'").fetchone()[0] == 0
+
+
+def test_begin_immediate_preserves_original_error_when_duplicate_rollback_fails(
+    tmp_path, caplog
+):
+    class RollbackFailingConnection(sqlite3.Connection):
+        fail_rollback = False
+
+        def rollback(self):
+            if self.fail_rollback:
+                self.fail_rollback = False
+                raise sqlite3.OperationalError("rollback failed")
+            return super().rollback()
+
+    conn = sqlite3.connect(
+        str(tmp_path / "begin-immediate-duplicate-rollback-error.db"),
+        factory=RollbackFailingConnection,
+    )
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)
+    effect_key = "job1:effect_immediate_duplicate_rollback_failure:1"
+
+    @idempotent_effect(
+        "effect_immediate_duplicate_rollback_failure", begin_immediate=True
+    )
+    def effect(conn, thread_id, business_key):
+        conn.execute("INSERT INTO job (id, title) VALUES ('partial', 'no')")
+        conn.execute(
+            "INSERT INTO effect_log "
+            "(effect_key, thread_id, node_name, business_key, applied_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))",
+            (
+                effect_key,
+                thread_id,
+                "effect_immediate_duplicate_rollback_failure",
+                business_key,
+            ),
+        )
+        conn.fail_rollback = True
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+            effect(conn, thread_id="job1", business_key="1")
+
+    assert "rollback failed while cleaning up duplicate effect_log for effect_key=" in caplog.text
+    assert "OperationalError: rollback failed" in caplog.text
+    assert conn.in_transaction  # rollback 失败时不得报告幂等成功或假称已清理。
+    sqlite3.Connection.rollback(conn)
+    assert conn.execute("SELECT COUNT(*) FROM job WHERE id='partial'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("failure_point", ["effect_log", "commit"])
+def test_begin_immediate_cleans_up_log_or_commit_failure(tmp_path, failure_point):
+    db_path = str(tmp_path / f"begin-immediate-{failure_point}.db")
+
+    class FailingConnection(sqlite3.Connection):
+        fail_next = False
+
+        def execute(self, sql, parameters=()):
+            if self.fail_next and failure_point == "effect_log" and sql.startswith(
+                "INSERT INTO effect_log"
+            ):
+                self.fail_next = False
+                raise sqlite3.OperationalError("original effect_log failure")
+            return super().execute(sql, parameters)
+
+        def commit(self):
+            if self.fail_next and failure_point == "commit":
+                self.fail_next = False
+                raise sqlite3.OperationalError("original commit failure")
+            return super().commit()
+
+    conn = sqlite3.connect(db_path, factory=FailingConnection, check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)
+
+    @idempotent_effect("effect_immediate_insert_failure", begin_immediate=True)
+    def effect(conn, thread_id, business_key):
+        conn.execute("INSERT INTO job (id, title) VALUES ('partial', 'no')")
+
+    conn.fail_next = True
+    expected = f"original {failure_point} failure"
+    with pytest.raises(sqlite3.OperationalError, match=expected):
+        effect(conn, thread_id="job1", business_key="1")
+    assert not conn.in_transaction
+    assert conn.execute("SELECT COUNT(*) FROM job WHERE id='partial'").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_immediate_insert_failure'"
+    ).fetchone()[0] == 0
+
+
 def test_effect_skipped_on_replay_with_same_business_key(tmp_path):
     db_path = str(tmp_path / "test.db")
     conn = get_connection(db_path)

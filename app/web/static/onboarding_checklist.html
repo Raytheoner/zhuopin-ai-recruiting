@@ -28,6 +28,30 @@
       </table>
       <p id="empty-hint" class="empty-hint" style="display:none">该投递尚未生成入职清单。</p>
     </div>
+    <div class="card" id="terminal-card" style="display:none">
+      <h2 class="page-title">入职终态</h2>
+      <p id="terminal-status-line"></p>
+      <div id="terminal-actions" style="display:none">
+        <p>
+          <label>实际入职日
+            <input type="date" id="actual-start-date">
+          </label>
+        </p>
+        <p>
+          <label>说明（有未完成必需条目时必填）<br>
+            <textarea id="terminal-note" rows="2"></textarea>
+          </label>
+        </p>
+        <p><button id="confirm-hired-btn">确认已入职</button></p>
+        <hr>
+        <p>
+          <label>放弃原因（必填）<br>
+            <textarea id="abandon-reason" rows="2"></textarea>
+          </label>
+        </p>
+        <p><button id="abandon-btn">放弃入职</button></p>
+      </div>
+    </div>
   </main>
   <script>
     // 2026-10-11 修正（1001G，Spec review 实测 blocker）：⛔ 不能用
@@ -96,6 +120,77 @@
       if (btn) updateItem(btn.dataset.item, btn.dataset.target);
     });
     load();
+  </script>
+  <script>
+    // 终态卡片自包含，不依赖 U2 脚本块变量；BASE_HREF 由服务端注入，接口使用相对路径。
+    const terminalApplicationId =
+      location.pathname.match(/\/applications\/([^/]+)\/onboarding\/?$/)[1];
+    const terminalUrl = `api/applications/${terminalApplicationId}/onboarding/terminal`;
+    const confirmHiredUrl = `api/applications/${terminalApplicationId}/onboarding/confirm-hired`;
+    const abandonUrl = `api/applications/${terminalApplicationId}/onboarding/abandon`;
+
+    function renderTerminal(state) {
+      const card = document.getElementById("terminal-card");
+      if (!state || !state.checklist_status) { card.style.display = "none"; return; }
+      card.style.display = "block";
+      const line = document.getElementById("terminal-status-line");
+      const actions = document.getElementById("terminal-actions");
+      if (state.terminal_outcome === "onboarded") {
+        line.textContent = `已确认入职（${state.start_date}），清单已关闭。`;
+        actions.style.display = "none";
+        return;
+      }
+      if (state.terminal_outcome === "abandoned") {
+        line.textContent = "已登记放弃入职，清单已关闭。";
+        actions.style.display = "none";
+        return;
+      }
+      line.textContent = state.pending_confirmation
+        ? `入职日 ${state.start_date} 已到，待确认。`
+        : "入职日到达后可在此确认终态。";
+      actions.style.display = state.can_abandon ? "block" : "none";
+      document.getElementById("actual-start-date").value = state.start_date || "";
+      document.getElementById("confirm-hired-btn").disabled = !state.can_confirm_hired;
+    }
+
+    async function loadTerminal() {
+      const resp = await fetch(terminalUrl);
+      if (!resp.ok) return;
+      renderTerminal(await resp.json());
+    }
+
+    function refreshChecklist() {
+      if (typeof load === "function") load();
+    }
+
+    document.getElementById("confirm-hired-btn").addEventListener("click", async () => {
+      const resp = await fetch(confirmHiredUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actual_start_date: document.getElementById("actual-start-date").value || null,
+          note: document.getElementById("terminal-note").value || null,
+        }),
+      });
+      if (!resp.ok) { alert("确认失败"); return; }
+      renderTerminal(await resp.json());
+      refreshChecklist();
+    });
+
+    document.getElementById("abandon-btn").addEventListener("click", async () => {
+      const reason = document.getElementById("abandon-reason").value.trim();
+      if (!reason) { alert("放弃原因必填"); return; }
+      const resp = await fetch(abandonUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      if (!resp.ok) { alert("操作失败"); return; }
+      renderTerminal(await resp.json());
+      refreshChecklist();
+    });
+
+    loadTerminal();
   </script>
 </body>
 </html>
