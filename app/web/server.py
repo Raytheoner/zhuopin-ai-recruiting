@@ -175,6 +175,7 @@ from app.storage.offer import (
     current_approval_level,
     get_offer,
     get_offer_by_application,
+    list_pending_offers_for,
     total_approval_levels,
 )
 from app.storage.source import candidate_source
@@ -2627,6 +2628,31 @@ def create_app(
         if refreshed["status"] == "pending_approval":
             publish_approval_todo(conn, offer=refreshed, channel=channel)
         return _offer_payload(offer_id)
+
+    # ── offer-generation U3：审批页数据与页面（tasks 3.4）──
+    # ⚠️ 声明顺序：/api/offers/pending 必须在 /api/offers/{offer_id} 之前
+    # （FastAPI 按声明顺序匹配路径，反过来 "pending" 会被当成 offer_id 吃掉，
+    # 症状是待审列表接口稳定 404）。
+    @router.get("/api/offers/pending")
+    def list_my_pending_offers(request: Request):
+        username = _require_login(request)
+        return {"offers": list_pending_offers_for(conn, username)}
+
+    @router.get("/api/offers/{offer_id}")
+    def get_offer_detail(offer_id: str, request: Request):
+        _require_login(request)
+        try:
+            return _offer_payload(offer_id)
+        except OfferNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/offers/pending")
+    def offers_pending_page():
+        return _render_static_page("offers_pending.html", root_path)
+
+    @router.get("/offers/{offer_id}/approve")
+    def offer_approve_page(offer_id: str):
+        return _render_static_page("offer_approve.html", root_path)
 
     _ALLOWED_OWNER_PARTIES = frozenset({"hr", "it", "admin", "finance", "dept"})
 
