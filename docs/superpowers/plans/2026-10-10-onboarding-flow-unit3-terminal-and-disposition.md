@@ -2071,6 +2071,21 @@ Expected: 全绿（15 个用例：8 条顺序 + 3 条补充 + 4 条反证）。
 
 ### Task 7: 终态确认 UI（tasks 3.5）
 
+**当前修复已落地的验收接续（1011R）**：当前实际源码已含 confirm-hired合法过去日期鉴权体、abandon合法reason、七表快照，未来日期拒绝用例请求2099-01-01。前一轮 evidence最后是目标13passed/exit0，早期红1failed、2failed均在它之前，不能把早期红当最新。本轮不重造这些已修复缺陷，只实跑联合命令 `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_pages.py tests/test_onboarding_pages.py -q`（35项），补当前偏离登记与真实最后退出码。如联合失败须修复再同命令通过，review读取本轮实际测试源码与本轮最后 completed事件。
+
+
+**最新实际文件核验（1011R）**：必须把测试源码 confirm-hired 参数从 `{}` 改为 `{actual_start_date: PAST_START_DATE, note: None}`（即使当前请求模型允许空对象，也按本次明确要求验证）。abandon合法reason与七表快照断言已在实际测试文件，必须保留。审查读取 worktree 真实测试文件与 diff，不以本计划旧示例当实际源码；旧示例已同步合法body。不得修改业务端点为鉴权先于FastAPI输入验证，合法体401/403即可，非法体422单独验证。
+
+
+**1011R 完整鉴权验收清单**：confirm-hired body含合法actual_start_date；abandon含合法reason；GET无body。对每个端点分别用未登录/非HR合法体断言401/403，捕获投递、Offer、history、queue及清单状态前后快照完全相等。不要接受422/403二选一。找原清单相关 tests 并实跑（如 test_onboarding_checklist_routes、test_onboarding_checklist_api，先用rg确定现存文件名），在计划偏离登记写实际命令/输出/exit_code。输入非法422单独测试。
+
+
+**1011R 鉴权测试修复**：三条端点的非HR测试必须携带各自合法请求体，尤其 abandon 要传合法 reason，明确断言403（未登录合法体401），不能以422验证鉴权；再核验所有投递/Offer/历史/处置事实无变化。保留请求体非法422为单独输入校验测试，允许同步本计划偏离登记。实跑目标与原清单路由回归，保存命令/输出/退出码。
+
+
+**1011R 本次验收记录**：目标测试用 `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_pages.py -q`，输出 `13 passed in 1.29s`，exit_code=0；原清单路由回归实际文件为 `tests/test_onboarding_pages.py`（仓库无 `test_onboarding_checklist_routes` / `test_onboarding_checklist_api`），执行 `"$SDD_PYTHON" -m pytest tests/test_onboarding_pages.py -q`，输出 `22 passed in 2.86s`，exit_code=0。鉴权参数化测试对 GET/confirm-hired/abandon 分别使用无 body/合法 actual_start_date/合法 reason，断言匿名 401 与 interviewer 403；两次请求各自前后快照比较 application、offer、application_stage_history、onboarding_checklist、onboarding_item、data_disposition_queue、effect_log。缺失 abandon reason 的非法请求体另测 422，并断言业务快照不变。
+
+
 **Files:**
 - Modify: `app/web/server.py`（`from datetime import date`；两个请求模型；`_terminal_state_payload()`；三个路由；import 两个终态符号）
 - Modify: `app/web/static/onboarding_checklist.html`（末尾追加终态卡片 + 自包含脚本）
@@ -2178,7 +2193,7 @@ def test_terminal_endpoints_require_hr(make_test_client, method, path):
     _seed_hired(conn)
 
     call = getattr(client, method)
-    payload = {"json": {}} if method == "post" else {}
+    payload = {} if method == "get" else {"json": ({"reason": "候选人自愿退出"} if path.endswith("abandon") else {"actual_start_date": PAST_START_DATE, "note": None})}
     assert call(path, **payload).status_code == 401
 
     _login(client, conn, "iv", "interviewer")
