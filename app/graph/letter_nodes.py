@@ -22,6 +22,7 @@ from app.agents.jd_agent import (
 from app.agents.letter_drafter import LetterDraft, LetterFacts, compute_letter_draft
 from app.storage.idempotency import idempotent_effect
 from app.storage.letter_template import get_letter_template
+from app.storage.offer import OfferNotExportableError, assert_offer_exportable
 
 
 class LetterNotFoundError(Exception):
@@ -279,7 +280,27 @@ def record_letter_access(
 ) -> None:
     """文书查看/导出留痕（candidate-letter-engine spec「导出 docx」「文书草稿的
     查看留痕」）。写入失败不吞任何异常——调用方（路由）不 catch 就是正确行为
-    （FastAPI 未捕获异常 ⇒ 500，读取自然失败，不返回正文）。"""
+    （FastAPI 未捕获异常 ⇒ 500，读取自然失败，不返回正文）。
+
+    2026-10-10（U3 tasks 3.6）：**export 在此加导出门槛**——Offer 类文书在
+    `offer.status ∉ {approved, exported, accepted, declined, negotiating}` 时抛
+    `OfferNotExportableError`，于是留痕与 docx 文件都不会产生（spec「审批通过才
+    可导出」）。⛔ 门槛放在这里而不是只放在导出路由里：本函数是 U2 既定契约
+    「导出先留痕再产文件」上**每个调用方都必经**的一步，而导出路由属 U2（磁盘上
+    尚未落地）——放这里判据不依赖 U2 的进度。路由侧再加一层显式 409 提示（7b）。
+    ⛔ `view` 不受影响（查看留痕与本门槛无关）；⛔ 拒信（kind='rejection'）不受影响
+    （它没有 offer 记录，spec 的门槛只针对 Offer 记录）。
+    """
+    if access_type == "export":
+        row = conn.execute(
+            "SELECT application_id, kind FROM candidate_letter WHERE id = ?",
+            (letter_id,),
+        ).fetchone()
+        if row is None:
+            raise LetterNotFoundError(f"文书不存在: {letter_id!r}")
+        letter_application_id, letter_kind = row
+        if letter_kind == "offer":
+            assert_offer_exportable(conn, letter_application_id)
     conn.execute(
         "INSERT INTO letter_access_log (id, accessor, application_id, letter_id, access_type) "
         "VALUES (?, ?, ?, ?, ?)",

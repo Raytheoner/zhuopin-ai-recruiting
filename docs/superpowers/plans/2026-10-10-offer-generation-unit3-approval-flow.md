@@ -52,7 +52,7 @@
 | `app/storage/idempotency.py::idempotent_effect` | ✅ 已落地 | 四个 effect 节点全部挂它 |
 | `app/graph/letter_nodes.py`（含 `record_letter_access`、`effect_persist_letter`） | ✅ 已落地 | Task 7 在此**加一道导出门槛**；Task 8 用它生成文书 |
 | `app/storage/letter_template.py` + 占位模板 v1 种子 | ✅ 已落地 | Task 8 生成文书用 |
-| **U2 Task 4/5/6/7/8**（`app/letter_docx.py`、`/api/letters*` 端点、`letters.html`） | ❌ **未落地**（磁盘无 `app/letter_docx.py`，`app/web/server.py` 里 grep 不到 `export.docx`） | ⚠️ tasks 3.6 字面引用「2.5 的导出接口」⇒ 本计划把导出门槛做成**卡点式**（Task 7a，落在 U2 已落地的 `record_letter_access` 上，不依赖 Task 4/5），并对 U2 Task 5 的端点接线给出 **probe 后接线／未落地登记留步**的预案（Task 7b、Task 8 步 B） |
+| **U2 Task 4/5/6/7/8**（`app/letter_docx.py`、`/api/letters*` 端点、`letters.html`） | ⚠️ **部分落地**：`app/web/server.py` 已有 `GET /api/letters/{id}/export.docx` 与 409 映射；其余文件/端点按各自任务核对 | Task 7 保留 `record_letter_access` 卡点，并在同一新测试文件补真实 HTTP 负例；当前 7b 已接线，无需改路由 |
 
 **前向依赖与已登记偏差（⛔ 不阻塞本单元，必须让 reviewer 与 Shao Peishen 都看见）**：
 
@@ -77,9 +77,10 @@
    **残余风险（登记，由 U5 tasks 5.6 的 HR 操作说明承接）**：审批链未配置期间 Offer 会停在
    「待审批」，HR 必须先维护审批链（U1 Task 7 的
    `PUT /api/jobs/{job_id}/offer-approval-chain`）。
-5. **U2 未落地部分（上表）**：Task 7b 与 Task 8 步 B 都以
-   `grep -q 'export.docx' app/web/server.py` 作 probe；probe 不过时**登记「⏸ 留步」**，
-   ⛔ 不假装接线完成，也 ⛔ 不因此判整件失败（导出门槛的判据由 Task 7a 的卡点测试独立覆盖）。
+5. **U2 未落地部分（上表）**：Task 7b 与 Task 8 步 B 以
+   `grep -q 'export.docx' app/web/server.py` 作 probe；当前 worktree 已有路由及 409 映射，
+   因此在 Task 7 同一测试文件覆盖 HTTP 负例，不另建端点测试文件。若后续干净 worktree 的 probe 无命中，
+   按 Task 7b 的留步分支处理，不假装接线完成。
 6. **tasks.md 的勾选**：本计划 ⛔ 不改 `openspec/**`（含不勾 3.1–3.7）。勾选在该 plan 的
    final review 通过后由收口方做。
 
@@ -2807,11 +2808,18 @@ python -m pytest tests/test_offer_pages.py -q
 
 ### Task 7: 导出门槛（tasks 3.6）
 
-> ⚠️ **依赖现状**（本计划「零」节表格）：U2 Task 5 的
-> `GET /api/letters/{letter_id}/export.docx` **当前磁盘上不存在**。因此门槛分两处落：
-> **7a 卡点**（落在 U2 已落地的 `record_letter_access` 上，与 U2 进度无关，判据自足）、
-> **7b 路由显式提示**（probe 后接线；未落地则登记留步）。⛔ 两处都指向同一个
-> `assert_offer_exportable`，不存在第二份判定。
+> 1011R 质量返工：当前磁盘确实已有 export.docx 路由，7b 已接线但缺少HTTP负例。
+> 在本Task新建的 tests/test_offer_export_gate.py 增加真实HTTP端点测试（可用make_test_client）：
+> HR登录、文书kind=offer且对应Offer处于pending_approval，GET /api/letters/{id}/export.docx
+> 明确返回409；请求前后letter_access_log/export事实、文书sent_status及Offer状态快照完全不变。
+> 同时保留合法已审批成功导出与拒信不受影响的原有回归，不修改旧tests/test_letter_*.py。
+> 原7a节点断言全保留。实跑门槛全文件和原letter_endpoints全文件（非仅成功1条），最后联合验证；
+> 实测数量不锁定旧10项。只改真实缺失测试/必要最小实现与本计划，不重跑Tasks1–6。
+
+> ⚠️ **依赖现状**：本计划初稿编写时 U2 Task 5 的
+> `GET /api/letters/{letter_id}/export.docx` 尚未落地；本轮 Task 7 probe 已确认路由及 409 映射存在。
+> 7a 卡点仍由 `record_letter_access` 承载；7b 不重复改路由，补齐真实 HTTP 负例验证。
+> 两处都指向同一个 `assert_offer_exportable`，不存在第二份判定。
 
 **7a. 文件**：`app/graph/letter_nodes.py`（修改，两处）
 
@@ -2863,7 +2871,7 @@ def record_letter_access(
     conn.commit()
 ```
 
-**7b. 文件**：`app/web/server.py`（修改，**probe 通过才做**）
+**7b. 文件**：`app/web/server.py`（先 probe；当前 worktree 已接线时只核验，不做无必要修改）
 
 **probe 命令**：
 
@@ -2894,6 +2902,13 @@ grep -n 'export.docx' app/web/server.py
   判据由 7a 的测试独立满足）。
 
 **文件**：`tests/test_offer_export_gate.py`（新建）
+
+1011R 质量返工补充：在本文件内增加真实 HTTP 端点测试，使用 `make_test_client` 建立 HR 登录态，
+对 `kind='offer'` 且 Offer 为 `pending_approval` 的文书请求
+`GET /api/letters/{id}/export.docx`，断言返回 409；请求前后完整比较该文书的 export
+`letter_access_log` 行、`candidate_letter.sent_status` 与 `offer.status`。保留本文件 7a
+节点断言，以及 `tests/test_letter_endpoints.py` 中已审批 Offer 成功导出的 HTTP 回归和本文件拒信
+不受门槛影响的回归；不修改旧 `tests/test_letter_*.py`。
 
 ```python
 """导出门槛：offer.status 白名单在导出卡点上生效（U3 tasks 3.6）。"""
@@ -3009,13 +3024,13 @@ def test_export_unknown_letter_raises_not_found(conn):
 **命令与预期输出**：
 
 ```bash
-python -m pytest tests/test_offer_export_gate.py -q
+"$SDD_PYTHON" -m pytest tests/test_offer_export_gate.py -q
 ```
 
-预期：全部通过（0 failed，10 passed）。加跑 U2 已落地的文书测试确认没回归：
+预期：全部通过；测试数量以实际收集为准（本轮 11 passed）。加跑 U2 已落地的文书测试确认没回归：
 
 ```bash
-python -m pytest tests/test_letter_nodes.py tests/test_letter_md_to_docx.py -q
+"$SDD_PYTHON" -m pytest tests/test_letter_nodes.py tests/test_letter_md_to_docx.py -q
 ```
 
 预期：全部通过（0 failed）。
@@ -3031,7 +3046,7 @@ python -m pytest tests/test_letter_nodes.py tests/test_letter_md_to_docx.py -q
 > HTTP 端点**（本文件用 `make_test_client` 真跑），**后两段走节点/卡点**
 > （`effect_persist_letter` + `record_letter_access`）——文书生成/导出的 HTTP 端点属
 > U2 Task 5，本计划写作时磁盘上还没有（见「零」节表格）。tasks 3.7 要验的是 U3 的
-> 链路是否把 Offer 推到"可导出"，节点级足以判定；U2 落地后由步 B 补 HTTP 版。
+> 链路是否把 Offer 推到"可导出"，节点级足以判定；Task 7 已由真实 HTTP 负例补足路由判据。
 
 ```python
 """U3 e2e（tasks 3.7）：发起 → 一级退回 → 修改 → 两级通过 → 生成文书 → 导出；
@@ -3231,82 +3246,15 @@ python -m pytest tests/test_offer_unit3_e2e.py -q
 
 预期：全部通过（0 failed，1 passed）。
 
-**步 B（probe 后接线，⛔ 未落地不许假装）**：
+**步 B（probe 后核验）**：
 
 ```bash
 grep -q 'export.docx' app/web/server.py && echo "U2 Task 5 已落地" || echo "U2 Task 5 未落地 ⇒ 登记留步"
 ```
 
-- **已落地** ⇒ 追加 `tests/test_offer_export_gate_endpoint.py`（HTTP 面判据）：
-
-```python
-"""导出门槛的 HTTP 面：未审批 Offer 导出被拒（U3 tasks 3.6；需 U2 Task 5 已落地）。"""
-from __future__ import annotations
-
-import pytest
-
-from app.storage.auth_session import create_session
-from app.storage.hr_account import upsert_account
-
-
-def _seed(conn, *, offer_status):
-    conn.execute(
-        "INSERT INTO job (id, title, status) VALUES ('j1','嵌入式工程师','approved')"
-    )
-    conn.execute("INSERT INTO candidate (id, name) VALUES ('c1','张三')")
-    conn.execute(
-        "INSERT INTO resume (id, job_id, sample_class, file_name, content_sha256, "
-        "status, uploaded_by) VALUES ('r1','j1','synthetic','a.pdf','sha','parsed','hr')"
-    )
-    conn.execute(
-        "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id) "
-        "VALUES ('app1','c1','j1','r1','offer')"
-    )
-    conn.execute(
-        "INSERT INTO offer (id, application_id, job_id, department, start_date, "
-        "report_to, status, approval_round, created_by) "
-        "VALUES ('o1','app1','j1','研发部','2026-11-01','李四',?,1,'hr1')",
-        (offer_status,),
-    )
-    conn.execute(
-        "INSERT INTO candidate_letter (id, application_id, kind, version, "
-        "template_version, body, ai_generated, created_by) "
-        "VALUES ('l1','app1','offer',1,1,'【AI 生成】正文',1,'hr1')"
-    )
-    account_id = upsert_account(conn, username="hr1", password="s3cret!")
-    conn.commit()
-    return create_session(conn, hr_account_id=account_id)
-
-
-def test_export_endpoint_rejects_pending_approval(make_test_client):
-    client, conn = make_test_client()
-    token = _seed(conn, offer_status="pending_approval")
-    client.cookies.set("hr_session", token)
-    resp = client.get("/api/letters/l1/export.docx")
-    assert resp.status_code == 409
-    assert "审批通过后才可导出" in resp.json()["detail"]
-    assert conn.execute(
-        "SELECT COUNT(*) FROM letter_access_log WHERE letter_id = 'l1'"
-    ).fetchone()[0] == 0
-
-
-def test_export_endpoint_allows_approved(make_test_client):
-    client, conn = make_test_client()
-    token = _seed(conn, offer_status="approved")
-    client.cookies.set("hr_session", token)
-    resp = client.get("/api/letters/l1/export.docx")
-    assert resp.status_code == 200
-    assert conn.execute(
-        "SELECT COUNT(*) FROM letter_access_log WHERE letter_id = 'l1' "
-        "AND access_type = 'export'"
-    ).fetchone()[0] == 1
-```
-
-  命令与预期：`python -m pytest tests/test_offer_export_gate_endpoint.py -q` ⇒ 2 passed。
-
-- **未落地** ⇒ 在最终答复里登记
-  `⏸ 留步：U2 Task 5（GET /api/letters/{id}/export.docx）未落地，导出门槛的 HTTP 面测试与 409 显式提示待 U2 落地后接线；Task 7a 的卡点判定已独立生效并有测试覆盖`，
-  ⛔ 不创建该测试文件（它此时必然失败，会把"未就绪"伪装成"实现有问题"）。
+当前 worktree probe 有命中，且 Task 7 已在 `tests/test_offer_export_gate.py` 加入 409 HTTP 负例与
+无副作用快照；⛔ 不再创建独立的 `tests/test_offer_export_gate_endpoint.py`。若其他执行环境的 probe
+无命中，则按 Task 7b 登记留步，不将其伪装成测试通过。
 
 ---
 
@@ -3423,10 +3371,10 @@ python -m pytest tests/test_offer_storage.py tests/test_offer_nodes_create.py \
    映射成 4xx（`assert_offer_creatable` 从 `server.py` 的 import 里一并移除）。
    `test_create_replay_same_request_id_returns_same_offer` 就是这条的判据。
 
-**⏸ 留步登记位（Task 7b/8 步 B 用）**：本轮提取验证时 `app/web/server.py` 里
-`grep -q 'export.docx'` **无命中**（U2 Task 5 未落地）⇒ 按计划书登记：
-⏸ 留步：U2 Task 5（`GET /api/letters/{id}/export.docx`）未落地，导出门槛的 HTTP 面
-测试与 409 显式提示待 U2 落地后接线；Task 7a 的卡点判定已独立生效并有测试覆盖。
+**Task 7 本轮核验记录（2026-10-11）**：`app/web/server.py` 的 `export.docx` probe 有命中，
+路由已有 `OfferNotExportableError` → HTTP 409 映射；真实 HTTP 负例已纳入
+`tests/test_offer_export_gate.py` 并验证请求前后 export 留痕、文书 `sent_status`、Offer `status`
+快照一致。本轮无需登记 U2 Task 5 留步。
 
 （本验证只证明"代码可执行且内部自洽"，spec 合规由 `run-build` 的两阶段 review 负责。）
 
