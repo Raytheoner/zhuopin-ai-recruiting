@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -29,13 +30,17 @@ from app.agents.jd_agent import (
     enforce_ai_label,
     extract_label_generated_at,
 )
+from app.audit.recorder import AuditRecorder
+from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.graph.invitation_nodes import (
     compute_invitation_draft_for_slot,
+    draft_body_digest,
     draft_edit_business_key,
     effect_backfill_invitation_outcome,
     effect_edit_draft,
     effect_mark_draft_human_written,
     effect_persist_invitation_draft,
+    send_invitation,
     validate_outcome,
 )
 from app.llm.gateway import LLMGateway
@@ -634,3 +639,306 @@ def test_backfill_confirmed_needs_no_reason(conn):
     assert outcome["status"] == "confirmed"
     assert outcome["channel"] is None
     assert _slot(conn)[:2] == ("confirmed", None)
+
+
+# ── send_invitation（门禁接线，Task 7 落地；Task 10 的门禁 Scenario）─────
+
+
+_SEND_NODE = "effect_mark_invitation_sent"
+
+
+class FakeChannel:
+    """记录投递次数的假通道。⛔ 不联网、不发真消息。"""
+
+    def __init__(self):
+        self.delivered = []
+
+    def deliver(self, thread_id, message):
+        self.delivered.append((thread_id, message))
+
+    def latest(self, thread_id):
+        return None
+
+
+@pytest.fixture
+def wired(conn, tmp_path):
+    chain_path = tmp_path / "decisions.jsonl"
+    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
+    return FakeChannel(), recorder, chain_path
+
+
+def _send(conn, wired, *, recipient="13800000000", enabled=False, confirmed_by="hr-1"):
+    channel, recorder, _chain_path = wired
+    draft = conn.execute(
+        "SELECT id, body FROM interview_invitation_draft WHERE slot_id = 's1' "
+        "ORDER BY version DESC LIMIT 1"
+    ).fetchone()
+    draft_id, body = draft
+    return send_invitation(
+        conn, thread_id="app1",
+        slot_id="s1", draft_id=draft_id, recipient=recipient, channel=channel,
+        recorder=recorder, outbound_enabled=lambda: enabled, confirmed_by=confirmed_by,
+    )
+
+
+def _mirror_lines(chain_path: Path) -> list[dict]:
+    text = chain_path.read_text(encoding="utf-8").strip()
+    return [json.loads(line) for line in text.splitlines()] if text else []
+
+
+def test_send_blocked_when_switch_off_and_audit_recorded(conn, wired):
+    """spec 第一个 Scenario：外发总开关关闭 ⇒ 拦下并留痕，⛔ 不动邀约状态。"""
+    _persist(conn)
+    decision = _send(conn, wired, enabled=False)
+    channel, _recorder, chain_path = wired
+    assert decision.allowed is False
+    assert decision.reason == "外发总开关关闭"
+    assert channel.delivered == []
+    lines = _mirror_lines(chain_path)
+    assert [line["event_type"] for line in lines] == ["outbound_blocked"]
+    assert lines[0]["blocked_reason"] == "外发总开关关闭"
+    assert _slot(conn)[0] == "drafted"  # ⛔ 拦截不动邀约状态
+    assert _effect_count(conn, _SEND_NODE) == 0
+
+
+def test_send_blocked_when_ai_label_missing(conn, wired):
+    """spec 第二个 Scenario：缺 AI 生成标识 ⇒ 门禁第 ④ 条拦截。"""
+    conn.execute(
+        "INSERT INTO interview_invitation_draft "
+        "(id, slot_id, version, template_version, body, ai_generated) "
+        "VALUES ('d-nolabel', 's1', 1, 'v1', '您好，邀请您参加面试。', 1)"
+    )
+    conn.commit()
+    decision = _send(conn, wired, enabled=True)
+    channel, _recorder, chain_path = wired
+    assert decision.allowed is False
+    assert decision.reason == "缺少 AI 生成标识"
+    assert channel.delivered == []
+    assert _mirror_lines(chain_path)[0]["blocked_reason"] == "缺少 AI 生成标识"
+
+
+def test_send_blocked_when_recipient_unknown(conn, wired):
+    """U4 vault 关着时就是这条路：`candidate_recipient_for_invitation()` 返回 None，
+    调用方喂空串 ⇒ 门禁第 ⑤ 条拦截（⛔ 节点不替门禁做判断）。"""
+    _persist(conn)
+    decision = _send(conn, wired, recipient=None, enabled=True)
+    assert decision.allowed is False
+    assert decision.reason == "收件对象缺失或为空"
+
+
+def test_send_allowed_delivers_and_marks_sent(conn, wired):
+    _persist(conn)
+    decision = _send(conn, wired, enabled=True)
+    channel, _recorder, chain_path = wired
+    assert decision.allowed is True
+    assert len(channel.delivered) == 1
+    assert channel.delivered[0][1].type == "interview_invitation"
+    assert _slot(conn) == ("sent", "system", "hr-1")
+    assert _mirror_lines(chain_path)[0]["event_type"] == "outbound_delivered"
+    assert _effect_count(conn, _SEND_NODE) == 1
+
+
+def test_send_replay_same_content_is_noop(conn, wired):
+    """重放仍返回实时门禁判定，内容键保证不重复投递。"""
+    _persist(conn)
+    _send(conn, wired, enabled=True)
+    assert _send(conn, wired, enabled=True).allowed is True
+    channel, _recorder, _chain_path = wired
+    assert len(channel.delivered) == 1
+    assert _effect_count(conn, _SEND_NODE) == 1
+
+
+def test_send_does_not_downgrade_confirmed_status(conn, wired):
+    """⛔ 不把已回填的 confirmed 打回去（只在 none/drafted/sent 时推进）。"""
+    _persist(conn)
+    effect_backfill_invitation_outcome(
+        conn, thread_id="app1", business_key="s1:confirmed", slot_id="s1",
+        status="confirmed", actor="hr-1",
+    )
+    _send(conn, wired, enabled=True)
+    assert _slot(conn)[0] == "confirmed"
+
+
+def test_send_rejects_cancelled_slot(conn, wired):
+    """已取消的场次不可外发（`_assert_slot_invitable` 在事务内重做一遍）。"""
+    _persist(conn)
+    conn.execute("UPDATE interview_slot SET status = 'cancelled' WHERE id = 's1'")
+    conn.commit()
+    with pytest.raises(InvitationNotAllowedError):
+        _send(conn, wired, enabled=True)
+    channel, _recorder, _chain_path = wired
+    assert channel.delivered == []
+    assert _effect_count(conn, _SEND_NODE) == 0
+
+
+def test_send_module_has_no_direct_channel_deliver():
+    """源码级反证：唯一入口是 `deliver_candidate_message()`，本文件不出现
+    任何 `channel.deliver(...)` 直连（绕过门禁的第二条外发路径）。"""
+    src = Path("app/graph/invitation_nodes.py").read_text(encoding="utf-8")
+    assert "channel.deliver" not in src
+    assert "deliver_candidate_message(" in src
+
+@pytest.mark.parametrize("target", ["s2", "missing"])
+def test_send_validates_slot_and_draft_before_gate(conn, wired, monkeypatch, target):
+    import app.graph.invitation_nodes as nodes
+    draft_id = _persist(conn)
+    conn.execute(
+        "INSERT INTO interview_slot (id, application_id, round, start_at, end_at, mode) "
+        "VALUES ('s2', 'app1', 2, '2026-10-13 14:00', '2026-10-13 15:00', 'onsite')"
+    )
+    conn.commit()
+    before = conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0]
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid ownership reached delivery")
+    monkeypatch.setattr(nodes, "deliver_candidate_message", forbidden)
+    with pytest.raises((InvitationNotAllowedError, InvitationSlotNotFoundError)):
+        send_invitation(
+            conn, thread_id="app1",
+            slot_id=target, draft_id=draft_id, recipient="fake",
+            channel=wired[0], recorder=wired[1], outbound_enabled=lambda: True,
+            confirmed_by="hr-1",
+        )
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == before
+    assert wired[0].delivered == []
+    assert _slot(conn)[0] == "drafted"
+
+
+def test_blocked_draft_can_retry_after_switch_opens(conn, wired):
+    _persist(conn)
+    assert not _send(conn, wired, enabled=False).allowed
+    assert _send(conn, wired, enabled=True).allowed
+    assert len(wired[0].delivered) == 1
+
+@pytest.mark.parametrize("window", ["before_mark", "mark_commit"])
+def test_send_recovers_after_delivery_commit(conn, wired, tmp_path, monkeypatch, window):
+    import sqlite3
+    import app.graph.invitation_nodes as nodes
+    _persist(conn)
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    channel = wired[0]
+    original = nodes.effect_mark_invitation_sent
+
+    class MarkCommitCrash(sqlite3.Connection):
+        armed = False
+        def execute(self, sql, parameters=()):
+            result = super().execute(sql, parameters)
+            if sql.startswith("INSERT INTO effect_log") and parameters[2] == _SEND_NODE:
+                self.armed = True
+            return result
+        def commit(self):
+            if self.armed:
+                raise RuntimeError("mark commit crash")
+            return super().commit()
+
+    if window == "before_mark":
+        def crash(*args, **kwargs):
+            # Both existing delivery effects have already durably committed.
+            assert _effect_count(args[0], "effect_deliver_message") == 1
+            assert _effect_count(args[0], "effect_record_outbound_audit") == 1
+            raise RuntimeError("before mark")
+        monkeypatch.setattr(nodes, "effect_mark_invitation_sent", crash)
+        active = conn
+    else:
+        active = sqlite3.connect(db_path, factory=MarkCommitCrash)
+    recorder = AuditRecorder(SqliteSink(active), JsonlChainSink(wired[2]))
+    with pytest.raises(RuntimeError):
+        _send(active, (channel, recorder, wired[2]), enabled=True)
+    if window == "mark_commit":
+        assert not active.in_transaction
+        assert active.execute("SELECT COUNT(*) FROM invitation_send_log").fetchone()[0] == 0
+        assert _effect_count(active, _SEND_NODE) == 0
+        active.armed = False
+        active.execute("INSERT INTO job (id, title) VALUES ('unrelated-after-mark', 'unrelated')")
+        active.commit()  # failed writes must not leak through this later commit
+    active.close()
+    monkeypatch.setattr(nodes, "effect_mark_invitation_sent", original)
+    fresh = get_connection(db_path)
+    try:
+        assert len(channel.delivered) == 1
+        assert _slot(fresh)[0] == "drafted"
+        assert _effect_count(fresh, _SEND_NODE) == 0
+        assert fresh.execute("SELECT COUNT(*) FROM invitation_send_log").fetchone()[0] == 0
+        assert _effect_count(fresh, "effect_deliver_message") == 1
+        recorder = AuditRecorder(SqliteSink(fresh), JsonlChainSink(wired[2]))
+        assert _send(fresh, (channel, recorder, wired[2]), enabled=True).allowed
+        assert _send(fresh, (channel, recorder, wired[2]), enabled=True).allowed
+        assert len(channel.delivered) == 1
+        assert _slot(fresh) == ("sent", "system", "hr-1")
+        assert _effect_count(fresh, _SEND_NODE) == 1
+        assert fresh.execute("SELECT COUNT(*) FROM invitation_send_log").fetchone()[0] == 1
+    finally:
+        fresh.close()
+
+
+@pytest.mark.parametrize("status", ["confirmed", "declined", "reschedule_requested"])
+def test_mark_rejects_terminal_state_without_orphan_log(conn, status):
+    from app.graph.invitation_nodes import effect_mark_invitation_sent
+    draft_id = _persist(conn)
+    conn.execute("UPDATE interview_slot SET invitation_status = ? WHERE id = 's1'", (status,))
+    conn.commit()
+    body = conn.execute("SELECT body FROM interview_invitation_draft WHERE id = ?", (draft_id,)).fetchone()[0]
+    digest = draft_body_digest(body)
+    with pytest.raises(InvitationNotAllowedError):
+        effect_mark_invitation_sent(
+            conn, thread_id="app1", business_key=f"s1:{draft_id}:{digest}",
+            slot_id="s1", draft_id=draft_id, body_digest=digest, actor="hr-1",
+        )
+    assert _slot(conn)[0] == status
+    assert _effect_count(conn, _SEND_NODE) == 0
+    assert conn.execute("SELECT COUNT(*) FROM invitation_send_log").fetchone()[0] == 0
+
+
+def test_send_rechecks_gate_on_allowed_replay(conn, wired):
+    _persist(conn)
+    assert _send(conn, wired, enabled=True).allowed
+    decision = _send(conn, wired, enabled=False)
+    assert not decision.allowed
+    assert decision.reason == "外发总开关关闭"
+    assert len(wired[0].delivered) == 1
+    assert _effect_count(conn, _SEND_NODE) == 1
+
+
+def test_send_fact_tracks_each_draft_version_and_replay(conn, wired):
+    _persist(conn)
+    assert _send(conn, wired, enabled=True).allowed
+    assert _send(conn, wired, enabled=True).allowed
+    assert conn.execute("SELECT COUNT(*) FROM invitation_send_log").fetchone()[0] == 1
+    conn.execute(
+        "INSERT INTO interview_invitation_draft "
+        "(id, slot_id, version, template_version, body, ai_generated) "
+        "SELECT 'draft-v2', slot_id, 2, template_version, body || ' 新版本', ai_generated "
+        "FROM interview_invitation_draft WHERE slot_id = 's1' AND version = 1"
+    )
+    conn.commit()
+    assert _send(conn, wired, enabled=True).allowed
+    assert _send(conn, wired, enabled=True).allowed
+    rows = conn.execute(
+        "SELECT thread_id, slot_id, draft_id, body_digest, actor, at FROM invitation_send_log"
+    ).fetchall()
+    assert len(rows) == _effect_count(conn, _SEND_NODE) == 2
+    assert len({row[2] for row in rows}) == 2
+    assert all(row[0] == 'app1' and row[1] == 's1' and row[4] == 'hr-1' and row[5] for row in rows)
+    assert len(wired[0].delivered) == 2
+
+
+def test_send_fact_schema_migrates_idempotently_without_changing_drafts(conn):
+    draft_id = _persist(conn)
+    before = conn.execute("SELECT * FROM interview_invitation_draft").fetchall()
+    conn.execute("DROP TABLE invitation_send_log")  # simulate a pre-Task-7 database
+    conn.commit()
+    init_schema(conn)
+    init_schema(conn)
+    assert conn.execute("SELECT * FROM interview_invitation_draft").fetchall() == before
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(invitation_send_log)")}
+    assert columns == {'thread_id', 'slot_id', 'draft_id', 'body_digest', 'actor', 'at'}
+    conn.execute(
+        "INSERT INTO invitation_send_log (thread_id, slot_id, draft_id, body_digest, actor) "
+        "VALUES ('app1', 's1', ?, 'digest', 'hr-1')", (draft_id,),
+    )
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO invitation_send_log (thread_id, slot_id, draft_id, body_digest, actor) "
+            "VALUES ('app1', 's1', ?, 'digest', 'hr-2')", (draft_id,),
+        )
+    conn.rollback()

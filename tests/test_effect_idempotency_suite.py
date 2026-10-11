@@ -84,11 +84,13 @@ from app.graph.interview_prep_nodes import (
 )
 from app.agents.invitation_drafter import InvitationDraft
 from app.graph.invitation_nodes import (
+    draft_body_digest,
     draft_edit_business_key,
     effect_backfill_invitation_outcome,
     effect_edit_draft,
     effect_mark_draft_human_written,
     effect_persist_invitation_draft,
+    effect_mark_invitation_sent,
 )
 from app.agents.interview_prep import PrepDraft, PrepQuestionDraft
 from app.graph.interview_scoring_nodes import (
@@ -206,6 +208,7 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_edit_draft",
         "effect_mark_draft_human_written",
         "effect_backfill_invitation_outcome",
+        "effect_mark_invitation_sent",
     }
 )
 
@@ -1229,6 +1232,12 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             "SELECT COUNT(*) FROM interview_invitation_draft "
             "WHERE id = ? AND ai_generated = 1",
             (_INV_DRAFT,),
+        ).fetchone()[0]
+
+    def _invitation_send_facts(conn):
+        return conn.execute(
+            "SELECT COUNT(*) FROM invitation_send_log WHERE thread_id = ?",
+            (_INV_THREAD,),
         ).fetchone()[0]
 
     return {
@@ -2345,6 +2354,19 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "双写。本节点的第二道保险是表的 UNIQUE(slot_id, status)——即使 "
                 "effect_log 短路失效，重复 INSERT 也会撞唯一键而不是多留一条痕。"
             ),
+        ),
+        "effect_mark_invitation_sent": Recipe(
+            thread_id=_INV_THREAD,
+            seed=_seed_invitation_draft,
+            invoke=lambda conn: effect_mark_invitation_sent(
+                conn,
+                thread_id=_INV_THREAD,
+                business_key=f"{_INV_SLOT}:{_INV_DRAFT}:{draft_body_digest(_INV_BODY)}",
+                slot_id=_INV_SLOT, draft_id=_INV_DRAFT,
+                body_digest=draft_body_digest(_INV_BODY), actor="HR 乙",
+            ),
+            count_business_rows=_invitation_send_facts,
+            note="每版正文 INSERT invitation_send_log 与状态 UPDATE、effect_log 同事务；无零行例外。",
         ),
     }
 

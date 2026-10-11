@@ -1082,6 +1082,19 @@ CREATE TABLE IF NOT EXISTS invitation_outcome_log (
 CREATE INDEX IF NOT EXISTS idx_invitation_outcome_slot
     ON invitation_outcome_log (slot_id);
 
+-- 每版草稿/正文的发送状态事实，与 mark effect_key 同粒度；不存正文或联系方式。
+-- 新库和老库均由 init_schema 的幂等 DDL 创建，不走加列/漂移守卫。
+CREATE TABLE IF NOT EXISTS invitation_send_log (
+    thread_id TEXT NOT NULL REFERENCES application(id),
+    slot_id TEXT NOT NULL REFERENCES interview_slot(id),
+    draft_id TEXT NOT NULL REFERENCES interview_invitation_draft(id),
+    body_digest TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invitation_send_fact
+    ON invitation_send_log (thread_id, slot_id, draft_id, body_digest);
+
 -- 候选人面试阶段联系方式（candidate-contact-vault spec；design D6）。
 -- application_id 唯一：一份投递只有一条联系方式记录，登记覆盖＝更新同一行。
 -- phone_enc/email_enc 存 AES-GCM 密文 BLOB，⛔ 无任何明文列。

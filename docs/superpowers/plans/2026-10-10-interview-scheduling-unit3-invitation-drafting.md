@@ -61,7 +61,7 @@
 >
 > - 铁律 1：本单元有 **5 个** `effect_*` 节点（`effect_persist_draft` / `effect_edit_draft` /
 >   `effect_mark_draft_human_written` / `effect_backfill_invitation_outcome` /
->   `effect_send_invitation`），每个独占、各带幂等键，由 `@idempotent_effect` 装饰器
+>   `effect_mark_invitation_sent`），每个独占、各带幂等键，由 `@idempotent_effect` 装饰器
 >   与业务写同一事务提交（节点内 ⛔ 不 `conn.commit()`）。
 > - 铁律 2：`app/agents/invitation_drafter.py::compute_invitation_draft` 是纯函数
 >   （不 import storage/graph，测试用 AST 扫 import 反证）；`app/graph/invitation_nodes.py::
@@ -124,6 +124,11 @@
   （加列路径只服务「老库缺列」），⛔ **不进 `_DRIFT_GUARDED_TABLES`**（该守卫只覆盖
   「既可能由 SCHEMA 建、又可能早已存在于老库」的表；本表在老库上不存在）。
   ⇒ `tests/test_db_migration.py` 的既有断言（`_ADDED_COLUMNS` 表集合 = 8 张）**逐字不变**。
+- **Task 7 第二轮阻塞修正的明确增量**：在原一张回填表之外新增内部事实表
+  `invitation_send_log`；它按 `(thread_id, slot_id, draft_id, body_digest)` 唯一，
+  与 mark 的键同粒度，不保存正文、联系方式或薪资。通过 `init_schema()` 的
+  `CREATE TABLE IF NOT EXISTS` / `CREATE UNIQUE INDEX IF NOT EXISTS` 创建，
+  不进入 `_ADDED_COLUMNS` 或 `_DRIFT_GUARDED_TABLES`，U1 两表仍零改动。
 - 模板 v1 占位种子走 `init_schema()` 里的幂等 `INSERT OR IGNORE`（与
   `_seed_letter_templates` 同一先例、同一位置），⛔ 不在业务路径里"顺手建种子"。
   ⚠️ `tests/test_db_interview_invitation_draft_schema.py`（U1 的 schema 测试）里那条
@@ -137,13 +142,15 @@ app/storage/invitation_template.py         # 新增：模板版本化读写 + �
 app/storage/interview_invitation.py        # 新增：草稿版本/场次事实/回填留痕读取 + 收件对象解析
 app/agents/invitation_drafter.py           # 新增：生成纯函数 compute_invitation_draft
 app/graph/invitation_nodes.py              # 新增：1 个 compute_* + 5 个 effect_* 节点
-app/storage/db.py                          # 修改：invitation_outcome_log 建表 + 模板 v1 占位种子
+app/storage/db.py                          # 修改：invitation_outcome_log / invitation_send_log 幂等建表 + 模板 v1 占位种子
 app/middleware/auth.py                     # 修改：PROTECTED_PATH_PREFIXES 加两个前缀
 app/web/server.py                          # 修改：Pydantic 模型 + 模板/草稿/回填/外发/页面路由
 app/web/static/invitation_review.html      # 新增：邀约页（生成/复制/编辑/标记人工/回填/外发）
 tests/test_invitation_template.py          # 新增：模板版本化 + 占位符反证（Task 1）
 tests/test_invitation_drafter.py           # 新增：生成纯函数（Task 2）
 tests/test_db_u3_schema.py                 # 新增：invitation_outcome_log schema（Task 3）
+tests/test_idempotency.py                  # 修改：最终 commit 失败回滚与原异常保留（Task 7）
+# tests/test_invitation_effect.py 同时覆盖 invitation_send_log 新库/老库幂等迁移（Task 7）
 tests/test_interview_invitation_storage.py # 新增：U3 存储层行为（Task 3）
 tests/test_invitation_effect.py            # 新增：5 节点 + 门禁 Scenario（Task 10）
 tests/test_interview_invitation_api.py     # 新增：路由契约 + 页面 + 子路径前缀（Task 11）
@@ -1733,128 +1740,71 @@ print([n.name for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)][-2
 
 ---
 
-### Task 7: `effect_send_invitation`（系统外发接线，经既有门禁；tasks 3.6）
+### Task 7: 邀约发送编排与独占状态节点（系统外发接线，经既有门禁；tasks 3.6）
 
-**文件**：`app/graph/invitation_nodes.py`（续写）
+**2026-10-11 `1011R` 阻塞修正（替代原 Task 7 全文）**：恢复 Spec review 实证发现原实现把
+`deliver_candidate_message()` 包在 `@idempotent_effect` 内，同一连接上的内层节点自行 commit，
+违反 Global Constraints 铁律 1。原代码样例撤回，不得照抄或以注释豁免。原 Task 7 未通过 review，
+已有 worktree 改动是修复输入，不是已完成交付。
 
-在文件顶部 import 区补两行（放在 `from app.storage...` 之前，按模块分组）：
+**输入与边界**：读取本计划 spec 输入与现有 `app/outbound/delivery.py`，保留唯一既有门禁入口、
+六条门禁判定、默认关闭与 HR 签名语义。只修事务编排与归属校验，不修改门禁开关、入队政策、
+真实收件对象或生产配置；外发测试一律 FakeChannel，无真实消息。
 
-```python
-from app.outbound.delivery import deliver_candidate_message
-from app.outbound.gate import GateDecision
-from app.outbound.messages import CandidateOutboundMessage
-```
+**文件**：`app/graph/invitation_nodes.py`、`tests/test_invitation_effect.py`、
+`tests/test_effect_idempotency_suite.py`、`app/storage/idempotency.py`、
+`tests/test_idempotency.py`、`app/storage/db.py`；同步本计划 Task 8/10/11/12 的接口及测试样例。
 
-文件末尾追加：
+按 TDD 执行以下修复：
 
-```python
-def draft_body_digest(body: str) -> str:
-    return hashlib.sha256(str(body).encode("utf-8")).hexdigest()[:16]
+1. 先增加失败测试：草稿属于 A 场次但传 B 场次时，在调用门禁前抛领域异常；零投递、
+   零状态写、零新幂等记录。缺失/取消场次也在投递前校验。
+2. 撤掉 `effect_send_invitation` 的外层幂等装饰器，改为普通编排函数 `send_invitation`。
+   它完成只读校验、构造 CandidateOutboundMessage、调用唯一既有
+   `deliver_candidate_message()`。该函数不得拥有 BEGIN/commit 或直接写数据库，也不属于
+   effect manifest；既有 delivery 的每个独占副作用节点继续各自处理幂等。
+3. 新增独占、带装饰器的 `effect_mark_invitation_sent`，只更新场次已发送事实；它不调用
+   delivery/其他 effect/recorder/channel。状态更新和本节点 effect_log 必须由同一个
+   idempotent_effect 事务提交。业务键包含 slot_id、draft_id 和正文摘要；适用状态校验仍在
+   事务内部重做。confirmed/declined/reschedule_requested 不得降级；该分支不能产生
+   零业务写却孤儿 effect_log，可通过普通编排层跳过已终结状态或在 effect 内抛领域异常。
+4. 普通编排只在门禁放行后调用状态节点。blocked 路径只有门禁自身的既有审计事实，无
+   mark 节点幂等记录；不得消耗额外发送尝试键而永久禁止相同草稿在开关打开后再经门禁。
+   保持返回 GateDecision（含重复调用时的判定），Task 8 与 Task 9 必须准确区分
+   blocked/allowed/replay，不得把拦截伪装成功。不得通过变更既有 gate 政策满足本项。
+5. 故障注入覆盖真实窗口：delivery 内层提交已完成后、mark 节点提交前异常，持久化连接
+   重新打开并重放，FakeChannel 实际投递次数恒为 1，mark 业务事实与 effect_log 同生共死；
+   mark 本身提交失败时二者均为 0，重放后均恰好为 1。不要只在首次内层 commit 注入崩溃。
+6. manifest/配方只登记新增真实独占 effect 节点，删除未提交旧 effect_send_invitation 的
+   登记。配方必须覆盖 mark 崩溃与正常路径，blocked 路径不能用零业务行例外豁免。
+7. 本 Task 已提前包含原 Task 10 发送测试，保留并修正它们；后续 Task 10 只补增量，
+   禁止追加同名 def 覆盖。同步后续计划中的函数名、effect_log 断言、业务键、路由
+   DomainError→409（尤其取消场次）与测试预期；在偏离登记写清根因修法。
 
+**第二轮阻塞修复（2026-10-11 Spec review，必须一起完成）**：
 
-@idempotent_effect("effect_send_invitation")
-def effect_send_invitation(
-    conn: sqlite3.Connection,
-    *,
-    thread_id: str,
-    business_key: str,
-    slot_id: str,
-    draft_id: str,
-    recipient: str | None,
-    channel,
-    recorder,
-    outbound_enabled,
-    confirmed_by: str | None,
-) -> GateDecision:
-    """effect_* 节点：把一版草稿送进**既有候选人外发门禁**（spec「系统外发一律经既有
-    门禁」；design D5）。
+8. `idempotent_effect` 的最终 `conn.commit()` 异常也必须回滚并原样上抛；当前异常清理只覆盖
+   fn 与 effect_log INSERT。允许在本 Task 修复 `app/storage/idempotency.py` 并扩展
+   `tests/test_idempotency.py`。失败测试必须保留同一连接、执行一次无关 commit 再重新打开
+   连接检查：失败 effect 的业务写及 effect_log 仍为 0。覆盖回滚自身失败时不吞原异常，
+   并保留已有 IntegrityError 幂等命中语义。不得只用立即关连接来证明回滚。
+9. mark 的业务键粒度是每版草稿/正文，不能用场次单行状态谓词替代该粒度的业务事实。
+   在 `app/storage/db.py` 初始化/老库幂等迁移中增加 `invitation_send_log` 持久化事实表，
+   字段含 thread_id、slot_id、draft_id、body_digest、actor、at；唯一索引与 mark 的
+   `(thread_id, business_key)` 同粒度。mark 内部插入该事实行＋更新场次＋effect_log
+   全部同一个事务，配方按事实表行数计数。新增测试：同场次发送两个不同版本时
+   send_log 与 mark effect_log 都为 2；同键重放仍为 1；失败回滚均为 0；场次终结后不降级。
+   不得依靠常量 rows_per_effect=0 或已有 sent 状态豁免。表不保存正文/联系方式或薪资。
+   同步本计划文件结构、迁移覆盖及后续测试样例，记录为什么新增内部事实表。
 
-    ⛔ 唯一入口是 `app.outbound.delivery.deliver_candidate_message()`——本文件不出现
-    任何 `channel.deliver(...)` 直连（tests/test_invitation_effect.py 有源码级反证），
-    也不新增第二个外发路径。门禁的六条 fail-closed 判定原样生效：
-
-    - 缺 AI 生成标识 ⇒ `REASON_MISSING_AI_LABEL` 拦截（spec 第二个 Scenario）；
-    - 收件对象不是非空字符串 ⇒ `REASON_RECIPIENT_UNKNOWN` 拦截（U4 vault 关着时就是
-      这条路：`candidate_recipient_for_invitation()` 返回 None，这里喂空串）；
-    - 外发总开关关闭 ⇒ `REASON_OUTBOUND_DISABLED` 拦截并留痕（spec 第一个 Scenario）；
-    - HR 签名（`confirmed_by`）与总开关**串联**：签了字开关关着照样不发。
-
-    ⚠️ `recipient` 用 `recipient or ""` 收尾：`CandidateOutboundMessage.recipient` 声明
-    是 `str`，把 None 塞进去是类型谎言；空串在门禁里与 None 同判（第 ⑤ 条要求
-    "isinstance(str) and strip() 非空"），⛔ 不在这里替门禁做判断。
-
-    ⚠️ 放行时把场次邀约状态推进到 `'sent'` + `sent_channel='system'`——只在当前状态属于
-    `'none'/'drafted'/'sent'` 时推进，⛔ 不把已回填的 `confirmed`/`declined`/
-    `reschedule_requested` 打回去。
-    """
-    draft = load_draft(conn, draft_id)
-    _assert_slot_invitable(conn, slot_id)
-    message = CandidateOutboundMessage(
-        message_type="interview_invitation",
-        recipient=recipient or "",
-        body=draft["body"],
-        confirmed_by=confirmed_by,
-    )
-    decision = deliver_candidate_message(
-        conn,
-        thread_id=thread_id,
-        message=message,
-        channel=channel,
-        recorder=recorder,
-        outbound_enabled=outbound_enabled,
-    )
-    if decision.allowed:
-        conn.execute(
-            "UPDATE interview_slot SET invitation_status = 'sent', "
-            "sent_channel = 'system', updated_by = ?, updated_at = datetime('now') "
-            "WHERE id = ? AND invitation_status IN ('none', 'drafted', 'sent')",
-            (confirmed_by, slot_id),
-        )
-    return decision
-```
-
-并把 Task 3 存储层的三个常量与三个异常类补进 Task 4 的 import 区（它们已在
-`app/storage/interview_invitation.py` 里定义，直接 import 即可）：
-
-```python
-from app.storage.interview_invitation import (
-    OUTCOME_STATUSES,
-    SENT_CHANNELS,
-    InvitationDraftNotFoundError,
-    InvitationNotAllowedError,
-    InvitationSlotNotFoundError,
-    InvitationTemplateMissingError,
-    load_draft,
-    slot_application_id,
-    slot_facts,
-    slot_status,
-)
-```
-
-**命令与预期输出**：
+**验证**（`python3` 必须替换为 runner 注入的 `$SDD_PYTHON`）：
 
 ```bash
-python3 -m pytest tests/test_invitation_effect.py -q
+"$SDD_PYTHON" -m pytest tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py tests/test_outbound_delivery.py tests/test_idempotency.py -q
 ```
 
-预期输出（Task 10 落地后）：`26 passed in X.XXs`。
-Task 7 单步先用「模块可导入 + 无直连通道调用」两条最小检查：
-
-```bash
-python3 -c "
-import ast, pathlib
-src = pathlib.Path('app/graph/invitation_nodes.py').read_text(encoding='utf-8')
-print('channel.deliver' in src)
-print([n.name for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)])
-"
-```
-
-预期输出：
-
-```
-False
-['_assert_slot_invitable', 'compute_invitation_draft_for_slot', 'effect_persist_draft', 'draft_edit_business_key', 'effect_edit_draft', 'effect_mark_draft_human_written', 'validate_outcome', 'effect_backfill_invitation_outcome', 'draft_body_digest', 'effect_send_invitation']
-```
+确认新测试先红再绿、既有门禁全部绿；两次只读 review 必须明确 PASS，未 PASS 不提交/勾进度。
+review 中不可运行依赖可写临时目录的 pytest，应检查实现方记录、真实代码及事务边界。
 
 ---
 
@@ -1890,7 +1840,7 @@ from app.graph.invitation_nodes import (
     effect_edit_draft,
     effect_mark_draft_human_written,
     effect_persist_draft,
-    effect_send_invitation,
+    send_invitation,
     validate_outcome,
 )
 from app.storage.interview_invitation import (
@@ -2086,25 +2036,34 @@ class InvitationOutcomeRequest(BaseModel):
         draft = _latest_draft_or_none(slot_id)
         if draft is None:
             raise HTTPException(status_code=409, detail="该场次还没有邀约草稿")
-        decision = effect_send_invitation(
-            conn, thread_id=application_id,
-            business_key=f"{draft['id']}:{draft_body_digest(draft['body'])}",
-            slot_id=slot_id, draft_id=draft["id"],
-            recipient=candidate_recipient_for_invitation(
-                conn, application_id=application_id
-            ),
-            channel=channel, recorder=recorder, outbound_enabled=outbound_enabled,
-            confirmed_by=reviewer_of(request),
+        from app.outbound.messages import CandidateOutboundMessage
+        recipient = candidate_recipient_for_invitation(conn, application_id=application_id)
+        message = CandidateOutboundMessage(
+            message_type="interview_invitation", recipient=recipient or "",
+            body=draft["body"], confirmed_by=reviewer_of(request),
         )
+        delivered_before = conn.execute(
+            "SELECT 1 FROM effect_log WHERE effect_key = ?",
+            (f"{application_id}:effect_deliver_message:{message.content_hash()}",),
+        ).fetchone() is not None
+        try:
+            decision = send_invitation(
+                conn, thread_id=application_id, slot_id=slot_id, draft_id=draft["id"],
+                recipient=recipient, channel=channel, recorder=recorder,
+                outbound_enabled=outbound_enabled, confirmed_by=reviewer_of(request),
+            )
+        except InvitationSlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (InvitationNotAllowedError, InvitationDraftNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
-            # ⚠️ None ⇒ 这一次 (草稿, 正文) 已尝试过外发、本节点被幂等短路：既不重复
-            # 投递也不重复留痕（真正防重的是内容哈希键，见节点 docstring）。
             "delivery_mode": (
-                "replay" if decision is None
-                else ("delivered" if decision.allowed else "blocked")
+                "blocked" if not decision.allowed
+                else ("replay" if delivered_before else "allowed")
             ),
-            "blocked_reason": None if decision is None else decision.reason,
+            "blocked_reason": decision.reason,
         }
+
 ```
 
 **命令与预期输出**：
@@ -2357,7 +2316,7 @@ from app.graph.invitation_nodes import (
     effect_edit_draft,
     effect_mark_draft_human_written,
     effect_persist_draft,
-    effect_send_invitation,
+    send_invitation,
 )
 from app.storage.db import get_connection, init_schema
 
@@ -2726,100 +2685,7 @@ def test_backfill_rejects_cancelled_slot(conn):
         )
 
 
-# ── effect_send_invitation（门禁接线） ───────────────────────────────────
-
-
-@pytest.fixture
-def wired(conn, tmp_path):
-    chain_path = tmp_path / "decisions.jsonl"
-    recorder = AuditRecorder(SqliteSink(conn), JsonlChainSink(chain_path))
-    return SpyChannel(), recorder, chain_path
-
-
-def _send(conn, wired, *, recipient="13800000000", enabled=False, confirmed_by="hr-1"):
-    channel, recorder, chain_path = wired
-    draft = conn.execute(
-        "SELECT id, body FROM interview_invitation_draft WHERE slot_id = 's1' "
-        "ORDER BY version DESC LIMIT 1"
-    ).fetchone()
-    draft_id, body = draft
-    decision = effect_send_invitation(
-        conn, thread_id="app1",
-        business_key=f"{draft_id}:{draft_body_digest(body)}",
-        slot_id="s1", draft_id=draft_id, recipient=recipient, channel=channel,
-        recorder=recorder, outbound_enabled=lambda: enabled, confirmed_by=confirmed_by,
-    )
-    return decision
-
-
-def test_send_blocked_when_switch_off_and_audit_recorded(conn, wired):
-    _persist(conn)
-    decision = _send(conn, wired, enabled=False)
-    channel, _recorder, chain_path = wired
-    assert decision.allowed is False
-    assert decision.reason == "外发总开关关闭"
-    assert channel.delivered == []
-    lines = _mirror_lines(chain_path)
-    assert [line["event_type"] for line in lines] == ["outbound_blocked"]
-    assert lines[0]["blocked_reason"] == "外发总开关关闭"
-    assert _slot(conn)[0] == "drafted"  # ⛔ 拦截不动邀约状态
-
-
-def test_send_blocked_when_ai_label_missing(conn, wired):
-    conn.execute(
-        "INSERT INTO interview_invitation_draft "
-        "(id, slot_id, version, template_version, body, ai_generated) "
-        "VALUES ('d-nolabel', 's1', 1, 'v1', '您好，邀请您参加面试。', 1)"
-    )
-    conn.commit()
-    decision = _send(conn, wired, enabled=True)
-    channel, _recorder, chain_path = wired
-    assert decision.allowed is False
-    assert decision.reason == "缺少 AI 生成标识"
-    assert channel.delivered == []
-    assert _mirror_lines(chain_path)[0]["blocked_reason"] == "缺少 AI 生成标识"
-
-
-def test_send_blocked_when_recipient_unknown(conn, wired):
-    _persist(conn)
-    decision = _send(conn, wired, recipient=None, enabled=True)
-    assert decision.allowed is False
-    assert decision.reason == "收件对象缺失或为空"
-
-
-def test_send_allowed_delivers_and_marks_sent(conn, wired):
-    _persist(conn)
-    decision = _send(conn, wired, enabled=True)
-    channel, _recorder, chain_path = wired
-    assert decision.allowed is True
-    assert len(channel.delivered) == 1
-    assert channel.delivered[0][1].type == "interview_invitation"
-    assert _slot(conn) == ("sent", "system", "hr-1")
-    assert _mirror_lines(chain_path)[0]["event_type"] == "outbound_delivered"
-
-
-def test_send_replay_same_content_is_noop(conn, wired):
-    _persist(conn)
-    _send(conn, wired, enabled=True)
-    assert _send(conn, wired, enabled=True) is None
-    channel, _recorder, _chain_path = wired
-    assert len(channel.delivered) == 1
-
-
-def test_send_does_not_downgrade_confirmed_status(conn, wired):
-    _persist(conn)
-    effect_backfill_invitation_outcome(
-        conn, thread_id="app1", business_key="confirmed", slot_id="s1",
-        status="confirmed", actor="hr-1",
-    )
-    _send(conn, wired, enabled=True)
-    assert _slot(conn)[0] == "confirmed"
-
-
-def test_send_module_has_no_direct_channel_deliver():
-    src = Path("app/graph/invitation_nodes.py").read_text(encoding="utf-8")
-    assert "channel.deliver" not in src
-    assert "deliver_candidate_message(" in src
+# Task 7 已包含发送测试与 wired/_send。Task 10 仅补增量，禁止重定义同名函数。
 ```
 
 **命令与预期输出**：
@@ -3306,7 +3172,7 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
       `version` 是 INTEGER、`template_version` 列存标签）。
 - [x] 每个有副作用的动作独占一个 Task 步骤且带幂等键：`effect_persist_draft`（run_id）、
       `effect_edit_draft`（draft_id+正文指纹）、`effect_mark_draft_human_written`（draft_id）、
-      `effect_backfill_invitation_outcome`（target_status）、`effect_send_invitation`
+      `effect_backfill_invitation_outcome`（target_status）、`effect_mark_invitation_sent`
       （draft_id+正文指纹）。
 - [x] 本单元不产出任何 AI 评分 ⇒ 无 `evidence_ref` 断言需求（spec 不含评分条目）。
 
@@ -3403,7 +3269,7 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 > 落库内容一字不变。名字取域前缀，与 `effect_persist_letter`、
 > `effect_persist_prep_draft` 同一先例（后者正是为绕开同一个 `effect_persist_draft`
 > 而加的前缀）。其余四个节点（`effect_edit_draft` / `effect_mark_draft_human_written` /
-> `effect_backfill_invitation_outcome` / `effect_send_invitation`）在 main 上无重名，
+> `effect_backfill_invitation_outcome` / `effect_mark_invitation_sent`）在 main 上无重名，
 > **逐字不动**。⇒ 后续 Task 5 / Task 7 的 AST 名单与 Task 10 的 import、`node_name`
 > 断言里出现的 `effect_persist_draft`，一律以 `effect_persist_invitation_draft` 为准。
 > ② Task 4 的 AST 判据预期输出相应变为 `['_assert_slot_invitable',
@@ -3487,6 +3353,54 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 > （`tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit`，
 > worktree 无 `venv/` ⇒ 体积闸被跳过），与 Task 6 无关。
 
+> **落地说明 D-U3-11（Task 7 实现；一处自相矛盾的计划字面按「保机器判据、改散文」
+> 处置）。**
+> `draft_body_digest` / `effect_send_invitation` 两个符号按计划 Task 7 正文落地
+> （`app/graph/invitation_nodes.py` 续写），`app.outbound.delivery.deliver_candidate_message`
+> 是**唯一**外发入口，`GateDecision` / `CandidateOutboundMessage` 从 `app.outbound.*`
+> import；AST 判据输出与计划预期逐字一致（`effect_persist_draft` 一项按 D-U3-8 的
+> 改名口径读作 `effect_persist_invitation_draft`）：
+> `['_assert_slot_invitable', 'compute_invitation_draft_for_slot',
+> 'effect_persist_invitation_draft', 'draft_edit_business_key', 'effect_edit_draft',
+> 'effect_mark_draft_human_written', 'validate_outcome',
+> 'effect_backfill_invitation_outcome', 'draft_body_digest', 'effect_send_invitation']`；
+> 最小检查 `print('channel.deliver' in src)` ⇒ `False`。
+>
+> ① **一处计划字面自相矛盾，按「保机器判据、改散文」处置**：计划 Task 7 的节点
+> docstring 正文里写着「本文件不出现任何 `channel.deliver(...)` 直连」，而**同一
+> Task 的最小检查**（`'channel.deliver' in src` 预期 `False`）与 Task 10 的源码级
+> 反证（`assert "channel.deliver" not in src`）要求这串字面量**不出现在文件里**——
+> 计划正文里这三者互斥（docstring 一写进去，两条判据当场红）。处置：docstring 改写为
+> 「本文件不出现任何绕过门禁的直连通道调用（…正文里⛔ 也不写那个调用串，否则文本级
+> 反证自己就红了）」，**语义一字不变**（仍声明本文件不直连通道、唯一入口是门禁），
+> 文本级反证与最小检查同时成立。⛔ 不改那两条判据本身——它们才是「不存在第二个外发
+> 路径」的机器证据。
+>
+> ② 两处不在 §1 文件清单里的测试文件同步更新（与 D-U3-8 ③ / D-U3-9 / D-U3-10 同款，
+> 漏登记必红）：① `tests/test_invitation_effect.py` 续写外发段（Task 10 对应段落 7 条
+> 逐字套路），另加 1 条加固用例 `test_send_rejects_cancelled_slot`（已取消场次在
+> 事务内 `_assert_slot_invitable` 重做一遍 ⇒ 拒且零 effect_log）；②
+> `tests/test_effect_idempotency_suite.py` 的 `EFFECT_NODE_MANIFEST` 加一行、
+> `build_recipes()` 加一条（种子＝投递闭环＋一版带 AI 标识草稿，业务事实＝场次邀约状态
+> 进入 `'sent'`/`'system'` 的 **0/1 谓词**、与 `effect_edit_draft` 同为 value-idempotent），
+> 否则 `test_manifest_matches_the_source_tree` 与
+> `test_every_effect_node_has_a_recovery_recipe` 当场判红。
+> ⚠️ 该节点的崩溃点落在**内层** `effect_deliver_message` 的那次 `commit()`（外层不是
+> 自己事务里最后一次 commit），通用协议断言的外层业务事实（场次邀约状态）此时仍未
+> 提交——这是本节点「经既有门禁」的结构性结果，已在配方 note 里写明。
+>
+> **验证证据**：`tests/test_invitation_effect.py tests/test_effect_idempotency_suite.py -q`
+> ⇒ **165 passed**；相关 8 个文件合并跑（`test_invitation_effect` /
+> `test_effect_idempotency_suite` / `test_interview_history_invariant` /
+> `test_db_migration` / `test_db_u3_schema` / `test_interview_invitation_storage` /
+> `test_invitation_template` / `test_invitation_drafter`）⇒ **234 passed**；
+> 外发门禁/外发链路相关 4 个文件（`test_outbound_delivery` / `test_outbound_gate` /
+> `test_outbound_end_to_end` / `test_outbound_effects`）＋ U2 历史不变式与迁移
+> ⇒ **167 passed**；全量 `-q` ⇒ **4474 passed, 12 skipped, 1 failed**，
+> 唯一红项与 D-U3-9 / D-U3-10 记录的是同一条本 worktree 的环境性红项
+> （`tests/test_commit_launcher.py::test_red_doc_size_test_rejects_before_commit`，
+> worktree 无 `venv/` ⇒ 体积闸被跳过），与 Task 7 无关。
+
 ## 5. 提取验证记录（`spec-to-plan` 第 6 步，本计划写作时已做的最小核验）
 
 - 已在仓库磁盘上核对：U1 的 `interview_invitation_draft` / `invitation_template`
@@ -3541,3 +3455,48 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 
 
 
+
+
+> **落地说明 D-U3-12（1011R / Task 7 阻塞修复）**
+>
+> D-U3-11 的旧发送实现、AST 名单及“内层提交”证明已撤回，不作为通过依据。
+> 根因：外层 effect 包住 delivery 独立提交，blocked 也占用尝试键。
+> 修法：send_invitation 无装饰器、事务管理、直接写库；只读归属校验后经唯一 delivery
+> 入口，再在放行时调用 effect_mark_invitation_sent。真实状态节点键为
+> {slot_id}:{draft_id}:{body_digest}，BEGIN IMMEDIATE 内重做适用性与正文校验，
+> UPDATE 与 effect_log 由装饰器同事务提交。终结状态编排跳过，节点内抛领域异常。
+> blocked 无 mark 记录；同草稿可在开关打开后重走门禁，重复调用仍返回 GateDecision。
+>
+> Task 8 样例领域错误（含取消）→409，不存在→404；blocked 优先于 replay。
+> Task 9 显示 blocked 原因，allowed/replay 分别显示本次放行/已有投递事实。
+> Task 10 禁止追加已存在的同名发送测试，只补增量；Task 11 增加关闭→打开、
+> allowed 重放、放行后关闭返回 blocked、取消返回409断言。
+> Task 12 manifest/配方登记 effect_mark_invitation_sent，不登记普通 send_invitation；
+> 旧历史中的 effect_send_invitation 名称及尝试键说明均以本修正为准。
+>
+> TDD：先新增归属/缺失场次与 blocked→enabled 测试，2 failed、47 passed；
+> 错误场次进入 delivery、blocked 后返回 None 均被实证。修复后指定三套验证188 passed。
+> 故障覆盖 delivery 两个 effect 已提交后、mark 执行前和 mark 自身提交前；
+> 关闭连接重开后假通道投递=1，mark 状态/日志从0/0到1/1。配方正常/崩溃路径均通过，
+> 无 blocked 零业务行豁免。两次只读 review 由外层 runner 接续，未双PASS不提交、不勾进度。
+
+
+> **落地说明 D-U3-13（2026-10-11 / Task 7 第二轮阻塞修复）**
+>
+> 根因：装饰器最终 commit 不在异常清理范围内，失败写可被下一次无关 commit 带下去；
+> 场次 sent 单行谓词也不能表达每版草稿/正文的发送事实，第二版使 effect_log=2 而业务事实=1。
+> 修法：最终 commit 异常回滚并原样上抛，回滚失败记含 effect_key 的 ERROR，保留原异常；
+> INSERT IntegrityError 的既有幂等命中语义保持不变。新增 invitation_send_log 六字段
+> thread_id/slot_id/draft_id/body_digest/actor/at，复合唯一索引与 mark 键同粒度；
+> mark 在 BEGIN IMMEDIATE 内校验，插入事实并更新场次，连同 effect_log 一次提交。
+> 原“一张新增表”限制按 Task 7 第9条明确扩为两张内部表；U1 两表、加列八表集合未改。
+> Task 12 配方改按 thread 的 send_log 行数计数，rows_per_effect=1，无状态谓词豁免。
+> Task 10 只补增量，并验证两个版本事实/日志各2、同键重放各1、终结状态各0；
+> Task 11 的发送接口样例继续用 blocked 优先、allowed/replay 区分与领域异常409。
+>
+> TDD 红：新增最终 commit 失败/回滚失败、两版本发送、老库迁移四用例，4 failed / 66 passed。
+> 绿：指定四套测试 203 passed。真实故障窗口测试保留 mark 失败的连接，执行无关业务写与
+> commit 后重开：send_log/effect_log 均0；重放后均1，FakeChannel 实际投递恒1。
+> 两版正常路径事实/日志均2；老库缺表后连续两次 init_schema 不改已有草稿，唯一索引拒重复。
+> 两次只读 review 由外层 runner 接续；本会话不声称 review PASS、不提交、不勾进度。
+> 补充迁移验证：test_db_migration / test_db_u3_schema / test_db_interview_invitation_draft_schema 共48 passed；git diff --check 通过。
