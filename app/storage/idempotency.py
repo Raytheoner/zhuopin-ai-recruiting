@@ -156,7 +156,20 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
                     )
                 raise
 
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                # Final commit is part of the effect transaction too. A failed
+                # commit must not leak its writes into an unrelated later commit.
+                try:
+                    conn.rollback()
+                except Exception as rollback_exc:
+                    logger.error(
+                        "rollback failed after commit for effect_key=%s failed; "
+                        "partial writes may be committed by a later effect",
+                        effect_key, exc_info=rollback_exc,
+                    )
+                raise
             return result
 
         return wrapper

@@ -124,6 +124,11 @@
   （加列路径只服务「老库缺列」），⛔ **不进 `_DRIFT_GUARDED_TABLES`**（该守卫只覆盖
   「既可能由 SCHEMA 建、又可能早已存在于老库」的表；本表在老库上不存在）。
   ⇒ `tests/test_db_migration.py` 的既有断言（`_ADDED_COLUMNS` 表集合 = 8 张）**逐字不变**。
+- **Task 7 第二轮阻塞修正的明确增量**：在原一张回填表之外新增内部事实表
+  `invitation_send_log`；它按 `(thread_id, slot_id, draft_id, body_digest)` 唯一，
+  与 mark 的键同粒度，不保存正文、联系方式或薪资。通过 `init_schema()` 的
+  `CREATE TABLE IF NOT EXISTS` / `CREATE UNIQUE INDEX IF NOT EXISTS` 创建，
+  不进入 `_ADDED_COLUMNS` 或 `_DRIFT_GUARDED_TABLES`，U1 两表仍零改动。
 - 模板 v1 占位种子走 `init_schema()` 里的幂等 `INSERT OR IGNORE`（与
   `_seed_letter_templates` 同一先例、同一位置），⛔ 不在业务路径里"顺手建种子"。
   ⚠️ `tests/test_db_interview_invitation_draft_schema.py`（U1 的 schema 测试）里那条
@@ -137,13 +142,15 @@ app/storage/invitation_template.py         # 新增：模板版本化读写 + �
 app/storage/interview_invitation.py        # 新增：草稿版本/场次事实/回填留痕读取 + 收件对象解析
 app/agents/invitation_drafter.py           # 新增：生成纯函数 compute_invitation_draft
 app/graph/invitation_nodes.py              # 新增：1 个 compute_* + 5 个 effect_* 节点
-app/storage/db.py                          # 修改：invitation_outcome_log 建表 + 模板 v1 占位种子
+app/storage/db.py                          # 修改：invitation_outcome_log / invitation_send_log 幂等建表 + 模板 v1 占位种子
 app/middleware/auth.py                     # 修改：PROTECTED_PATH_PREFIXES 加两个前缀
 app/web/server.py                          # 修改：Pydantic 模型 + 模板/草稿/回填/外发/页面路由
 app/web/static/invitation_review.html      # 新增：邀约页（生成/复制/编辑/标记人工/回填/外发）
 tests/test_invitation_template.py          # 新增：模板版本化 + 占位符反证（Task 1）
 tests/test_invitation_drafter.py           # 新增：生成纯函数（Task 2）
 tests/test_db_u3_schema.py                 # 新增：invitation_outcome_log schema（Task 3）
+tests/test_idempotency.py                  # 修改：最终 commit 失败回滚与原异常保留（Task 7）
+# tests/test_invitation_effect.py 同时覆盖 invitation_send_log 新库/老库幂等迁移（Task 7）
 tests/test_interview_invitation_storage.py # 新增：U3 存储层行为（Task 3）
 tests/test_invitation_effect.py            # 新增：5 节点 + 门禁 Scenario（Task 10）
 tests/test_interview_invitation_api.py     # 新增：路由契约 + 页面 + 子路径前缀（Task 11）
@@ -1745,7 +1752,8 @@ print([n.name for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)][-2
 真实收件对象或生产配置；外发测试一律 FakeChannel，无真实消息。
 
 **文件**：`app/graph/invitation_nodes.py`、`tests/test_invitation_effect.py`、
-`tests/test_effect_idempotency_suite.py`；需要时同步本计划 Task 8/10/11/12 的接口及测试样例。
+`tests/test_effect_idempotency_suite.py`、`app/storage/idempotency.py`、
+`tests/test_idempotency.py`、`app/storage/db.py`；同步本计划 Task 8/10/11/12 的接口及测试样例。
 
 按 TDD 执行以下修复：
 
@@ -2076,6 +2084,24 @@ python3 -m pytest tests/test_auth_middleware.py tests/test_auth_routes.py -q
 
 ### Task 9: 邀约页 `app/web/static/invitation_review.html`（tasks 3.7）
 
+**2026-10-11 `1011R` Luna review 阻塞修正**：本 Task 的实现会话必须亲自复跑
+已有页面测试与 Task 8 路由测试，不能因文件已存在就将测试推给 runner。Task 11 的
+`tests/test_interview_invitation_api.py` 尚未交付时，先用当前
+`tests/test_invitation_review_page.py`＋`tests/test_interview_invitation_routes.py` 验证。
+页面测试 mock 应按实际请求路径/动作分别响应，不得把所有 API 返回固定 send 结果，
+使 allowed/blocked/已有投递事实三分支成为真实接口契约对应的输入。增加真实路由草稿
+响应到页面展示的衔接证据，验证 AI 标识及正文不会被页面剥除；使用测试数据/FakeChannel，
+不得真实外发。同步本 Task 后续测试命令与偏离登记，原样例中的 path `.pop()` 已修正，
+不得回退。
+
+**兼容性补充**：页面提取路径倒数第二段时使用数组长度索引，不使用较新的 Array.prototype.at；补对应路径测试并实跑。
+
+**本 Task 授权文件**：除页面与页面测试外，允许修改本计划的 Task 9 修正、相关测试
+命令与偏离登记（主会话在 Task 开始前已写入的说明亦属于本 Task）。页面测试须分别验证
+GET 草稿列表、generate、edit、mark-human、outcome、send 的请求路径/方法/请求 body，
+按各动作响应真实结构分别返回并断言页面状态；不得用一个泛化 POST 返回体掩盖接口错接。
+真实 API 的契约验证可由已通过的 Task 8 路由测试与页面契约测试组合证明，不要求真实外发。
+
 **文件**：`app/web/static/invitation_review.html`（新增，整文件）
 
 页面路由（`GET /interview-slots/{slot_id}/invitation`）已在 Task 8 落地；本 Task 只写
@@ -2136,7 +2162,8 @@ python3 -m pytest tests/test_auth_middleware.py tests/test_auth_routes.py -q
   </main>
 
   <script>
-    const slotId = location.pathname.split("/").filter(Boolean).pop();
+    const pathParts = location.pathname.split("/").filter(Boolean);
+    const slotId = pathParts[pathParts.length - 2];
     const api = `api/interview-slots/${slotId}/invitation`;
     let currentDraftId = null;
 
@@ -2268,17 +2295,22 @@ python3 -m pytest tests/test_auth_middleware.py tests/test_auth_routes.py -q
 </html>
 ```
 
-**命令与预期输出**：
+**命令与预期输出**（Task 11 的 `tests/test_interview_invitation_api.py` 尚未落地时，以当前页面测试和 Task 8 路由测试验收）：
 
 ```bash
-python3 -m pytest tests/test_interview_invitation_api.py -q
+"$SDD_PYTHON" -m pytest tests/test_invitation_review_page.py tests/test_interview_invitation_routes.py -q
 ```
 
-预期输出（Task 11 落地后）：`15 passed in X.XXs`。
+预期输出：页面测试与 Task 8 路由测试全绿。Task 11 落地后再单独运行 `"$SDD_PYTHON" -m pytest tests/test_interview_invitation_api.py -q`。
+
+**Task 9 落地偏离登记**：页面与初始实现已存在于本 worktree；本 Task 补强页面测试以逐一断言 GET、模板 PUT、generate、edit、mark-human、outcome、send 的路径、方法及请求体，并按各 API 的实际响应结构分别 mock。页面测试覆盖 blocked/allowed/replay 三种 send 结果及真实路由草稿正文/AI 标识衔接。计划内过时的 `.pop()` 路径示例修正为兼容旧浏览器的数组索引 `parts[parts.length - 2]`，测试命令使用 runner 注入的 `$SDD_PYTHON`，并先跑当前页面与 Task 8 路由测试。无页面行为偏离，无真实外发。
 
 ---
 
 ### Task 10: `tests/test_invitation_effect.py`（五个节点 + 门禁两个 Scenario）
+
+**1011R 审查核验补充**：在已存在测试文件增量续写，允许修改该测试文件与本计划偏离登记。回填节点的 docstring 中 `business_key = f"{slot_id}:{status}"` 是调用约定说明，不能当作可执行覆写；实际幂等装饰器按调用方 business_key 构键。保留同键重放、跨场次同状态及不同请求键触发领域重复异常且无孤儿日志三个断言；若现有测试已覆盖，直接实跑并如实登记，无需为了制造 diff 改业务代码。review 用实际可执行源码行验证，不把 docstring 当赋值。若实际发现覆写才按缺陷修复，不跳过两阶段 review。
+
 
 **文件**：`tests/test_invitation_effect.py`（新增，整文件）
 
@@ -2692,6 +2724,9 @@ python3 -m pytest tests/test_invitation_effect.py -q
 
 ### Task 11: `tests/test_interview_invitation_api.py`（路由契约 + 邀约页 + 子路径前缀）
 
+**1011R 路由契约修正及完整授权**：允许新增该 API 测试文件、修改本计划偏离登记及 `app/storage/interview_scheduling.py` 的 `slot_for()` 读取/序列化：现有列 sent_channel 已由回填写入但 API 场次对象漏返，补此字段，不做迁移、不改动作语义。实测先红（缺字段）后绿23项；本轮增加既有排期存储/API相关测试回归并把该必要共用文件修改落偏离登记，审查按这份完整授权核对。
+
+
 **文件**：`tests/test_interview_invitation_api.py`（新增，整文件）
 
 ```python
@@ -2986,6 +3021,12 @@ python3 -m pytest tests/test_interview_invitation_api.py -q
 
 ### Task 12: `tests/test_interview_scheduling_u3_e2e.py`（U3 e2e，tasks 3.8）
 
+**最新一轮验收命令**：本轮最后一条pytest必须实跑 `"$SDD_PYTHON" -m pytest tests/test_interview_invitation_storage.py tests/test_interview_invitation_api.py tests/test_interview_scheduling_u3_e2e.py -q`，使本轮pytest-evidence.json与最新联合30项回归一致。不要在联合回归后再单跑e2e。原始events按文件物理行顺序追加，旧轮30项不得说成新轮3项之后；runner evidence标注 current execution raw stdout 只含本轮，非全部历史。
+
+
+**1011R 顺序缺陷修复与授权清单**：本 Task 新增 e2e 文件，允许修改 `app/storage/interview_invitation.py` 的 list_outcomes、本存储测试及本计划偏离登记。不得把 `[sent, confirmed]` 放宽为集合。现实现 `ORDER BY at,id` 在同秒时用随机 UUID 排列，会颠倒事实先后。保留 at 第一排序，并用稳定的插入顺序（当前普通 SQLite 表的 rowid）处理同时间并列；先补同秒、逆字典序 id 的确定性失败测试，再修查询，严格恢复 e2e 顺序断言，跑存储/API/e2e回归并登记原因与证据，不改 schema或幂等语义。
+
+
 **文件**：`tests/test_interview_scheduling_u3_e2e.py`（新增，整文件）
 
 ```python
@@ -3183,6 +3224,16 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 | 文案模板的来源与版本 | Task 1（表 + 白名单校验 + v1 占位种子）、Task 8（PUT） | 升版不覆盖；留痕记模板版本；⛔ 无评分/排名/淘汰理由占位符（参数化反证） |
 
 ## 4. 本计划相对 `tasks.md` / `design.md` / spec 的偏离登记
+
+### D-U3-15：Task 12 同秒回填按插入顺序返回（1011R）
+
+原因：`ORDER BY at,id` 的随机 UUID 并列排序可把 sent/confirmed 颠倒。list_outcomes 改为 `ORDER BY at,rowid`，保留 at 主排序，以当前普通 SQLite 表插入顺序稳定并列项；不改 schema与幂等键。补固定相同时间和逆字典序 UUID 的存储测试，e2e恢复严格 `[sent,confirmed]` 断言。最新 Task 12 原始事件：e2e、存储和 API联合30 passed/exit_code=0，git diff --check通过。授权 e2e文件、该存储函数、存储测试与本计划；本段为实际偏离登记，不把集合断言当验收。
+
+
+### D-U3-14：Task 11 API 场次对象补返已存储的发送渠道（1011R）
+
+`slot_for()` 原先漏选/漏序列化现有 `sent_channel` 列，导致回填 API 响应无渠道。Task 11 路由测试先 14 passed/1 failed，补字段后 API 契约与原路由23项通过，追加既有排期存储/API回归共58项通过（原始任务事件中 exit_code=0）。此修复仅补响应字段，不改变 schema、状态转移或 U2 不变式。允许改本计划、存储函数和本 Task API 测试。再补直接存储函数断言以确认现有 sent_channel 读回和无发送时 null，并实跑相关回归；不得覆盖原测试。
+
 
 1. **D-U3-1（实现细节）**：模板占位符白名单在 tasks 3.1 列的六项之外多放
    `candidate_name`（收信人姓名），共九个。理由：邀约文案要称呼候选人，而它是普通
@@ -3471,3 +3522,24 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 > 故障覆盖 delivery 两个 effect 已提交后、mark 执行前和 mark 自身提交前；
 > 关闭连接重开后假通道投递=1，mark 状态/日志从0/0到1/1。配方正常/崩溃路径均通过，
 > 无 blocked 零业务行豁免。两次只读 review 由外层 runner 接续，未双PASS不提交、不勾进度。
+
+
+> **落地说明 D-U3-13（2026-10-11 / Task 7 第二轮阻塞修复）**
+>
+> 根因：装饰器最终 commit 不在异常清理范围内，失败写可被下一次无关 commit 带下去；
+> 场次 sent 单行谓词也不能表达每版草稿/正文的发送事实，第二版使 effect_log=2 而业务事实=1。
+> 修法：最终 commit 异常回滚并原样上抛，回滚失败记含 effect_key 的 ERROR，保留原异常；
+> INSERT IntegrityError 的既有幂等命中语义保持不变。新增 invitation_send_log 六字段
+> thread_id/slot_id/draft_id/body_digest/actor/at，复合唯一索引与 mark 键同粒度；
+> mark 在 BEGIN IMMEDIATE 内校验，插入事实并更新场次，连同 effect_log 一次提交。
+> 原“一张新增表”限制按 Task 7 第9条明确扩为两张内部表；U1 两表、加列八表集合未改。
+> Task 12 配方改按 thread 的 send_log 行数计数，rows_per_effect=1，无状态谓词豁免。
+> Task 10 只补增量，并验证两个版本事实/日志各2、同键重放各1、终结状态各0；
+> Task 11 的发送接口样例继续用 blocked 优先、allowed/replay 区分与领域异常409。
+>
+> TDD 红：新增最终 commit 失败/回滚失败、两版本发送、老库迁移四用例，4 failed / 66 passed。
+> 绿：指定四套测试 203 passed。真实故障窗口测试保留 mark 失败的连接，执行无关业务写与
+> commit 后重开：send_log/effect_log 均0；重放后均1，FakeChannel 实际投递恒1。
+> 两版正常路径事实/日志均2；老库缺表后连续两次 init_schema 不改已有草稿，唯一索引拒重复。
+> 两次只读 review 由外层 runner 接续；本会话不声称 review PASS、不提交、不勾进度。
+> 补充迁移验证：test_db_migration / test_db_u3_schema / test_db_interview_invitation_draft_schema 共48 passed；git diff --check 通过。

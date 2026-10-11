@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <!--BASE_HREF-->
+  <title>面试邀约 · 卓品智能招聘</title>
+  <link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+  <main>
+    <h1>面试邀约</h1>
+    <p id="slot-summary">加载中…</p>
+    <p id="status-line"></p>
+
+    <section>
+      <h2>模板</h2>
+      <p id="template-version"></p>
+      <textarea id="template-body" rows="8" cols="80"></textarea>
+      <button id="save-template">保存模板（升版）</button>
+    </section>
+
+    <section>
+      <h2>文案</h2>
+      <button id="generate">生成邀约文案</button>
+      <ul id="draft-list"></ul>
+      <pre id="draft-body"></pre>
+      <button id="copy-draft">复制文案</button>
+      <textarea id="edit-body" rows="8" cols="80"></textarea>
+      <button id="save-edit">保存编辑</button>
+      <button id="mark-human">标记为人工撰写</button>
+    </section>
+
+    <section>
+      <h2>回填外发结果</h2>
+      <select id="outcome-status">
+        <option value="sent">已发出</option>
+        <option value="confirmed">候选人已确认</option>
+        <option value="declined">候选人拒绝</option>
+        <option value="reschedule_requested">候选人请求改期</option>
+      </select>
+      <select id="outcome-channel">
+        <option value="wechat">微信</option>
+        <option value="email">邮件</option>
+        <option value="phone">电话</option>
+      </select>
+      <input id="outcome-reason" placeholder="候选人拒绝时必填的原因">
+      <button id="submit-outcome">回填</button>
+      <button id="send-by-system">由系统发送（经外发门禁）</button>
+      <ul id="outcome-list"></ul>
+    </section>
+  </main>
+
+  <script>
+    const pathParts = location.pathname.split("/").filter(Boolean);
+    const slotId = pathParts[pathParts.length - 2];
+    const api = `api/interview-slots/${slotId}/invitation`;
+    let currentDraftId = null;
+
+    function say(text) {
+      document.getElementById("status-line").textContent = text || "";
+    }
+
+    async function load() {
+      const res = await fetch(api);
+      if (!res.ok) { say("加载失败"); return; }
+      const data = await res.json();
+      const slot = data.slot;
+      document.getElementById("slot-summary").textContent =
+        `投递 ${slot.application_id} · 第 ${slot.round} 轮 · ${slot.start_at} — ${slot.end_at}` +
+        ` · 场次 ${slot.status} · 邀约 ${slot.invitation_status}`;
+      if (data.template) {
+        document.getElementById("template-version").textContent =
+          `当前版本 ${data.template.version}（${data.template.updated_by}）`;
+        document.getElementById("template-body").value = data.template.body;
+      }
+      const list = document.getElementById("draft-list");
+      list.innerHTML = "";
+      data.drafts.forEach((draft) => {
+        const li = document.createElement("li");
+        li.textContent =
+          `v${draft.version} · 模板 ${draft.template_version}` +
+          `${draft.ai_generated ? " · AI 生成" : " · 人工撰写"}` +
+          `${draft.authorship_marked_by ? " · 去标人 " + draft.authorship_marked_by : ""}`;
+        li.onclick = () => {
+          currentDraftId = draft.id;
+          document.getElementById("draft-body").textContent = draft.body;
+          document.getElementById("edit-body").value = draft.body;
+        };
+        list.appendChild(li);
+      });
+      const outcomes = document.getElementById("outcome-list");
+      outcomes.innerHTML = "";
+      data.outcomes.forEach((outcome) => {
+        const li = document.createElement("li");
+        li.textContent =
+          `${outcome.status}${outcome.channel ? "·" + outcome.channel : ""}` +
+          `${outcome.reason ? "·" + outcome.reason : ""} · ${outcome.actor} · ${outcome.at}`;
+        outcomes.appendChild(li);
+      });
+      const last = data.drafts[data.drafts.length - 1];
+      if (last) {
+        currentDraftId = last.id;
+        document.getElementById("draft-body").textContent = last.body;
+        document.getElementById("edit-body").value = last.body;
+      }
+    }
+
+    async function post(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      const payload = await res.json();
+      if (!res.ok) { say(payload.detail || "操作失败"); return null; }
+      return payload;
+    }
+
+    document.getElementById("save-template").onclick = async () => {
+      const res = await fetch("api/invitation-templates", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: document.getElementById("template-body").value }),
+      });
+      const payload = await res.json();
+      say(res.ok ? `模板已保存为 ${payload.version}` : payload.detail);
+      if (res.ok) { await load(); }
+    };
+
+    document.getElementById("generate").onclick = async () => {
+      const payload = await post(`${api}/generate`, {});
+      if (payload) { say("已生成新版本"); await load(); }
+    };
+
+    document.getElementById("copy-draft").onclick = async () => {
+      const text = document.getElementById("draft-body").textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        say("已复制到剪贴板，请到微信／邮件里粘贴发送");
+      } catch (err) {
+        say("复制失败，请手动选中正文复制");
+      }
+    };
+
+    document.getElementById("save-edit").onclick = async () => {
+      if (!currentDraftId) { say("请先选择一版草稿"); return; }
+      const payload = await post(`${api}/drafts/${currentDraftId}/edit`, {
+        body: document.getElementById("edit-body").value,
+      });
+      if (payload) { say("已保存（AI 标识保留）"); await load(); }
+    };
+
+    document.getElementById("mark-human").onclick = async () => {
+      if (!currentDraftId) { say("请先选择一版草稿"); return; }
+      const payload = await post(
+        `${api}/drafts/${currentDraftId}/mark-human-written`, {}
+      );
+      if (payload) { say("已标记为人工撰写（已留痕）"); await load(); }
+    };
+
+    document.getElementById("submit-outcome").onclick = async () => {
+      const payload = await post(`${api}/outcome`, {
+        status: document.getElementById("outcome-status").value,
+        channel: document.getElementById("outcome-channel").value,
+        reason: document.getElementById("outcome-reason").value || null,
+      });
+      if (payload) { say("已回填"); await load(); }
+    };
+
+    document.getElementById("send-by-system").onclick = async () => {
+      const payload = await post(`${api}/send`, {});
+      if (payload) {
+        const text = payload.delivery_mode === "blocked"
+          ? `外发被门禁拦截：${payload.blocked_reason}`
+          : payload.delivery_mode === "replay"
+            ? "已有投递事实（本次未重复发送）"
+            : "本次外发已放行";
+        say(text);
+        await load();
+      }
+    };
+
+    load();
+  </script>
+</body>
+</html>

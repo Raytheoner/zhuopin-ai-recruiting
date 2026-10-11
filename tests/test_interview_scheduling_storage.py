@@ -432,8 +432,19 @@ def test_slot_for_returns_slot_with_interviewers(tmp_path):
     assert slot["mode"] == "onsite"
     assert slot["status"] == "scheduled"
     assert slot["invitation_status"] == "none"
+    assert slot["sent_channel"] is None
     assert slot["interviewer_ids"] == ["iv1", "iv2"]
     assert slot["needs_invitation_followup"] is False
+
+
+def test_slot_for_returns_sent_channel(tmp_path):
+    conn = _conn(tmp_path)
+    _seed(conn)
+    _slot(conn, slot_id="s1")
+    conn.execute("UPDATE interview_slot SET sent_channel = 'wechat' WHERE id = 's1'")
+    conn.commit()
+
+    assert slot_for(conn, "s1")["sent_channel"] == "wechat"
 
 
 @pytest.mark.parametrize(

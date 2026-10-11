@@ -14,10 +14,7 @@ thread_id 约定＝该场次所属 application_id（与 U2 `app/graph/scheduling
 - backfill= f"{slot_id}:{status}"（**同一场次**同状态重复提交无第二条留痕由这条键与
   `invitation_outcome_log` 的 UNIQUE(slot_id, status) 双保险；⚠️ 键必须带 slot_id，
   否则同一投递第二轮场次的同状态回填会被静默短路——2026-10-11 修正）
-- send    = f"{draft_id}:{正文 sha256 前 16 位}"（同一份文案至多尝试外发一次；
-  改了正文重走门禁。⛔ 真正防重复投递的是内容哈希键
-  `effect_deliver_message` / `effect_record_outbound_audit` 各自的 business_key，
-  本节点的键只保证"同一次尝试不重复执行"）
+- sent    = f"{slot_id}:{draft_id}:{正文 sha256 前 16 位}"（独占状态写；发送编排无装饰器）
 
 ⚠️ 偏离登记 D-U3-8（节点名字面量）：持久化节点在计划里叫 `effect_persist_draft`，
 但**这个名字已被 M1 画像泳道占用**（`app/graph/nodes.py::effect_persist_draft`，落
@@ -45,8 +42,12 @@ from app.agents.jd_agent import (
     extract_label_generated_at,
     strip_ai_label,
 )
+from app.outbound.delivery import deliver_candidate_message
+from app.outbound.gate import GateDecision
+from app.outbound.messages import CandidateOutboundMessage
 from app.storage.idempotency import idempotent_effect
 from app.storage.interview_invitation import (
+    InvitationDraftNotFoundError,
     InvitationNotAllowedError,
     InvitationOutcomeAlreadyRecordedError,
     InvitationSlotNotFoundError,
@@ -317,3 +318,81 @@ def effect_backfill_invitation_outcome(
         "channel": existing[3], "reason": existing[4], "actor": existing[5],
         "at": existing[6],
     }
+
+
+def draft_body_digest(body: str) -> str:
+    return hashlib.sha256(str(body).encode("utf-8")).hexdigest()[:16]
+
+
+def _validate_invitation_send(conn, *, slot_id, draft_id, thread_id):
+    _assert_slot_invitable(conn, slot_id)
+    draft = load_draft(conn, draft_id)
+    if draft["slot_id"] != slot_id:
+        raise InvitationNotAllowedError("草稿不属于该场次")
+    if slot_application_id(conn, slot_id) != thread_id:
+        raise InvitationNotAllowedError("场次不属于该投递")
+    return draft
+
+
+@idempotent_effect("effect_mark_invitation_sent")
+def effect_mark_invitation_sent(
+    conn: sqlite3.Connection, *, thread_id: str, business_key: str,
+    slot_id: str, draft_id: str, body_digest: str, actor: str,
+) -> None:
+    """独占状态写；业务事实与 effect_log 由装饰器同事务提交。"""
+    # 在首次读之前锁定事务，避免校验后场次被另一连接取消。
+    conn.execute("BEGIN IMMEDIATE")
+    draft = _validate_invitation_send(
+        conn, slot_id=slot_id, draft_id=draft_id, thread_id=thread_id,
+    )
+    if draft_body_digest(draft["body"]) != body_digest:
+        raise InvitationNotAllowedError("投递后草稿已修改，请重新确认")
+    if business_key != f"{slot_id}:{draft_id}:{body_digest}":
+        raise InvitationNotAllowedError("发送状态业务键不匹配")
+    result = conn.execute(
+        "UPDATE interview_slot SET invitation_status = 'sent', "
+        "sent_channel = 'system', updated_by = ?, updated_at = datetime('now') "
+        "WHERE id = ? AND invitation_status IN ('none', 'drafted', 'sent')",
+        (actor, slot_id),
+    )
+    if result.rowcount != 1:
+        raise InvitationNotAllowedError("已回填的邀约状态不可降级")
+    conn.execute(
+        "INSERT INTO invitation_send_log "
+        "(thread_id, slot_id, draft_id, body_digest, actor) VALUES (?, ?, ?, ?, ?)",
+        (thread_id, slot_id, draft_id, body_digest, actor),
+    )
+
+
+def send_invitation(
+    conn: sqlite3.Connection, *, thread_id: str,
+    slot_id: str, draft_id: str, recipient: str | None,
+    channel, recorder, outbound_enabled, confirmed_by: str | None,
+) -> GateDecision:
+    """只读校验后经唯一既有门禁发送，再调用独占状态节点；自身不管理事务。"""
+    draft = _validate_invitation_send(
+        conn, slot_id=slot_id, draft_id=draft_id, thread_id=thread_id,
+    )
+    digest = draft_body_digest(draft["body"])
+    message = CandidateOutboundMessage(
+        message_type="interview_invitation", recipient=recipient or "",
+        body=draft["body"], confirmed_by=confirmed_by,
+    )
+    decision = deliver_candidate_message(
+        conn, thread_id=thread_id, message=message, channel=channel,
+        recorder=recorder, outbound_enabled=outbound_enabled,
+    )
+    if decision.allowed:
+        status = conn.execute(
+            "SELECT invitation_status FROM interview_slot WHERE id = ?", (slot_id,),
+        ).fetchone()
+        if status is None:
+            raise InvitationSlotNotFoundError(f"场次不存在: {slot_id!r}")
+        if status[0] not in ("confirmed", "declined", "reschedule_requested"):
+            effect_mark_invitation_sent(
+                conn, thread_id=thread_id,
+                business_key=f"{slot_id}:{draft_id}:{digest}",
+                slot_id=slot_id, draft_id=draft_id, body_digest=digest,
+                actor=confirmed_by,
+            )
+    return decision

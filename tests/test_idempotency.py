@@ -414,3 +414,50 @@ def test_rollback_failure_on_non_integrity_error_keeps_original_exception(tmp_pa
     assert any("job1:effect_disk_full_rb:v1" in r.getMessage() for r in error_records), (
         "日志里应该包含 effect_key，方便定位是哪个 effect 的部分写入被泄漏"
     )
+
+
+@pytest.mark.parametrize("rollback_fails", [False, True])
+def test_final_commit_failure_rolls_back_and_preserves_original(tmp_path, caplog, rollback_fails):
+    original = sqlite3.OperationalError("final commit failed")
+
+    class CommitFailure(sqlite3.Connection):
+        armed = False
+
+        def commit(self):
+            if self.armed:
+                self.armed = False
+                raise original
+            return super().commit()
+
+        def rollback(self):
+            if rollback_fails:
+                raise RuntimeError("rollback failed")
+            return super().rollback()
+
+    path = str(tmp_path / "commit.db")
+    conn = sqlite3.connect(path, factory=CommitFailure)
+    init_schema(conn)
+
+    @idempotent_effect("effect_commit_failure")
+    def write(conn, thread_id, business_key):
+        conn.execute("INSERT INTO job (id, title) VALUES ('failed', 'failed')")
+
+    conn.armed = True
+    with caplog.at_level(logging.ERROR), pytest.raises(sqlite3.OperationalError) as caught:
+        write(conn, thread_id="thread", business_key="key")
+    assert caught.value is original
+    if rollback_fails:
+        assert any("thread:effect_commit_failure:key" in r.getMessage() for r in caplog.records)
+        sqlite3.Connection.rollback(conn)  # cleanup after the deliberately broken rollback
+    else:
+        assert not conn.in_transaction
+    conn.execute("INSERT INTO job (id, title) VALUES ('unrelated', 'unrelated')")
+    conn.commit()  # keep the failed connection alive through an unrelated commit
+    reader = get_connection(path)
+    try:
+        assert reader.execute("SELECT COUNT(*) FROM job WHERE id = 'failed'").fetchone()[0] == 0
+        assert reader.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+        assert reader.execute("SELECT COUNT(*) FROM job WHERE id = 'unrelated'").fetchone()[0] == 1
+    finally:
+        reader.close()
+        conn.close()

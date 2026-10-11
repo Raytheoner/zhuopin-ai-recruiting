@@ -27,6 +27,33 @@ from app.audit.recorder import AuditRecorder
 from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.channels.web_channel import WebChannel
 from app.graph.build import build_intake_graph
+from app.graph.invitation_nodes import (
+    compute_invitation_draft_for_slot,
+    draft_edit_business_key,
+    effect_backfill_invitation_outcome,
+    effect_edit_draft,
+    effect_mark_draft_human_written,
+    effect_persist_invitation_draft,
+    send_invitation,
+    validate_outcome,
+)
+from app.storage.interview_invitation import (
+    InvitationDraftNotFoundError,
+    InvitationNotAllowedError,
+    InvitationOutcomeAlreadyRecordedError,
+    InvitationSlotNotFoundError,
+    InvitationTemplateMissingError,
+    candidate_recipient_for_invitation,
+    list_drafts,
+    list_outcomes,
+    load_draft,
+    slot_application_id,
+)
+from app.storage.invitation_template import (
+    ForbiddenPlaceholderError as InvitationForbiddenPlaceholderError,
+    get_invitation_template,
+    put_invitation_template,
+)
 from app.graph.jd_nodes import (
     JDNotGeneratedError,
     effect_mark_jd_human_written,
@@ -321,6 +348,24 @@ class CancelSlotRequest(BaseModel):
 
 class CompleteSlotRequest(BaseModel):
     target_status: str
+
+
+class InvitationTemplatePutRequest(BaseModel):
+    body: str
+
+
+class InvitationGenerateRequest(BaseModel):
+    contact_hint: str | None = None
+
+
+class InvitationEditRequest(BaseModel):
+    body: str
+
+
+class InvitationOutcomeRequest(BaseModel):
+    status: str
+    channel: str | None = None
+    reason: str | None = None
 
 
 class OnboardingTemplateItem(BaseModel):
@@ -641,6 +686,198 @@ def create_app(
     @router.get("/interviewers/me/schedule")
     def interviewer_schedule_page():
         return _render_static_page("interviewer_schedule.html", root_path)
+
+    def _require_slot_draft(slot_id: str, draft_id: str) -> None:
+        if load_draft(conn, draft_id)["slot_id"] != slot_id:
+            raise InvitationDraftNotFoundError("草稿不属于该场次")
+
+    # ── interview-scheduling U3：邀约文案生成与回填 ──────────────────────
+    # 全部端点要求 HR 角色（`_require_hr_role`）：邀约是 HR 的动作，面试官账号 403。
+    # 操作人一律取 reviewer_of(request)（登录账号名）——⛔ 不接受请求体里传"操作人"，
+    # 那等于让调用方自己声明自己是谁。
+
+    def _latest_draft_or_none(slot_id: str) -> dict | None:
+        drafts = list_drafts(conn, slot_id)
+        return drafts[-1] if drafts else None
+
+    def _invitation_payload(slot_id: str) -> dict:
+        slot = slot_for(conn, slot_id)
+        if slot is None:
+            raise HTTPException(status_code=404, detail="场次不存在")
+        return {
+            "slot": slot,
+            "template": get_invitation_template(conn),
+            "drafts": list_drafts(conn, slot_id),
+            "outcomes": list_outcomes(conn, slot_id),
+        }
+
+    @router.get("/api/invitation-templates")
+    def invitation_template_detail(request: Request):
+        _require_hr_role(request)
+        return {"template": get_invitation_template(conn)}
+
+    @router.put("/api/invitation-templates")
+    def invitation_template_put(req: InvitationTemplatePutRequest, request: Request):
+        _require_hr_role(request)
+        try:
+            return put_invitation_template(
+                conn, body=req.body, updated_by=reviewer_of(request)
+            )
+        except (InvitationForbiddenPlaceholderError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/interview-slots/{slot_id}/invitation")
+    def invitation_page(slot_id: str):
+        return _render_static_page("invitation_review.html", root_path)
+
+    @router.get("/api/interview-slots/{slot_id}/invitation")
+    def invitation_detail(slot_id: str, request: Request):
+        _require_hr_role(request)
+        return _invitation_payload(slot_id)
+
+    @router.post("/api/interview-slots/{slot_id}/invitation/generate", status_code=201)
+    def invitation_generate(
+        slot_id: str, req: InvitationGenerateRequest, request: Request
+    ):
+        _require_hr_role(request)
+        try:
+            application_id = slot_application_id(conn, slot_id)
+            draft, template_version = compute_invitation_draft_for_slot(
+                conn, slot_id=slot_id, gateway=gateway, contact_hint=req.contact_hint
+            )
+            draft_id = effect_persist_invitation_draft(
+                conn, thread_id=application_id, business_key=draft.run_id,
+                slot_id=slot_id, template_version=template_version, draft=draft,
+            )
+        except InvitationSlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (InvitationNotAllowedError, InvitationTemplateMissingError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        payload = _invitation_payload(slot_id)
+        if draft_id is None:
+            # 同一次生成留痕的幂等重放仍返回原草稿标识。
+            draft_id = next(
+                d["id"] for d in payload["drafts"]
+                if d["analysis_run_id"] == draft.run_id
+            )
+        payload["created_draft_id"] = draft_id
+        return payload
+
+    @router.post("/api/interview-slots/{slot_id}/invitation/drafts/{draft_id}/edit")
+    def invitation_edit(
+        slot_id: str, draft_id: str, req: InvitationEditRequest, request: Request
+    ):
+        _require_hr_role(request)
+        try:
+            application_id = slot_application_id(conn, slot_id)
+            _require_slot_draft(slot_id, draft_id)
+            body = effect_edit_draft(
+                conn, thread_id=application_id,
+                business_key=draft_edit_business_key(draft_id, req.body),
+                draft_id=draft_id, edited_body=req.body,
+            )
+        except (InvitationDraftNotFoundError, InvitationSlotNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if body is None:
+            body = load_draft(conn, draft_id)["body"]
+        return {"draft_id": draft_id, "body": body}
+
+    @router.post(
+        "/api/interview-slots/{slot_id}/invitation/drafts/{draft_id}/mark-human-written"
+    )
+    def invitation_mark_human_written(slot_id: str, draft_id: str, request: Request):
+        _require_hr_role(request)
+        try:
+            application_id = slot_application_id(conn, slot_id)
+            _require_slot_draft(slot_id, draft_id)
+            body = effect_mark_draft_human_written(
+                conn, thread_id=application_id, business_key=draft_id,
+                draft_id=draft_id, reviewer=reviewer_of(request),
+                marked_at=sqlite_utc_now(),
+            )
+        except (InvitationDraftNotFoundError, InvitationSlotNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if body is None:
+            body = load_draft(conn, draft_id)["body"]
+        return {"draft_id": draft_id, "body": body}
+
+    @router.post("/api/interview-slots/{slot_id}/invitation/outcome")
+    def invitation_outcome(
+        slot_id: str, req: InvitationOutcomeRequest, request: Request
+    ):
+        _require_hr_role(request)
+        try:
+            validate_outcome(status=req.status, channel=req.channel, reason=req.reason)
+            application_id = slot_application_id(conn, slot_id)
+            # 2026-10-11 修正（Spec review）：键必须带 slot_id——只带 status 会把
+            # 同一投递第二轮场次的同状态回填静默短路（与 U2 既有键约定相抵）。
+            outcome = effect_backfill_invitation_outcome(
+                conn, thread_id=application_id, business_key=f"{slot_id}:{req.status}",
+                slot_id=slot_id, status=req.status, actor=reviewer_of(request),
+                channel=req.channel, reason=req.reason,
+            )
+            if outcome is None:
+                # 幂等短路：同一状态重复提交时节点直接返回 None（不重复写留痕）。
+                # 响应体仍要给页面一份可渲染的现状，⛔ 不把 None 直接塞给前端。
+                outcome = next(
+                    (
+                        o for o in list_outcomes(conn, slot_id)
+                        if o["status"] == req.status
+                    ),
+                    None,
+                )
+        except InvitationOutcomeAlreadyRecordedError as exc:
+            # 2026-10-11 修正（Spec review F1 配套）：不同幂等键的重复回填 ⇒
+            # 幂等成功（既有行原样返回）；⛔ 不能落进下面的宽 ValueError ⇒ 422。
+            outcome = exc.outcome
+        except InvitationSlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except InvitationNotAllowedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"outcome": outcome, **_invitation_payload(slot_id)}
+
+    @router.post("/api/interview-slots/{slot_id}/invitation/send")
+    def invitation_send(slot_id: str, request: Request):
+        _require_hr_role(request)
+        try:
+            application_id = slot_application_id(conn, slot_id)
+        except InvitationSlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        draft = _latest_draft_or_none(slot_id)
+        if draft is None:
+            raise HTTPException(status_code=409, detail="该场次还没有邀约草稿")
+        from app.outbound.messages import CandidateOutboundMessage
+        recipient = candidate_recipient_for_invitation(conn, application_id=application_id)
+        message = CandidateOutboundMessage(
+            message_type="interview_invitation", recipient=recipient or "",
+            body=draft["body"], confirmed_by=reviewer_of(request),
+        )
+        delivered_before = conn.execute(
+            "SELECT 1 FROM effect_log WHERE effect_key = ?",
+            (f"{application_id}:effect_deliver_message:{message.content_hash()}",),
+        ).fetchone() is not None
+        try:
+            decision = send_invitation(
+                conn, thread_id=application_id, slot_id=slot_id, draft_id=draft["id"],
+                recipient=recipient, channel=channel, recorder=recorder,
+                outbound_enabled=outbound_enabled, confirmed_by=reviewer_of(request),
+            )
+        except InvitationSlotNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (InvitationNotAllowedError, InvitationDraftNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "delivery_mode": (
+                "blocked" if not decision.allowed
+                else ("replay" if delivered_before else "allowed")
+            ),
+            "blocked_reason": decision.reason,
+        }
+
 
     def _can_complete_slot(slot: dict, username: str, role: str | None) -> bool:
         if role == "hr":
