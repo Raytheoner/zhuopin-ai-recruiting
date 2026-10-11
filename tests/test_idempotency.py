@@ -7,6 +7,56 @@ from app.storage.db import get_connection, init_schema
 from app.storage.idempotency import idempotent_effect
 
 
+def test_require_no_transaction_rejects_without_rolling_back_callers_transaction(tmp_path):
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('sentinel', '调用方')")
+
+    @idempotent_effect("effect_requires_clean_connection", require_no_transaction=True)
+    def effect(conn, thread_id, business_key):
+        raise AssertionError("function must not run")
+
+    with pytest.raises(RuntimeError, match="requires a connection without an active transaction"):
+        effect(conn, thread_id="t1", business_key="b1")
+    assert conn.in_transaction
+    conn.commit()
+    assert conn.execute("SELECT name FROM candidate WHERE id='sentinel'").fetchone()[0] == "调用方"
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 0
+
+
+def test_require_no_transaction_checks_before_idempotency_precheck(tmp_path):
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+
+    @idempotent_effect("effect_requires_clean_connection", require_no_transaction=True)
+    def effect(conn, thread_id, business_key):
+        conn.execute("INSERT INTO candidate (id, name) VALUES ('once', '一次')")
+
+    effect(conn, thread_id="t1", business_key="b1")
+    conn.execute("INSERT INTO candidate (id, name) VALUES ('sentinel', '调用方')")
+    with pytest.raises(RuntimeError, match="active transaction"):
+        effect(conn, thread_id="t1", business_key="b1")
+    assert conn.in_transaction
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM candidate WHERE id='sentinel'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM candidate WHERE id='once'").fetchone()[0] == 1
+
+
+def test_require_no_transaction_allows_normal_effect_call(tmp_path):
+    conn = get_connection(str(tmp_path / "test.db"))
+    init_schema(conn)
+
+    @idempotent_effect("effect_requires_clean_connection", require_no_transaction=True)
+    def effect(conn, thread_id, business_key):
+        conn.execute("INSERT INTO candidate (id, name) VALUES ('normal', '正常调用')")
+        return "done"
+
+    assert effect(conn, thread_id="t1", business_key="b1") == "done"
+    assert not conn.in_transaction
+    assert conn.execute("SELECT name FROM candidate WHERE id='normal'").fetchone()[0] == "正常调用"
+    assert conn.execute("SELECT COUNT(*) FROM effect_log").fetchone()[0] == 1
+
+
 def test_effect_runs_once_on_first_call(tmp_path):
     db_path = str(tmp_path / "test.db")
     conn = get_connection(db_path)
