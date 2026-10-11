@@ -881,6 +881,30 @@ Expected: 全绿。
 
 ### Task 3: `effect_enqueue_disposition`（tasks 3.2，六类登记 + 每类一把幂等键）
 
+**最后一写故障测试补充（1011R）**：除 queue 写入和 commit 故障外，还要注入 effect_log INSERT 失败（例如仅针对 effect_log 的 SQL 拦截），断言六类 queue/log 均完整回滚；保留同连接执行无关提交再重开仍无泄漏，解除故障后成功重放一一对应且不重复。必须实跑测试并保存退出码。
+
+
+**2026-10-11 `1011R` Spec review 阻塞修正**：独立入口 `effect_enqueue_disposition`
+在 helper 任意写入失败或最终 commit 失败时必须 rollback 并原样上抛；helper 保持不 commit，
+供 Task 4/5 外层同事务调用。先增加失败测试：第二/第三类的 queue/effect_log 写失败、最终 commit 失败，
+保留同一连接继续做无关 commit 后重新打开库，队列行与六类 effect_log 均不能泄漏；
+正常六类和同键重放测试继续通过。若 rollback 自身失败，保留原异常并记录日志。
+同步后续 Task 的独立入口样例与偏离登记，不用关闭连接隐式回滚来掩盖缺口。
+
+**本 Task 文件范围补充**：允许修改本计划文件
+`docs/superpowers/plans/2026-10-10-onboarding-flow-unit3-terminal-and-disposition.md`
+的 Task 3 修正说明、相关样例与偏离登记；该计划改动由主会话授权并在执行前写入，属于本
+Task 的修复输入，不应误判为其它泳道改动。除这些规划说明外，不扩展业务行为或触碰其它任务代码。
+
+**Luna 质量 review 补充**：测试须按 thread 与每个 category 显式核对 queue 事实行
+和对应 effect_log 的一一对应/条数恒等；在正常六类登记、重复登记、失败回滚及单侧旧行
+（队列已有而日志缺失、日志已有而队列缺失）预置后调用的路径核验两表重新成对，不能仅
+分别断言总数/键列表。保留 INSERT OR IGNORE 修补单侧缺失的既有语义，不增加实际删除。
+
+本 Task 的测试还须断言 rollback 自身失败时会记录错误日志且仍抛出原写入/提交异常。独立入口
+的两种失败路径都在同一 writer 连接上继续提交无关行，再由新连接验证未泄漏；不允许以关闭
+连接触发 SQLite 隐式回滚代替入口自身的 rollback。
+
 **Files:**
 - Modify: `app/graph/onboarding_nodes.py`（追加 `DISPOSITION_CATEGORIES` / `_enqueue_disposition_rows` / `effect_enqueue_disposition`）
 - Test: `tests/test_onboarding_terminal_nodes.py`（新建，本 Task 先建文件头与登记用例）
@@ -1047,7 +1071,7 @@ def test_enqueue_disposition_rerun_keeps_six_rows(conn):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `./venv/bin/python -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
+Run: `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
 Expected: FAIL —— `ImportError: cannot import name 'effect_enqueue_disposition'`。
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1119,19 +1143,31 @@ def effect_enqueue_disposition(
     生产主路径是 `effect_complete_onboarding` 内部同事务调用，本入口供补登记/
     重放使用（例如为历史"已入职"投递补登记）。
     """
-    count = _enqueue_disposition_rows(
-        conn, application_id=application_id, candidate_id=candidate_id
-    )
-    conn.commit()
-    return count
+    try:
+        count = _enqueue_disposition_rows(
+            conn, application_id=application_id, candidate_id=candidate_id
+        )
+        conn.commit()
+        return count
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception(
+                "rollback failed while cleaning up effect_enqueue_disposition "
+                "for application_id=%s",
+                application_id,
+            )
+        raise
 ```
 
 （`uuid` / `json` 已在模块顶部 import；本 Task 不需要新增 import。）
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `./venv/bin/python -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
-Expected: 全绿（三个用例）。
+Run: `"$SDD_PYTHON" -m pytest tests/test_onboarding_terminal_nodes.py -q -k enqueue`
+Expected: 全绿（正常六类、按 thread/category 配对核验、同键重放、单侧旧行修补、第二/第三类
+queue/effect_log 写失败回滚、commit 失败回滚、rollback 异常保留原异常）。
 
 ---
 
@@ -1936,6 +1972,8 @@ def test_enqueue_never_changes_terminal_facts(conn):
     _finish_all_required(conn, checklist_id)
     _confirm(conn)
 
+    # 独立入口自带事务：此处是在终态提交后另行补登记；终态主路径只能在
+    # effect_complete_onboarding 内调用不 commit 的 _enqueue_disposition_rows。
     effect_enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
 
     _assert_invariants(conn)
@@ -3067,6 +3105,7 @@ Expected: 全绿（CI 的同一个标记）。
 | 7 | 审计断言六把"是否已签认"做成**调用方传参**（CLI `--retention-policy-signed-version`，默认读同名环境变量） | Task 8 | 守分层规矩 | `app/audit` 不 import `app.config`（`__init__.py` 明文规矩）。不传即按"未签认"口径 fail-closed——方向上宁可多红一次，也不让"验不了"折成"守住了" |
 | 8 | 新增 `docs/audit-and-outbound-ops.md` 一节（旗标口径） | Task 8 ⑤ | 配套文档 | 新旗标不写进运维口径，等于让 `.51` 上的人永远按"未签认"跑巡检（一条会长期假红的红线）；这一节是它的唯一说明处 |
 | 9 | 三条迁移的测试文件独立成两份（`test_db_terminal_status_migration.py` / `test_db_stage_history_terminal_action.py`），且 Task 2 只改 `tests/test_db_m2_schema.py` 的 docstring 措辞 | Task 1/2 | 复用与最小侵入 | `tests/test_db_migration.py` 已持有 `${HR_GATE_MAIN}` 级的老库夹具，但那两份是**新库+本包老库**的一次性回归，放进大文件会把本包的变化淹掉；`test_db_m2_schema.py` 的那句 docstring 会因值域扩充而**变成假话**，必须同步改（⛔ 断言不动） |
+| 10 | Task 3 独立入口显式负责失败 rollback；同事务 helper 仍不 commit | Task 3；Task 4/5 入口样例 | 补齐事务边界 | tasks 3.2 定义了幂等登记，但未写独立入口在中途写失败或 commit 失败后的连接状态契约。入口必须 rollback 并保留原异常，rollback 自身失败时记日志；否则调用方在同一连接后续 commit 可能泄漏半组登记。主终态流程仍只调不 commit 的 helper，以保留与终态事实同一事务 |
 
 前 6 条属"不改变外部可观察行为的技术方案/补前置"范畴（新增取值不会让任何既有行为改变），由 `run-build` 的 final review 确认；第 7/8 条涉及一条新接口（CLI 旗标），也在 final review 的范围内。
 

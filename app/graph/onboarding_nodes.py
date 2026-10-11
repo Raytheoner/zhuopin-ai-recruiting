@@ -1,5 +1,7 @@
 """onboarding-flow U2 清单页与进度的 L4 编排层节点（tasks 2.1/2.2）。
 
+本模块同时承载 U2 清单节点与 U3 终态、处置登记节点。
+
 与 app/graph/invite_nodes.py 同一形态：Web 通道下"挂起等人确认"由 HTTP 端点
 直接调用普通 Python 函数达成，不建真实 LangGraph interrupt()（2026-08-26 判例）。
 
@@ -9,10 +11,13 @@ thread_id 语义：实例化取 application_id（一份投递一份清单）；�
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 
 from app.storage.idempotency import idempotent_effect
+
+logger = logging.getLogger(__name__)
 
 
 class ChecklistInstantiateRejected(Exception):
@@ -184,3 +189,90 @@ def effect_update_item(
         "VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
         (str(uuid.uuid4()), item_id, from_status, to_status, reason, operator_username),
     )
+
+
+# ── 以下属 onboarding-flow U3（终态与处置登记，tasks 3.1–3.3）─────────────
+
+# 六类待处置数据。⛔ 与 app/storage/db.py 的 data_disposition_queue.category CHECK
+# 逐字同源（post-hire-data-disposition spec「入职完成时登记处置事项」原话：
+# 简历文件与原文、解析字段、评分与证据、面试场次与邀约文书、联系方式、Offer 文书）。
+DISPOSITION_CATEGORIES = (
+    "resume_file",
+    "parsed_fields",
+    "scores",
+    "interview",
+    "contact",
+    "offer_letter",
+)
+
+# 六条登记各自的幂等键，category 是此处的 business_key。
+_ENQUEUE_NODE_NAME = "effect_enqueue_disposition"
+
+
+def _enqueue_disposition_rows(
+    conn: sqlite3.Connection, *, application_id: str, candidate_id: str
+) -> int:
+    """登记六类待处置事项（tasks 3.2），返回该投递的登记行数。
+
+    - 每行：`policy_version=NULL`（待策略）、`planned_action='pending'`、
+      `due_at=NULL`、`executed_at=NULL`——🔴 留存策略未签认前不执行任何删除/脱敏。
+    - 幂等两道：`data_disposition_queue(application_id, category)` 唯一索引（结构）
+      ＋ 每类一条 `effect_log`（`{application_id}:effect_enqueue_disposition:{category}`）。
+    - **⛔ 本函数不 commit**：它既被 `effect_enqueue_disposition`（独立入口）调用，
+      也被 `effect_complete_onboarding` 在**同一事务**里调用（tasks 3.1 原话
+      「写 history ＋ 清单 closed ＋ 3.2 登记，同事务」）。在这里 commit 会把
+      "同事务"打散成两个事务——清单关了、登记没落，或反过来。
+    """
+    for category in DISPOSITION_CATEGORIES:
+        conn.execute(
+            "INSERT OR IGNORE INTO data_disposition_queue "
+            "(id, application_id, candidate_id, category, policy_version, planned_action) "
+            "VALUES (?, ?, ?, ?, NULL, 'pending')",
+            (str(uuid.uuid4()), application_id, candidate_id, category),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO effect_log "
+            "(effect_key, thread_id, node_name, business_key, applied_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))",
+            (
+                f"{application_id}:{_ENQUEUE_NODE_NAME}:{category}",
+                application_id,
+                _ENQUEUE_NODE_NAME,
+                category,
+            ),
+        )
+    return conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id = ?",
+        (application_id,),
+    ).fetchone()[0]
+
+
+def effect_enqueue_disposition(
+    conn: sqlite3.Connection, *, application_id: str, candidate_id: str
+) -> int:
+    """effect_* 节点（tasks 3.2）的独立入口：登记六类处置事项并提交。
+
+    ⛔ 刻意**不套** `@idempotent_effect`：本单元的幂等粒度是"每类一把键"（六把，
+    tasks 3.2 字面），外层再套一把单键装饰器会让粒度混淆（装饰器会往 effect_log
+    写一条 `{application_id}:effect_enqueue_disposition:{business_key}`，与六把
+    键并存两套语义）。幂等由上面两道兑现，重复调用返回 6、不新增行。
+
+    生产主路径是 `effect_complete_onboarding` 内部同事务调用，本入口供补登记/
+    重放使用（例如为历史"已入职"投递补登记）。
+    """
+    try:
+        count = _enqueue_disposition_rows(
+            conn, application_id=application_id, candidate_id=candidate_id
+        )
+        conn.commit()
+        return count
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception(
+                "rollback failed while cleaning up effect_enqueue_disposition "
+                "for application_id=%s",
+                application_id,
+            )
+        raise
