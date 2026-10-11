@@ -250,3 +250,19 @@ def test_test_evidence_skips_warnings_and_preserves_latest_failed_run(tmp_path, 
     monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=b"WARN only\n", returncode=0))
     runner._run("task", ["codex"], tmp_path, log)
     assert json.loads(log.with_suffix(".pytest-evidence.json").read_text())["pytest_events"] == []
+
+
+def test_raw_execution_evidence_survives_summary_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts import codex_sdd_runner as runner
+    import pytest
+
+    raw = b'"warning"\n'
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=raw, returncode=0))
+    def broken_summary(output):
+        raise RuntimeError("summary failed")
+    monkeypatch.setattr(runner, "summarize", broken_summary)
+    log = tmp_path / "task-8.log"
+    with pytest.raises(RuntimeError, match="summary failed"):
+        runner._run("task", ["codex"], tmp_path, log)
+    assert log.with_suffix(".events.jsonl").read_bytes() == raw

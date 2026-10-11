@@ -182,7 +182,6 @@ def _run(prompt: str, argv: list[str], cwd: Path, log_path: Path) -> tuple[int, 
         stderr=subprocess.STDOUT,
         env=env,
     )
-    fields, final, _saw = summarize(proc.stdout.decode("utf-8", errors="replace"))
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.with_suffix(".events.jsonl").open("ab") as events:
@@ -195,6 +194,8 @@ def _run(prompt: str, argv: list[str], cwd: Path, log_path: Path) -> tuple[int, 
                 event = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(event, dict):
+                continue
             item = event.get("item", {})
             if (event.get("type") == "item.completed"
                     and item.get("type") == "command_execution"
@@ -205,6 +206,10 @@ def _run(prompt: str, argv: list[str], cwd: Path, log_path: Path) -> tuple[int, 
                 json.dumps({"source": "current execution raw stdout", "pytest_events": test_events}, ensure_ascii=False),
                 encoding="utf-8",
             )
+    except OSError:
+        pass
+    fields, final, _saw = summarize(proc.stdout.decode("utf-8", errors="replace"))
+    try:
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"argv={' '.join(argv)}\n{final or '(无最终文本)'}\nusage={'|'.join(fields)}\n")
     except OSError:

@@ -52,7 +52,10 @@ def parse_lines(text: str) -> tuple[list[dict], list[str], bool]:
         if not line:
             continue
         try:
-            events.append(json.loads(line))
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                continue
+            events.append(event)
             saw_json = True
         except ValueError:
             continue
