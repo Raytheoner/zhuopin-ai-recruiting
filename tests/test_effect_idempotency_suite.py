@@ -58,7 +58,13 @@ from app.graph.manual_handoff import (
     effect_deliver_manual_handoff,
     effect_mark_needs_manual,
 )
-from app.graph.onboarding_nodes import effect_instantiate_checklist, effect_update_item
+from app.graph.onboarding_nodes import (
+    DISPOSITION_CATEGORIES,
+    effect_complete_onboarding,
+    effect_enqueue_disposition,
+    effect_instantiate_checklist,
+    effect_update_item,
+)
 from app.graph.scheduling_nodes import (
     effect_cancel_slot,
     effect_complete_slot,
@@ -198,6 +204,8 @@ EFFECT_NODE_MANIFEST = frozenset(
         "effect_send_verification_code",
         "effect_instantiate_checklist",
         "effect_update_item",
+        "effect_complete_onboarding",
+        "effect_enqueue_disposition",
         "effect_schedule_slot",
         "effect_reschedule_slot",
         "effect_cancel_slot",
@@ -992,6 +1000,26 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
             "input_hash, raw_response) VALUES (?, 'deepseek-chat', 'interview-prep-v1', 0, "
             "'hash', '{}')",
             (_PREP_RUN,),
+        )
+        conn.commit()
+
+    def _seed_onboarding_terminal(conn):
+        _seed_application_base(conn)
+        conn.execute(
+            "UPDATE application SET status='hired', current_stage_id='hired' WHERE id=?",
+            (_APPLICATION,),
+        )
+        conn.execute(
+            "INSERT INTO offer (id, application_id, job_id, department, start_date, report_to, "
+            "status, approval_round, created_by) VALUES ('offer-4-4', ?, ?, '研发部', "
+            "'2026-10-20', 'manager', 'accepted', 1, 'tester')",
+            (_APPLICATION, _JOB),
+        )
+        conn.execute(
+            "INSERT INTO onboarding_checklist "
+            "(id, application_id, template_version, start_date, created_by) "
+            "VALUES ('checklist-4-4', ?, 1, '2026-10-20', 'tester')",
+            (_APPLICATION,),
         )
         conn.commit()
 
@@ -2171,6 +2199,43 @@ def build_recipes(tmp_path: pathlib.Path) -> dict[str, Recipe]:
                 "另有一条用例锁死「重跑不产生第二条留痕」。"
             ),
         ),
+        "effect_complete_onboarding": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_onboarding_terminal,
+            invoke=lambda conn: effect_complete_onboarding(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="hired",
+                actor_username="hr:tester",
+                actual_start_date="2026-10-20",
+                today="2026-10-20",
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM application_stage_history WHERE application_id=? "
+                "AND action='onboarded'",
+                (_APPLICATION,),
+            ).fetchone()[0],
+            note=(
+                "终态事实与主 effect_log 各一条；同事务还须有六行处置队列和六条按类别"
+                "effect_log（由终态节点内部 helper 写入）。"
+            ),
+        ),
+        "effect_enqueue_disposition": Recipe(
+            thread_id=_APPLICATION,
+            seed=_seed_application_base,
+            invoke=lambda conn: effect_enqueue_disposition(
+                conn,
+                thread_id=_APPLICATION,
+                business_key="resume_file",
+                candidate_id=_CANDIDATE,
+            ),
+            count_business_rows=lambda conn: conn.execute(
+                "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id=? "
+                "AND category='resume_file'",
+                (_APPLICATION,),
+            ).fetchone()[0],
+            note="该单类别节点的业务事实与同名 effect_log 都恰好一条。",
+        ),
         "effect_schedule_slot": Recipe(
             thread_id="sched-app1",
             seed=_seed_interview_ready,
@@ -2418,6 +2483,56 @@ def test_forced_interrupt_then_recovery_applies_the_effect_exactly_once(node_nam
     assert recipe.count_business_rows(fresh) == rows_before + recipe.rows_per_effect, (
         f"{node_name}：恢复重跑后业务事实应恰好 {recipe.rows_per_effect} 份。{recipe.note}"
     )
+    if node_name == "effect_complete_onboarding":
+        queue_rows = fresh.execute(
+            "SELECT category FROM data_disposition_queue WHERE application_id=?",
+            (recipe.thread_id,),
+        ).fetchall()
+        category_logs = fresh.execute(
+            "SELECT effect_key, thread_id, node_name, business_key FROM effect_log "
+            "WHERE node_name='effect_enqueue_disposition' AND thread_id=?",
+            (recipe.thread_id,),
+        ).fetchall()
+        queue_categories = [row[0] for row in queue_rows]
+        assert len(queue_categories) == len(DISPOSITION_CATEGORIES) == 6
+        assert len(set(queue_categories)) == 6
+        assert set(queue_categories) == set(DISPOSITION_CATEGORIES)
+        assert len(category_logs) == len(DISPOSITION_CATEGORIES) == 6
+        assert {
+            (thread_id, business_key)
+            for _, thread_id, _, business_key in category_logs
+        } == {(recipe.thread_id, category) for category in DISPOSITION_CATEGORIES}
+        assert {
+            effect_key
+            for effect_key, thread_id, node_name, business_key in category_logs
+        } == {
+            f"{recipe.thread_id}:effect_enqueue_disposition:{category}"
+            for category in DISPOSITION_CATEGORIES
+        }
+        assert all(
+            node_name == "effect_enqueue_disposition"
+            and thread_id == recipe.thread_id
+            and effect_key == f"{thread_id}:effect_enqueue_disposition:{business_key}"
+            for effect_key, thread_id, node_name, business_key in category_logs
+        )
+    elif node_name == "effect_enqueue_disposition":
+        queue_rows = fresh.execute(
+            "SELECT category FROM data_disposition_queue WHERE application_id=?",
+            (recipe.thread_id,),
+        ).fetchall()
+        category_logs = fresh.execute(
+            "SELECT effect_key, thread_id, node_name, business_key FROM effect_log "
+            "WHERE node_name=? AND thread_id=?",
+            (node_name, recipe.thread_id),
+        ).fetchall()
+        assert recipe.count_business_rows(fresh) == 1
+        assert queue_rows == [("resume_file",)]
+        assert len(category_logs) == 1
+        effect_key, thread_id, logged_node_name, business_key = category_logs[0]
+        assert business_key == "resume_file"
+        assert thread_id == recipe.thread_id
+        assert logged_node_name == node_name
+        assert effect_key == f"{thread_id}:{node_name}:{business_key}"
 
 
 @pytest.mark.parametrize(

@@ -16,7 +16,9 @@ class EffectAlreadyApplied(Exception):
     """
 
 
-def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
+def idempotent_effect(
+    node_name: str, *, begin_immediate: bool = False
+) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
     """
     装饰一个 effect_* 节点函数。被装饰函数必须接受
     (conn: sqlite3.Connection, thread_id: str, business_key: str, **kwargs) 签名。
@@ -30,6 +32,15 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
             conn: sqlite3.Connection, *, thread_id: str, business_key: str, **kwargs
         ) -> T | None:
             effect_key = f"{thread_id}:{node_name}:{business_key}"
+            if begin_immediate:
+                if conn.in_transaction:
+                    raise sqlite3.OperationalError(
+                        f"{node_name} requires transaction ownership; caller transaction is active"
+                    )
+                conn.execute("BEGIN IMMEDIATE")
+                return _run_immediate(
+                    conn, fn, node_name, effect_key, thread_id, business_key, kwargs
+                )
             existing = conn.execute(
                 "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
             ).fetchone()
@@ -162,3 +173,48 @@ def idempotent_effect(node_name: str) -> Callable[[Callable[..., T]], Callable[.
         return wrapper
 
     return decorator
+
+
+def _run_immediate(conn, fn, node_name, effect_key, thread_id, business_key, kwargs):
+    """Run one effect inside the BEGIN IMMEDIATE transaction owned by the wrapper."""
+    try:
+        existing = conn.execute(
+            "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
+        ).fetchone()
+        if existing is not None:
+            conn.rollback()
+            return None
+        result = fn(conn, thread_id=thread_id, business_key=business_key, **kwargs)
+        conn.execute(
+            "INSERT INTO effect_log (effect_key, thread_id, node_name, business_key, applied_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))",
+            (effect_key, thread_id, node_name, business_key),
+        )
+        conn.commit()
+        return result
+    except sqlite3.IntegrityError as exc:
+        try:
+            conn.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "rollback failed while cleaning up immediate effect_key=%s",
+                effect_key,
+                exc_info=rollback_exc,
+            )
+            raise exc
+        # Retain the old duplicate-key contract: only an existing key means replay.
+        if conn.execute(
+            "SELECT 1 FROM effect_log WHERE effect_key = ?", (effect_key,)
+        ).fetchone():
+            return None
+        raise
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "rollback failed while cleaning up immediate effect_key=%s",
+                effect_key,
+                exc_info=rollback_exc,
+            )
+        raise

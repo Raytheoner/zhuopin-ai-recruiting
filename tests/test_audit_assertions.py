@@ -12,6 +12,7 @@ import pytest
 from app.audit.assertions import (
     AI_SCORE_REASON,
     COMPLIANCE_ASSERTIONS,
+    CONFIG_GATED_ASSERTIONS,
     REJECTION_REASON_COLUMN,
     REJECTION_TABLE,
     AssertionResult,
@@ -209,11 +210,12 @@ def test_unlisted_criterion_assertion_passes_for_every_whitelisted_key(conn):
 def test_run_compliance_assertions_covers_every_assertion(conn):
     results = run_compliance_assertions(conn)
 
-    assert len(results) == 7
-    assert len(COMPLIANCE_ASSERTIONS) == 7
+    assert len(results) == 10
+    assert len(COMPLIANCE_ASSERTIONS) == 9
+    assert len(CONFIG_GATED_ASSERTIONS) == 1
     assert all(isinstance(r, AssertionResult) for r in results)
     # 名字必须两两不同：报告里靠 name 定位是哪条红线破了。
-    assert len({r.name for r in results}) == 7
+    assert len({r.name for r in results}) == 10
     assert all(r.ok for r in results)
 
 
@@ -502,3 +504,27 @@ def test_abandoned_terminal_rows_are_exempted_and_counted_with_their_own_effect_
 
     assert result.ok, result.violations
     assert "豁免 2 条" in result.detail, result.detail
+
+
+# ── onboarding-flow U3：三条新断言的正向行为 ──────────────────────────
+
+
+def test_onboarding_item_without_content_columns_passes(conn):
+    from app.audit.assertions import assert_onboarding_item_has_no_content_columns
+
+    assert assert_onboarding_item_has_no_content_columns(conn).ok is True
+
+
+def test_refused_application_without_rejection_passes(conn):
+    from app.audit.assertions import assert_refused_application_has_no_rejection
+
+    assert assert_refused_application_has_no_rejection(conn).ok is True
+
+
+def test_disposition_queue_never_executed_passes(conn):
+    from app.audit.assertions import assert_disposition_not_executed_without_signed_policy
+
+    assert assert_disposition_not_executed_without_signed_policy(conn).ok is True
+    assert assert_disposition_not_executed_without_signed_policy(
+        conn, retention_policy_signed_version="v1-180d"
+    ).ok is True

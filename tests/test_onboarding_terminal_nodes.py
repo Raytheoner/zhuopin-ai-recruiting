@@ -7,6 +7,7 @@ Task 分节长大，本文件按 U3 的任务分节；两份互不修改，避�
 import json
 import logging
 import sqlite3
+import threading
 
 import pytest
 
@@ -18,6 +19,7 @@ from app.graph.onboarding_nodes import (
     terminal_history_rows,
     DISPOSITION_CATEGORIES,
     effect_enqueue_disposition,
+    enqueue_disposition,
     effect_instantiate_checklist,
     effect_update_item,
 )
@@ -35,8 +37,14 @@ def conn(tmp_path):
 
 
 def _seed_hired_application(
-    conn, application_id="app-1", department="研发部", start_date=START_DATE
+    conn, application_id="app-1", department="研发部", start_date=START_DATE,
+    current_stage_id="hired",
 ):
+    if current_stage_id != "hired":
+        conn.execute(
+            "INSERT INTO stage (id, name, stage_type) VALUES (?, '自定义已入职', 'hired')",
+            (current_stage_id,),
+        )
     conn.execute(
         "INSERT INTO job (id, title, department, status) VALUES ('j1', '嵌入式工程师', ?, 'approved')",
         (department,),
@@ -48,8 +56,8 @@ def _seed_hired_application(
     )
     conn.execute(
         "INSERT INTO application (id, candidate_id, job_id, resume_id, current_stage_id, status) "
-        "VALUES (?, 'cand-1', 'j1', 'res-1', 'hired', 'hired')",
-        (application_id,),
+        "VALUES (?, 'cand-1', 'j1', 'res-1', ?, 'hired')",
+        (application_id, current_stage_id),
     )
     conn.execute(
         "INSERT INTO offer (id, application_id, job_id, department, start_date, report_to, "
@@ -120,6 +128,7 @@ def _assert_disposition_pairs(conn, application_id="app-1"):
     assert len(log_rows) == len(DISPOSITION_CATEGORIES)
     assert set(queue) == set(DISPOSITION_CATEGORIES)
     assert set(logs) == {(application_id, category) for category in DISPOSITION_CATEGORIES}
+    assert set(queue) == {business_key for _, business_key in logs}
     for category in DISPOSITION_CATEGORIES:
         assert queue[category] == ("cand-1", None, "pending", None, None, None)
         assert logs[(application_id, category)] == (
@@ -128,13 +137,105 @@ def _assert_disposition_pairs(conn, application_id="app-1"):
         )
 
 
+def test_disposition_pair_guard_rejects_wrong_effect_key_with_same_counts(conn):
+    _seed_hired_application(conn)
+    enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
+    conn.execute(
+        "UPDATE effect_log SET effect_key='app-1:effect_enqueue_disposition:contact-wrong' "
+        "WHERE effect_key='app-1:effect_enqueue_disposition:contact'"
+    )
+    conn.commit()
+
+    with pytest.raises(AssertionError):
+        _assert_disposition_pairs(conn)
+
+
 # ── Task 3：effect_enqueue_disposition ──────────────────────────────────
+
+
+def test_enqueue_disposition_effect_writes_one_category_fact_and_log(conn):
+    _seed_hired_application(conn)
+    result = effect_enqueue_disposition(
+        conn,
+        thread_id="app-1",
+        business_key="resume_file",
+        candidate_id="cand-1",
+    )
+    assert result == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE effect_key="
+        "'app-1:effect_enqueue_disposition:resume_file'"
+    ).fetchone()[0] == 1
+    assert effect_enqueue_disposition(
+        conn,
+        thread_id="app-1",
+        business_key="resume_file",
+        candidate_id="cand-1",
+    ) is None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1'"
+    ).fetchone()[0] == 1
+
+
+def test_enqueue_disposition_effect_repairs_existing_queue_without_effect_log(conn):
+    _seed_hired_application(conn)
+    conn.execute(
+        "INSERT INTO data_disposition_queue "
+        "(id, application_id, candidate_id, category, policy_version, planned_action) "
+        "VALUES ('legacy-queue', 'app-1', 'cand-1', 'resume_file', NULL, 'pending')"
+    )
+    conn.commit()
+    result = effect_enqueue_disposition(
+        conn,
+        thread_id="app-1",
+        business_key="resume_file",
+        candidate_id="cand-1",
+    )
+    assert result == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1' "
+        "AND category='resume_file'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE effect_key="
+        "'app-1:effect_enqueue_disposition:resume_file'"
+    ).fetchone()[0] == 1
+
+
+def test_enqueue_disposition_effect_rolls_back_fact_and_log_on_failure(conn):
+    _seed_hired_application(conn)
+    conn.execute(
+        "CREATE TRIGGER fail_disposition_insert BEFORE INSERT ON data_disposition_queue "
+        "BEGIN SELECT RAISE(ABORT, 'queue write failed'); END"
+    )
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="queue write failed"):
+        effect_enqueue_disposition(
+            conn,
+            thread_id="app-1",
+            business_key="resume_file",
+            candidate_id="cand-1",
+        )
+    assert conn.execute("SELECT COUNT(*) FROM data_disposition_queue").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_enqueue_disposition'"
+    ).fetchone()[0] == 0
+    conn.execute("DROP TRIGGER fail_disposition_insert")
+    assert effect_enqueue_disposition(
+        conn,
+        thread_id="app-1",
+        business_key="resume_file",
+        candidate_id="cand-1",
+    ) == 1
 
 
 def test_enqueue_disposition_writes_six_rows(conn):
     _seed_hired_application(conn)
 
-    count = effect_enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
+    count = enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
 
     assert count == 6
     rows = conn.execute(
@@ -156,7 +257,7 @@ def test_enqueue_disposition_writes_six_rows(conn):
 def test_enqueue_disposition_writes_one_effect_log_key_per_category(conn):
     _seed_hired_application(conn)
 
-    effect_enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
+    enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
 
     keys = {
         row[0]
@@ -173,8 +274,8 @@ def test_enqueue_disposition_writes_one_effect_log_key_per_category(conn):
 def test_enqueue_disposition_rerun_keeps_six_rows(conn):
     _seed_hired_application(conn)
 
-    effect_enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
-    second = effect_enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
+    enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
+    second = enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
 
     assert second == 6
     assert conn.execute(
@@ -207,7 +308,7 @@ def test_enqueue_disposition_repairs_single_sided_legacy_row(conn, preexisting_s
         )
     conn.commit()
 
-    count = effect_enqueue_disposition(
+    count = enqueue_disposition(
         conn, application_id="app-1", candidate_id="cand-1"
     )
 
@@ -251,7 +352,7 @@ def test_enqueue_disposition_rolls_back_after_category_write_failure(
         sqlite3.OperationalError,
         match=f"category {fail_at} {failure_kind} write failed",
     ):
-        effect_enqueue_disposition(
+        enqueue_disposition(
             writer, application_id="app-1", candidate_id="cand-1"
         )
 
@@ -276,7 +377,7 @@ def test_enqueue_disposition_rolls_back_after_category_write_failure(
     reader.close()
 
     # 故障已按调用次数自动解除；同一 writer 连接可完成正常重放，且两表逐类配对。
-    assert effect_enqueue_disposition(
+    assert enqueue_disposition(
         writer, application_id="app-1", candidate_id="cand-1"
     ) == len(DISPOSITION_CATEGORIES)
     _assert_disposition_pairs(writer)
@@ -301,7 +402,7 @@ def test_enqueue_disposition_rolls_back_after_commit_failure(tmp_path):
     writer.fail_next_commit = True
 
     with pytest.raises(sqlite3.OperationalError, match="commit failed"):
-        effect_enqueue_disposition(
+        enqueue_disposition(
             writer, application_id="app-1", candidate_id="cand-1"
         )
 
@@ -325,7 +426,7 @@ def test_enqueue_disposition_rolls_back_after_commit_failure(tmp_path):
     ).fetchone()[0] == 0
     reader.close()
 
-    assert effect_enqueue_disposition(
+    assert enqueue_disposition(
         writer, application_id="app-1", candidate_id="cand-1"
     ) == len(DISPOSITION_CATEGORIES)
     _assert_disposition_pairs(writer)
@@ -356,14 +457,14 @@ def test_enqueue_disposition_preserves_write_error_when_rollback_fails(tmp_path,
 
     with caplog.at_level("ERROR", logger="app.graph.onboarding_nodes"):
         with pytest.raises(sqlite3.OperationalError, match="category write failed"):
-            effect_enqueue_disposition(
+            enqueue_disposition(
                 writer, application_id="app-1", candidate_id="cand-1"
             )
 
     assert "rollback failed while cleaning up effect_enqueue_disposition" in caplog.text
     writer.rollback()
     writer.fail_writes = False
-    assert effect_enqueue_disposition(
+    assert enqueue_disposition(
         writer, application_id="app-1", candidate_id="cand-1"
     ) == len(DISPOSITION_CATEGORIES)
     _assert_disposition_pairs(writer)
@@ -496,6 +597,53 @@ def test_confirm_hired_rerun_is_idempotent(conn):
     ).fetchone()[0] == 6
 
 
+def test_confirm_hired_preserves_custom_hired_stage_and_history_semantics(conn):
+    stage_id = "hired-custom"
+    _seed_hired_application(conn, current_stage_id=stage_id)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+
+    history_id = _confirm(conn)
+
+    assert conn.execute(
+        "SELECT status, current_stage_id FROM application WHERE id='app-1'"
+    ).fetchone() == ("hired", stage_id)
+    row = conn.execute(
+        "SELECT h.from_stage_id, h.to_stage_id, h.action, s_from.stage_type, s_to.stage_type "
+        "FROM application_stage_history h "
+        "JOIN stage s_from ON s_from.id = h.from_stage_id "
+        "JOIN stage s_to ON s_to.id = h.to_stage_id WHERE h.id=?",
+        (history_id,),
+    ).fetchone()
+    assert row == (stage_id, stage_id, "onboarded", "hired", "hired")
+
+
+def test_confirm_hired_same_key_replay_preserves_custom_stage_and_single_history(conn):
+    stage_id = "hired-custom"
+    _seed_hired_application(conn, current_stage_id=stage_id)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+
+    first = _confirm(conn)
+    second = _confirm(conn)
+
+    assert first is not None and second is None
+    assert conn.execute(
+        "SELECT status, current_stage_id FROM application WHERE id='app-1'"
+    ).fetchone() == ("hired", stage_id)
+    assert conn.execute(
+        "SELECT h.from_stage_id, h.to_stage_id, h.action, s_from.stage_type, s_to.stage_type "
+        "FROM application_stage_history h "
+        "JOIN stage s_from ON s_from.id = h.from_stage_id "
+        "JOIN stage s_to ON s_to.id = h.to_stage_id WHERE h.id=?",
+        (first,),
+    ).fetchone() == (stage_id, stage_id, "onboarded", "hired", "hired")
+    assert conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE application_id='app-1' "
+        "AND action='onboarded'"
+    ).fetchone()[0] == 1
+
+
 def test_confirm_hired_requires_actor(conn):
     _seed_hired_application(conn)
     checklist_id = _instantiated(conn)
@@ -548,6 +696,99 @@ def test_terminal_history_rows_only_counts_terminal_actions(conn):
     assert actions == ["onboarded"]
 
 
+@pytest.mark.parametrize("first_outcome", ["hired", "abandoned"])
+def test_opposite_terminal_race_is_serialized_and_second_outcome_rejected(
+    tmp_path, monkeypatch, first_outcome
+):
+    """独立连接并发确认相反终态：首个 effect 持锁提交，第二个随后读到终态并拒绝。"""
+    db_path = str(tmp_path / f"terminal-race-{first_outcome}.db")
+    first_conn = get_connection(db_path)
+    init_schema(first_conn)
+    _seed_hired_application(first_conn)
+    checklist_id = _instantiated(first_conn)
+    _finish_all_required(first_conn, checklist_id)
+
+    competing_conn = get_connection(db_path)
+    competing_conn.execute("PRAGMA busy_timeout = 0")
+    entered_history_read = threading.Event()
+    release_first = threading.Event()
+    original_history_rows = onboarding_nodes.terminal_history_rows
+
+    def pause_after_lock(conn, application_id):
+        entered_history_read.set()
+        assert release_first.wait(timeout=5)
+        return original_history_rows(conn, application_id)
+
+    monkeypatch.setattr(onboarding_nodes, "terminal_history_rows", pause_after_lock)
+    first_error = []
+
+    def run_first():
+        try:
+            outcome = first_outcome
+            kwargs = {"actor_username": "hr-user", "today": TODAY}
+            if outcome == "abandoned":
+                kwargs["reason"] = "个人原因"
+            else:
+                kwargs["today"] = TODAY
+            effect_complete_onboarding(
+                first_conn, thread_id="app-1", business_key=outcome, **kwargs
+            )
+        except Exception as exc:  # surfaced in the main test thread below
+            first_error.append(exc)
+
+    worker = threading.Thread(target=run_first)
+    worker.start()
+    assert entered_history_read.wait(timeout=5)
+    second_outcome = "abandoned" if first_outcome == "hired" else "hired"
+    second_kwargs = {"actor_username": "hr-user", "today": TODAY, "reason": "个人原因"}
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        effect_complete_onboarding(
+            competing_conn,
+            thread_id="app-1",
+            business_key=second_outcome,
+            **second_kwargs,
+        )
+    release_first.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert first_error == []
+
+    monkeypatch.setattr(onboarding_nodes, "terminal_history_rows", original_history_rows)
+    with pytest.raises(OnboardingTerminalRejected, match="已有终态"):
+        effect_complete_onboarding(
+            competing_conn,
+            thread_id="app-1",
+            business_key=second_outcome,
+            **second_kwargs,
+        )
+    assert len(terminal_history_rows(competing_conn, "app-1")) == 1
+    assert competing_conn.execute(
+        "SELECT status FROM application WHERE id='app-1'"
+    ).fetchone()[0] == ("hired" if first_outcome == "hired" else "refused")
+    assert competing_conn.execute(
+        "SELECT status FROM offer WHERE application_id='app-1'"
+    ).fetchone()[0] == ("accepted" if first_outcome == "hired" else "abandoned")
+    assert competing_conn.execute(
+        "SELECT action FROM application_stage_history WHERE application_id='app-1' "
+        "AND action IN ('onboarded', 'abandoned')"
+    ).fetchone()[0] == ("onboarded" if first_outcome == "hired" else "abandoned")
+    logs = competing_conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_complete_onboarding' "
+        "AND thread_id='app-1'"
+    ).fetchone()[0]
+    assert logs == 1
+    queue_rows = competing_conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1'"
+    ).fetchone()[0]
+    queue_logs = competing_conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_enqueue_disposition' "
+        "AND thread_id='app-1'"
+    ).fetchone()[0]
+    assert (queue_rows, queue_logs) == (
+        (6, 6) if first_outcome == "hired" else (0, 0)
+    )
+
+
 # ── Task 5：effect_complete_onboarding(abandon) ────────────────────────
 
 
@@ -571,6 +812,26 @@ def test_abandon_writes_terminal_facts(conn):
     assert conn.execute(
         "SELECT status, closed_reason FROM onboarding_checklist WHERE id = ?", (checklist_id,)
     ).fetchone() == ("closed", "abandoned")
+
+
+def test_abandon_preserves_custom_hired_stage_and_history_semantics(conn):
+    stage_id = "hired-custom"
+    _seed_hired_application(conn, current_stage_id=stage_id)
+    checklist_id = _instantiated(conn)
+
+    history_id = _abandon(conn, reason="接受其他公司")
+
+    assert conn.execute(
+        "SELECT status, current_stage_id FROM application WHERE id='app-1'"
+    ).fetchone() == ("refused", stage_id)
+    row = conn.execute(
+        "SELECT h.from_stage_id, h.to_stage_id, h.action, s_from.stage_type, s_to.stage_type "
+        "FROM application_stage_history h "
+        "JOIN stage s_from ON s_from.id = h.from_stage_id "
+        "JOIN stage s_to ON s_to.id = h.to_stage_id WHERE h.id=?",
+        (history_id,),
+    ).fetchone()
+    assert row == (stage_id, stage_id, "abandoned", "hired", "hired")
 
 
 def test_abandon_writes_no_rejection_record(conn):

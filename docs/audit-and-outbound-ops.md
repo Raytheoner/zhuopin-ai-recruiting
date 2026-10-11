@@ -838,6 +838,18 @@ Format-Hex 'C:\apps\zhuopin-recruit-agent\data\candidate_outbound.switch' -Count
 
 ---
 
+## 六、合规断言巡检命令（含留存策略版本）
+
+    .venv\\Scripts\\python.exe -m app.audit.assertions --db data\\demo.db --mirror data\\audit\\decisions.jsonl --retention-policy-signed-version <已签认版本>
+
+十条断言里有一条（「留存策略未签认时 `data_disposition_queue.executed_at` 全空」）
+需要知道**当前是否已签认**：不传本参数即按「未签认」口径校验——此时处置队列里
+任何 `executed_at` 非空都判失败。
+
+⚠️ 策略版本配置在 `.env` 文件里时不会被导出到进程环境，**必须显式传参**；
+配置在进程环境里时命令行可省略（CLI 会读同名环境变量）。
+⛔ 报红时不要摘断言、也不要把参数写死成某个旧版本——先确认 `.51` 上签认到哪一版。
+
 ## 关联
 
 - 实现：`app/config.py`（开关取值）、`app/audit/sinks.py`（`JsonlChainSink.verify_chain`）

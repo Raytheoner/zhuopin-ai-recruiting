@@ -25,6 +25,7 @@ m1-job-profile-intake 建，缺表就是留痕没上线，不是"还没到能验
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -586,7 +587,129 @@ def assert_merged_candidates_have_no_active_application(
     )
 
 
-# ── 七条一起跑 ──────────────────────────────────────────────────────────
+# ── onboarding-flow U3：材料、处置与自愿退出断言 ─────────────────────────
+
+ONBOARDING_ITEM_TABLE = "onboarding_item"
+ONBOARDING_ITEM_FORBIDDEN_COLUMNS = frozenset(
+    {
+        "content", "attachment", "id_number", "file", "file_name",
+        "content_sha256", "raw_text", "parsed_json", "url",
+    }
+)
+ASSERTION_ONBOARDING_ITEM_HAS_NO_CONTENT_COLUMNS = (
+    "onboarding_item 不存在材料内容/附件/证件号类列"
+)
+
+
+def assert_onboarding_item_has_no_content_columns(
+    conn: sqlite3.Connection,
+) -> AssertionResult:
+    if not _table_exists(conn, ONBOARDING_ITEM_TABLE):
+        return AssertionResult(
+            name=ASSERTION_ONBOARDING_ITEM_HAS_NO_CONTENT_COLUMNS,
+            ok=False,
+            violations=({"table": ONBOARDING_ITEM_TABLE, "issue": "table_missing"},),
+            detail=(
+                f"{ONBOARDING_ITEM_TABLE} 表不存在。它由 onboarding-flow U1 建，"
+                "缺表＝材料不入库这条约束没有机器守护，fail-closed 判失败。"
+            ),
+        )
+    found = sorted(ONBOARDING_ITEM_FORBIDDEN_COLUMNS & _columns(conn, ONBOARDING_ITEM_TABLE))
+    return AssertionResult(
+        name=ASSERTION_ONBOARDING_ITEM_HAS_NO_CONTENT_COLUMNS,
+        ok=not found,
+        violations=tuple(
+            {"table": ONBOARDING_ITEM_TABLE, "forbidden_column": column} for column in found
+        ),
+        detail=(
+            ""
+            if not found
+            else f"清单条目表出现内容类列 {found}——材料一旦入库，PIA、加密、留存全要升档。"
+            "⛔ 不要把它们加进白名单：正确处置是删列（清单只跟踪状态）。"
+        ),
+    )
+
+
+DISPOSITION_QUEUE_TABLE = "data_disposition_queue"
+ASSERTION_DISPOSITION_NOT_EXECUTED_WITHOUT_SIGNED_POLICY = (
+    "留存策略未签认时 data_disposition_queue.executed_at 全空"
+)
+
+
+def assert_disposition_not_executed_without_signed_policy(
+    conn: sqlite3.Connection, *, retention_policy_signed_version: str | None = None
+) -> AssertionResult:
+    if not _table_exists(conn, DISPOSITION_QUEUE_TABLE):
+        return AssertionResult(
+            name=ASSERTION_DISPOSITION_NOT_EXECUTED_WITHOUT_SIGNED_POLICY,
+            ok=False,
+            violations=({"table": DISPOSITION_QUEUE_TABLE, "issue": "table_missing"},),
+            detail=(
+                f"{DISPOSITION_QUEUE_TABLE} 表不存在（onboarding-flow U1 建）。"
+                "缺表＝处置钩子的登记与执行都无迹可查，fail-closed 判失败。"
+            ),
+        )
+    executed = _rows(
+        conn,
+        "SELECT id, application_id, category, policy_version, executed_at, executed_by "
+        f"FROM {DISPOSITION_QUEUE_TABLE} WHERE executed_at IS NOT NULL",
+    )
+    signed_version = (retention_policy_signed_version or "").strip()
+    violations: list[dict[str, Any]] = []
+    for row in executed:
+        if not signed_version:
+            violations.append({**row, "issue": "executed_while_policy_unsigned"})
+        elif not (row["policy_version"] or "").strip():
+            violations.append({**row, "issue": "executed_without_policy_version"})
+    return AssertionResult(
+        name=ASSERTION_DISPOSITION_NOT_EXECUTED_WITHOUT_SIGNED_POLICY,
+        ok=not violations,
+        violations=tuple(violations),
+        detail=(
+            ""
+            if not violations
+            else "发现留存策略未签认（或已执行行缺 policy_version）的处置执行记录。"
+            "删除不可逆：必须先由决策人签认留存策略并配置 RETENTION_POLICY_SIGNED_VERSION。"
+        ),
+    )
+
+
+ASSERTION_REFUSED_APPLICATION_HAS_NO_REJECTION = (
+    "application.status='refused' 的投递没有本包写入的 rejection_record"
+)
+
+
+def assert_refused_application_has_no_rejection(
+    conn: sqlite3.Connection,
+) -> AssertionResult:
+    for table in (REJECTION_TABLE, "application"):
+        if not _table_exists(conn, table):
+            return AssertionResult(
+                name=ASSERTION_REFUSED_APPLICATION_HAS_NO_REJECTION,
+                ok=False,
+                violations=({"table": table, "issue": "table_missing"},),
+                detail=f"{table} 表不存在，本条断言无法验证。fail-closed：验不了不算通过。",
+            )
+    rows = _rows(
+        conn,
+        f"SELECT r.id, r.application_id, r.{REJECTION_REASON_COLUMN}, r.decided_by, r.decided_at "
+        f"FROM {REJECTION_TABLE} r JOIN application a ON a.id = r.application_id "
+        "WHERE a.status = 'refused'",
+    )
+    return AssertionResult(
+        name=ASSERTION_REFUSED_APPLICATION_HAS_NO_REJECTION,
+        ok=not rows,
+        violations=tuple(rows),
+        detail=(
+            ""
+            if not rows
+            else f"发现 {len(rows)} 条挂在 refused 投递上的拒绝记录：候选人自愿退出被写成了"
+            "我方淘汰。查一下是不是有人绕开 effect_complete_onboarding 直接写了拒绝记录。"
+        ),
+    )
+
+
+# ── 十条一起跑 ──────────────────────────────────────────────────────────
 
 COMPLIANCE_ASSERTIONS: tuple[Callable[[sqlite3.Connection], AssertionResult], ...] = (
     assert_no_ai_score_rejections,
@@ -598,16 +721,29 @@ COMPLIANCE_ASSERTIONS: tuple[Callable[[sqlite3.Connection], AssertionResult], ..
     assert_no_plaintext_phone_column,
     assert_merge_log_rows_have_actor,
     assert_merged_candidates_have_no_active_application,
+    assert_onboarding_item_has_no_content_columns,
+    assert_refused_application_has_no_rejection,
+)
+
+CONFIG_GATED_ASSERTIONS: tuple[Callable[..., AssertionResult], ...] = (
+    assert_disposition_not_executed_without_signed_policy,
 )
 
 
-def run_compliance_assertions(conn: sqlite3.Connection) -> list[AssertionResult]:
-    """spec「合规断言在 CI 中执行」：七条全部成立才通过。
+def run_compliance_assertions(
+    conn: sqlite3.Connection, *, retention_policy_signed_version: str | None = None
+) -> list[AssertionResult]:
+    """spec「合规断言在 CI 中执行」：全部断言成立才通过。
 
     ⚠️ **全部跑完再返回，⛔ 不短路。** 第一条红了就返回的话，一次修复只能
     看到一条违例，第二条要等下一轮 CI 才现形。
     """
-    return [assertion(conn) for assertion in COMPLIANCE_ASSERTIONS]
+    results = [assertion(conn) for assertion in COMPLIANCE_ASSERTIONS]
+    results += [
+        assertion(conn, retention_policy_signed_version=retention_policy_signed_version)
+        for assertion in CONFIG_GATED_ASSERTIONS
+    ]
+    return results
 
 
 # ── 对账与链校验（6.4）──────────────────────────────────────────────────
@@ -875,6 +1011,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--mirror", required=True, help="JSONL 镜像路径，如 data/audit/decisions.jsonl"
     )
+    parser.add_argument(
+        "--retention-policy-signed-version",
+        default=os.environ.get("RETENTION_POLICY_SIGNED_VERSION") or None,
+        help=(
+            "已签认的留存策略版本（Settings.retention_policy_signed_version 的值）。"
+            "不传且环境变量也没有 ⇒ 按「未签认」口径校验：队列里任何 executed_at 非空都判失败。"
+            "⚠️ 策略配置在 .env 里时 pydantic-settings 不会导出到进程环境，巡检必须显式传本参数；"
+            "⛔ 不要因为「报红了但明明签认过」就把这条断言摘掉。"
+        ),
+    )
     args = parser.parse_args(argv)
 
     db_path = Path(args.db)
@@ -896,7 +1042,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         mirror_sink = JsonlChainSink(mirror_path)
         recorder = AuditRecorder(store=SqliteSink(conn), mirror_sink=mirror_sink)
 
-        results = run_compliance_assertions(conn)
+        results = run_compliance_assertions(
+            conn, retention_policy_signed_version=args.retention_policy_signed_version
+        )
         results.append(chain_assertion(recorder))
         results.append(reconciliation_assertion(recorder))
         _print_safely(format_report(results), sys.stdout)

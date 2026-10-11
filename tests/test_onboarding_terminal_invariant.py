@@ -13,7 +13,7 @@ from app.graph import onboarding_nodes
 from app.graph.onboarding_nodes import (
     OnboardingTerminalRejected,
     effect_complete_onboarding,
-    effect_enqueue_disposition,
+    enqueue_disposition,
     effect_instantiate_checklist,
     terminal_history_rows,
 )
@@ -185,7 +185,7 @@ def test_enqueue_never_changes_terminal_facts(conn):
     checklist_id = _instantiated(conn)
     _finish_all_required(conn, checklist_id)
     _confirm(conn)
-    effect_enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
+    enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
     _assert_invariants(conn)
     assert conn.execute("SELECT COUNT(*) FROM data_disposition_queue").fetchone()[0] == 6
 

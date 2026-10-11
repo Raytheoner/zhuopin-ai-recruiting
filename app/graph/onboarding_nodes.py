@@ -248,18 +248,28 @@ def _enqueue_disposition_rows(
     ).fetchone()[0]
 
 
-def effect_enqueue_disposition(
+def _enqueue_disposition_category(
+    conn: sqlite3.Connection, *, application_id: str, candidate_id: str, category: str
+) -> int:
+    """Write one category fact; the decorated effect owns its matching effect_log."""
+    if category not in DISPOSITION_CATEGORIES:
+        raise ValueError(f"未知处置类别: {category!r}")
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO data_disposition_queue "
+        "(id, application_id, candidate_id, category, policy_version, planned_action) "
+        "VALUES (?, ?, ?, ?, NULL, 'pending')",
+        (str(uuid.uuid4()), application_id, candidate_id, category),
+    )
+    return int(cursor.rowcount == 1)
+
+
+def enqueue_disposition(
     conn: sqlite3.Connection, *, application_id: str, candidate_id: str
 ) -> int:
-    """effect_* 节点（tasks 3.2）的独立入口：登记六类处置事项并提交。
+    """普通编排入口：独立事务登记六类事项，并清理失败时回滚整组写入。
 
-    ⛔ 刻意**不套** `@idempotent_effect`：本单元的幂等粒度是"每类一把键"（六把，
-    tasks 3.2 字面），外层再套一把单键装饰器会让粒度混淆（装饰器会往 effect_log
-    写一条 `{application_id}:effect_enqueue_disposition:{business_key}`，与六把
-    键并存两套语义）。幂等由上面两道兑现，重复调用返回 6、不新增行。
-
-    生产主路径是 `effect_complete_onboarding` 内部同事务调用，本入口供补登记/
-    重放使用（例如为历史"已入职"投递补登记）。
+    生产终态路径直接调用不提交的 `_enqueue_disposition_rows()`，使六类及其
+    每类 effect_log 与终态事实同事务提交。
     """
     try:
         count = _enqueue_disposition_rows(
@@ -277,6 +287,23 @@ def effect_enqueue_disposition(
                 application_id,
             )
         raise
+
+
+@idempotent_effect("effect_enqueue_disposition")
+def effect_enqueue_disposition(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    business_key: str,
+    candidate_id: str,
+) -> int:
+    """登记单一处置类别；thread_id=application_id，business_key=category。"""
+    return _enqueue_disposition_category(
+        conn,
+        application_id=thread_id,
+        candidate_id=candidate_id,
+        category=business_key,
+    )
 
 
 # U3 终态动作与结局。
@@ -301,7 +328,7 @@ def terminal_history_rows(
     ).fetchall()
 
 
-@idempotent_effect("effect_complete_onboarding")
+@idempotent_effect("effect_complete_onboarding", begin_immediate=True)
 def effect_complete_onboarding(
     conn: sqlite3.Connection,
     *,
@@ -368,14 +395,14 @@ def effect_complete_onboarding(
         conn.execute(
             "INSERT INTO application_stage_history "
             "(id, application_id, from_stage_id, to_stage_id, actor_type, actor, action, detail_json) "
-            "VALUES (?, ?, ?, 'hired', 'human', ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, 'human', ?, ?, ?)",
             (
-                history_id, application_id, current_stage, actor_username,
+                history_id, application_id, current_stage, current_stage, actor_username,
                 TERMINAL_ACTION_ONBOARDED, json.dumps(detail, ensure_ascii=False),
             ),
         )
         conn.execute(
-            "UPDATE application SET status = 'hired', current_stage_id = 'hired' WHERE id = ?",
+            "UPDATE application SET status = 'hired' WHERE id = ?",
             (application_id,),
         )
         conn.execute(

@@ -19,7 +19,7 @@ from app.audit.events import AI_ANALYSIS, CriterionScore, DecisionEvent
 from app.audit.recorder import AuditRecorder
 from app.audit.sinks import JsonlChainSink, SqliteSink
 from app.storage.db import get_connection, init_schema
-from tests.test_audit_assertions import insert_run, insert_score
+from tests.test_audit_assertions import _ensure_application_exists, insert_run, insert_score
 
 pytestmark = pytest.mark.compliance
 
@@ -217,3 +217,26 @@ def test_report_says_all_passed_when_nothing_is_broken():
     report = format_report([AssertionResult(name="甲", ok=True)])
 
     assert "全部通过" in report
+
+
+def test_signed_policy_flag_lets_executed_rows_pass(db_path, mirror_path, capsys):
+    conn = get_connection(str(db_path))
+    _ensure_application_exists(conn, "app-9")
+    conn.execute(
+        "INSERT INTO data_disposition_queue "
+        "(id, application_id, candidate_id, category, policy_version, planned_action, executed_at) "
+        "VALUES ('dq-1', 'app-9', 'app-9-cand', 'resume_file', 'v1-180d', 'delete', "
+        "'2026-10-20 10:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    without_flag = main(["--db", str(db_path), "--mirror", str(mirror_path)])
+    without_out = capsys.readouterr().out
+    with_flag = main(
+        ["--db", str(db_path), "--mirror", str(mirror_path),
+         "--retention-policy-signed-version", "v1-180d"]
+    )
+    assert without_flag == 1
+    assert "未签认" in without_out
+    assert with_flag == 0

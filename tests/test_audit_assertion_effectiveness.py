@@ -307,11 +307,11 @@ def test_run_compliance_assertions_reports_every_broken_line_at_once(conn):
 
     results = run_compliance_assertions(conn)
 
-    assert len(results) == 7
+    assert len(results) == 10
     # 第一至三条（本次被破坏的三条）必须全部红。第四至七条（human_review 与
     # channel-resume-intake U3 的三条结构断言）本次没有被破坏——
     # 没有终态画像版本、没有违例列、没有合并留痕、没有已合并候选人，自然无违例。
-    assert [r.ok for r in results] == [False, False, False, True, True, True, True]
+    assert [r.ok for r in results] == [False, False, False, True, True, True, True, True, True, True]
     # spec：任一条不成立时判定为失败**并指出违例记录**。
     assert all(r.violations for r in results if not r.ok)
 
@@ -528,3 +528,61 @@ def test_merged_candidate_without_active_applications_passes(conn):
     conn.commit()
 
     assert assert_merged_candidates_have_no_active_application(conn).ok is True
+
+
+# ── onboarding-flow U3：三条新断言的反证 ────────────────────────────────
+
+
+def test_content_column_on_onboarding_item_is_detected(conn):
+    from app.audit.assertions import assert_onboarding_item_has_no_content_columns
+
+    conn.execute("ALTER TABLE onboarding_item ADD COLUMN content TEXT")
+    conn.commit()
+    result = assert_onboarding_item_has_no_content_columns(conn)
+    assert result.ok is False
+    assert [v["forbidden_column"] for v in result.violations] == ["content"]
+
+
+def _insert_disposition_row(conn, *, executed_at=None, policy_version=None):
+    _ensure_application_exists(conn, "app-9")
+    conn.execute(
+        "INSERT INTO data_disposition_queue "
+        "(id, application_id, candidate_id, category, policy_version, planned_action, executed_at) "
+        "VALUES ('dq-1', 'app-9', 'app-9-cand', 'resume_file', ?, 'pending', ?)",
+        (policy_version, executed_at),
+    )
+    conn.commit()
+
+
+def test_executed_disposition_without_signed_policy_is_detected(conn):
+    from app.audit.assertions import assert_disposition_not_executed_without_signed_policy
+
+    _insert_disposition_row(conn, executed_at="2026-10-20 10:00:00", policy_version="v1-180d")
+    assert assert_disposition_not_executed_without_signed_policy(conn).ok is False
+    assert assert_disposition_not_executed_without_signed_policy(
+        conn, retention_policy_signed_version="v1-180d"
+    ).ok is True
+
+
+def test_executed_disposition_without_policy_version_is_detected(conn):
+    from app.audit.assertions import assert_disposition_not_executed_without_signed_policy
+
+    _insert_disposition_row(conn, executed_at="2026-10-20 10:00:00", policy_version=None)
+    result = assert_disposition_not_executed_without_signed_policy(
+        conn, retention_policy_signed_version="v1-180d"
+    )
+    assert result.ok is False
+    assert result.violations[0]["issue"] == "executed_without_policy_version"
+
+
+def test_rejection_record_on_refused_application_is_detected(conn):
+    from app.audit.assertions import assert_refused_application_has_no_rejection
+
+    _ensure_application_exists(conn, "app-9")
+    conn.execute("UPDATE application SET status='refused' WHERE id='app-9'")
+    insert_rejection_record(
+        conn, row_id="rej-refused", application_id="app-9", reason_type="human_decision"
+    )
+    result = assert_refused_application_has_no_rejection(conn)
+    assert result.ok is False
+    assert result.violations[0]["id"] == "rej-refused"
