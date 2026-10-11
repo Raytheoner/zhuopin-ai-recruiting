@@ -169,6 +169,7 @@ from app.storage.offer import (
     NotAnApproverError,
     OfferNotCreatableError,
     OfferNotEditableError,
+    OfferNotExportableError,
     OfferNotFoundError,
     OfferNotPendingApprovalError,
     approval_history,
@@ -2822,10 +2823,13 @@ def create_app(
         username = _require_role(request, "hr")
         letter = _load_letter_or_404(letter_id)
         # 导出也写留痕（access_type=export），先留痕再产文件（spec「导出 MUST 写访问留痕」）。
-        record_letter_access(
-            conn, accessor=username, application_id=letter["application_id"],
-            letter_id=letter_id, access_type="export",
-        )
+        try:
+            record_letter_access(
+                conn, accessor=username, application_id=letter["application_id"],
+                letter_id=letter_id, access_type="export",
+            )
+        except OfferNotExportableError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         fd, tmp_path = tempfile.mkstemp(suffix=".docx")
         os.close(fd)
         try:
