@@ -137,6 +137,26 @@ def _assert_disposition_pairs(conn, application_id="app-1"):
         )
 
 
+def _terminal_business_snapshot(conn, application_id="app-1"):
+    """完整快照终态确认会触及的业务表与幂等日志。"""
+    tables = (
+        "application",
+        "offer",
+        "application_stage_history",
+        "onboarding_checklist",
+        "onboarding_item",
+        "data_disposition_queue",
+        "effect_log",
+    )
+    return {
+        table: tuple(
+            tuple(row)
+            for row in conn.execute(f"SELECT * FROM {table}").fetchall()
+        )
+        for table in tables
+    }
+
+
 def test_disposition_pair_guard_rejects_wrong_effect_key_with_same_counts(conn):
     _seed_hired_application(conn)
     enqueue_disposition(conn, application_id="app-1", candidate_id="cand-1")
@@ -550,6 +570,54 @@ def test_confirm_hired_rejects_before_start_date(conn):
         _confirm(conn)
     assert conn.execute("SELECT COUNT(*) FROM application_stage_history").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM data_disposition_queue").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "invalid_date",
+    ["0", "2026-02-30", "2026-1-02", ""],
+)
+def test_confirm_hired_rejects_invalid_actual_date_without_writes_then_allows_retry(
+    conn, invalid_date
+):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    before = _terminal_business_snapshot(conn)
+
+    with pytest.raises(OnboardingTerminalRejected):
+        _confirm(conn, actual_start_date=invalid_date)
+
+    assert _terminal_business_snapshot(conn) == before
+
+    history_id = _confirm(conn, actual_start_date="2026-10-19")
+    assert history_id is not None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM application_stage_history WHERE application_id='app-1' "
+        "AND action='onboarded'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE effect_key="
+        "'app-1:effect_complete_onboarding:hired'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM data_disposition_queue WHERE application_id='app-1'"
+    ).fetchone()[0] == len(DISPOSITION_CATEGORIES)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM effect_log WHERE node_name='effect_enqueue_disposition' "
+        "AND thread_id='app-1'"
+    ).fetchone()[0] == len(DISPOSITION_CATEGORIES)
+
+
+def test_confirm_hired_rejects_invalid_injected_today_without_writes(conn):
+    _seed_hired_application(conn)
+    checklist_id = _instantiated(conn)
+    _finish_all_required(conn, checklist_id)
+    before = _terminal_business_snapshot(conn)
+
+    with pytest.raises(OnboardingTerminalRejected):
+        _confirm(conn, today="2026-2-20")
+
+    assert _terminal_business_snapshot(conn) == before
 
 
 def test_confirm_hired_rejects_without_accepted_offer(conn):

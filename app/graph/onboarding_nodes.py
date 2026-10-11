@@ -369,11 +369,26 @@ def effect_complete_onboarding(
             raise OnboardingTerminalRejected("该投递尚无入职清单")
         if checklist_status != "open":
             raise OnboardingTerminalRejected(f"清单状态为 {checklist_status}，不能确认已入职")
-        effective_start_date = actual_start_date or offer_start_date
-        if not effective_start_date:
+        effective_start_date = (
+            offer_start_date if actual_start_date is None else actual_start_date
+        )
+        if effective_start_date is None:
             raise OnboardingTerminalRejected("缺少实际入职日")
-        today_str = today or date.today().isoformat()
-        if effective_start_date > today_str:
+        try:
+            start_date_value = date.fromisoformat(effective_start_date)
+        except (TypeError, ValueError) as exc:
+            raise OnboardingTerminalRejected("实际入职日必须是有效的 YYYY-MM-DD 日期") from exc
+        if start_date_value.isoformat() != effective_start_date:
+            raise OnboardingTerminalRejected("实际入职日必须是有效的 YYYY-MM-DD 日期")
+
+        today_str = today if today is not None else date.today().isoformat()
+        try:
+            today_value = date.fromisoformat(today_str)
+        except (TypeError, ValueError) as exc:
+            raise OnboardingTerminalRejected("比较日期必须是有效的 YYYY-MM-DD 日期") from exc
+        if today_value.isoformat() != today_str:
+            raise OnboardingTerminalRejected("比较日期必须是有效的 YYYY-MM-DD 日期")
+        if start_date_value > today_value:
             raise OnboardingTerminalRejected("入职日尚未到达，不能确认已入职")
         incomplete = conn.execute(
             "SELECT name, owner_party FROM onboarding_item "
