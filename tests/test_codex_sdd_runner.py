@@ -216,15 +216,15 @@ def test_final_review_is_scoped_to_selected_tasks(tmp_path, monkeypatch):
     assert "本段只审查 Task 2；其它未执行 Task" in prompts[-1]
 
 
-def test_default_model_is_flash_per_user_instruction(tmp_path, capsys):
-    """1001G（2026-10-08）：子任务一律 flash（Haiku 档）。⛔ 别把默认值改回 v4-pro 而不改这条断言。"""
+def test_default_model_is_luna_per_user_instruction(tmp_path, capsys):
+    """1011R（2026-10-11）：Shao Peishen 指定所有子会话使用 Luna。"""
     from scripts.codex_sdd_runner import DEFAULT_MODEL, DEFAULT_REASON
 
-    assert DEFAULT_MODEL == "deepseek-flash"
+    assert DEFAULT_MODEL == "gpt-6-luna"
     assert DEFAULT_REASON == "low"
     # dry-run 打印的 argv 也必须带 flash（钉住 main() → build_codex_argv 的接线）
     plan = tmp_path / "plan.md"
     plan.write_text(PLAN, encoding="utf-8")
     assert main(["--plan", str(plan), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "-m deepseek-flash" in out and "-m deepseek-v4-pro" not in out
+    assert "-m gpt-6-luna" in out and "-m deepseek-v4-pro" not in out

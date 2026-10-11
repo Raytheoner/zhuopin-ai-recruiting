@@ -65,9 +65,9 @@ def resolve_codex_bin(env: Mapping[str, str] | None = None) -> str:
         if Path(candidate).exists():
             return candidate
     return CODEX_BIN
-#: 默认模型＝Haiku 档映射（flash/low）。2026-10-08 `1001G` Shao Peishen 指令：
-#: 本项目**子任务一律 flash**（含 review 会话）；要单次覆盖用 `--model` / `--reason`。
-DEFAULT_MODEL = "deepseek-flash"
+#: 默认模型＝Haiku 档映射（flash/low）。2026-10-11 `1011R` Shao Peishen 指令：
+#: 本项目**子任务一律 Luna**（含 review 会话）；要单次覆盖用 `--model` / `--reason`。
+DEFAULT_MODEL = "gpt-6-luna"
 DEFAULT_REASON = "low"
 
 
@@ -143,7 +143,8 @@ HEADLESS_RULES = """【无头执行引导】本会话由 scripts/codex_sdd_runne
 def build_task_prompt(task: tuple[int, str], constraints: str) -> str:
     return (
         f"{HEADLESS_RULES}\n"
-        f"执行计划中的 Task {task[0]}，严格按计划文本 TDD（先写测试→实现→跑测试）；"
+        f"你就是 Task {task[0]} 的实现执行者，已处于隔离 worktree；runner 只调度 review 与代提交，不会替你写代码或跑测试。"
+        f"严格按计划文本 TDD（先写测试→实现→跑测试）；已有未提交实现也必须亲自跑验收测试，不能返回让 runner 接着做。"
         f"⛔ 不要 git add/commit（runner 代提交，见⑥）。\n\n"
         f"## Global Constraints（逐字生效，reviewer 的注意力透镜）\n{constraints}\n\n"
         f"## Task {task[0]}\n{task[1]}\n"

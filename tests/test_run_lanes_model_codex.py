@@ -2,11 +2,11 @@
 
 与 tests/test_run_lanes_model.py 同构，只是桩从假 `claude` 换成假 `codex`、引擎默认走
 codex（不设 HR_AGENT_ENGINE，验「默认即 codex」这一条）。钉死：
-  ① 默认档（haiku，2026-10-10 起）→ `-m deepseek-flash -c model_reasoning_effort=low`
-  ② 「模型: Opus」→ `-m deepseek-v4-pro -c model_reasoning_effort=max`
+  ① 默认档（haiku，2026-10-10 起）→ `-m gpt-6-luna -c model_reasoning_effort=low`
+  ② 「模型: Opus」→ `-m gpt-6-luna -c model_reasoning_effort=max`
   ③ 沙箱与审批：`--sandbox workspace-write`；`--full-auto` ⇒ `-c approval_policy=never`，
      非全自动 ⇒ `on-request`；`-c forced_login_method=chatgpt`（本机 auth.json 对齐）
-  ④ 子代理经 `-c agents.default_subagent_model=deepseek-flash`
+  ④ 子代理经 `-c agents.default_subagent_model=gpt-6-luna`
   ⑤ JSONL 收敛：哨兵（含 **OPENER_DONE** 形态）与 7 列用量进 results.tsv；
      非 JSON 输出回退成纯文本（哨兵仍判到，用量列全 "-"）
 """
@@ -130,9 +130,9 @@ def test_real_run_passes_codex_argv_and_usage_columns(sandbox):
         assert "-c approval_policy=never" in ln
         assert "-c forced_login_method=chatgpt" in ln
         assert "LANE=1" in ln
-    assert "-m deepseek-flash -c model_reasoning_effort=low" in a
-    assert "-m deepseek-v4-pro -c model_reasoning_effort=max" in b
-    assert "-c agents.default_subagent_model=deepseek-flash" in a
+    assert "-m gpt-6-luna -c model_reasoning_effort=low" in a
+    assert "-m gpt-6-luna -c model_reasoning_effort=max" in b
+    assert "-c agents.default_subagent_model=gpt-6-luna" in a
     results = next((sandbox["repo"] / ".claude" / "handoff").glob("lanes-*/results.tsv"))
     rows = {l.split("\t")[1]: l.split("\t") for l in results.read_text(encoding="utf-8").splitlines()}
     assert rows["0101A"][2] == "OK" and rows["0101A"][5] == "haiku"

@@ -139,6 +139,7 @@ def test_resolve_codex_bin_falls_back_to_bundled_app_path(monkeypatch, tmp_path)
 
 def test_build_headless_argv_codex_shape():
     argv = build_headless_argv_codex("/usr/local/bin/codex", {})
+    assert argv[argv.index("-m") + 1] == "gpt-6-luna"
     assert argv == [
         "/usr/local/bin/codex",
         "exec",
@@ -149,6 +150,10 @@ def test_build_headless_argv_codex_shape():
         "approval_policy=never",
         "-c",
         "forced_login_method=chatgpt",
+        "-m",
+        "gpt-6-luna",
+        "-c",
+        "model_reasoning_effort=low",
         "--dangerously-bypass-hook-trust",
         "-",
     ]

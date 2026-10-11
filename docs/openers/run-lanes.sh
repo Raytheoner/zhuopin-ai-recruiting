@@ -130,7 +130,7 @@ BUDGET="25.00"
 # P0 账本（docs/token治理/P0-对账.md）：无头泳道 95% 调用跑在 Opus 上——原先 MODEL="" 不传 --model，
 # 于是沿用本机默认模型。Opus 5 单价是 Sonnet 5 的 2.5 倍，而泳道＋子代理占基线成本 92%。
 # 取值优先级：命令行 --model（整批）＞ opener【设置】行的「模型: Opus|Sonnet|Haiku」＞ DEFAULT_MODEL。
-# 2026-10-10 `1001G`（Shao Peishen 指令：**所有子 session 一律 Flash**）：默认档 sonnet → **haiku**、
+# 2026-10-10 `1001G`（Shao Peishen 指令：**所有子 session 一律 Luna（2026-10-11 更新）**）：默认档 sonnet → **haiku**、
 # 子代理同步 → haiku；要更高档的在 opener【设置】行显式写「模型: Sonnet/Opus」单独抬，或整批 `--model`。
 DEFAULT_MODEL="haiku"
 SUBAGENT_MODEL="haiku"
@@ -149,9 +149,9 @@ case "$ENGINE" in
   codex|claude) ;;
   *) echo "✗ HR_AGENT_ENGINE 只认 codex|claude：$ENGINE" >&2; exit 63 ;;
 esac
-CODEX_MODEL_OPUS="${HR_CODEX_MODEL_OPUS:-deepseek-v4-pro}"; CODEX_REASON_OPUS="${HR_CODEX_REASON_OPUS:-max}"
-CODEX_MODEL_SONNET="${HR_CODEX_MODEL_SONNET:-deepseek-v4-pro}"; CODEX_REASON_SONNET="${HR_CODEX_REASON_SONNET:-high}"
-CODEX_MODEL_HAIKU="${HR_CODEX_MODEL_HAIKU:-deepseek-flash}"; CODEX_REASON_HAIKU="${HR_CODEX_REASON_HAIKU:-low}"
+CODEX_MODEL_OPUS="${HR_CODEX_MODEL_OPUS:-gpt-6-luna}"; CODEX_REASON_OPUS="${HR_CODEX_REASON_OPUS:-max}"
+CODEX_MODEL_SONNET="${HR_CODEX_MODEL_SONNET:-gpt-6-luna}"; CODEX_REASON_SONNET="${HR_CODEX_REASON_SONNET:-high}"
+CODEX_MODEL_HAIKU="${HR_CODEX_MODEL_HAIKU:-gpt-6-luna}"; CODEX_REASON_HAIKU="${HR_CODEX_REASON_HAIKU:-low}"
 CODEX_LOGIN_METHOD="${HR_CODEX_FORCED_LOGIN:-chatgpt}"
 
 while [[ $# -gt 0 ]]; do

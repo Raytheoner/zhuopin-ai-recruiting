@@ -23,8 +23,8 @@
 ## 2. 模型分级映射（opener 词汇不变）
 
 - opener 的「模型: Opus|Sonnet|Haiku」三档词汇**保持不变**（编排文件、号池台账都不动），只在执行器内映射：
-  Opus → deepseek-v4-pro（reasoning=max）｜ Sonnet → deepseek-v4-pro（reasoning=high）｜
-  Haiku → deepseek-flash（reasoning=low）。
+  Opus → gpt-6-luna（reasoning=max）｜ Sonnet → gpt-6-luna（reasoning=high）｜
+  Haiku → gpt-6-luna（reasoning=low）。2026-10-11 Shao Peishen 指定所有子会话（含 SDD 双 review）用 Luna。
 - 覆盖键：`HR_CODEX_MODEL_*` / `HR_CODEX_REASON_*` / `HR_CODEX_FORCED_LOGIN` / `HR_CODEX_BIN`。
 
 ## 3. 技能与 SDD 执行层

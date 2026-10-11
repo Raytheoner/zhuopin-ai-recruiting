@@ -289,7 +289,7 @@ def test_session_is_started_with_codex_engine_flags(repo: Path) -> None:
     assert "--json" in args_line and "--sandbox workspace-write" in args_line
     assert "-c approval_policy=never" in args_line
     assert "-c forced_login_method=chatgpt" in args_line
-    assert "-m deepseek-flash" in args_line and "-c model_reasoning_effort=low" in args_line
+    assert "-m gpt-6-luna" in args_line and "-c model_reasoning_effort=low" in args_line
     assert "--max-budget-usd" not in args_line and "--dangerously-skip-permissions" not in args_line
 
 

@@ -325,6 +325,10 @@ def build_headless_argv_codex(codex_bin: str, env: Mapping[str, str]) -> list[st
         "approval_policy=never",
         "-c",
         f"forced_login_method={login}",
+        "-m",
+        (env.get("HR_CODEX_MODEL_HAIKU") or "gpt-6-luna").strip() or "gpt-6-luna",
+        "-c",
+        f"model_reasoning_effort={env.get('HR_CODEX_REASON_HAIKU') or 'low'}",
         "--dangerously-bypass-hook-trust",
         "-",
     ]
