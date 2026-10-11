@@ -2309,6 +2309,9 @@ GET 草稿列表、generate、edit、mark-human、outcome、send 的请求路径
 
 ### Task 10: `tests/test_invitation_effect.py`（五个节点 + 门禁两个 Scenario）
 
+**1011R 审查核验补充**：在已存在测试文件增量续写，允许修改该测试文件与本计划偏离登记。回填节点的 docstring 中 `business_key = f"{slot_id}:{status}"` 是调用约定说明，不能当作可执行覆写；实际幂等装饰器按调用方 business_key 构键。保留同键重放、跨场次同状态及不同请求键触发领域重复异常且无孤儿日志三个断言；若现有测试已覆盖，直接实跑并如实登记，无需为了制造 diff 改业务代码。review 用实际可执行源码行验证，不把 docstring 当赋值。若实际发现覆写才按缺陷修复，不跳过两阶段 review。
+
+
 **文件**：`tests/test_invitation_effect.py`（新增，整文件）
 
 ```python
