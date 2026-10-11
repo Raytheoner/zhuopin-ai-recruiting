@@ -156,10 +156,31 @@ from app.storage.offer_approval_chain import (
     get_approval_chain,
     put_approval_chain,
 )
+from app.graph.offer_nodes import (
+    effect_create_offer,
+    effect_record_approval,
+    effect_revise_offer,
+    publish_approval_todo,
+)
+from app.storage.offer import (
+    ApprovalAlreadyRecordedError,
+    ApprovalChainNotConfiguredError,
+    ApprovalOutOfOrderError,
+    NotAnApproverError,
+    OfferNotCreatableError,
+    OfferNotEditableError,
+    OfferNotFoundError,
+    OfferNotPendingApprovalError,
+    approval_history,
+    current_approval_level,
+    get_offer,
+    get_offer_by_application,
+    total_approval_levels,
+)
 from app.storage.source import candidate_source
 from app.graph.letter_nodes import (
     LetterTemplateMissingError,
-    OfferNotFoundError,
+    OfferNotFoundError as LetterOfferNotFoundError,
     OfferNotApprovedError,
     RejectionRecordMissingError,
     compute_letter_draft_for_application,
@@ -272,6 +293,30 @@ class OfferApprovalChainItem(BaseModel):
 
 class OfferApprovalChainRequest(BaseModel):
     chain: list[OfferApprovalChainItem]
+
+
+class OfferCreateRequest(BaseModel):
+    department: str
+    start_date: str
+    report_to: str
+    note: str | None = None
+    # 同一业务请求重试时保持稳定，作为 effect_create_offer 的业务键。
+    request_id: str
+
+
+class OfferReviseRequest(BaseModel):
+    department: str
+    start_date: str
+    report_to: str
+    note: str | None = None
+    request_id: str
+
+
+class OfferApprovalRequest(BaseModel):
+    decision: str  # approved | returned
+    comment: str | None = None
+    # 页面从详情载荷的 current_level 原样回传，保证重放命中同一幂等键。
+    level: int | None = None
 
 
 class InterviewerCreateRequest(BaseModel):
@@ -2439,6 +2484,150 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"job_id": job_id, "chain": get_approval_chain(conn, job_id)}
 
+    # ── offer-generation U3：发起 Offer / 逐级审批 / 退回后修改（tasks 3.1–3.3）──
+    # `/api/offers/**` 不在 AuthMiddleware 的 PROTECTED_PATH_PREFIXES 里；逐路由登录。
+    def _require_login(request: Request) -> str:
+        """U3 的登录闸并返回 username。
+
+        不限制为 HR 角色：岗位链里配置的业务经理／总经理也必须能审；具体审批资格
+        由 effect_record_approval 按当前级审批链判定。
+        """
+        auth = getattr(request.state, "auth", None)
+        if not getattr(auth, "authenticated", False):
+            raise HTTPException(status_code=401, detail="未登录")
+        return getattr(auth, "user_id", None)
+
+    def _offer_payload(offer_id: str) -> dict:
+        """审批页/接口统一载荷：只有 Offer 与投递的非敏感事实，没有 AI 字段。"""
+        offer = get_offer(conn, offer_id)
+        level = current_approval_level(conn, offer_id)
+        return {
+            "id": offer["id"],
+            "application_id": offer["application_id"],
+            "job_id": offer["job_id"],
+            "job_title": offer["job_title"],
+            "candidate_name": offer["candidate_name"],
+            "department": offer["department"],
+            "start_date": offer["start_date"],
+            "report_to": offer["report_to"],
+            "note": offer["note"],
+            "status": offer["status"],
+            "status_label": offer["status_label"],
+            "approval_round": offer["approval_round"],
+            "current_level": level,
+            "total_levels": total_approval_levels(conn, offer["job_id"]),
+            "approvals": approval_history(conn, offer_id),
+            "created_by": offer["created_by"],
+            "created_at": offer["created_at"],
+        }
+
+    @router.post("/api/applications/{application_id}/offer", status_code=201)
+    def create_offer(application_id: str, req: OfferCreateRequest, request: Request):
+        username = _require_login(request)
+        # 不在 effect 节点之前预检：相同 request_id 的重放时 Offer 已存在，前置
+        # 预检会先返回 409，导致幂等短路永远无法执行。权威前置校验在节点事务内。
+        try:
+            offer_id = effect_create_offer(
+                conn,
+                thread_id=application_id,
+                business_key=req.request_id,
+                application_id=application_id,
+                department=req.department,
+                start_date=req.start_date,
+                report_to=req.report_to,
+                note=req.note,
+                created_by=username,
+            )
+        except OfferNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except OfferNotCreatableError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if offer_id is None:
+            existing = get_offer_by_application(conn, application_id)
+            if existing is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该 request_id 已被处理，但找不到对应 Offer 记录",
+                )
+            offer_id = existing["id"]
+        publish_approval_todo(conn, offer=get_offer(conn, offer_id), channel=channel)
+        return _offer_payload(offer_id)
+
+    @router.patch("/api/offers/{offer_id}")
+    def revise_offer(offer_id: str, req: OfferReviseRequest, request: Request):
+        username = _require_login(request)
+        try:
+            effect_revise_offer(
+                conn,
+                thread_id=offer_id,
+                business_key=req.request_id,
+                offer_id=offer_id,
+                department=req.department,
+                start_date=req.start_date,
+                report_to=req.report_to,
+                note=req.note,
+                updated_by=username,
+            )
+        except OfferNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except OfferNotEditableError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        publish_approval_todo(conn, offer=get_offer(conn, offer_id), channel=channel)
+        return _offer_payload(offer_id)
+
+    @router.post("/api/offers/{offer_id}/approval")
+    def record_offer_approval(
+        offer_id: str, req: OfferApprovalRequest, request: Request
+    ):
+        username = _require_login(request)
+        if req.decision not in ("approved", "returned"):
+            raise HTTPException(
+                status_code=422, detail="decision 只能是 approved 或 returned"
+            )
+        try:
+            offer = get_offer(conn, offer_id)
+        except OfferNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # 幂等键为 {offer_id}:effect_record_approval:{round}:{level}:{approver}:{decision}。
+        # 级号优先取请求体回传值，重试必须命中同一键；否则第 1 级通过后重放会被
+        # 算成第 2 级，既无法幂等短路，也可能尝试替下一级签字。缺省只适用于首次提交。
+        level = (
+            req.level
+            if req.level is not None
+            else current_approval_level(conn, offer_id)
+        )
+        try:
+            effect_record_approval(
+                conn,
+                thread_id=offer_id,
+                business_key=(
+                    f"{offer['approval_round']}:{level}:{username}:{req.decision}"
+                ),
+                offer_id=offer_id,
+                level=level,
+                approver=username,
+                decision=req.decision,
+                comment=req.comment,
+            )
+        except ApprovalChainNotConfiguredError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except NotAnApproverError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ApprovalOutOfOrderError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ApprovalAlreadyRecordedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OfferNotPendingApprovalError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        refreshed = get_offer(conn, offer_id)
+        if refreshed["status"] == "pending_approval":
+            publish_approval_todo(conn, offer=refreshed, channel=channel)
+        return _offer_payload(offer_id)
+
     _ALLOWED_OWNER_PARTIES = frozenset({"hr", "it", "admin", "finance", "dept"})
 
     def _require_role(request: Request, required_role: str) -> str:
@@ -2532,7 +2721,11 @@ def create_app(
             draft, template_version = compute_letter_draft_for_application(
                 conn, application_id=application_id, kind=req.kind, gateway=gateway
             )
-        except (OfferNotFoundError, OfferNotApprovedError, RejectionRecordMissingError) as exc:
+        except (
+            LetterOfferNotFoundError,
+            OfferNotApprovedError,
+            RejectionRecordMissingError,
+        ) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except LetterTemplateMissingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
