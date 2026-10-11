@@ -116,6 +116,25 @@ def test_slot_helpers_and_empty_outcomes(conn):
     assert list_outcomes(conn, "s1") == []
 
 
+def test_list_outcomes_keeps_insert_order_when_timestamps_tie(conn):
+    # UUID 的字典序与事实插入顺序相反；并列时间必须按 SQLite rowid 稳定排序。
+    conn.executemany(
+        "INSERT INTO invitation_outcome_log "
+        "(id, slot_id, status, channel, actor, at) "
+        "VALUES (?, 's1', ?, ?, 'tester', ?)",
+        [
+            ("z-last-lexically", "sent", "wechat", "2026-10-11T10:00:00+00:00"),
+            ("a-first-lexically", "confirmed", None, "2026-10-11T10:00:00+00:00"),
+        ],
+    )
+    conn.commit()
+
+    assert [outcome["status"] for outcome in list_outcomes(conn, "s1")] == [
+        "sent",
+        "confirmed",
+    ]
+
+
 def test_recipient_is_none_when_vault_module_missing(conn, monkeypatch):
     monkeypatch.setitem(sys.modules, "app.storage.contact_vault", None)
     assert candidate_recipient_for_invitation(conn, application_id="app1") is None

@@ -172,7 +172,7 @@ def slot_status(conn: sqlite3.Connection, slot_id: str) -> str:
 def list_outcomes(conn: sqlite3.Connection, slot_id: str) -> list[dict]:
     rows = conn.execute(
         "SELECT id, slot_id, status, channel, reason, actor, at "
-        "FROM invitation_outcome_log WHERE slot_id = ? ORDER BY at, id",
+        "FROM invitation_outcome_log WHERE slot_id = ? ORDER BY at, rowid",
         (slot_id,),
     ).fetchall()
     return [

@@ -3021,6 +3021,12 @@ python3 -m pytest tests/test_interview_invitation_api.py -q
 
 ### Task 12: `tests/test_interview_scheduling_u3_e2e.py`（U3 e2e，tasks 3.8）
 
+**最新一轮验收命令**：本轮最后一条pytest必须实跑 `"$SDD_PYTHON" -m pytest tests/test_interview_invitation_storage.py tests/test_interview_invitation_api.py tests/test_interview_scheduling_u3_e2e.py -q`，使本轮pytest-evidence.json与最新联合30项回归一致。不要在联合回归后再单跑e2e。原始events按文件物理行顺序追加，旧轮30项不得说成新轮3项之后；runner evidence标注 current execution raw stdout 只含本轮，非全部历史。
+
+
+**1011R 顺序缺陷修复与授权清单**：本 Task 新增 e2e 文件，允许修改 `app/storage/interview_invitation.py` 的 list_outcomes、本存储测试及本计划偏离登记。不得把 `[sent, confirmed]` 放宽为集合。现实现 `ORDER BY at,id` 在同秒时用随机 UUID 排列，会颠倒事实先后。保留 at 第一排序，并用稳定的插入顺序（当前普通 SQLite 表的 rowid）处理同时间并列；先补同秒、逆字典序 id 的确定性失败测试，再修查询，严格恢复 e2e 顺序断言，跑存储/API/e2e回归并登记原因与证据，不改 schema或幂等语义。
+
+
 **文件**：`tests/test_interview_scheduling_u3_e2e.py`（新增，整文件）
 
 ```python
@@ -3218,6 +3224,11 @@ python3 -m pytest tests/test_interview_scheduling_u3_e2e.py -q
 | 文案模板的来源与版本 | Task 1（表 + 白名单校验 + v1 占位种子）、Task 8（PUT） | 升版不覆盖；留痕记模板版本；⛔ 无评分/排名/淘汰理由占位符（参数化反证） |
 
 ## 4. 本计划相对 `tasks.md` / `design.md` / spec 的偏离登记
+
+### D-U3-15：Task 12 同秒回填按插入顺序返回（1011R）
+
+原因：`ORDER BY at,id` 的随机 UUID 并列排序可把 sent/confirmed 颠倒。list_outcomes 改为 `ORDER BY at,rowid`，保留 at 主排序，以当前普通 SQLite 表插入顺序稳定并列项；不改 schema与幂等键。补固定相同时间和逆字典序 UUID 的存储测试，e2e恢复严格 `[sent,confirmed]` 断言。最新 Task 12 原始事件：e2e、存储和 API联合30 passed/exit_code=0，git diff --check通过。授权 e2e文件、该存储函数、存储测试与本计划；本段为实际偏离登记，不把集合断言当验收。
+
 
 ### D-U3-14：Task 11 API 场次对象补返已存储的发送渠道（1011R）
 
