@@ -3415,3 +3415,15 @@ U3 完成后，`offer-generation` 的 U4（门禁接线与拒信）才可发车�
 实际命令：`"$SDD_PYTHON" -m pytest tests/test_idempotency.py tests/test_offer_nodes_approval.py tests/test_offer_nodes_create.py tests/test_offer_storage.py tests/test_effect_idempotency_suite.py -q` → `209 passed in 13.68s`，退出码 0。此前在缺少 `effect_create_offer` 空 request_id 校验时，针对新增测试单跑 → `1 failed`，退出码 1；修复后最终集合全绿。单独 `--collect-only` 的恢复配方套件为 `125 tests collected`；截至这次 209 项执行，审批节点模块有 21 个顶层测试函数、30 个展开用例。新增 req-A 成功、req-B 因状态已回到 `pending_approval` 被 `OfferNotEditableError` 拒绝的真实顺序测试，逐项比较 Offer 字段、旧审批行、history、effect_log 快照，并确认 revise 日志仍只有一条。`git diff --check` → 通过，退出码 0。此前基线 194/目标 199 属节点并发补充之前估计；加入对象绑定与顺序用例后，该次联合集合实测为 209。
 
 **1011R 缓存对象绑定与跨轮重放复验（2026-10-11）**：在既有实现上新增审批/修改分别对缓存未命中与命中路径替换实际 `offer_id` 的四个用例、创建节点替换实际 `application_id` 的两个用例，以及“第 1 轮退回留痕→修改至第 2 轮待审批→重放第 1 轮成功键”的整组快照用例。新增用例先于本轮联合验收运行：`"$SDD_PYTHON" -m pytest tests/test_offer_nodes_approval.py tests/test_offer_nodes_create.py -q -k 'old_round_approval_replay or swapped_business_object or swapped_application'` → `7 passed, 41 deselected`，退出码 0（既有实现已包含绑定校验，因此无新增红灯）。本轮审批模块实收 **24 个顶层测试函数、35 个展开用例**；联合命令 `"$SDD_PYTHON" -m pytest tests/test_idempotency.py tests/test_offer_nodes_approval.py tests/test_offer_nodes_create.py tests/test_offer_storage.py tests/test_effect_idempotency_suite.py -q` → **216 passed in 14.65s**，退出码 0。`git diff --check` → 通过，退出码 0。该结果取代此前 209 作为本轮最新联合验收证据。
+
+
+## 1011R Task 9 实际验收记录（父会话补落档）
+
+执行HEAD：8e038a7。Task9执行会话只跑测试未改文件；本记录由父会话依据该真实
+`task-9.pytest-evidence.json`与原始JSONL补入，保留验收产物供runner双审后提交。
+解释器：/Users/paulshao/Projects/HumanResource/venv/bin/python。
+本Task上列17文件命令：309 passed，exit_code=0。全量 `"$SDD_PYTHON" -m pytest -q`：
+4605 passed，12 skipped，耗时161.22秒，exit_code=0。
+原始证据：`.superpowers/sdd/2026-10-10-offer-generation-unit3-approval-flow/task-9.events.jsonl`，
+完成事件输出字段aggregated_output与exit_code；当前轮提取证据为同目录task-9.pytest-evidence.json。
+此记录只涵盖Offer泳道；多泳道整合父分支另已实跑4779 passed/12 skipped/exit0，二者范围不同。
